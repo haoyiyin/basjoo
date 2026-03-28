@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Basjoo Widget 嵌入测试</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 40px;
+      margin-bottom: 30px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+    }
+
+    h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 1.1em;
+      margin-bottom: 30px;
+    }
+
+    .demo-site {
+      background: #f8fafc;
+      border: 2px dashed #cbd5e0;
+      border-radius: 12px;
+      padding: 60px 40px;
+      text-align: center;
+      margin: 30px 0;
+    }
+
+    .demo-site h2 {
+      color: #4a5568;
+      margin-bottom: 20px;
+    }
+
+    .demo-site p {
+      color: #718096;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-top: 30px;
+    }
+
+    .feature-item {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .feature-item:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    }
+
+    .feature-icon {
+      font-size: 2em;
+      margin-bottom: 15px;
+    }
+
+    .feature-item h3 {
+      margin-bottom: 10px;
+      color: #2d3748;
+    }
+
+    .feature-item p {
+      color: #718096;
+      font-size: 0.95em;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #c6f6d5;
+      color: #22543d;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 0.9em;
+      font-weight: 500;
+    }
+
+    .status-badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      background: #48bb78;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 500;
+      transition: transform 0.2s, box-shadow 0.2s;
+      border: none;
+      cursor: pointer;
+      font-size: 1em;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+
+    footer {
+      text-align: center;
+      color: rgba(255,255,255,0.8);
+      margin-top: 40px;
+      padding: 20px;
+    }
+
+    .embed-info {
+      background: #f7fafc;
+      border-left: 4px solid #4299e1;
+      padding: 20px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+
+    .embed-info h3 {
+      margin-top: 0;
+      color: #2b6cb0;
+    }
+
+    .embed-info code {
+      background: #edf2f7;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    .code-block {
+      background: #1a202c;
+      color: #e2e8f0;
+      padding: 20px;
+      border-radius: 8px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 0.85em;
+      overflow-x: auto;
+      margin: 20px 0;
+      line-height: 1.5;
+    }
+
+    .code-block .comment { color: #68d391; }
+    .code-block .string { color: #fbd38d; }
+    .code-block .keyword { color: #63b3ed; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>🏪 示例电商网站</h1>
+      <p class="subtitle">这是一个模拟的第三方网站，用于测试 Basjoo 客服窗口嵌入功能</p>
+
+      <div class="status-badge">
+        Widget 已嵌入
+      </div>
+
+      <div class="demo-site">
+        <h2>🛍️ 欢迎光临示例商城</h2>
+        <p>这是一个模拟的电商网站页面。在真实的业务场景中，您可以将 Basjoo 客服窗口嵌入到任何网站，让访客随时与 AI 助手对话。</p>
+        <br>
+        <button class="btn">浏览商品</button>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-item">
+          <div class="feature-icon">💬</div>
+          <h3>实时对话</h3>
+          <p>访客可以随时点击右下角的聊天按钮，与 AI 助手进行实时对话</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">🤖</div>
+          <h3>智能回复</h3>
+          <p>基于知识库的智能问答，自动回答常见问题，提升客服效率</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">👥</div>
+          <h3>人工接管</h3>
+          <p>AI 无法处理的问题可以无缝转接人工客服，提供人性化服务</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">📊</div>
+          <h3>会话管理</h3>
+          <p>所有对话记录自动同步到 Basjoo 会话中心，方便管理和跟进</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="embed-info">
+        <h3>📋 嵌入信息</h3>
+        <p><strong>API Base:</strong> <code id="api-base-value">加载中...</code></p>
+        <p><strong>Agent ID:</strong> <code id="agent-id-value">加载中...</code></p>
+        <p><strong>状态:</strong> <span id="widget-status">正在加载公开配置...</span></p>
+      </div>
+
+      <h3>📝 使用的嵌入代码</h3>
+      <pre class="code-block" id="embed-code-display">正在生成嵌入代码...</pre>
+
+      <h3>🧪 测试步骤</h3>
+      <ol style="line-height: 2; margin-left: 20px;">
+        <li>点击右下角的蓝色圆形按钮打开聊天窗口</li>
+        <li>查看是否能正常显示欢迎消息</li>
+        <li>输入一条测试消息（如"你好"）并发送</li>
+        <li>观察是否能收到 AI 或 Mock 回复</li>
+        <li>打开 Basjoo 管理后台并登录</li>
+        <li>进入“会话中心”页面查看会话是否同步</li>
+      </ol>
+    </div>
+  </div>
+
+  <footer>
+    <p>Basjoo Widget 嵌入测试页面 | Docker 部署环境</p>
+  </footer>
+
+<!-- Basjoo Widget v3.0 -->
+<script src="/sdk.js?v=3.0.0"></script>
+<script>
+  (async function () {
+    const fallbackApiBase = window.location.origin;
+    const apiBaseElement = document.getElementById('api-base-value');
+    const agentIdElement = document.getElementById('agent-id-value');
+    const statusElement = document.getElementById('widget-status');
+    const embedCodeElement = document.getElementById('embed-code-display');
+
+    try {
+      const response = await fetch('/api/v1/config:public');
+      if (!response.ok) {
+        throw new Error('Failed to load public config');
+      }
+
+      const config = await response.json();
+      const apiBase = config.api_base || fallbackApiBase;
+      const agentId = config.default_agent_id || '';
+      const themeColor = config.widget_color || '#3b82f6';
+      const title = config.widget_title || '在线客服';
+      const welcomeMessage = config.welcome_message || '您好！有什么可以帮您的吗？';
+
+      apiBaseElement.textContent = apiBase;
+      agentIdElement.textContent = agentId || '未找到默认 Agent';
+
+      const sdkVersion = '2.0.0';
+      const sdkUrl = new URL(`${apiBase}/sdk.js`);
+      sdkUrl.searchParams.set('v', sdkVersion);
+      sdkUrl.searchParams.set('agentId', agentId);
+      sdkUrl.searchParams.set('apiBase', apiBase);
+      sdkUrl.searchParams.set('themeColor', themeColor);
+      sdkUrl.searchParams.set('title', title);
+      sdkUrl.searchParams.set('welcomeMessage', welcomeMessage);
+
+      const embedCode = [
+        '<!-- Basjoo Widget 嵌入代码 -->',
+        `<script src="${sdkUrl.toString()}"><` + '/script>',
+      ].join('\n');
+
+      embedCodeElement.textContent = embedCode;
+
+      if (!agentId) {
+        statusElement.textContent = '未找到可用的默认 Agent';
+        return;
+      }
+
+      const demoScript = document.createElement('script');
+      demoScript.src = sdkUrl.toString();
+      document.body.appendChild(demoScript);
+      statusElement.textContent = '已加载公开配置';
+    } catch (error) {
+      apiBaseElement.textContent = fallbackApiBase;
+      agentIdElement.textContent = '加载失败';
+      embedCodeElement.textContent = '无法生成嵌入代码，请检查后端公开配置接口。';
+      statusElement.textContent = '公开配置加载失败';
+      console.error('Failed to initialize widget demo', error);
+    }
+  })();
+</script>
+
+</body>
+</html>

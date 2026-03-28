@@ -1,0 +1,236 @@
+# ============================================
+# Basjoo Docker Compose 配置
+# 使用 Profile 区分环境：
+#   - 生产: docker compose --profile prod up -d
+#   - 开发: docker compose --profile dev up -d
+# ============================================
+
+services:
+  # ============================================
+  # 基础设施服务 (所有环境共用)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: basjoo-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["prod", "dev"]
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    container_name: basjoo-qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["prod", "dev"]
+
+  # ============================================
+  # 生产环境服务
+  # ============================================
+  backend-prod:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: basjoo-backend
+    environment:
+      - DATABASE_URL=sqlite:////app/data/basjoo.db
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - SECRET_KEY=${SECRET_KEY:-}
+      - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
+      - REQUIRE_SECRET_KEY=${REQUIRE_SECRET_KEY:-true}
+      - "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
+      - "ALLOWED_METHODS=${ALLOWED_METHODS:-GET,POST,PUT,DELETE,OPTIONS}"
+      - "ALLOWED_HEADERS=${ALLOWED_HEADERS:-Content-Type,Authorization,X-Requested-With,Accept}"
+      - DEFAULT_RATE_LIMIT=1000
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - ENCRYPTION_KEY_FILE=${ENCRYPTION_KEY_FILE:-/app/data/.encryption_key}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
+      - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
+      - LOG_LEVEL=INFO
+    volumes:
+      - backend-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles: ["prod"]
+
+  frontend-prod:
+    build:
+      context: ./frontend-nextjs
+      dockerfile: Dockerfile
+      args:
+        BACKEND_PROXY_TARGET: http://backend-prod:8000
+    container_name: basjoo-frontend
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=
+      - BACKEND_PROXY_TARGET=http://backend-prod:8000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles: ["prod"]
+    depends_on:
+      - backend-prod
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: basjoo-nginx
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend-prod
+      - frontend-prod
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    profiles: ["prod"]
+
+  # ============================================
+  # 开发环境服务
+  # ============================================
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: basjoo-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////app/data/basjoo.db
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
+      - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
+      - ALLOWED_ORIGINS=*
+      - ALLOWED_METHODS=GET,POST,PUT,DELETE,OPTIONS
+      - ALLOWED_HEADERS=Content-Type,Authorization,X-Requested-With,Accept
+      - DEFAULT_RATE_LIMIT=10000
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - ENCRYPTION_KEY_FILE=${ENCRYPTION_KEY_FILE:-/app/data/.encryption_key}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
+      - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - backend-data:/app/data
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    entrypoint: ["python3", "/app/docker-entrypoint.py"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles: ["dev"]
+    develop:
+      watch:
+        - path: ./backend
+          target: /app
+          action: sync
+          ignore:
+            - __pycache__/
+            - "*.pyc"
+            - .pytest_cache/
+            - venv/
+            - data/
+            - .git/
+        - path: ./backend/requirements.txt
+          action: rebuild
+
+  frontend-dev:
+    build:
+      context: ./frontend-nextjs
+      dockerfile: Dockerfile.dev
+    container_name: basjoo-frontend-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8000
+      - BACKEND_PROXY_TARGET=http://host.docker.internal:8000
+    volumes:
+      - ./frontend-nextjs:/app
+      - /app/node_modules
+    depends_on:
+      - backend-dev
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    profiles: ["dev"]
+    develop:
+      watch:
+        - path: ./frontend-nextjs
+          target: /app
+          action: sync
+          ignore:
+            - node_modules/
+            - .next/
+        - path: ./frontend-nextjs/package.json
+          action: rebuild
+
+networks:
+  basjoo-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  qdrant-data:
+  backend-data:

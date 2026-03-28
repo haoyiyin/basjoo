@@ -1,0 +1,32 @@
+{
+  "name": "@basjoo/widget",
+  "version": "1.0.0",
+  "description": "Basjoo AI Chat Widget - 可嵌入的智能聊天组件",
+  "main": "dist/basjoo-widget.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run typecheck && npm run build:dev && npm run build:prod",
+    "build:dev": "esbuild src/BasjooWidget.tsx --bundle --format=esm --outfile=dist/basjoo-widget.js --sourcemap",
+    "build:prod": "esbuild src/BasjooWidget.tsx --bundle --format=iife --global-name=BasjooWidget --outfile=dist/basjoo-widget.min.js --minify --sourcemap",
+    "dev": "esbuild src/BasjooWidget.tsx --bundle --format=iife --global-name=BasjooWidget --outfile=example/basjoo-widget.js --servedir=example",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "chatbot",
+    "widget",
+    "customer-service",
+    "basjoo"
+  ],
+  "author": "Basjoo Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "esbuild": "^0.19.12",
+    "typescript": "^5.3.0"
+  }
+}

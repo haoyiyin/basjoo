@@ -1,0 +1,51 @@
+# English translations
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en_US\n"
+
+# Authentication
+msgid "Invalid credentials"
+msgstr "Authentication failed, please check your email and password"
+
+msgid "Email already registered"
+msgstr "This email is already registered"
+
+msgid "Password too short"
+msgstr "Password must be at least 8 characters long"
+
+msgid "System already has an administrator"
+msgstr "System already has an administrator, please contact existing administrator for account management"
+
+# API Errors
+msgid "Agent not found"
+msgstr "Agent not found"
+
+msgid "Daily message quota exceeded"
+msgstr "Daily message quota exceeded, please try again tomorrow"
+
+msgid "URL fetching failed"
+msgstr "Failed to fetch URL"
+
+msgid "Index rebuild failed"
+msgstr "Failed to rebuild index"
+
+# API Responses
+msgid "Operation successful"
+msgstr "Operation successful"
+
+msgid "URL added successfully"
+msgstr "URL added successfully"
+
+msgid "QA item imported successfully"
+msgstr "Q&A item imported successfully"
+
+msgid "Q&A item updated successfully"
+msgstr "Q&A item updated successfully"
+
+msgid "Q&A item deleted successfully"
+msgstr "Q&A item deleted successfully"
+
+# System Messages
+msgid "Request body too large"
+msgstr "Request body too large"

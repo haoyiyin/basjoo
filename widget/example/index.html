@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Basjoo Widget 示例</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 800px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    h1 {
+      color: #1f2937;
+      margin-bottom: 16px;
+      font-size: 32px;
+    }
+
+    p {
+      color: #6b7280;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .code-block {
+      background: #1f2937;
+      color: #f3f4f6;
+      padding: 20px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 16px 0;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 14px;
+    }
+
+    .feature-list {
+      list-style: none;
+      margin: 24px 0;
+    }
+
+    .feature-list li {
+      padding: 12px 0;
+      border-bottom: 1px solid #e5e7eb;
+      color: #374151;
+    }
+
+    .feature-list li:before {
+      content: "✓";
+      color: #10b981;
+      font-weight: bold;
+      margin-right: 12px;
+    }
+
+    .button {
+      display: inline-block;
+      background: #3b82f6;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-decoration: none;
+      margin-top: 16px;
+      transition: background 0.2s;
+    }
+
+    .button:hover {
+      background: #2563eb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 Basjoo AI Widget</h1>
+    <p>
+      这是一个可嵌入的AI客服聊天组件示例。点击右下角的聊天按钮开始与AI助手对话！
+    </p>
+
+    <h2 style="color: #1f2937; margin-top: 32px; margin-bottom: 16px;">功能特性</h2>
+    <ul class="feature-list">
+      <li>即插即用，一行代码集成</li>
+      <li>支持自定义主题色和Logo</li>
+      <li>自动显示引用来源</li>
+      <li>响应式设计，移动端友好</li>
+      <li>支持多语言（自动检测）</li>
+      <li>错误提示和加载状态</li>
+    </ul>
+
+    <h2 style="color: #1f2937; margin-top: 32px; margin-bottom: 16px;">集成方式</h2>
+    <p>在您的网站中添加以下代码：</p>
+
+    <div class="code-block">&lt;!-- 加载Widget脚本 --&gt;
+&lt;script src="basjoo-widget.js"&gt;&lt;/script&gt;
+
+&lt;!-- 初始化Widget --&gt;
+&lt;script&gt;
+  new BasjooWidget({
+    agentId: 'your_agent_id',
+    apiBase: 'http://localhost:8001',
+    themeColor: '#3B82F6',
+    title: 'AI助手',
+    welcomeMessage: '你好！有什么可以帮助您的吗？',
+    position: 'right'
+  }).init();
+&lt;/script&gt;</div>
+
+    <h2 style="color: #1f2937; margin-top: 32px; margin-bottom: 16px;">配置参数</h2>
+    <div class="code-block">{
+  agentId: string,        // 必需：Agent ID
+  apiBase: string,        // 可选：API地址（默认自动检测）
+  themeColor: string,     // 可选：主题色（默认#3B82F6）
+  logoUrl: string,        // 可选：Logo URL
+  title: string,          // 可选：标题（默认"AI助手"）
+  welcomeMessage: string, // 可选：欢迎消息
+  language: string,       // 可选：语言（auto/zh-CN/en-US）
+  position: string        // 可选：位置（left/right）
+}</div>
+
+    <a href="https://github.com/basjoo/basjoo" class="button" target="_blank">
+      查看文档 →
+    </a>
+  </div>
+
+  <!-- 加载并初始化Widget -->
+  <script src="basjoo-widget.js"></script>
+  <script>
+    new BasjooWidget({
+      agentId: 'agt_874abcf53314',
+      apiBase: 'http://localhost:8001',
+      themeColor: '#3B82F6',
+      title: 'AI客服助手',
+      welcomeMessage: '您好！我是AI助手，有什么可以帮助您的吗？',
+      language: 'zh-CN',
+      position: 'right'
+    }).init();
+  </script>
+</body>
+</html>

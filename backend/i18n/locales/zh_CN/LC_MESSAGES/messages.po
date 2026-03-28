@@ -1,0 +1,51 @@
+# Chinese (Simplified) translations
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: zh_CN\n"
+
+# 认证相关
+msgid "Invalid credentials"
+msgstr "认证失败，请检查邮箱和密码"
+
+msgid "Email already registered"
+msgstr "邮箱已被注册"
+
+msgid "Password too short"
+msgstr "密码长度至少为8个字符"
+
+msgid "System already has an administrator"
+msgstr "系统已有管理员，请联系现有管理员进行账户管理"
+
+# API 错误
+msgid "Agent not found"
+msgstr "未找到指定的 Agent"
+
+msgid "Daily message quota exceeded"
+msgstr "今日消息配额已用完，请明天再试"
+
+msgid "URL fetching failed"
+msgstr "URL 抓取失败"
+
+msgid "Index rebuild failed"
+msgstr "索引重建失败"
+
+# API 响应
+msgid "Operation successful"
+msgstr "操作成功"
+
+msgid "URL added successfully"
+msgstr "URL 添加成功"
+
+msgid "QA item imported successfully"
+msgstr "Q&A 条目导入成功"
+
+msgid "Q&A item updated successfully"
+msgstr "Q&A 条目更新成功"
+
+msgid "Q&A item deleted successfully"
+msgstr "Q&A 条目删除成功"
+
+# 系统消息
+msgid "Request body too large"
+msgstr "请求体过大"
