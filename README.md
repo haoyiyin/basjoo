@@ -1,5 +1,7 @@
 # Basjoo
 
+English | [简体中文](README.zh-CN.md)
+
 Basjoo is an AI customer-support platform with three main parts:
 
 - a **FastAPI backend** for agent configuration, chat, indexing, auth, and scheduling
