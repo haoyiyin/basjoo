@@ -242,6 +242,9 @@ class BasjooWidget {
     // 显示打招呼气泡
     this.showGreetingBubble();
 
+    // 页面加载时立即启动标题闪烁提醒，吸引用户打开聊天窗口
+    this.startTitleBlink();
+
     if (this.sessionId) {
       void this.loadHistory();
       return;
@@ -334,7 +337,7 @@ class BasjooWidget {
     let showOriginal = true;
 
     this.titleBlinkInterval = window.setInterval(() => {
-      document.title = showOriginal ? this.originalTitle : '🔔 ' + this.getText('newMessage');
+      document.title = showOriginal ? this.originalTitle : '❗ ' + this.getText('newMessage');
       showOriginal = !showOriginal;
     }, 1000);
   }

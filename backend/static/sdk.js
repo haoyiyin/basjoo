@@ -261,6 +261,9 @@
     this.createButton();
     this.createChatWindow();
 
+    // 页面加载时立即启动标题闪烁提醒，吸引用户打开聊天窗口
+    this.startTitleBlink();
+
     if (this.sessionId) {
       // 有会话 ID，从后端加载历史消息
       this.loadHistory();
@@ -1527,10 +1530,11 @@
   BasjooWidget.prototype.startTitleBlink = function() {
     if (this.titleBlinkInterval) return;
     this.originalTitle = document.title;
+    this.hasUnread = true;
     var self = this;
     var blink = true;
     this.titleBlinkInterval = setInterval(function() {
-      document.title = blink ? '【新消息】' + self.originalTitle : self.originalTitle;
+      document.title = blink ? self.originalTitle : '❗ ' + self.getText('newMessage');
       blink = !blink;
     }, 1000);
   };
