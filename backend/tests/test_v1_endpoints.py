@@ -224,7 +224,7 @@ async def test_taken_over_session_skips_rate_limit_reply(client, default_agent_i
 
     await client.put(
         f"/api/v1/agent?agent_id={agent_id}",
-        json={"rate_limit_per_hour": 1, "rate_limit_reply": "Limited", "enable_turnstile": False},
+        json={"rate_limit_per_hour": 1, "restricted_reply": "Limited", "enable_turnstile": False},
     )
 
     first_response = await client.post(

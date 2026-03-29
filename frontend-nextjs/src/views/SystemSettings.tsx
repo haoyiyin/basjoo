@@ -38,8 +38,7 @@ export default function SystemSettings() {
     welcome_message: t('labels.welcomeMessage'),
     history_days: 30,
     rate_limit_per_hour: 100,
-    rate_limit_reply: t('labels.autoReplyMessage'),
-    offline_reply: t('labels.offlineReplyPlaceholder'),
+    restricted_reply: t('labels.restrictedReplyPlaceholder'),
     enable_turnstile: false,
     turnstile_site_key: '',
     turnstile_secret_key: '',
@@ -91,8 +90,7 @@ export default function SystemSettings() {
         welcome_message: agentData.welcome_message || t('labels.welcomeMessage'),
         history_days: agentData.history_days || 30,
         rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
-        rate_limit_reply: agentData.rate_limit_reply || t('labels.autoReplyMessage'),
-        offline_reply: agentData.offline_reply || t('labels.offlineReplyPlaceholder'),
+        restricted_reply: agentData.restricted_reply || t('labels.restrictedReplyPlaceholder'),
         enable_turnstile: agentData.enable_turnstile ?? false,
         turnstile_site_key: agentData.turnstile_site_key || '',
         turnstile_secret_key: '',
@@ -116,8 +114,7 @@ export default function SystemSettings() {
         welcome_message: newSettings.welcome_message,
         history_days: newSettings.history_days,
         rate_limit_per_hour: newSettings.rate_limit_per_hour,
-        rate_limit_reply: newSettings.rate_limit_reply,
-        offline_reply: newSettings.offline_reply,
+        restricted_reply: newSettings.restricted_reply,
         enable_turnstile: newSettings.enable_turnstile,
         turnstile_site_key: newSettings.turnstile_site_key || null,
         turnstile_secret_key: newSettings.turnstile_secret_key || null,
@@ -902,34 +899,6 @@ export default function SystemSettings() {
               </p>
             </div>
 
-            <div>
-              <label style={{
-                display: 'block',
-                marginBottom: 'var(--space-2)',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                color: 'var(--color-text-secondary)',
-              }}>
-                {t('labels.autoReplyOnLimit')}
-              </label>
-              <textarea
-                value={settings.rate_limit_reply}
-                onChange={(e) => handleChangeWithAutoSave('rate_limit_reply', e.target.value)}
-                rows={3}
-                placeholder={t('labels.autoReplyMessage')}
-                style={{
-                  width: '100%',
-                  resize: 'vertical',
-                }}
-              />
-              <p style={{
-                marginTop: 'var(--space-2)',
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-              }}>
-                {t('labels.autoReplyDesc')}
-              </p>
-            </div>
           </div>
 
           <div style={{ marginTop: 'var(--space-4)' }}>
@@ -940,13 +909,13 @@ export default function SystemSettings() {
               fontWeight: 500,
               color: 'var(--color-text-secondary)',
             }}>
-              {t('labels.offlineReplyLabel')}
+              {t('labels.restrictedReplyLabel')}
             </label>
             <textarea
-              value={settings.offline_reply}
-              onChange={(e) => handleChangeWithAutoSave('offline_reply', e.target.value)}
+              value={settings.restricted_reply}
+              onChange={(e) => handleChangeWithAutoSave('restricted_reply', e.target.value)}
               rows={3}
-              placeholder={t('labels.offlineReplyPlaceholder')}
+              placeholder={t('labels.restrictedReplyPlaceholder')}
               style={{
                 width: '100%',
                 resize: 'vertical',
@@ -957,7 +926,7 @@ export default function SystemSettings() {
               fontSize: 'var(--text-xs)',
               color: 'var(--color-text-muted)',
             }}>
-              {t('labels.offlineReplyDesc')}
+              {t('labels.restrictedReplyDesc')}
             </p>
           </div>
         </div>

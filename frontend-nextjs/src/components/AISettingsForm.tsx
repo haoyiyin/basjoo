@@ -55,7 +55,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     similarity_threshold: 0.5,
     enable_context: false,
     rate_limit_per_hour: 100,
-    rate_limit_reply: '',
+    restricted_reply: '',
   })
   const [personaError, setPersonaError] = useState(false)
 
@@ -111,7 +111,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         similarity_threshold: agentData.similarity_threshold ?? 0.5,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
-        rate_limit_reply: agentData.rate_limit_reply ?? t('labels.autoReplyMessage'),
+        restricted_reply: agentData.restricted_reply ?? t('labels.restrictedReplyPlaceholder'),
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : t('errors.loadFailed'))
@@ -199,7 +199,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         similarity_threshold: formData.similarity_threshold,
         enable_context: formData.enable_context,
         rate_limit_per_hour: formData.rate_limit_per_hour,
-        rate_limit_reply: formData.rate_limit_reply,
+        restricted_reply: formData.restricted_reply,
         persona_type: selectedPersona,
       }
 
@@ -285,7 +285,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.similarity_threshold,
     formData.enable_context,
     formData.rate_limit_per_hour,
-    formData.rate_limit_reply,
+    formData.restricted_reply,
     formData.api_key,
     formData.jina_api_key,
     handleSave,

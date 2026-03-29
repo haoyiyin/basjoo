@@ -12,7 +12,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from database import get_db, AsyncSessionLocal
+import database
+from database import get_db
 from api.endpoints.auth import get_current_admin
 from models import (
     Agent,
@@ -140,7 +141,7 @@ def build_agent_config(agent: Agent) -> dict:
         "enable_auto_fetch": agent.enable_auto_fetch,
         "url_fetch_interval_days": agent.url_fetch_interval_days,
         "rate_limit_per_hour": agent.rate_limit_per_hour,
-        "rate_limit_reply": agent.rate_limit_reply,
+        "restricted_reply": agent.restricted_reply,
         "enable_turnstile": agent.enable_turnstile,
         "turnstile_site_key": agent.turnstile_site_key,
         "turnstile_secret_key_set": bool(agent.turnstile_secret_key),
@@ -487,7 +488,7 @@ async def prepare_chat_request(
     agent_jina_api_key = agent.jina_api_key
     agent_embedding_model = agent.embedding_model
     agent_rate_limit_per_hour = agent.rate_limit_per_hour
-    agent_rate_limit_reply = agent.rate_limit_reply
+    agent_restricted_reply = agent.restricted_reply
     use_mock_llm = not agent.api_key
     if use_mock_llm:
         logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
@@ -521,7 +522,7 @@ async def prepare_chat_request(
         )
 
         if messages_last_hour >= agent_rate_limit_per_hour:
-            limit_reply = agent_rate_limit_reply or "抱歉，当前对话次数过多，请稍后再试。"
+            limit_reply = agent_restricted_reply or "抱歉，当前服务受限，请稍后再试。"
             logger.info(f"Session {request.session_id} exceeded rate limit, returning auto reply")
             return {
                 "mode": "rate_limited",
@@ -838,7 +839,7 @@ async def chat(
     Manages DB sessions explicitly to avoid holding connections open during LLM calls.
     """
     # Phase 1: Preparation with short-lived DB session
-    async with AsyncSessionLocal() as prep_db:
+    async with database.AsyncSessionLocal() as prep_db:
         chat_context = await prepare_chat_request(request, http_request, prep_db)
         session = chat_context["session"]
 
@@ -895,7 +896,7 @@ async def chat(
     usage = real_usage or build_chat_usage(messages, reply, use_mock_llm)
 
     # Phase 3: Persistence with fresh DB session
-    async with AsyncSessionLocal() as persist_db:
+    async with database.AsyncSessionLocal() as persist_db:
         # Re-fetch session for persistence
         session_result = await persist_db.execute(
             select(ChatSession).where(ChatSession.id == session_db_id)
@@ -940,7 +941,7 @@ async def chat_stream(
 
     async def event_generator():
         # Phase 1: Preparation with short-lived DB session
-        async with AsyncSessionLocal() as prep_db:
+        async with database.AsyncSessionLocal() as prep_db:
             try:
                 chat_context = await prepare_chat_request(request, http_request, prep_db)
                 session = chat_context["session"]
@@ -1044,7 +1045,7 @@ async def chat_stream(
         usage = real_usage or build_chat_usage(messages, reply, use_mock_llm)
 
         # Phase 3: Persistence with fresh DB session
-        async with AsyncSessionLocal() as persist_db:
+        async with database.AsyncSessionLocal() as persist_db:
             try:
                 # Re-fetch session for persistence
                 session_result = await persist_db.execute(

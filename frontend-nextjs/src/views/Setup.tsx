@@ -50,7 +50,7 @@ export const Setup = () => {
                     provider_type: 'openai',
                     enable_context: false,
                     rate_limit_per_hour: 100,
-                    rate_limit_reply: t('settings.defaultReply')
+                    restricted_reply: t('settings.defaultReply')
                 })
             });
 

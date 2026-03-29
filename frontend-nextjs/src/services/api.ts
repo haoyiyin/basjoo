@@ -82,8 +82,7 @@ export interface Agent {
   enable_auto_fetch?: boolean;
   url_fetch_interval_days?: number;
   rate_limit_per_hour: number;
-  rate_limit_reply?: string;
-  offline_reply?: string;
+  restricted_reply?: string;
   last_error_code?: string | null;
   last_error_message?: string | null;
   last_error_at?: string | null;

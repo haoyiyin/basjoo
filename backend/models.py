@@ -137,12 +137,9 @@ class Agent(Base):
     rate_limit_per_hour = Column(
         Integer, nullable=False, default=100
     )  # 每小时对话限制（0表示不限制）
-    rate_limit_reply = Column(
-        Text, nullable=True, default="抱歉，当前对话次数过多，请稍后再试。"
-    )  # 达到限制后的自动回复
-    offline_reply = Column(
-        Text, nullable=True, default="抱歉，AI 服务暂时不可用，请稍后再试。"
-    )  # AI 服务不可用时的自动回复
+    restricted_reply = Column(
+        Text, nullable=True, default="抱歉，当前服务受限，请稍后再试。"
+    )  # 自动回复（速率限制、AI 服务异常等场景）
     last_error_code = Column(String(50), nullable=True)
     last_error_message = Column(Text, nullable=True)
     last_error_at = Column(DateTime(timezone=True), nullable=True)

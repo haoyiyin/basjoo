@@ -201,7 +201,7 @@ def migrate_sqlite_schema():
                 "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high') OR reasoning_effort IS NULL)",
             ),
             (
-                "offline_reply",
+                "restricted_reply",
                 "TEXT",
             ),
             (
