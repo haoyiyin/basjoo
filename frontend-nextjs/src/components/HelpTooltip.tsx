@@ -28,6 +28,7 @@ export default function HelpTooltip({
 }: HelpTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [adjustedPosition, setAdjustedPosition] = useState(position);
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -113,6 +114,10 @@ export default function HelpTooltip({
     setTooltipStyle(style);
   }, [position]);
 
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // 显示时计算位置
   useEffect(() => {
     if (isVisible) {
@@ -130,15 +135,11 @@ export default function HelpTooltip({
       if (!tooltipRef.current || !triggerRef.current) return;
 
       const triggerRect = triggerRef.current.getBoundingClientRect();
-      const tooltipEl = tooltipRef.current;
       const maxWidth = window.innerWidth - 32;
       const tooltipWidth = Math.min(320, maxWidth);
 
       let style: React.CSSProperties = {
-        position: 'fixed',
-        zIndex: 9999,
         maxWidth: `${tooltipWidth}px`,
-        visibility: 'hidden',
       };
 
       // 简化的位置计算逻辑
@@ -362,7 +363,7 @@ export default function HelpTooltip({
         ?
       </button>
 
-      {createPortal(tooltipContent, document.body)}
+      {mounted && createPortal(tooltipContent, document.body)}
     </span>
   );
 }
