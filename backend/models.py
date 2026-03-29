@@ -140,6 +140,12 @@ class Agent(Base):
     rate_limit_reply = Column(
         Text, nullable=True, default="抱歉，当前对话次数过多，请稍后再试。"
     )  # 达到限制后的自动回复
+    offline_reply = Column(
+        Text, nullable=True, default="抱歉，AI 服务暂时不可用，请稍后再试。"
+    )  # AI 服务不可用时的自动回复
+    last_error_code = Column(String(50), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    last_error_at = Column(DateTime(timezone=True), nullable=True)
     enable_turnstile = Column(Boolean, nullable=False, default=False)
     turnstile_site_key = Column(String(255), nullable=True, default=None)
     turnstile_secret_key = Column(String(255), nullable=True, default=None)

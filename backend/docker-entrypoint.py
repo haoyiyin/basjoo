@@ -201,6 +201,22 @@ def migrate_sqlite_schema():
                 "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high') OR reasoning_effort IS NULL)",
             ),
             (
+                "offline_reply",
+                "TEXT",
+            ),
+            (
+                "last_error_code",
+                "VARCHAR(50)",
+            ),
+            (
+                "last_error_message",
+                "TEXT",
+            ),
+            (
+                "last_error_at",
+                "DATETIME",
+            ),
+            (
                 "enable_turnstile",
                 "BOOLEAN NOT NULL DEFAULT 0",
             ),

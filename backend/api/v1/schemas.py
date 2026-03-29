@@ -318,6 +318,13 @@ class AgentConfig(BaseModel):
         default="抱歉，当前对话次数过多，请稍后再试。",
         description="Auto reply when rate limit exceeded",
     )
+    offline_reply: Optional[str] = Field(
+        default="抱歉，AI 服务暂时不可用，请稍后再试。",
+        description="Fallback reply when AI API fails",
+    )
+    last_error_code: Optional[str] = None
+    last_error_message: Optional[str] = None
+    last_error_at: Optional[str] = None
     enable_turnstile: bool = Field(
         default=False, description="Enable Cloudflare Turnstile verification"
     )
@@ -391,6 +398,9 @@ class AgentUpdateRequest(BaseModel):
     )
     rate_limit_reply: Optional[str] = Field(
         None, description="Auto reply when rate limit exceeded"
+    )
+    offline_reply: Optional[str] = Field(
+        None, description="Fallback reply when AI API fails"
     )
     enable_turnstile: Optional[bool] = Field(
         None, description="Enable Cloudflare Turnstile verification"
