@@ -424,6 +424,9 @@
       "clearAll": "Clear All",
       "confirmClearAll": "Are you sure you want to clear all URLs? This action cannot be undone.",
       "clearFailed": "Failed to clear",
+      "clearing": "Clearing...",
+      "clearSuccess": "Successfully cleared {{count}} URLs",
+      "pollingStopped": "Updates stopped",
       "indexRebuildInProgress": "Index rebuild in progress, please wait..."
     }
   },

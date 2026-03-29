@@ -41,10 +41,14 @@ export default function URLManagement() {
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
   const [isRetraining, setIsRetraining] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [clearing, setClearing] = useState(false);
+  const [pollingStopped, setPollingStopped] = useState(false);
+  const [deletingUrlId, setDeletingUrlId] = useState<number | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const jinaKeyCheckInFlightRef = useRef(false);
   const redirectedForJinaKeyRef = useRef(false);
+  const stopPollingRequestedRef = useRef(false);
 
   // Auto-complete URL with https:// if missing protocol
   const normalizeUrl = (url: string): string => {
@@ -118,8 +122,8 @@ export default function URLManagement() {
     try {
       const status = await api.getTasksStatus(agentId);
       setTaskStatus(status);
-      // If backend reports crawling, enable polling
-      if (status.is_crawling && !crawlPolling) {
+      // If backend reports crawling, enable polling unless the user explicitly stopped live updates
+      if (status.is_crawling && !crawlPolling && !stopPollingRequestedRef.current) {
         setCrawlPolling(true);
       }
       // Sync isRetraining with backend status using functional update to avoid stale closure
@@ -161,11 +165,11 @@ export default function URLManagement() {
       setUrls(data.urls);
       setTotal(data.total);
 
-      // 检测是否有正在抓取的URL，自动开启轮询
+      // 检测是否有正在抓取的URL，自动开启轮询（除非用户已手动停止实时更新）
       const hasPendingOrFetching = data.urls.some(
         (url) => url.status === 'pending' || url.status === 'fetching'
       );
-      if (hasPendingOrFetching && !crawlPolling) {
+      if (hasPendingOrFetching && !crawlPolling && !stopPollingRequestedRef.current) {
         setCrawlStartCount(data.total);
         setCrawlPolling(true);
       }
@@ -183,6 +187,7 @@ export default function URLManagement() {
       return;
     }
 
+    stopPollingRequestedRef.current = false;
     setAdding(true);
     try {
       const result = await api.createURLs(agentId, [newUrl]);
@@ -210,11 +215,14 @@ export default function URLManagement() {
     if (!agentId) return;
     if (!confirm(t('labels.urlManagement.confirmRefetch'))) return;
 
+    stopPollingRequestedRef.current = false;
     setRefetching(true);
     try {
       const result = await api.refetchURLs(agentId, undefined, true);
+      setCrawlStartCount(total);
+      setCrawlPolling(true);
+      await loadURLs();
       alert(t('labels.urlManagement.refetchStarted', { jobId: result.job_id }));
-      setTimeout(() => loadURLs(), 10000);
     } catch (error) {
       alert(`${t('labels.urlManagement.refetchFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
     } finally {
@@ -223,11 +231,14 @@ export default function URLManagement() {
   };
 
   const stopPolling = useCallback(() => {
+    stopPollingRequestedRef.current = true;
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
     setCrawlPolling(false);
+    setPollingStopped(true);
+    window.setTimeout(() => setPollingStopped(false), 2000);
   }, []);
 
   // Polling effect for crawl progress
@@ -317,6 +328,7 @@ export default function URLManagement() {
       return;
     }
 
+    stopPollingRequestedRef.current = false;
     setCrawling(true);
     setCrawlStartCount(total);
     try {
@@ -345,11 +357,14 @@ export default function URLManagement() {
     if (!agentId) return;
     if (!confirm(t('labels.urlManagement.confirmDelete'))) return;
 
+    setDeletingUrlId(urlId);
     try {
       await api.deleteURL(agentId, urlId);
       await loadURLs();
     } catch (error) {
       alert(`${t('labels.urlManagement.deleteFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+    } finally {
+      setDeletingUrlId(null);
     }
   };
 
@@ -358,13 +373,15 @@ export default function URLManagement() {
     if (urls.length === 0) return;
     if (!confirm(t('labels.urlManagement.confirmClearAll'))) return;
 
+    setClearing(true);
     try {
-      for (const url of urls) {
-        await api.deleteURL(agentId, url.id);
-      }
+      const result = await api.clearAllUrls(agentId);
       await loadURLs();
+      alert(t('labels.urlManagement.clearSuccess', { count: result.deleted_count }));
     } catch (error) {
       alert(`${t('labels.urlManagement.clearFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -617,7 +634,7 @@ export default function URLManagement() {
 
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
+                gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
                 gap: 'var(--space-4)',
                 marginTop: 'var(--space-4)',
               }}>
@@ -749,14 +766,16 @@ export default function URLManagement() {
 
             <div style={{
               display: 'flex',
-              alignItems: 'center',
+              flexDirection: isMobile ? 'column' : 'row',
+              alignItems: isMobile ? 'stretch' : 'center',
               justifyContent: 'space-between',
+              gap: isMobile ? 'var(--space-3)' : 'var(--space-4)',
               padding: 'var(--space-4)',
               background: 'var(--color-bg-tertiary)',
               borderRadius: 'var(--radius-md)',
               marginBottom: 'var(--space-4)',
             }}>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <div style={{
                   fontSize: 'var(--text-sm)',
                   fontWeight: 500,
@@ -786,24 +805,27 @@ export default function URLManagement() {
               </div>
               <button
                 onClick={() => setAutoFetchEnabled(!autoFetchEnabled)}
+                aria-pressed={autoFetchEnabled}
                 style={{
-                  width: '48px',
-                  height: '28px',
-                  borderRadius: '14px',
+                  width: isMobile ? '56px' : '48px',
+                  height: isMobile ? '32px' : '28px',
+                  alignSelf: isMobile ? 'flex-start' : 'auto',
+                  borderRadius: isMobile ? '16px' : '14px',
                   border: 'none',
                   background: autoFetchEnabled ? 'var(--color-accent-primary)' : 'var(--color-bg-secondary)',
                   cursor: 'pointer',
                   position: 'relative',
                   transition: 'background 0.2s',
+                  touchAction: 'manipulation',
                 }}
               >
                 <span style={{
                   position: 'absolute',
                   top: '2px',
-                  left: autoFetchEnabled ? '22px' : '2px',
-                  width: '24px',
-                  height: '24px',
-                  borderRadius: '12px',
+                  left: autoFetchEnabled ? (isMobile ? '26px' : '22px') : '2px',
+                  width: isMobile ? '28px' : '24px',
+                  height: isMobile ? '28px' : '24px',
+                  borderRadius: isMobile ? '14px' : '12px',
                   background: 'white',
                   transition: 'left 0.2s',
                   boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
@@ -814,7 +836,8 @@ export default function URLManagement() {
             {autoFetchEnabled && (
               <div style={{
                 display: 'flex',
-                alignItems: 'center',
+                flexDirection: isMobile ? 'column' : 'row',
+                alignItems: isMobile ? 'stretch' : 'center',
                 gap: 'var(--space-4)',
                 marginBottom: 'var(--space-4)',
               }}>
@@ -838,7 +861,7 @@ export default function URLManagement() {
                       size="sm"
                     />
                   </label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
                     <input
                       type="number"
                       value={fetchIntervalDays}
@@ -846,7 +869,8 @@ export default function URLManagement() {
                       min={1}
                       max={30}
                       style={{
-                        width: '120px',
+                        width: isMobile ? '100%' : '120px',
+                        maxWidth: isMobile ? '160px' : '120px',
                       }}
                     />
                     <span style={{
@@ -907,7 +931,8 @@ export default function URLManagement() {
           <div className="glass-card" style={{ padding: 'var(--space-6)', height: 'fit-content', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '1 / span 2', gridRow: isMobile ? 'auto' : '2' }}>
             <div style={{
               display: 'flex',
-              alignItems: 'center',
+              flexDirection: isMobile ? 'column' : 'row',
+              alignItems: isMobile ? 'stretch' : 'center',
               justifyContent: 'space-between',
               marginBottom: 'var(--space-6)',
               flexWrap: 'wrap',
@@ -931,7 +956,7 @@ export default function URLManagement() {
                 </svg>
                 {t('labels.urlManagement.urlList')}
               </h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', width: isMobile ? '100%' : 'auto' }}>
                 {crawlPolling && (
                   <button
                     onClick={stopPolling}
@@ -939,33 +964,65 @@ export default function URLManagement() {
                     style={{
                       display: 'flex',
                       alignItems: 'center',
+                      justifyContent: 'center',
                       gap: 'var(--space-2)',
                       color: 'var(--color-warning)',
+                      minHeight: isMobile ? '44px' : undefined,
+                      width: isMobile ? '100%' : 'auto',
                     }}
                   >
                     <div className="spinner" style={{ width: '14px', height: '14px' }} />
                     {t('labels.urlManagement.stopPolling')}
                   </button>
                 )}
-                {urls.length > 0 && (
-                  <button
-                    onClick={handleClearAll}
-                    disabled={!jinaKeyReady}
-                    className="btn-ghost"
+                {pollingStopped && !crawlPolling && (
+                  <span
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: 'var(--space-2)',
-                      color: 'var(--color-error)',
-                      opacity: !jinaKeyReady ? 0.5 : 1,
-                      cursor: !jinaKeyReady ? 'not-allowed' : 'pointer',
+                      color: 'var(--color-success)',
+                      fontSize: 'var(--text-sm)',
+                      width: isMobile ? '100%' : 'auto',
                     }}
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="20 6 9 17 4 12" />
                     </svg>
-                    {t('labels.urlManagement.clearAll')}
+                    {t('labels.urlManagement.pollingStopped')}
+                  </span>
+                )}
+                {urls.length > 0 && (
+                  <button
+                    onClick={handleClearAll}
+                    disabled={clearing || !jinaKeyReady}
+                    className="btn-ghost"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 'var(--space-2)',
+                      color: 'var(--color-error)',
+                      opacity: clearing || !jinaKeyReady ? 0.5 : 1,
+                      cursor: clearing || !jinaKeyReady ? 'not-allowed' : 'pointer',
+                      minHeight: isMobile ? '44px' : undefined,
+                      width: isMobile ? '100%' : 'auto',
+                    }}
+                  >
+                    {clearing ? (
+                      <>
+                        <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                        {t('labels.urlManagement.clearing')}
+                      </>
+                    ) : (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                        {t('labels.urlManagement.clearAll')}
+                      </>
+                    )}
                   </button>
                 )}
                 <button
@@ -975,7 +1032,10 @@ export default function URLManagement() {
                   style={{
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: 'center',
                     gap: 'var(--space-2)',
+                    minHeight: isMobile ? '44px' : undefined,
+                    width: isMobile ? '100%' : 'auto',
                   }}
                 >
                   {loading ? (
@@ -1063,7 +1123,8 @@ export default function URLManagement() {
                   >
                     <div style={{
                       display: 'flex',
-                      alignItems: 'flex-start',
+                      flexDirection: isMobile ? 'column' : 'row',
+                      alignItems: isMobile ? 'stretch' : 'flex-start',
                       justifyContent: 'space-between',
                       gap: 'var(--space-4)',
                     }}>
@@ -1126,16 +1187,26 @@ export default function URLManagement() {
                       </div>
                       <button
                         onClick={() => handleDelete(url.id)}
+                        disabled={deletingUrlId === url.id}
                         className="btn-ghost"
                         style={{
                           color: 'var(--color-error)',
-                          padding: 'var(--space-2)',
+                          padding: isMobile ? '10px 12px' : 'var(--space-2)',
+                          opacity: deletingUrlId === url.id ? 0.5 : 1,
+                          cursor: deletingUrlId === url.id ? 'not-allowed' : 'pointer',
+                          minHeight: isMobile ? '44px' : undefined,
+                          minWidth: isMobile ? '44px' : undefined,
+                          alignSelf: isMobile ? 'flex-end' : 'auto',
                         }}
                       >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="3 6 5 6 21 6" />
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
+                        {deletingUrlId === url.id ? (
+                          <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                        ) : (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   </div>

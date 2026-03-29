@@ -424,6 +424,9 @@
       "clearAll": "清空列表",
       "confirmClearAll": "确定要清空所有URL吗？此操作不可撤销。",
       "clearFailed": "清空失败",
+      "clearing": "清空中...",
+      "clearSuccess": "已成功清空 {{count}} 个URL",
+      "pollingStopped": "已停止更新",
       "indexRebuildInProgress": "索引重建中，请稍候..."
     }
   },
