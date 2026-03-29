@@ -12,6 +12,9 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   productionBrowserSourceMaps: false,
+  async generateBuildId() {
+    return `build-${Date.now()}`;
+  },
   webpack(config) {
     config.resolve.alias['react-router-dom'] = path.resolve('./src/router/react-router-dom.tsx');
     return config;

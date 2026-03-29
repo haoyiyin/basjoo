@@ -1452,6 +1452,64 @@
     });
   };
 
+  BasjooWidget.prototype.sendMessageWithRetry = async function(text) {
+    var lastError = null;
+
+    for (var attempt = 0; attempt <= 1; attempt++) {
+      try {
+        var turnstileToken = await this.getTurnstileToken();
+        var response = await fetch(this.config.apiBase + '/api/v1/chat/stream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+          },
+          body: JSON.stringify({
+            agent_id: this.config.agentId,
+            message: text,
+            session_id: this.sessionId,
+            visitor_id: this.visitorId,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            turnstile_token: turnstileToken
+          })
+        });
+
+        if (!response.ok) {
+          var detail = 'HTTP ' + response.status + ': ' + response.statusText;
+          try {
+            var errorPayload = await response.json();
+            detail = errorPayload.message || errorPayload.detail || detail;
+          } catch (parseError) {}
+          throw new Error(detail);
+        }
+
+        this.hideLoading();
+        this.createStreamingMessage();
+        await this.consumeStream(response);
+        return;
+      } catch (error) {
+        lastError = error;
+        var errorText = error && error.message ? String(error.message) : '';
+        var isRetryable = error instanceof TypeError
+          || errorText.indexOf('fetch') !== -1
+          || errorText.indexOf('Failed to fetch') !== -1
+          || errorText.indexOf('Stream ended unexpectedly') !== -1;
+
+        if (!isRetryable || attempt >= 1) {
+          throw error;
+        }
+
+        this.hideLoading();
+        this.removeStreamingMessage();
+        console.warn('[Basjoo Widget] Stream attempt ' + (attempt + 1) + ' failed, retrying...');
+        await new Promise(function(resolve) { window.setTimeout(resolve, 1000); });
+        this.showLoading();
+      }
+    }
+
+    throw lastError;
+  };
+
   BasjooWidget.prototype.sendMessage = async function(text) {
     var self = this;
     if (this.isSending) return;
@@ -1461,35 +1519,7 @@
     this.showLoading();
 
     try {
-      var turnstileToken = await this.getTurnstileToken();
-      var response = await fetch(this.config.apiBase + '/api/v1/chat/stream', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream'
-        },
-        body: JSON.stringify({
-          agent_id: this.config.agentId,
-          message: text,
-          session_id: this.sessionId,
-          visitor_id: this.visitorId,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          turnstile_token: turnstileToken
-        })
-      });
-
-      if (!response.ok) {
-        var detail = 'HTTP ' + response.status + ': ' + response.statusText;
-        try {
-          var errorPayload = await response.json();
-          detail = errorPayload.message || errorPayload.detail || detail;
-        } catch (parseError) {}
-        throw new Error(detail);
-      }
-
-      this.hideLoading();
-      this.createStreamingMessage();
-      await this.consumeStream(response);
+      await this.sendMessageWithRetry(text);
     } catch (error) {
       self.hideLoading();
       self.removeStreamingMessage();

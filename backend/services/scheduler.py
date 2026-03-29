@@ -76,18 +76,11 @@ class URLFetchScheduler:
             logger.exception(f"Error in check_and_fetch_urls: {e}")
 
     async def fetch_agent_urls(self, db: AsyncSession, agent: Agent):
-        """
-        抓取特定Agent的URL
-
-        Args:
-            db: 数据库会话
-            agent: Agent实例
-        """
+        """抓取特定Agent的URL，读取列表后不再持有会话执行 HTTP 请求"""
         try:
             interval_days = agent.url_fetch_interval_days or 7
             threshold_date = datetime.now(timezone.utc) - timedelta(days=interval_days)
 
-            # 获取需要更新的URL（上次抓取时间早于阈值，或者从未抓取过）
             result = await db.execute(
                 select(URLSource).where(
                     and_(
@@ -111,85 +104,85 @@ class URLFetchScheduler:
                 f"(interval: {interval_days} days)"
             )
 
-            # 使用 URLScraper 抓取
             crawler = SiteCrawler(jina_api_key=agent.jina_api_key or "")
 
             for url_source in url_sources:
-                await self.fetch_single_url(db, crawler, url_source)
+                await self.fetch_single_url(crawler, url_source.id, str(agent.id))
 
         except Exception as e:
             logger.exception(f"Error in fetch_agent_urls for agent {agent.id}: {e}")
 
     async def fetch_single_url(
         self,
-        db: AsyncSession,
         crawler: SiteCrawler,
-        url_source: URLSource
+        url_source_id: int,
+        agent_id: str,
     ):
-        """
-        抓取单个URL
-
-        Args:
-            db: 数据库会话
-            crawler: SiteCrawler实例
-            url_source: URLSource实例
-        """
+        """抓取单个URL，使用短生命周期数据库会话"""
         try:
-            logger.info(f"Refetching URL {url_source.url} (ID: {url_source.id})")
-
-            # 标记为抓取中
-            url_source.status = "fetching"
-            await db.commit()
-
-            # 使用 URLScraper 抓取URL
-            page_result = await crawler.crawl_single_page(url_source.url)
-
-            if page_result.success:
-                # 检查内容是否有变化
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                url_source = result.scalar_one_or_none()
+                if not url_source:
+                    return
+                logger.info(f"Refetching URL {url_source.url} (ID: {url_source.id})")
+                url = url_source.url
                 old_hash = url_source.content_hash
-                new_hash = page_result.content_hash
+                url_source.status = "fetching"
+                await db.commit()
 
-                if old_hash != new_hash:
-                    # 内容有变化，更新
-                    url_source.status = "success"
-                    url_source.title = page_result.title
-                    url_source.content = page_result.content
-                    url_source.content_hash = new_hash
-                    url_source.last_fetch_at = datetime.now(timezone.utc)
-                    url_source.fetch_metadata = page_result.metadata
+            page_result = await crawler.crawl_single_page(url)
 
-                    logger.info(
-                        f"URL {url_source.url} content changed, updated. "
-                        f"Old hash: {old_hash[:8] if old_hash else 'None'}..., New hash: {new_hash[:8]}..."
-                    )
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                url_source = result.scalar_one_or_none()
+                if not url_source:
+                    return
+
+                if page_result.success:
+                    new_hash = page_result.content_hash
+                    if old_hash != new_hash:
+                        url_source.status = "success"
+                        url_source.title = page_result.title
+                        url_source.content = page_result.content
+                        url_source.content_hash = new_hash
+                        url_source.last_fetch_at = datetime.now(timezone.utc)
+                        url_source.fetch_metadata = page_result.metadata
+                        logger.info(
+                            f"URL {url_source.url} content changed, updated. "
+                            f"Old hash: {old_hash[:8] if old_hash else 'None'}..., New hash: {new_hash[:8]}..."
+                        )
+                    else:
+                        url_source.status = "success"
+                        url_source.last_fetch_at = datetime.now(timezone.utc)
+                        logger.info(f"URL {url_source.url} content unchanged, only updated timestamp")
+
+                    await db.commit()
+
+                    if old_hash != new_hash:
+                        logger.info(f"URL content changed, triggering index rebuild for agent {agent_id}")
+                        await self.trigger_index_rebuild(agent_id)
                 else:
-                    # 内容无变化，只更新时间
-                    url_source.status = "success"
-                    url_source.last_fetch_at = datetime.now(timezone.utc)
-
-                    logger.info(f"URL {url_source.url} content unchanged, only updated timestamp")
-
-                await db.commit()
-
-                # 如果内容有变化，触发索引重建
-                if old_hash != new_hash:
-                    logger.info(f"URL content changed, triggering index rebuild for agent {url_source.agent_id}")
-                    await self.trigger_index_rebuild(str(url_source.agent_id))
-
-            else:
-                # 抓取失败
-                url_source.status = "failed"
-                url_source.last_error = page_result.error or "Unknown error"
-                await db.commit()
-
-                logger.error(
-                    f"Failed to refetch URL {url_source.url}: "
-                    f"{page_result.error}"
-                )
+                    url_source.status = "failed"
+                    url_source.last_error = page_result.error or "Unknown error"
+                    await db.commit()
+                    logger.error(
+                        f"Failed to refetch URL {url_source.url}: "
+                        f"{page_result.error}"
+                    )
 
         except Exception as e:
-            logger.exception(f"Error in fetch_single_url for URL {url_source.url}: {e}")
-            await db.rollback()
+            logger.exception(f"Error in fetch_single_url for URL ID {url_source_id}: {e}")
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                    url_source = result.scalar_one_or_none()
+                    if url_source:
+                        url_source.status = "failed"
+                        url_source.last_error = str(e)
+                        await db.commit()
+            except Exception:
+                logger.exception("Failed to persist fetch_single_url error state")
 
     async def trigger_index_rebuild(self, agent_id: str):
         """

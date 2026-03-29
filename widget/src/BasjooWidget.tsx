@@ -1504,6 +1504,69 @@ class BasjooWidget {
     });
   }
 
+  private async sendMessageWithRetry(message: string): Promise<void> {
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const turnstileToken = await this.getTurnstileToken();
+
+        const response = await fetch(`${this.config.apiBase}/api/v1/chat/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+          },
+          body: JSON.stringify({
+            agent_id: this.config.agentId,
+            message,
+            locale: this.config.language === 'auto' ? undefined : this.config.language,
+            session_id: this.sessionId || undefined,
+            visitor_id: this.visitorId,
+            timezone: userTimezone,
+            turnstile_token: turnstileToken,
+          }),
+        });
+
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}: ${response.statusText}`;
+          try {
+            const errorPayload = await response.json();
+            detail = errorPayload.message || errorPayload.detail || detail;
+          } catch {
+            // ignore non-JSON error bodies
+          }
+          throw new Error(detail);
+        }
+
+        this.hideLoading();
+        this.createStreamingMessage();
+        await this.consumeStream(response);
+        return;
+      } catch (error: any) {
+        lastError = error;
+        const errorText = String(error?.message || '');
+        const isRetryable = error instanceof TypeError
+          || errorText.includes('fetch')
+          || errorText.includes('Failed to fetch')
+          || errorText.includes('Stream ended unexpectedly');
+
+        if (!isRetryable || attempt >= 1) {
+          throw error;
+        }
+
+        this.hideLoading();
+        this.removeStreamingMessage();
+        console.warn(`[Basjoo Widget] Stream attempt ${attempt + 1} failed, retrying...`);
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
+        this.showLoading();
+      }
+    }
+
+    throw lastError;
+  }
+
   private async sendMessage(message: string) {
     if (this.isSending) {
       return;
@@ -1520,40 +1583,7 @@ class BasjooWidget {
     this.showLoading();
 
     try {
-      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const turnstileToken = await this.getTurnstileToken();
-
-      const response = await fetch(`${this.config.apiBase}/api/v1/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        body: JSON.stringify({
-          agent_id: this.config.agentId,
-          message,
-          locale: this.config.language === 'auto' ? undefined : this.config.language,
-          session_id: this.sessionId || undefined,
-          visitor_id: this.visitorId,
-          timezone: userTimezone,
-          turnstile_token: turnstileToken,
-        }),
-      });
-
-      if (!response.ok) {
-        let detail = `HTTP ${response.status}: ${response.statusText}`;
-        try {
-          const errorPayload = await response.json();
-          detail = errorPayload.message || errorPayload.detail || detail;
-        } catch {
-          // ignore non-JSON error bodies
-        }
-        throw new Error(detail);
-      }
-
-      this.hideLoading();
-      this.createStreamingMessage();
-      await this.consumeStream(response);
+      await this.sendMessageWithRetry(message);
     } catch (error: any) {
       this.hideLoading();
       this.removeStreamingMessage();

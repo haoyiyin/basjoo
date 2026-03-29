@@ -192,15 +192,16 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
             except Exception as e:
                 logger.exception(f"Error in rebuild_index_task: {e}")
                 try:
-                    result = await db.execute(select(IndexJob).where(IndexJob.id == job_id))
-                    job = result.scalar_one_or_none()
-                    if job:
-                        job.status = "failed"
-                        job.completed_at = func.now()
-                        job.error_message = str(e)
-                        await db.commit()
+                    async with database.AsyncSessionLocal() as fail_db:
+                        result = await fail_db.execute(select(IndexJob).where(IndexJob.id == job_id))
+                        job = result.scalar_one_or_none()
+                        if job:
+                            job.status = "failed"
+                            job.completed_at = func.now()
+                            job.error_message = str(e)[:500]
+                            await fail_db.commit()
                 except Exception:
-                    pass
+                    logger.exception("Failed to update IndexJob failure status")
     finally:
         # 释放任务锁
         await task_lock.release_task(agent_id, task_id)

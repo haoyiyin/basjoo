@@ -78,9 +78,12 @@ async def _run_tracked_task(agent_id: str, task_id: str, coro):
 
 
 async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
-    """异步抓取URL任务 - 使用 URLScraper"""
-    async with database.AsyncSessionLocal() as db:
-        try:
+    """异步抓取URL任务 - 使用短生命周期 DB session"""
+    agent_id = None
+    task_id = f"fetch_{url_source_id}"
+
+    try:
+        async with database.AsyncSessionLocal() as db:
             result = await db.execute(
                 select(URLSource).where(URLSource.id == url_source_id)
             )
@@ -91,35 +94,52 @@ async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
                 return
 
             agent_id = url_source.agent_id
-            task_id = f"fetch_{url_source_id}"
+            url = url_source.url
 
             agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
             agent = agent_result.scalar_one_or_none()
-            agent_scraper = URLScraper(jina_api_key=agent.jina_api_key or "") if agent else URLScraper()
+            jina_api_key = agent.jina_api_key if agent else ""
 
-            # 尝试获取任务锁
-            success, error = await task_lock.acquire_task(agent_id, TaskType.URL_FETCH, task_id)
-            if not success:
-                logger.warning(f"Cannot start URL fetch: {error}")
-                url_source.status = "failed"
-                url_source.last_error = error
-                await db.commit()
-                return
+        success, error = await task_lock.acquire_task(agent_id, TaskType.URL_FETCH, task_id)
+        if not success:
+            logger.warning(f"Cannot start URL fetch: {error}")
+            async with database.AsyncSessionLocal() as db:
+                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                url_source = result.scalar_one_or_none()
+                if url_source:
+                    url_source.status = "failed"
+                    url_source.last_error = error
+                    await db.commit()
+            return
 
-            try:
-                # 标记为抓取中
+        try:
+            async with database.AsyncSessionLocal() as db:
+                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                url_source = result.scalar_one_or_none()
+                if not url_source:
+                    return
                 url_source.status = "fetching"
                 await db.commit()
 
-                if task_lock.is_cancelled(agent_id, task_id):
-                    url_source.status = "failed"
-                    url_source.last_error = "Fetch cancelled by user"
-                    url_source.updated_at = func.now()
-                    await db.commit()
-                    return
+            if task_lock.is_cancelled(agent_id, task_id):
+                async with database.AsyncSessionLocal() as db:
+                    result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                    url_source = result.scalar_one_or_none()
+                    if url_source:
+                        url_source.status = "failed"
+                        url_source.last_error = "Fetch cancelled by user"
+                        url_source.updated_at = func.now()
+                        await db.commit()
+                return
 
-                # 使用 URLScraper 抓取单页
-                fetch_result = await agent_scraper.fetch(url_source.url)
+            agent_scraper = URLScraper(jina_api_key=jina_api_key or "")
+            fetch_result = await agent_scraper.fetch(url)
+
+            async with database.AsyncSessionLocal() as db:
+                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                url_source = result.scalar_one_or_none()
+                if not url_source:
+                    return
 
                 if task_lock.is_cancelled(agent_id, task_id):
                     url_source.status = "failed"
@@ -129,41 +149,42 @@ async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
                     return
 
                 if fetch_result.get("success"):
-                    # 更新成功状态
                     url_source.status = "success"
                     url_source.title = fetch_result.get("title")
                     url_source.content = fetch_result.get("content")
                     url_source.content_hash = fetch_result.get("content_hash")
                     url_source.last_fetch_at = func.now()
                     url_source.fetch_metadata = fetch_result.get("metadata")
-
                     await db.commit()
-
                     logger.info(f"Successfully fetched {url_source.url}")
-
-                    # 注意：不再自动增量更新索引，由用户手动触发"重新训练智能体"
                 else:
-                    # 更新失败状态
                     url_source.status = "failed"
                     url_source.last_error = fetch_result.get("error") or "Unknown error"
                     url_source.updated_at = func.now()
                     await db.commit()
-
                     logger.error(
                         f"Failed to fetch {url_source.url}: {fetch_result.get('error')}"
                     )
-            finally:
-                # 释放任务锁
-                await task_lock.release_task(agent_id, task_id)
-                # 注意：不再触发全量重建，因为已经在抓取成功时增量更新了索引
+        finally:
+            await task_lock.release_task(agent_id, task_id)
 
-        except asyncio.CancelledError:
-            logger.info(f"fetch_url_task cancelled for URLSource {url_source_id}")
-            await db.rollback()
-            raise
-        except Exception as e:
-            logger.exception(f"Error in fetch_url_task: {e}")
-            await db.rollback()
+    except asyncio.CancelledError:
+        logger.info(f"fetch_url_task cancelled for URLSource {url_source_id}")
+        raise
+    except Exception as e:
+        logger.exception(f"Error in fetch_url_task: {e}")
+        if agent_id:
+            try:
+                async with database.AsyncSessionLocal() as db:
+                    result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                    url_source = result.scalar_one_or_none()
+                    if url_source:
+                        url_source.status = "failed"
+                        url_source.last_error = str(e)[:500]
+                        url_source.updated_at = func.now()
+                        await db.commit()
+            except Exception:
+                logger.exception("Failed to update URL fetch failure status")
 
 
 @router.post("/urls:create")
@@ -489,11 +510,10 @@ async def discover_subpages(
 
 
 async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: int):
-    """后台全站爬取任务"""
+    """后台全站爬取任务 - 使用短生命周期 DB session"""
     task_id = f"crawl_{url[:50]}_{max_depth}_{max_pages}"
     logger.info(f"[site_crawl_task] Starting task {task_id} for agent {agent_id}")
 
-    # 尝试获取任务锁
     success, error = await task_lock.acquire_task(agent_id, TaskType.URL_CRAWL, task_id)
     if not success:
         logger.warning(f"[site_crawl_task] Cannot start site crawl: {error}")
@@ -503,39 +523,39 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
 
     try:
         async with database.AsyncSessionLocal() as db:
-            try:
-                # 获取Agent和配额
-                agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-                agent = agent_result.scalar_one_or_none()
-                if not agent:
-                    logger.error(f"[site_crawl_task] Agent {agent_id} not found for site crawl")
-                    return
+            agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
+            agent = agent_result.scalar_one_or_none()
+            if not agent:
+                logger.error(f"[site_crawl_task] Agent {agent_id} not found for site crawl")
+                return
+            jina_api_key = agent.jina_api_key or ""
+            workspace_id = agent.workspace_id
 
+        logger.info(f"[site_crawl_task] Initializing SiteCrawler...")
+        crawler = SiteCrawler(jina_api_key=jina_api_key)
+        logger.info(f"[site_crawl_task] Starting crawl_site({url}, depth={max_depth}, pages={max_pages})")
+        results = await crawler.crawl_site(
+            url=url,
+            max_depth=max_depth,
+            max_pages=max_pages
+        )
+        logger.info(f"[site_crawl_task] Crawl completed, got {len(results)} results")
+
+        if task_lock.is_cancelled(agent_id, task_id):
+            logger.info(f"[site_crawl_task] Task {task_id} cancelled before persisting results")
+            return
+
+        async with database.AsyncSessionLocal() as db:
+            try:
                 quota_result = await db.execute(
-                    select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
+                    select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
                 )
                 quota = quota_result.scalar_one_or_none()
-
-                logger.info(f"[site_crawl_task] Agent found, quota: {quota.used_urls if quota else 'N/A'}/{quota.max_urls if quota else 'N/A'}")
-
-                # 执行全站爬取
-                logger.info(f"[site_crawl_task] Initializing SiteCrawler...")
-                crawler = SiteCrawler(jina_api_key=agent.jina_api_key or "")
-                logger.info(f"[site_crawl_task] Starting crawl_site({url}, depth={max_depth}, pages={max_pages})")
-                results = await crawler.crawl_site(
-                    url=url,
-                    max_depth=max_depth,
-                    max_pages=max_pages
-                )
-                logger.info(f"[site_crawl_task] Crawl completed, got {len(results)} results")
-
-                if task_lock.is_cancelled(agent_id, task_id):
-                    logger.info(f"[site_crawl_task] Task {task_id} cancelled before persisting results")
-                    return
+                logger.info(f"[site_crawl_task] Quota: {quota.used_urls if quota else 'N/A'}/{quota.max_urls if quota else 'N/A'}")
 
                 created_count = 0
-                seen_normalized_urls = set()  # Track URLs we've already processed in this batch
-                
+                seen_normalized_urls = set()
+
                 for page_result in results:
                     if task_lock.is_cancelled(agent_id, task_id):
                         logger.info(f"[site_crawl_task] Task {task_id} cancelled during result persistence")
@@ -544,19 +564,15 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                     if not page_result.success:
                         continue
 
-                    # 检查配额
                     if quota and quota.used_urls >= quota.max_urls:
                         logger.warning(f"URL quota exceeded for agent {agent_id}")
                         break
 
                     normalized = URLNormalizer.normalize(page_result.url)
-                    
-                    # Skip if we've already seen this URL in this batch
                     if normalized in seen_normalized_urls:
                         continue
                     seen_normalized_urls.add(normalized)
 
-                    # 检查是否已存在
                     existing = await db.execute(
                         select(URLSource).where(
                             URLSource.agent_id == agent_id,
@@ -566,7 +582,6 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                     if existing.scalar_one_or_none():
                         continue
 
-                    # 创建URLSource记录（已包含内容）
                     url_source = URLSource(
                         agent_id=agent_id,
                         url=page_result.url,
@@ -578,8 +593,7 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                         fetch_metadata=page_result.metadata,
                     )
                     db.add(url_source)
-                    
-                    # Flush to catch any remaining duplicates
+
                     try:
                         await db.flush()
                         created_count += 1
@@ -587,21 +601,15 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                             quota.used_urls += 1
                     except IntegrityError:
                         await db.rollback()
-                        # Re-fetch agent and quota after rollback
-                        agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-                        agent = agent_result.scalar_one_or_none()
-                        if agent:
-                            quota_result = await db.execute(
-                                select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
-                            )
-                            quota = quota_result.scalar_one_or_none()
+                        quota_result = await db.execute(
+                            select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
+                        )
+                        quota = quota_result.scalar_one_or_none()
                         logger.info(f"Skipping duplicate URL: {normalized}")
                         continue
 
                 await db.commit()
                 logger.info(f"Site crawl completed for {url}: {created_count} pages added")
-                
-                # 注意：不再自动触发索引重建，由用户手动点击"重新训练智能体"
 
             except asyncio.CancelledError:
                 logger.info(f"[site_crawl_task] Task {task_id} cancelled")
@@ -611,7 +619,6 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                 logger.exception(f"[site_crawl_task] Error in site_crawl_task: {e}")
                 await db.rollback()
     finally:
-        # 释放任务锁
         logger.info(f"[site_crawl_task] Releasing task lock {task_id}")
         await task_lock.release_task(agent_id, task_id)
 

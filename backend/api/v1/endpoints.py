@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import Any, Dict, List, Optional
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -1003,14 +1004,24 @@ async def chat_stream(
 
         reply_parts = []
         try:
-            async for chunk in llm.chat_completion(
+            stream_iter = llm.chat_completion(
                 messages=messages,
                 system_prompt=None,
                 stream=True,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
-            ):
+            ).__aiter__()
+
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=15.0)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+
                 reply_parts.append(chunk)
                 yield sse_event("content", {"content": chunk})
         except Exception:
