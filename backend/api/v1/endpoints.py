@@ -51,7 +51,7 @@ from api.v1.schemas import (
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
-from services.llm_service import get_llm_service
+from services.llm_service import LLMError, get_llm_service
 from services.turnstile_service import verify_turnstile_token
 from services.auth_service import AuthService
 from middleware import get_request_client_ip
@@ -140,6 +140,10 @@ def build_agent_config(agent: Agent) -> dict:
         "url_fetch_interval_days": agent.url_fetch_interval_days,
         "rate_limit_per_hour": agent.rate_limit_per_hour,
         "rate_limit_reply": agent.rate_limit_reply,
+        "offline_reply": agent.offline_reply,
+        "last_error_code": agent.last_error_code,
+        "last_error_message": agent.last_error_message,
+        "last_error_at": agent.last_error_at.isoformat() if agent.last_error_at else None,
         "enable_turnstile": agent.enable_turnstile,
         "turnstile_site_key": agent.turnstile_site_key,
         "turnstile_secret_key_set": bool(agent.turnstile_secret_key),
@@ -336,6 +340,34 @@ def get_safe_stream_error_message(code: str) -> str:
     return messages.get(code, "Chat stream failed")
 
 
+async def record_agent_error(
+    agent: Agent,
+    code: str,
+    message: str,
+    db: AsyncSession,
+) -> None:
+    agent.last_error_code = code
+    agent.last_error_message = message[:500]
+    agent.last_error_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(agent)
+
+
+async def clear_agent_error_state(agent: Agent, db: AsyncSession) -> None:
+    if (
+        agent.last_error_code is None
+        and agent.last_error_message is None
+        and agent.last_error_at is None
+    ):
+        return
+
+    agent.last_error_code = None
+    agent.last_error_message = None
+    agent.last_error_at = None
+    await db.commit()
+    await db.refresh(agent)
+
+
 async def get_or_create_chat_session(
     agent: Agent,
     request: ChatRequest,
@@ -472,6 +504,7 @@ async def prepare_chat_request(
     agent_embedding_model = agent.embedding_model
     agent_rate_limit_per_hour = agent.rate_limit_per_hour
     agent_rate_limit_reply = agent.rate_limit_reply
+    agent_offline_reply = agent.offline_reply
     use_mock_llm = not agent.api_key
     if use_mock_llm:
         logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
@@ -635,6 +668,7 @@ async def prepare_chat_request(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
+        "offline_reply": agent_offline_reply,
     }
 
 
@@ -818,18 +852,29 @@ async def chat(
             taken_over=True,
         )
 
-    reply_parts = []
-    async for chunk in chat_context["llm"].chat_completion(
-        messages=chat_context["messages"],
-        system_prompt=None,
-        stream=True,
-        temperature=chat_context["temperature"],
-        max_tokens=chat_context["max_tokens"],
-        reasoning_effort=chat_context["reasoning_effort"],
-    ):
-        reply_parts.append(chunk)
+    try:
+        reply_parts = []
+        async for chunk in chat_context["llm"].chat_completion(
+            messages=chat_context["messages"],
+            system_prompt=None,
+            stream=True,
+            temperature=chat_context["temperature"],
+            max_tokens=chat_context["max_tokens"],
+            reasoning_effort=chat_context["reasoning_effort"],
+        ):
+            reply_parts.append(chunk)
 
-    reply = "".join(reply_parts)
+        reply = "".join(reply_parts)
+    except LLMError as error:
+        offline_reply = chat_context.get("offline_reply") or "抱歉，AI 服务暂时不可用，请稍后再试。"
+        logger.warning("LLM error [%s]: %s", error.code, error)
+        await record_agent_error(chat_context["agent"], error.code, str(error), db)
+        return ChatResponse(
+            reply=offline_reply,
+            sources=[],
+            usage=None,
+            session_id=session.session_id,
+        )
     sources = chat_context["sources"]
     real_usage = chat_context["llm"].get_last_usage()
     if real_usage:
@@ -964,6 +1009,20 @@ async def chat_stream(
                 {
                     "error": get_safe_stream_error_message("PERSISTENCE_ERROR"),
                     "code": "PERSISTENCE_ERROR",
+                },
+            )
+        except LLMError as error:
+            offline_reply = chat_context.get("offline_reply") or "抱歉，AI 服务暂时不可用，请稍后再试。"
+            logger.warning("LLM error [%s]: %s", error.code, error)
+            await record_agent_error(chat_context["agent"], error.code, str(error), db)
+            yield sse_event("content", {"content": offline_reply})
+            yield sse_event(
+                "done",
+                {
+                    "message_id": None,
+                    "session_id": session.session_id,
+                    "usage": None,
+                    "taken_over": False,
                 },
             )
         except Exception:
@@ -1163,6 +1222,24 @@ async def update_agent(
     await db.refresh(agent)
 
     return build_agent_config(agent)
+
+
+@router.post("/agent:clear-error")
+async def clear_agent_error(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
+        )
+
+    await clear_agent_error_state(agent, db)
+    return {"success": True}
 
 
 @router.get("/agent:jina-key-status")

@@ -102,7 +102,15 @@
     "jinaApiRateLimit": "Jina API 请求过于频繁，请稍后重试",
     "rateLimitExceeded": "对话次数已达上限，请稍后再试",
     "dailyQuotaExceeded": "今日对话配额已用完，请明天再试",
-    "noApiKeyConfigured": "未配置 API Key，请在 AI 设置中配置"
+    "noApiKeyConfigured": "未配置 API Key，请在 AI 设置中配置",
+    "agentErrorBanner": "Agent 异常提醒",
+    "agentErrorDismiss": "忽略此通知",
+    "agentErrorAPI_KEY_INVALID": "AI API Key无效或已过期，请检查配置",
+    "agentErrorAPI_KEY_MISSING": "未配置 AI API Key，请先完成配置",
+    "agentErrorPROVIDER_RATE_LIMITED": "AI 服务商已限流，请稍后重试",
+    "agentErrorPROVIDER_UNAVAILABLE": "AI 服务暂时不可用，请检查网络或服务商状态",
+    "agentErrorMODEL_NOT_FOUND": "AI 模型不存在，请检查模型名称",
+    "agentErrorPROVIDER_ERROR": "AI 服务调用失败，请检查配置或稍后重试"
   },
   "time": {
     "goodMorning": "早上好",
@@ -322,6 +330,9 @@
     "autoReplyOnLimit": "达到限制后的自动回复",
     "autoReplyMessage": "抱歉，当前对话次数过多，请稍后再试。",
     "autoReplyDesc": "当达到每小时限制时，向用户显示此消息",
+    "offlineReplyLabel": "AI 服务异常时的自动回复",
+    "offlineReplyPlaceholder": "抱歉，AI 服务暂时不可用，请稍后再试。",
+    "offlineReplyDesc": "当 AI API 无法调用时，向访客展示此自动回复内容",
     "secureStorage": "您的 API 密钥将被安全存储，不会泄露",
     "pleaseConfigureApiKey": "请先配置 API 密钥才能使用 AI 对话功能",
     "widgetAppearance": "Widget 外观",

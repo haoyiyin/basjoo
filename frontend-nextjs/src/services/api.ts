@@ -83,6 +83,10 @@ export interface Agent {
   url_fetch_interval_days?: number;
   rate_limit_per_hour: number;
   rate_limit_reply?: string;
+  offline_reply?: string;
+  last_error_code?: string | null;
+  last_error_message?: string | null;
+  last_error_at?: string | null;
   persona_type?: string;
   widget_title?: string;
   widget_color?: string;
@@ -360,6 +364,12 @@ class APIService {
     return this.request<Agent>(`/api/v1/agent?agent_id=${agentId}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
+    });
+  }
+
+  async clearAgentError(agentId: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/api/v1/agent:clear-error?agent_id=${agentId}`, {
+      method: 'POST',
     });
   }
 

@@ -39,6 +39,7 @@ export default function SystemSettings() {
     history_days: 30,
     rate_limit_per_hour: 100,
     rate_limit_reply: t('labels.autoReplyMessage'),
+    offline_reply: t('labels.offlineReplyPlaceholder'),
     enable_turnstile: false,
     turnstile_site_key: '',
     turnstile_secret_key: '',
@@ -91,6 +92,7 @@ export default function SystemSettings() {
         history_days: agentData.history_days || 30,
         rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
         rate_limit_reply: agentData.rate_limit_reply || t('labels.autoReplyMessage'),
+        offline_reply: agentData.offline_reply || t('labels.offlineReplyPlaceholder'),
         enable_turnstile: agentData.enable_turnstile ?? false,
         turnstile_site_key: agentData.turnstile_site_key || '',
         turnstile_secret_key: '',
@@ -115,6 +117,7 @@ export default function SystemSettings() {
         history_days: newSettings.history_days,
         rate_limit_per_hour: newSettings.rate_limit_per_hour,
         rate_limit_reply: newSettings.rate_limit_reply,
+        offline_reply: newSettings.offline_reply,
         enable_turnstile: newSettings.enable_turnstile,
         turnstile_site_key: newSettings.turnstile_site_key || null,
         turnstile_secret_key: newSettings.turnstile_secret_key || null,
@@ -208,6 +211,28 @@ export default function SystemSettings() {
       setTimeout(() => setCopied(false), 2000)
     }
   }
+
+  const getAgentErrorMessage = useCallback((errorCode?: string | null) => {
+    if (!errorCode) return ''
+    const key = `errors.agentError${errorCode}`
+    const translated = t(key)
+    return translated === key ? (agent?.last_error_message || errorCode) : translated
+  }, [agent?.last_error_message, t])
+
+  const handleDismissAgentError = useCallback(async () => {
+    if (!agent) return
+    try {
+      await api.clearAgentError(agent.id)
+      setAgent(prev => prev ? {
+        ...prev,
+        last_error_code: null,
+        last_error_message: null,
+        last_error_at: null,
+      } : prev)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('errors.saveFailed'))
+    }
+  }, [agent, t])
 
   if (loading) {
     return (
@@ -312,6 +337,45 @@ export default function SystemSettings() {
             color: '#ef4444',
           }}>
             {error}
+          </div>
+        )}
+
+        {agent?.last_error_code && (
+          <div style={{
+            padding: 'var(--space-4)',
+            marginBottom: 'var(--space-6)',
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+            borderRadius: 'var(--radius-md)',
+            color: 'var(--color-text-primary)',
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: isMobile ? 'flex-start' : 'center',
+              flexDirection: isMobile ? 'column' : 'row',
+              gap: 'var(--space-3)',
+            }}>
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)' }}>
+                  {t('errors.agentErrorBanner')}
+                </div>
+                <div style={{ marginBottom: 'var(--space-1)' }}>
+                  {getAgentErrorMessage(agent.last_error_code)}
+                </div>
+                {agent.last_error_at && (
+                  <div style={{
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--color-text-muted)',
+                  }}>
+                    {new Date(agent.last_error_at).toLocaleString(i18n.language)}
+                  </div>
+                )}
+              </div>
+              <button className="btn-secondary" onClick={handleDismissAgentError}>
+                {t('errors.agentErrorDismiss')}
+              </button>
+            </div>
           </div>
         )}
 
@@ -866,6 +930,35 @@ export default function SystemSettings() {
                 {t('labels.autoReplyDesc')}
               </p>
             </div>
+          </div>
+
+          <div style={{ marginTop: 'var(--space-4)' }}>
+            <label style={{
+              display: 'block',
+              marginBottom: 'var(--space-2)',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 500,
+              color: 'var(--color-text-secondary)',
+            }}>
+              {t('labels.offlineReplyLabel')}
+            </label>
+            <textarea
+              value={settings.offline_reply}
+              onChange={(e) => handleChangeWithAutoSave('offline_reply', e.target.value)}
+              rows={3}
+              placeholder={t('labels.offlineReplyPlaceholder')}
+              style={{
+                width: '100%',
+                resize: 'vertical',
+              }}
+            />
+            <p style={{
+              marginTop: 'var(--space-2)',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--color-text-muted)',
+            }}>
+              {t('labels.offlineReplyDesc')}
+            </p>
           </div>
         </div>
 

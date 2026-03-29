@@ -16,6 +16,89 @@ import html
 logger = logging.getLogger(__name__)
 
 
+class LLMError(Exception):
+    """Base exception for classified LLM failures."""
+
+    code = "PROVIDER_ERROR"
+
+
+class APIKeyInvalidError(LLMError):
+    code = "API_KEY_INVALID"
+
+
+class APIKeyMissingError(LLMError):
+    code = "API_KEY_MISSING"
+
+
+class ProviderRateLimitedError(LLMError):
+    code = "PROVIDER_RATE_LIMITED"
+
+
+class ProviderUnavailableError(LLMError):
+    code = "PROVIDER_UNAVAILABLE"
+
+
+class ModelNotFoundError(LLMError):
+    code = "MODEL_NOT_FOUND"
+
+
+def classify_llm_error(error: Exception) -> LLMError:
+    """Normalize provider-specific exceptions into stable error codes."""
+
+    if isinstance(error, LLMError):
+        return error
+
+    status_code = getattr(error, "status_code", None)
+    response = getattr(error, "response", None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, "status_code", None)
+
+    error_name = type(error).__name__.lower()
+    message = str(error)
+    lowered_message = message.lower()
+
+    if (
+        status_code == 401
+        or "authenticationerror" in error_name
+        or "invalid api key" in lowered_message
+        or "incorrect api key" in lowered_message
+        or "api key" in lowered_message and ("invalid" in lowered_message or "expired" in lowered_message)
+    ):
+        return APIKeyInvalidError(message)
+
+    if (
+        status_code == 404
+        or "notfounderror" in error_name
+        or "model not found" in lowered_message
+        or "unknown model" in lowered_message
+        or "does not exist" in lowered_message and "model" in lowered_message
+    ):
+        return ModelNotFoundError(message)
+
+    if (
+        status_code == 429
+        or "ratelimiterror" in error_name
+        or "rate limit" in lowered_message
+        or "too many requests" in lowered_message
+        or "quota" in lowered_message
+    ):
+        return ProviderRateLimitedError(message)
+
+    if (
+        "timeout" in lowered_message
+        or "timed out" in lowered_message
+        or "connection" in lowered_message
+        or "unavailable" in lowered_message
+        or "temporarily down" in lowered_message
+        or "service unavailable" in lowered_message
+        or "apiconnectionerror" in error_name
+        or "apierror" in error_name
+    ):
+        return ProviderUnavailableError(message)
+
+    return LLMError(message)
+
+
 def supports_openai_reasoning_effort(model: str) -> bool:
     """判断 OpenAI 模型是否支持 reasoning_effort 参数"""
     return model.lower().startswith(("o1", "o3", "o4"))
@@ -293,7 +376,7 @@ class OpenAIProvider(BaseLLMService):
 
         except Exception as e:
             logger.error(f"OpenAI API 调用失败: {str(e)}")
-            raise
+            raise classify_llm_error(e) from e
 
     async def test_connection(self) -> bool:
         """测试 OpenAI API 连通性"""
@@ -305,7 +388,8 @@ class OpenAIProvider(BaseLLMService):
             )
             return True
         except Exception as e:
-            logger.error(f"OpenAI API 连接测试失败: {str(e)}")
+            classified = classify_llm_error(e)
+            logger.error(f"OpenAI API 连接测试失败 [{classified.code}]: {str(e)}")
             return False
 
 
@@ -400,7 +484,7 @@ class OpenAINativeProvider(BaseLLMService):
 
         except Exception as e:
             logger.error(f"OpenAI Native API 调用失败: {str(e)}")
-            raise
+            raise classify_llm_error(e) from e
 
     async def test_connection(self) -> bool:
         """测试 OpenAI API 连通性"""
@@ -412,7 +496,8 @@ class OpenAINativeProvider(BaseLLMService):
             )
             return True
         except Exception as e:
-            logger.error(f"OpenAI Native API 连接测试失败: {str(e)}")
+            classified = classify_llm_error(e)
+            logger.error(f"OpenAI Native API 连接测试失败 [{classified.code}]: {str(e)}")
             return False
 
     @staticmethod
@@ -531,7 +616,7 @@ class GoogleProvider(BaseLLMService):
 
         except Exception as e:
             logger.error(f"Google API 调用失败: {str(e)}")
-            raise
+            raise classify_llm_error(e) from e
 
     async def test_connection(self) -> bool:
         """测试 Google API 连通性"""
@@ -541,7 +626,8 @@ class GoogleProvider(BaseLLMService):
             )
             return True
         except Exception as e:
-            logger.error(f"Google API 连接测试失败: {str(e)}")
+            classified = classify_llm_error(e)
+            logger.error(f"Google API 连接测试失败 [{classified.code}]: {str(e)}")
             return False
 
     @staticmethod

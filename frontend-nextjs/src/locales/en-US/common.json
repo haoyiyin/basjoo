@@ -102,7 +102,15 @@
     "jinaApiRateLimit": "Jina API rate limit exceeded, please try again later",
     "rateLimitExceeded": "Conversation limit reached, please try again later",
     "dailyQuotaExceeded": "Daily conversation quota exceeded, please try again tomorrow",
-    "noApiKeyConfigured": "No API Key configured, please configure in AI Settings"
+    "noApiKeyConfigured": "No API Key configured, please configure in AI Settings",
+    "agentErrorBanner": "Agent issue detected",
+    "agentErrorDismiss": "Dismiss",
+    "agentErrorAPI_KEY_INVALID": "The AI API key is invalid or expired. Please check your configuration.",
+    "agentErrorAPI_KEY_MISSING": "No AI API key is configured yet.",
+    "agentErrorPROVIDER_RATE_LIMITED": "The AI provider is rate limiting requests. Please try again later.",
+    "agentErrorPROVIDER_UNAVAILABLE": "The AI provider is temporarily unavailable. Please check network or provider status.",
+    "agentErrorMODEL_NOT_FOUND": "The configured AI model was not found. Please verify the model name.",
+    "agentErrorPROVIDER_ERROR": "The AI provider request failed. Please review the configuration or try again later."
   },
   "time": {
     "goodMorning": "Good morning",
@@ -322,6 +330,9 @@
     "autoReplyOnLimit": "Auto-reply when limit reached",
     "autoReplyMessage": "Sorry, there are too many conversations right now. Please try again later.",
     "autoReplyDesc": "Message displayed to users when hourly limit is reached",
+    "offlineReplyLabel": "Auto-reply when AI service is unavailable",
+    "offlineReplyPlaceholder": "Sorry, the AI service is temporarily unavailable. Please try again later.",
+    "offlineReplyDesc": "Message shown to visitors when the AI API cannot be called",
     "secureStorage": "Your API key will be securely stored and will not be leaked",
     "pleaseConfigureApiKey": "Please configure API key first to use AI conversation features",
     "widgetAppearance": "Widget Appearance",
