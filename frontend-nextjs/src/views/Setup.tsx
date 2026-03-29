@@ -23,8 +23,20 @@ export const Setup = () => {
         setError('');
 
         try {
-            // Update AI Settings for App ID 1
-            const res = await fetch(`${API_BASE_URL}/api/admin/settings/ai?app_id=1`, {
+            const defaultAgentRes = await fetch(`${API_BASE_URL}/api/v1/agent:default`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (!defaultAgentRes.ok) {
+                const data = await defaultAgentRes.json();
+                throw new Error(data.detail || t('settings.setupFailed'));
+            }
+
+            const defaultAgent = await defaultAgentRes.json();
+
+            const res = await fetch(`${API_BASE_URL}/api/v1/agent?agent_id=${defaultAgent.id}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -32,12 +44,13 @@ export const Setup = () => {
                 },
                 body: JSON.stringify({
                     api_key: apiKey,
-                    base_url: baseUrl,
-                    model_name: modelName,
+                    api_base: baseUrl,
+                    model: modelName,
                     system_prompt: systemPrompt,
+                    provider_type: 'openai',
                     enable_context: false,
-                    rate_limit: 100,
-                    default_reply: t('settings.defaultReply')
+                    rate_limit_per_hour: 100,
+                    rate_limit_reply: t('settings.defaultReply')
                 })
             });
 
@@ -46,7 +59,6 @@ export const Setup = () => {
                 throw new Error(data.detail || t('settings.setupFailed'));
             }
 
-            // Redirect to dashboard
             navigate('/');
         } catch (err: unknown) {
             setError(err instanceof Error ? err.message : t('settings.setupFailedRetry'));
