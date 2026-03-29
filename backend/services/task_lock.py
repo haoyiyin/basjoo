@@ -29,7 +29,9 @@ class TaskLock:
     def __init__(self):
         self._locks: Dict[str, asyncio.Lock] = {}
         self._active_tasks: Dict[str, Dict[str, datetime]] = {}
+        self._task_handles: Dict[str, Dict[str, asyncio.Task]] = {}
         self._pending_rebuild: Set[str] = set()
+        self._cancelled_tasks: Dict[str, Set[str]] = {}
         self._lock_creation_lock = asyncio.Lock()  # 用于保护锁的创建
 
     def _get_lock(self, agent_id: str) -> asyncio.Lock:
@@ -99,6 +101,12 @@ class TaskLock:
             logger.info(f"Task acquired: {task_id} for agent {agent_id}")
             return True, None
 
+    async def register_task_handle(self, agent_id: str, task_id: str, task: asyncio.Task):
+        """记录正在运行的 asyncio Task 句柄，以便真正取消。"""
+        lock = await self._get_or_create_lock(agent_id)
+        async with lock:
+            self._task_handles.setdefault(agent_id, {})[task_id] = task
+
     async def release_task(self, agent_id: str, task_id: str):
         """释放任务锁
 
@@ -112,11 +120,19 @@ class TaskLock:
                 if task_id in self._active_tasks[agent_id]:
                     del self._active_tasks[agent_id][task_id]
                     logger.info(f"Task released: {task_id} for agent {agent_id}")
+            if agent_id in self._cancelled_tasks:
+                self._cancelled_tasks[agent_id].discard(task_id)
+                if not self._cancelled_tasks[agent_id]:
+                    del self._cancelled_tasks[agent_id]
+            if agent_id in self._task_handles:
+                self._task_handles[agent_id].pop(task_id, None)
+                if not self._task_handles[agent_id]:
+                    del self._task_handles[agent_id]
 
-                    # 检查是否需要触发待处理的索引重建
-                    if agent_id in self._pending_rebuild and not self._active_tasks[agent_id]:
-                        self._pending_rebuild.discard(agent_id)
-                        return True  # 表示需要触发重建
+            # 检查是否需要触发待处理的索引重建
+            if agent_id in self._pending_rebuild and not self._active_tasks.get(agent_id):
+                self._pending_rebuild.discard(agent_id)
+                return True  # 表示需要触发重建
         return False
 
     async def schedule_rebuild_after_tasks(self, agent_id: str):
@@ -155,6 +171,38 @@ class TaskLock:
     def has_any_active_task(self, agent_id: str) -> bool:
         """检查是否有任何活动任务"""
         return bool(self._active_tasks.get(agent_id))
+
+    async def cancel_tasks(self, agent_id: str, task_types: Optional[Set[TaskType]] = None) -> list[str]:
+        """标记指定 agent 的活动任务为已取消。"""
+        lock = await self._get_or_create_lock(agent_id)
+        async with lock:
+            active = self._active_tasks.get(agent_id, {})
+            if not active:
+                return []
+
+            prefix_map = {
+                TaskType.INDEX_REBUILD: "rebuild_",
+                TaskType.URL_CRAWL: "crawl_",
+                TaskType.URL_FETCH: "fetch_",
+                TaskType.URL_REFETCH: "refetch_",
+            }
+            prefixes = {
+                prefix_map[task_type]
+                for task_type in (task_types or set(prefix_map.keys()))
+                if task_type in prefix_map
+            }
+            cancelled = [task_id for task_id in active if any(task_id.startswith(prefix) for prefix in prefixes)]
+            if cancelled:
+                self._cancelled_tasks.setdefault(agent_id, set()).update(cancelled)
+                for task_id in cancelled:
+                    task = self._task_handles.get(agent_id, {}).get(task_id)
+                    if task and not task.done():
+                        task.cancel()
+            return cancelled
+
+    def is_cancelled(self, agent_id: str, task_id: str) -> bool:
+        """检查任务是否已被标记取消。"""
+        return task_id in self._cancelled_tasks.get(agent_id, set())
 
 
 # 全局任务锁实例

@@ -230,8 +230,15 @@ export default function URLManagement() {
     }
   };
 
-  const stopPolling = useCallback(() => {
+  const stopPolling = useCallback(async () => {
     stopPollingRequestedRef.current = true;
+    try {
+      if (agentId) {
+        await api.cancelURLTasks(agentId);
+      }
+    } catch (error) {
+      console.error('Failed to cancel URL tasks:', error);
+    }
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
@@ -239,7 +246,7 @@ export default function URLManagement() {
     setCrawlPolling(false);
     setPollingStopped(true);
     window.setTimeout(() => setPollingStopped(false), 2000);
-  }, []);
+  }, [agentId]);
 
   // Polling effect for crawl progress
   useEffect(() => {
@@ -283,13 +290,20 @@ export default function URLManagement() {
         // 2. 且已经轮询了至少 3 次
         // 3. 且连续 2 次没有新 URL 增加（确保数据已稳定）
         if (!tasksStatus.is_crawling && pollCount > 3 && consecutiveNoChange >= 2) {
-          stopPolling();
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          setCrawlPolling(false);
+          window.setTimeout(() => {
+            void loadURLs();
+          }, 500);
           return;
         }
 
         // 备选停止条件：如果轮询超过 30 次仍没有变化，可能是抓取失败
         if (consecutiveNoChange > 30) {
-          stopPolling();
+          await stopPolling();
         }
       } catch (error) {
         console.error('[pollURLs] Polling error:', error);
@@ -405,6 +419,14 @@ export default function URLManagement() {
 
   const handleRetrain = async () => {
     if (!agentId || !jinaKeyReady) return;
+    if (taskStatus?.is_crawling) {
+      alert(t('labels.qa.crawlInProgress'));
+      return;
+    }
+    if (taskStatus?.is_rebuilding) {
+      alert(t('labels.qa.rebuildInProgress'));
+      return;
+    }
     setIsRetraining(true);
     try {
       await api.rebuildIndex(agentId, true);

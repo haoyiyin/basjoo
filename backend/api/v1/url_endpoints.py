@@ -8,6 +8,7 @@ from typing import List
 import logging
 import csv
 import uuid
+import asyncio
 
 import database
 from database import get_db
@@ -69,6 +70,13 @@ async def trigger_auto_rebuild(agent_id: str):
 # ========== URL Management ==========
 
 
+async def _run_tracked_task(agent_id: str, task_id: str, coro):
+    task = asyncio.current_task()
+    if task:
+        await task_lock.register_task_handle(agent_id, task_id, task)
+    await coro
+
+
 async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
     """异步抓取URL任务 - 使用 URLScraper"""
     async with database.AsyncSessionLocal() as db:
@@ -103,8 +111,22 @@ async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
                 url_source.status = "fetching"
                 await db.commit()
 
+                if task_lock.is_cancelled(agent_id, task_id):
+                    url_source.status = "failed"
+                    url_source.last_error = "Fetch cancelled by user"
+                    url_source.updated_at = func.now()
+                    await db.commit()
+                    return
+
                 # 使用 URLScraper 抓取单页
                 fetch_result = await agent_scraper.fetch(url_source.url)
+
+                if task_lock.is_cancelled(agent_id, task_id):
+                    url_source.status = "failed"
+                    url_source.last_error = "Fetch cancelled by user"
+                    url_source.updated_at = func.now()
+                    await db.commit()
+                    return
 
                 if fetch_result.get("success"):
                     # 更新成功状态
@@ -135,6 +157,10 @@ async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
                 await task_lock.release_task(agent_id, task_id)
                 # 注意：不再触发全量重建，因为已经在抓取成功时增量更新了索引
 
+        except asyncio.CancelledError:
+            logger.info(f"fetch_url_task cancelled for URLSource {url_source_id}")
+            await db.rollback()
+            raise
         except Exception as e:
             logger.exception(f"Error in fetch_url_task: {e}")
             await db.rollback()
@@ -222,7 +248,8 @@ async def create_urls(
 
     # 异步抓取
     for url_source in created_urls:
-        background_tasks.add_task(fetch_url_task, url_source.id)
+        task_id = f"fetch_{url_source.id}"
+        background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
 
     return {
         "created": len(created_urls),
@@ -326,6 +353,21 @@ async def refetch_urls(
         status="queued",
         message=f"Queued {len(urls)} URLs for refetching",
     )
+
+
+@router.post("/urls:cancel")
+async def cancel_url_tasks(
+    agent_id: str,
+):
+    cancelled = await task_lock.cancel_tasks(
+        agent_id,
+        {TaskType.URL_CRAWL, TaskType.URL_FETCH, TaskType.URL_REFETCH},
+    )
+    return {
+        "cancelled": len(cancelled),
+        "task_ids": cancelled,
+        "message": f"Cancelled {len(cancelled)} URL tasks",
+    }
 
 
 @router.delete("/urls:delete")
@@ -433,7 +475,8 @@ async def discover_subpages(
 
     if background_tasks:
         for url_source in created_urls:
-            background_tasks.add_task(fetch_url_task, url_source.id)
+            task_id = f"fetch_{url_source.id}"
+            background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
 
     return {
         "discovered": len(discovered_urls),
@@ -486,10 +529,18 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                 )
                 logger.info(f"[site_crawl_task] Crawl completed, got {len(results)} results")
 
+                if task_lock.is_cancelled(agent_id, task_id):
+                    logger.info(f"[site_crawl_task] Task {task_id} cancelled before persisting results")
+                    return
+
                 created_count = 0
                 seen_normalized_urls = set()  # Track URLs we've already processed in this batch
                 
                 for page_result in results:
+                    if task_lock.is_cancelled(agent_id, task_id):
+                        logger.info(f"[site_crawl_task] Task {task_id} cancelled during result persistence")
+                        await db.rollback()
+                        return
                     if not page_result.success:
                         continue
 
@@ -552,6 +603,10 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                 
                 # 注意：不再自动触发索引重建，由用户手动点击"重新训练智能体"
 
+            except asyncio.CancelledError:
+                logger.info(f"[site_crawl_task] Task {task_id} cancelled")
+                await db.rollback()
+                raise
             except Exception as e:
                 logger.exception(f"[site_crawl_task] Error in site_crawl_task: {e}")
                 await db.rollback()
@@ -605,12 +660,17 @@ async def crawl_site(
     logger.info(f"[crawl_site] Adding background task for {request.url}, job_id={job_id}")
 
     # 添加后台任务
+    task_id = f"crawl_{request.url[:50]}_{request.max_depth}_{request.max_pages}"
     background_tasks.add_task(
-        site_crawl_task,
+        _run_tracked_task,
         agent_id,
-        request.url,
-        request.max_depth,
-        request.max_pages
+        task_id,
+        site_crawl_task(
+            agent_id,
+            request.url,
+            request.max_depth,
+            request.max_pages,
+        ),
     )
 
     logger.info(f"[crawl_site] Background task added successfully")

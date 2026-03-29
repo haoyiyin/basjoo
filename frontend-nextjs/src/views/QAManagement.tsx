@@ -103,7 +103,10 @@ export default function QAManagement() {
         setIsRetraining(prev => {
           if (prev && !status.is_rebuilding) {
             setRefreshTrigger(t => t + 1);
-            loadItems();
+            void loadItems();
+            window.setTimeout(() => {
+              void loadItems();
+            }, 500);
           }
           return false;
         });

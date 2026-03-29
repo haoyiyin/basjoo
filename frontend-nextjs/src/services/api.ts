@@ -415,6 +415,12 @@ class APIService {
     }).then(result => result as { job_id: string; status: string; message: string });
   }
 
+  async cancelURLTasks(agentId: string): Promise<{ cancelled: number; task_ids: string[]; message: string }> {
+    return this.request(`/api/v1/urls:cancel?agent_id=${agentId}`, {
+      method: 'POST',
+    }).then(result => result as { cancelled: number; task_ids: string[]; message: string });
+  }
+
   async deleteURL(agentId: string, urlId: number): Promise<void> {
     await this.request(`/api/v1/urls:delete?agent_id=${agentId}&url_id=${urlId}`, {
       method: 'DELETE',

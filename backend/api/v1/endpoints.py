@@ -1609,7 +1609,7 @@ async def get_sources_summary(
     url_indexed_result = await db.execute(
         select(func.count()).select_from(URLSource).where(
             URLSource.agent_id == agent_id,
-            URLSource.status == "success"
+            URLSource.is_indexed == True
         )
     )
     url_indexed = url_indexed_result.scalar() or 0
@@ -1648,7 +1648,7 @@ async def get_sources_summary(
     qa_size_bytes = qa_size_result.scalar() or 0
     qa_size_kb = round(qa_size_bytes / 1024, 2)
 
-    url_pending = 0
+    url_pending = url_total - url_indexed
     qa_pending = qa_total - qa_indexed
     has_pending = url_pending > 0 or qa_pending > 0
 
