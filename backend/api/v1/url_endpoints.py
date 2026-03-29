@@ -750,6 +750,14 @@ async def batch_import_qa(
 
     await db.commit()
 
+    # Invalidate QA cache for this agent
+    try:
+        from services.redis_service import get_redis
+        redis = await get_redis()
+        await redis.delete_cache(f"qa_items:{agent_id}")
+    except Exception:
+        pass
+
     # 注意：不再自动增量更新索引，由用户手动点击"重新训练智能体"
 
     return QABatchImportResponse(
@@ -836,6 +844,14 @@ async def update_qa(
 
     await db.commit()
 
+    # Invalidate QA cache for this agent
+    try:
+        from services.redis_service import get_redis
+        redis = await get_redis()
+        await redis.delete_cache(f"qa_items:{qa.agent_id}")
+    except Exception:
+        pass
+
     return {"message": "Q&A updated successfully"}
 
 
@@ -875,6 +891,14 @@ async def delete_qa(
             quota.used_qa_items = max(0, quota.used_qa_items - 1)
 
     await db.commit()
+
+    # Invalidate QA cache for this agent
+    try:
+        from services.redis_service import get_redis
+        redis = await get_redis()
+        await redis.delete_cache(f"qa_items:{agent_id_for_vectors}")
+    except Exception:
+        pass
 
     # 同步删除 Qdrant 向量索引中的数据
     try:

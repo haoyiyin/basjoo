@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 class JinaEmbeddingClient:
-    """Jina v3 embedding client"""
+    """Jina v3 embedding client with query caching and rate limiting"""
 
     _disabled_keys: set[str] = set()
+    _embedding_cache: Dict[str, List[float]] = {}  # Simple in-memory cache
+    _semaphore: Optional[Any] = None  # Rate limiting semaphore
 
     def __init__(self, api_key: str, model: str = "jina-embeddings-v3"):
         self.api_key = api_key
@@ -27,7 +29,15 @@ class JinaEmbeddingClient:
         self.base_url = settings.jina_embedding_api_base
         self._disabled = api_key in self._disabled_keys
 
+    def _get_semaphore(self):
+        """Get or create the rate limiting semaphore (max 3 concurrent requests)."""
+        import asyncio
+        if JinaEmbeddingClient._semaphore is None:
+            JinaEmbeddingClient._semaphore = asyncio.Semaphore(3)
+        return JinaEmbeddingClient._semaphore
+
     def embed(self, texts: List[str]) -> List[List[float]]:
+        """Synchronous embedding for index building (batch operations)."""
         if not self.api_key:
             raise ValueError("Jina API key is required")
         if not texts:
@@ -58,6 +68,59 @@ class JinaEmbeddingClient:
                 self._disabled_keys.add(self.api_key)
                 raise ValueError("Jina API key is invalid (401 Unauthorized). Please check your API key at https://jina.ai/api-dashboard/key-manager")
             raise
+
+    async def embed_async(self, texts: List[str]) -> List[List[float]]:
+        """Async embedding for query search with caching and rate limiting."""
+        if not self.api_key:
+            raise ValueError("Jina API key is required")
+        if not texts:
+            return []
+        if self._disabled:
+            raise ValueError("Jina API key is invalid (401 Unauthorized). Please check your API key at https://jina.ai/api-dashboard/key-manager")
+
+        # Check cache for single query (most common case for search)
+        if len(texts) == 1:
+            cache_key = texts[0]
+            if cache_key in self._embedding_cache:
+                logger.info(f"Using cached embedding for query: {cache_key[:50]}...")
+                return [self._embedding_cache[cache_key]]
+
+        # Use semaphore to limit concurrent API calls and avoid rate limiting
+        async with self._get_semaphore():
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.post(
+                        self.base_url,
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        json={"model": self.model, "input": texts},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    embeddings = [item["embedding"] for item in payload.get("data", [])]
+                    if len(embeddings) != len(texts):
+                        raise ValueError("Jina embeddings response size mismatch")
+                    # 验证不是零向量
+                    for i, emb in enumerate(embeddings):
+                        if all(v == 0.0 for v in emb):
+                            raise ValueError(f"Embedding {i} is a zero vector - API may have returned invalid data")
+
+                    # Cache single query results
+                    if len(texts) == 1:
+                        self._embedding_cache[texts[0]] = embeddings[0]
+                        # Limit cache size to prevent memory bloat
+                        if len(self._embedding_cache) > 1000:
+                            # Remove oldest entries (first 200)
+                            keys_to_remove = list(self._embedding_cache.keys())[:200]
+                            for key in keys_to_remove:
+                                del self._embedding_cache[key]
+
+                    return embeddings
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 401:
+                    self._disabled = True
+                    self._disabled_keys.add(self.api_key)
+                    raise ValueError("Jina API key is invalid (401 Unauthorized). Please check your API key at https://jina.ai/api-dashboard/key-manager")
+                raise
 
 
 class QdrantVectorStore:
@@ -409,6 +472,103 @@ class QdrantVectorStore:
             # 记录每个结果的source_type
             source_types = [d["metadata"].get("source_type", "unknown") for d in documents]
             logger.info(f"Qdrant结果类型分布: {dict((x, source_types.count(x)) for x in set(source_types))}")
+
+        logger.info(f"Found {len(documents)} results for query (agent={agent_id})")
+        return documents
+
+    async def search_async(
+        self,
+        agent_id: str,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.5,
+        source_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Async search using non-blocking embedding for concurrent request handling.
+
+        Same logic as search() but uses async embedding to avoid blocking the event loop.
+        """
+        collection_name = self._get_collection_name(agent_id)
+        logger.info(f"Qdrant async search: collection={collection_name}, query='{query[:50]}...', top_k={top_k}")
+
+        # 检查集合是否存在
+        try:
+            collections = self.client.get_collections().collections
+            if not any(c.name == collection_name for c in collections):
+                logger.warning(f"Collection {collection_name} not found")
+                return []
+        except Exception as e:
+            logger.error(f"Error checking collection: {e}")
+            return []
+
+        # 获取集合信息并检查是否有文档
+        try:
+            info = self.client.get_collection(collection_name)
+            points_count = getattr(info, "points_count", 0) or 0
+            logger.info(f"Collection {collection_name} has {points_count} points")
+            if points_count == 0:
+                logger.info(f"Skipping embedding for empty collection {collection_name}")
+                return []
+        except Exception:
+            logger.warning(f"Failed to get collection info for {collection_name}")
+
+        # 生成查询向量 (async to avoid blocking)
+        query_vector = await self.embedding_client.embed_async([query])
+        query_vector = query_vector[0]
+
+        # 构建过滤条件
+        query_filter = None
+        if source_type:
+            query_filter = self.models.Filter(
+                must=[
+                    self.models.FieldCondition(
+                        key="source_type",
+                        match=self.models.MatchValue(value=source_type),
+                    )
+                ]
+            )
+
+        # 搜索 (Qdrant client operations are synchronous but fast)
+        try:
+            try:
+                results = self.client.search(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=top_k * 2,
+                )
+            except AttributeError:
+                results = self.client.query_points(
+                    collection_name=collection_name,
+                    query=query_vector,
+                    query_filter=query_filter,
+                    limit=top_k * 2,
+                )
+                if hasattr(results, "points"):
+                    results = results.points
+            logger.info(f"Qdrant.search_async() returned {len(results)} raw results")
+            if results:
+                scores = [r.score for r in results]
+                logger.info(f"Score range: min={min(scores):.4f}, max={max(scores):.4f}")
+                results = [r for r in results if r.score >= threshold]
+                logger.info(f"After threshold filter: {len(results)} results")
+        except Exception as e:
+            logger.error(f"Error searching in Qdrant: {e}")
+            return []
+
+        # 转换结果格式
+        documents = []
+        for result in results:
+            payload = result.payload or {}
+            doc = {
+                "content": payload.get("content", ""),
+                "score": result.score,
+                "metadata": {
+                    k: v for k, v in payload.items() if k != "content"
+                },
+            }
+            documents.append(doc)
 
         logger.info(f"Found {len(documents)} results for query (agent={agent_id})")
         return documents

@@ -124,8 +124,10 @@ services:
     volumes:
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
-      - backend-prod
-      - frontend-prod
+      backend-prod:
+        condition: service_healthy
+      frontend-prod:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - basjoo-network

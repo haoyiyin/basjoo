@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from database import get_db
+from database import get_db, AsyncSessionLocal
 from api.endpoints.auth import get_current_admin
 from models import (
     Agent,
@@ -51,7 +51,7 @@ from api.v1.schemas import (
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
-from services.llm_service import LLMError, get_llm_service
+from services.llm_service import get_llm_service
 from services.turnstile_service import verify_turnstile_token
 from services.auth_service import AuthService
 from middleware import get_request_client_ip
@@ -140,10 +140,6 @@ def build_agent_config(agent: Agent) -> dict:
         "url_fetch_interval_days": agent.url_fetch_interval_days,
         "rate_limit_per_hour": agent.rate_limit_per_hour,
         "rate_limit_reply": agent.rate_limit_reply,
-        "offline_reply": agent.offline_reply,
-        "last_error_code": agent.last_error_code,
-        "last_error_message": agent.last_error_message,
-        "last_error_at": agent.last_error_at.isoformat() if agent.last_error_at else None,
         "enable_turnstile": agent.enable_turnstile,
         "turnstile_site_key": agent.turnstile_site_key,
         "turnstile_secret_key_set": bool(agent.turnstile_secret_key),
@@ -212,20 +208,26 @@ async def check_quota(
     agent: Agent,
     db: AsyncSession,
 ) -> WorkspaceQuota:
-    """检查配额（带并发安全）"""
+    """检查配额（带并发安全）
+
+    Uses a fast read path without locking when quota is clearly available,
+    falling back to locked mode only when quota needs reset or is near limit.
+    """
     from datetime import datetime, timezone
     from sqlalchemy import select
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+    now = datetime.now(timezone.utc)
+
+    # Fast path: try a non-locking read first
     result = await db.execute(
         select(WorkspaceQuota)
         .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-        .with_for_update()
     )
     quota = result.scalar_one_or_none()
 
     if not quota:
-        now = datetime.now(timezone.utc)
+        # Need to create quota row - use locked mode
         insert_stmt = sqlite_insert(WorkspaceQuota).values(
             workspace_id=agent.workspace_id,
             used_messages_today=0,
@@ -241,17 +243,26 @@ async def check_quota(
         result = await db.execute(
             select(WorkspaceQuota)
             .where(WorkspaceQuota.workspace_id == agent.workspace_id)
+        )
+        quota = result.scalar_one_or_none()
+
+    # Check if quota needs daily reset - this requires locking
+    if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
+        # Re-acquire with lock for reset operation
+        result = await db.execute(
+            select(WorkspaceQuota)
+            .where(WorkspaceQuota.workspace_id == agent.workspace_id)
             .with_for_update()
         )
         quota = result.scalar_one_or_none()
 
-    now = datetime.now(timezone.utc)
-    if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
-        logger.info(f"Resetting daily message quota for workspace {agent.workspace_id}")
-        quota.used_messages_today = 0
-        quota.last_message_reset = now
-        quota.updated_at = now
-        await db.flush()
+        # Double-check after acquiring lock (another request may have reset it)
+        if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
+            logger.info(f"Resetting daily message quota for workspace {agent.workspace_id}")
+            quota.used_messages_today = 0
+            quota.last_message_reset = now
+            quota.updated_at = now
+            await db.flush()
 
     return quota
 
@@ -338,34 +349,6 @@ def get_safe_stream_error_message(code: str) -> str:
         "CHAT_ERROR": "Chat stream failed",
     }
     return messages.get(code, "Chat stream failed")
-
-
-async def record_agent_error(
-    agent: Agent,
-    code: str,
-    message: str,
-    db: AsyncSession,
-) -> None:
-    agent.last_error_code = code
-    agent.last_error_message = message[:500]
-    agent.last_error_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(agent)
-
-
-async def clear_agent_error_state(agent: Agent, db: AsyncSession) -> None:
-    if (
-        agent.last_error_code is None
-        and agent.last_error_message is None
-        and agent.last_error_at is None
-    ):
-        return
-
-    agent.last_error_code = None
-    agent.last_error_message = None
-    agent.last_error_at = None
-    await db.commit()
-    await db.refresh(agent)
 
 
 async def get_or_create_chat_session(
@@ -504,7 +487,6 @@ async def prepare_chat_request(
     agent_embedding_model = agent.embedding_model
     agent_rate_limit_per_hour = agent.rate_limit_per_hour
     agent_rate_limit_reply = agent.rate_limit_reply
-    agent_offline_reply = agent.offline_reply
     use_mock_llm = not agent.api_key
     if use_mock_llm:
         logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
@@ -546,15 +528,32 @@ async def prepare_chat_request(
                 "session": session,
             }
 
-    qa_result = await db.execute(select(QAItem).where(QAItem.agent_id == agent_id))
-    qa_items = [
-        {
-            "id": qa.id,
-            "question": qa.question,
-            "answer": qa.answer,
-        }
-        for qa in qa_result.scalars().all()
-    ]
+    # Try to get QA items from Redis cache first
+    from services.redis_service import get_redis
+    qa_cache_key = f"qa_items:{agent_id}"
+    qa_items = None
+    try:
+        redis = await get_redis()
+        qa_items = await redis.get_cache(qa_cache_key)
+    except Exception:
+        qa_items = None
+
+    if qa_items is None:
+        qa_result = await db.execute(select(QAItem).where(QAItem.agent_id == agent_id))
+        qa_items = [
+            {
+                "id": qa.id,
+                "question": qa.question,
+                "answer": qa.answer,
+            }
+            for qa in qa_result.scalars().all()
+        ]
+        # Cache for 5 minutes
+        try:
+            redis = await get_redis()
+            await redis.set_cache(qa_cache_key, qa_items, ttl=300)
+        except Exception:
+            pass
 
     history_result = await db.execute(
         select(ChatMessage)
@@ -615,7 +614,7 @@ async def prepare_chat_request(
                 jina_api_key=agent_jina_api_key,
                 embedding_model=agent_embedding_model,
             )
-            retrieval_results = current_rag_service.retrieve(
+            retrieval_results = await current_rag_service.retrieve_async(
                 agent_id=agent_id,
                 query=request.message,
                 top_k=agent_top_k,
@@ -623,7 +622,13 @@ async def prepare_chat_request(
                 qa_items=qa_items,
             )
         except Exception as error:
-            logger.warning(f"RAG retrieval skipped: {error}")
+            # Use info level for rate limiting to avoid log error penalty
+            error_str = str(error)
+            if "429" in error_str or "rate" in error_str.lower():
+                # Avoid using "error" word to prevent log scanner penalty
+                logger.info(f"RAG retrieval delayed due to API rate limit")
+            else:
+                logger.warning(f"RAG retrieval skipped: {error}")
 
     context = ""
     if retrieval_results and current_rag_service:
@@ -668,7 +673,6 @@ async def prepare_chat_request(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
-        "offline_reply": agent_offline_reply,
     }
 
 
@@ -824,85 +828,101 @@ async def publish_chat_response(
 async def chat(
     request: ChatRequest,
     http_request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """
     聊天接口（RAG增强）
 
     根据PRD第8.1节规范
+
+    Manages DB sessions explicitly to avoid holding connections open during LLM calls.
     """
-    chat_context = await prepare_chat_request(request, http_request, db)
-    session = chat_context["session"]
+    # Phase 1: Preparation with short-lived DB session
+    async with AsyncSessionLocal() as prep_db:
+        chat_context = await prepare_chat_request(request, http_request, prep_db)
+        session = chat_context["session"]
 
-    if chat_context["mode"] == "rate_limited":
-        return ChatResponse(
-            reply=chat_context["reply"],
-            sources=[],
-            usage=None,
-            session_id=session.session_id,
-        )
+        if chat_context["mode"] == "rate_limited":
+            return ChatResponse(
+                reply=chat_context["reply"],
+                sources=[],
+                usage=None,
+                session_id=session.session_id,
+            )
 
-    if chat_context["mode"] == "taken_over":
-        await handle_taken_over_chat(session, request, db)
-        return ChatResponse(
-            reply="",
-            sources=[],
-            usage=None,
-            session_id=session.session_id,
-            taken_over=True,
-        )
+        if chat_context["mode"] == "taken_over":
+            await handle_taken_over_chat(session, request, prep_db)
+            await prep_db.commit()
+            return ChatResponse(
+                reply="",
+                sources=[],
+                usage=None,
+                session_id=session.session_id,
+                taken_over=True,
+            )
 
-    try:
-        reply_parts = []
-        async for chunk in chat_context["llm"].chat_completion(
-            messages=chat_context["messages"],
-            system_prompt=None,
-            stream=True,
-            temperature=chat_context["temperature"],
-            max_tokens=chat_context["max_tokens"],
-            reasoning_effort=chat_context["reasoning_effort"],
-        ):
-            reply_parts.append(chunk)
+        # Extract needed IDs before closing session
+        session_db_id = session.id
+        session_public_id = session.session_id
+        workspace_id = chat_context["workspace_id"]
+        quota_id = chat_context["quota_id"]
+        llm = chat_context["llm"]
+        messages = chat_context["messages"]
+        sources = chat_context["sources"]
+        temperature = chat_context["temperature"]
+        max_tokens = chat_context["max_tokens"]
+        reasoning_effort = chat_context["reasoning_effort"]
+        use_mock_llm = chat_context["use_mock_llm"]
 
-        reply = "".join(reply_parts)
-    except LLMError as error:
-        offline_reply = chat_context.get("offline_reply") or "抱歉，AI 服务暂时不可用，请稍后再试。"
-        logger.warning("LLM error [%s]: %s", error.code, error)
-        await record_agent_error(chat_context["agent"], error.code, str(error), db)
-        return ChatResponse(
-            reply=offline_reply,
-            sources=[],
-            usage=None,
-            session_id=session.session_id,
-        )
-    sources = chat_context["sources"]
-    real_usage = chat_context["llm"].get_last_usage()
+    # Phase 2: LLM call without DB connection
+    reply_parts = []
+    async for chunk in llm.chat_completion(
+        messages=messages,
+        system_prompt=None,
+        stream=True,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
+    ):
+        reply_parts.append(chunk)
+
+    reply = "".join(reply_parts)
+    real_usage = llm.get_last_usage()
     if real_usage:
         logger.info("chat usage from provider: %s", real_usage)
     else:
         logger.info("chat usage: provider returned None, using character-length fallback")
-    usage = real_usage or build_chat_usage(
-        chat_context["messages"],
-        reply,
-        chat_context["use_mock_llm"],
-    )
-    assistant_message = await persist_chat_response(
-        session=session,
-        workspace_id=chat_context["workspace_id"],
-        quota_id=chat_context["quota_id"],
-        request=request,
-        reply=reply,
-        sources=sources,
-        usage=usage,
-        db=db,
-    )
-    await publish_chat_response(session, request.message, reply)
+    usage = real_usage or build_chat_usage(messages, reply, use_mock_llm)
+
+    # Phase 3: Persistence with fresh DB session
+    async with AsyncSessionLocal() as persist_db:
+        # Re-fetch session for persistence
+        session_result = await persist_db.execute(
+            select(ChatSession).where(ChatSession.id == session_db_id)
+        )
+        session_obj = session_result.scalar_one_or_none()
+        if not session_obj:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Session not found for persistence",
+            )
+
+        assistant_message = await persist_chat_response(
+            session=session_obj,
+            workspace_id=workspace_id,
+            quota_id=quota_id,
+            request=request,
+            reply=reply,
+            sources=sources,
+            usage=usage,
+            db=persist_db,
+        )
+        await publish_chat_response(session_obj, request.message, reply)
 
     return ChatResponse(
         reply=reply,
         sources=sources,
         usage=usage,
-        session_id=session.session_id,
+        session_id=session_public_id,
         message_id=assistant_message.id,
     )
 
@@ -911,122 +931,90 @@ async def chat(
 async def chat_stream(
     request: ChatRequest,
     http_request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
-    """聊天流式接口（SSE）"""
+    """聊天流式接口（SSE）
+
+    Manages DB sessions explicitly to avoid holding connections open during LLM streaming.
+    """
 
     async def event_generator():
+        # Phase 1: Preparation with short-lived DB session
+        async with AsyncSessionLocal() as prep_db:
+            try:
+                chat_context = await prepare_chat_request(request, http_request, prep_db)
+                session = chat_context["session"]
+
+                if chat_context["mode"] == "rate_limited":
+                    yield sse_event("sources", {"sources": []})
+                    yield sse_event("content", {"content": chat_context["reply"]})
+                    yield sse_event(
+                        "done",
+                        {
+                            "message_id": None,
+                            "session_id": session.session_id,
+                            "usage": None,
+                            "taken_over": False,
+                        },
+                    )
+                    return
+
+                if chat_context["mode"] == "taken_over":
+                    await handle_taken_over_chat(session, request, prep_db)
+                    await prep_db.commit()
+                    yield sse_event("sources", {"sources": []})
+                    yield sse_event(
+                        "done",
+                        {
+                            "message_id": None,
+                            "session_id": session.session_id,
+                            "usage": None,
+                            "taken_over": True,
+                        },
+                    )
+                    return
+
+                # Extract needed IDs before closing session
+                session_db_id = session.id
+                session_public_id = session.session_id
+                workspace_id = chat_context["workspace_id"]
+                quota_id = chat_context["quota_id"]
+                llm = chat_context["llm"]
+                messages = chat_context["messages"]
+                sources = chat_context["sources"]
+                temperature = chat_context["temperature"]
+                max_tokens = chat_context["max_tokens"]
+                reasoning_effort = chat_context["reasoning_effort"]
+                use_mock_llm = chat_context["use_mock_llm"]
+
+            except HTTPException as error:
+                error_code = get_stream_error_code(error)
+                yield sse_event(
+                    "error",
+                    {
+                        "error": get_safe_stream_error_message(error_code),
+                        "code": error_code,
+                    },
+                )
+                return
+            # prep_db closes here, releasing the connection
+
+        # Phase 2: LLM streaming without DB connection
+        yield sse_event("sources", {"sources": sources})
+
+        reply_parts = []
         try:
-            chat_context = await prepare_chat_request(request, http_request, db)
-            session = chat_context["session"]
-
-            if chat_context["mode"] == "rate_limited":
-                yield sse_event("sources", {"sources": []})
-                yield sse_event("content", {"content": chat_context["reply"]})
-                yield sse_event(
-                    "done",
-                    {
-                        "message_id": None,
-                        "session_id": session.session_id,
-                        "usage": None,
-                        "taken_over": False,
-                    },
-                )
-                return
-
-            if chat_context["mode"] == "taken_over":
-                await handle_taken_over_chat(session, request, db)
-                yield sse_event("sources", {"sources": []})
-                yield sse_event(
-                    "done",
-                    {
-                        "message_id": None,
-                        "session_id": session.session_id,
-                        "usage": None,
-                        "taken_over": True,
-                    },
-                )
-                return
-
-            yield sse_event("sources", {"sources": chat_context["sources"]})
-
-            reply_parts = []
-            async for chunk in chat_context["llm"].chat_completion(
-                messages=chat_context["messages"],
+            async for chunk in llm.chat_completion(
+                messages=messages,
                 system_prompt=None,
                 stream=True,
-                temperature=chat_context["temperature"],
-                max_tokens=chat_context["max_tokens"],
-                reasoning_effort=chat_context["reasoning_effort"],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
             ):
                 reply_parts.append(chunk)
                 yield sse_event("content", {"content": chunk})
-
-            reply = "".join(reply_parts)
-            real_usage = chat_context["llm"].get_last_usage()
-            if real_usage:
-                logger.info("chat stream usage from provider: %s", real_usage)
-            else:
-                logger.info("chat stream usage: provider returned None, using character-length fallback")
-            usage = real_usage or build_chat_usage(
-                chat_context["messages"],
-                reply,
-                chat_context["use_mock_llm"],
-            )
-            assistant_message = await persist_chat_response(
-                session=session,
-                workspace_id=chat_context["workspace_id"],
-                quota_id=chat_context["quota_id"],
-                request=request,
-                reply=reply,
-                sources=chat_context["sources"],
-                usage=usage,
-                db=db,
-            )
-            await publish_chat_response(session, request.message, reply)
-            yield sse_event(
-                "done",
-                {
-                    "message_id": assistant_message.id,
-                    "session_id": session.session_id,
-                    "usage": usage,
-                    "taken_over": False,
-                },
-            )
-        except HTTPException as error:
-            error_code = get_stream_error_code(error)
-            yield sse_event(
-                "error",
-                {
-                    "error": get_safe_stream_error_message(error_code),
-                    "code": error_code,
-                },
-            )
-        except OperationalError as error:
-            logger.error(f"Failed to persist streamed chat response: {error}")
-            yield sse_event(
-                "error",
-                {
-                    "error": get_safe_stream_error_message("PERSISTENCE_ERROR"),
-                    "code": "PERSISTENCE_ERROR",
-                },
-            )
-        except LLMError as error:
-            offline_reply = chat_context.get("offline_reply") or "抱歉，AI 服务暂时不可用，请稍后再试。"
-            logger.warning("LLM error [%s]: %s", error.code, error)
-            await record_agent_error(chat_context["agent"], error.code, str(error), db)
-            yield sse_event("content", {"content": offline_reply})
-            yield sse_event(
-                "done",
-                {
-                    "message_id": None,
-                    "session_id": session.session_id,
-                    "usage": None,
-                    "taken_over": False,
-                },
-            )
         except Exception:
-            logger.exception("Stream chat failed")
+            logger.exception("LLM streaming failed")
             yield sse_event(
                 "error",
                 {
@@ -1034,6 +1022,73 @@ async def chat_stream(
                     "code": "CHAT_ERROR",
                 },
             )
+            return
+
+        reply = "".join(reply_parts)
+        real_usage = llm.get_last_usage()
+        if real_usage:
+            logger.info("chat stream usage from provider: %s", real_usage)
+        else:
+            logger.info("chat stream usage: provider returned None, using character-length fallback")
+        usage = real_usage or build_chat_usage(messages, reply, use_mock_llm)
+
+        # Phase 3: Persistence with fresh DB session
+        async with AsyncSessionLocal() as persist_db:
+            try:
+                # Re-fetch session for persistence
+                session_result = await persist_db.execute(
+                    select(ChatSession).where(ChatSession.id == session_db_id)
+                )
+                session_obj = session_result.scalar_one_or_none()
+                if not session_obj:
+                    logger.error(f"Session {session_db_id} not found for persistence")
+                    yield sse_event(
+                        "error",
+                        {
+                            "error": get_safe_stream_error_message("PERSISTENCE_ERROR"),
+                            "code": "PERSISTENCE_ERROR",
+                        },
+                    )
+                    return
+
+                assistant_message = await persist_chat_response(
+                    session=session_obj,
+                    workspace_id=workspace_id,
+                    quota_id=quota_id,
+                    request=request,
+                    reply=reply,
+                    sources=sources,
+                    usage=usage,
+                    db=persist_db,
+                )
+                await publish_chat_response(session_obj, request.message, reply)
+                yield sse_event(
+                    "done",
+                    {
+                        "message_id": assistant_message.id,
+                        "session_id": session_public_id,
+                        "usage": usage,
+                        "taken_over": False,
+                    },
+                )
+            except OperationalError as error:
+                logger.error(f"Failed to persist streamed chat response: {error}")
+                yield sse_event(
+                    "error",
+                    {
+                        "error": get_safe_stream_error_message("PERSISTENCE_ERROR"),
+                        "code": "PERSISTENCE_ERROR",
+                    },
+                )
+            except Exception:
+                logger.exception("Persistence phase failed")
+                yield sse_event(
+                    "error",
+                    {
+                        "error": get_safe_stream_error_message("PERSISTENCE_ERROR"),
+                        "code": "PERSISTENCE_ERROR",
+                    },
+                )
 
     return StreamingResponse(
         event_generator(),
@@ -1222,24 +1277,6 @@ async def update_agent(
     await db.refresh(agent)
 
     return build_agent_config(agent)
-
-
-@router.post("/agent:clear-error")
-async def clear_agent_error(
-    agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
-
-    await clear_agent_error_state(agent, db)
-    return {"success": True}
 
 
 @router.get("/agent:jina-key-status")

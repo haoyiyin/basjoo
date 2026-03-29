@@ -132,6 +132,90 @@ class QdrantRAGService:
 
         return final_results
 
+    async def retrieve_async(
+        self,
+        agent_id: str,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.5,
+        include_qa: bool = True,
+        qa_items: List[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Async retrieve using non-blocking embedding for concurrent request handling.
+
+        Same logic as retrieve() but uses async embedding to avoid blocking the event loop.
+        """
+        results = []
+
+        # 从 Qdrant 向量索引检索内容 (async)
+        logger.info(f"RAG async retrieve: agent_id={agent_id}, query='{query}', top_k={top_k}")
+        vector_results = await self.vector_store.search_async(
+            agent_id=agent_id,
+            query=query,
+            top_k=top_k * 2,
+            threshold=threshold,
+        )
+
+        logger.info(f"Qdrant async returned {len(vector_results)} results")
+
+        # 根据source_type分类结果
+        url_count = 0
+        qa_count = 0
+        for result in vector_results:
+            source_type = result.get("metadata", {}).get("source_type", "url")
+            if source_type == "qa":
+                qa_count += 1
+                results.append(
+                    {
+                        "type": "qa",
+                        "content": result["content"],
+                        "score": result["score"],
+                        "metadata": {
+                            "question": result.get("metadata", {}).get("question", ""),
+                            "qa_id": result.get("metadata", {}).get("qa_id", ""),
+                        },
+                    }
+                )
+            else:
+                url_count += 1
+                results.append(
+                    {
+                        "type": "url",
+                        "content": result["content"],
+                        "score": result["score"],
+                        "metadata": result.get("metadata", {}),
+                    }
+                )
+
+        logger.info(f"Vector results: URL={url_count}, QA={qa_count}")
+
+        # 检索Q&A（简单的关键词匹配）
+        if include_qa and qa_items:
+            qa_results = self._search_qa(query, qa_items, top_k // 2)
+            logger.info(f"Keyword QA returned {len(qa_results)} results")
+            for qa in qa_results:
+                results.append(
+                    {
+                        "type": "qa",
+                        "content": qa["answer"],
+                        "score": qa["score"],
+                        "metadata": {
+                            "question": qa["question"],
+                            "qa_id": qa["id"],
+                        },
+                    }
+                )
+
+        # 按分数排序
+        results.sort(key=lambda x: x["score"], reverse=True)
+
+        # 返回top_k结果
+        final_results = results[:top_k]
+        logger.info(f"Returning {len(final_results)} results")
+
+        return final_results
+
     def _search_qa(
         self,
         query: str,
