@@ -42,6 +42,7 @@ export default function URLManagement() {
   const [isRetraining, setIsRetraining] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [clearing, setClearing] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [pollingStopped, setPollingStopped] = useState(false);
   const [deletingUrlId, setDeletingUrlId] = useState<number | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -368,14 +369,19 @@ export default function URLManagement() {
     }
   };
 
-  const handleClearAll = async () => {
+  const handleClearAll = () => {
     if (!agentId || !jinaKeyReady) return;
     if (urls.length === 0) return;
-    if (!confirm(t('labels.urlManagement.confirmClearAll'))) return;
+    setShowClearConfirm(true);
+  };
+
+  const confirmClearAll = async () => {
+    if (!agentId || !jinaKeyReady) return;
 
     setClearing(true);
     try {
       const result = await api.clearAllUrls(agentId);
+      setShowClearConfirm(false);
       await loadURLs();
       alert(t('labels.urlManagement.clearSuccess', { count: result.deleted_count }));
     } catch (error) {
@@ -425,6 +431,58 @@ export default function URLManagement() {
 
   return (
     <AdminLayout>
+      {showClearConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 'var(--space-4)',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '420px',
+              background: 'var(--color-bg-secondary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              boxShadow: 'var(--shadow-xl)',
+              padding: 'var(--space-6)',
+            }}
+          >
+            <h3 style={{ margin: 0, marginBottom: 'var(--space-3)', fontSize: 'var(--text-lg)', color: 'var(--color-text-primary)' }}>
+              {t('labels.urlManagement.clearAll')}
+            </h3>
+            <p style={{ margin: 0, marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+              {t('labels.urlManagement.confirmClearAll')}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)' }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setShowClearConfirm(false)}
+                disabled={clearing}
+              >
+                {t('buttons.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={confirmClearAll}
+                disabled={clearing}
+                style={{ background: 'var(--color-error)', borderColor: 'var(--color-error)' }}
+              >
+                {clearing ? t('labels.urlManagement.clearing') : t('buttons.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{
         padding: isMobile ? 'var(--space-4)' : 'var(--space-8)',
         maxWidth: '1400px',
@@ -1002,6 +1060,7 @@ export default function URLManagement() {
                 )}
                 {urls.length > 0 && (
                   <button
+                    type="button"
                     onClick={handleClearAll}
                     disabled={clearing || !jinaKeyReady}
                     className="btn-ghost"
