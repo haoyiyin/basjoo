@@ -334,10 +334,19 @@ class AgentConfig(BaseModel):
         default="general", description="Persona type: general, customer-service, sales, custom"
     )
     widget_title: Optional[str] = Field(default="AI 客服", description="Widget title")
+    widget_title_i18n: Optional[Dict[str, str]] = Field(
+        default=None, description="Localized widget titles"
+    )
     widget_color: Optional[str] = Field(
         default="#06B6D4", description="Widget theme color"
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
+    welcome_message_i18n: Optional[Dict[str, str]] = Field(
+        default=None, description="Localized widget welcome messages"
+    )
+    restricted_reply_i18n: Optional[Dict[str, str]] = Field(
+        default=None, description="Localized fallback replies when service is restricted"
+    )
     history_days: int = Field(default=30, description="Chat history retention days")
     is_active: bool
     created_at: datetime
@@ -410,10 +419,19 @@ class AgentUpdateRequest(BaseModel):
     widget_title: Optional[str] = Field(
         None, max_length=100, description="Widget title"
     )
+    widget_title_i18n: Optional[Dict[str, str]] = Field(
+        None, description="Localized widget titles"
+    )
     widget_color: Optional[str] = Field(
         None, max_length=20, description="Widget theme color"
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
+    welcome_message_i18n: Optional[Dict[str, str]] = Field(
+        None, description="Localized widget welcome messages"
+    )
+    restricted_reply_i18n: Optional[Dict[str, str]] = Field(
+        None, description="Localized fallback replies when service is restricted"
+    )
     history_days: Optional[int] = Field(
         None, ge=1, le=365, description="Chat history retention days"
     )

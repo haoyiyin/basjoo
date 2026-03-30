@@ -19,6 +19,12 @@ interface WidgetConfig {
 interface TurnstilePublicConfig {
   turnstile_enabled?: boolean;
   turnstile_site_key?: string | null;
+  widget_title?: string | null;
+  widget_title_i18n?: Record<string, string> | null;
+  welcome_message?: string | null;
+  welcome_message_i18n?: Record<string, string> | null;
+  widget_color?: string | null;
+  default_agent_id?: string | null;
 }
 
 interface TurnstileApi {
@@ -186,6 +192,30 @@ class BasjooWidget {
     return 'light';
   }
 
+  private getEffectiveLocale(): 'zh-CN' | 'en-US' {
+    if (this.config.language === 'zh-CN' || this.config.language === 'en-US') {
+      return this.config.language;
+    }
+    return navigator.language.startsWith('en') ? 'en-US' : 'zh-CN';
+  }
+
+  private resolveI18nText(
+    i18nMap: Record<string, string> | null | undefined,
+    fallback: string,
+  ): string {
+    const locale = this.getEffectiveLocale()
+    if (i18nMap?.[locale]) {
+      return i18nMap[locale]
+    }
+    if (i18nMap?.['zh-CN']) {
+      return i18nMap['zh-CN']
+    }
+    if (i18nMap?.['en-US']) {
+      return i18nMap['en-US']
+    }
+    return fallback
+  }
+
   private async loadPublicConfig() {
     this.turnstileSiteKey = this.config.turnstileSiteKey || null;
 
@@ -204,14 +234,14 @@ class BasjooWidget {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await response.json() as TurnstilePublicConfig
       if (!this.config.agentId && data.default_agent_id) {
         this.config.agentId = data.default_agent_id
       }
       this.config.themeColor = this.config.themeColor || data.widget_color || '#3B82F6'
-      this.config.title = this.config.title || data.widget_title || 'AI助手'
-      this.config.welcomeMessage = this.config.welcomeMessage || data.welcome_message || '你好！有什么可以帮助您的吗？'
-      const turnstileConfig = data as TurnstilePublicConfig
+      this.config.title = this.config.title || this.resolveI18nText(data.widget_title_i18n, data.widget_title || 'AI助手')
+      this.config.welcomeMessage = this.config.welcomeMessage || this.resolveI18nText(data.welcome_message_i18n, data.welcome_message || '你好！有什么可以帮助您的吗？')
+      const turnstileConfig = data
       this.turnstileSiteKey = turnstileConfig.turnstile_enabled ? (turnstileConfig.turnstile_site_key || null) : null
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
@@ -889,8 +919,7 @@ class BasjooWidget {
    * Get localized text based on language setting
    */
   private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'citationSources' | 'document' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'openSource'): string {
-    const isEnglish = this.config.language === 'en-US' ||
-      (this.config.language === 'auto' && navigator.language.startsWith('en'));
+    const isEnglish = this.getEffectiveLocale() === 'en-US';
 
     const texts: Record<string, { en: string; zh: string }> = {
       sendFailed: { en: 'Send failed, please try again later', zh: '发送失败，请稍后重试' },
@@ -1521,7 +1550,7 @@ class BasjooWidget {
           body: JSON.stringify({
             agent_id: this.config.agentId,
             message,
-            locale: this.config.language === 'auto' ? undefined : this.config.language,
+            locale: this.getEffectiveLocale(),
             session_id: this.sessionId || undefined,
             visitor_id: this.visitorId,
             timezone: userTimezone,

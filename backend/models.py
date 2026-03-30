@@ -154,10 +154,13 @@ class Agent(Base):
 
     # Widget 配置
     widget_title = Column(String(100), nullable=True, default="AI 客服")
+    widget_title_i18n = Column(JSON, nullable=True)
     widget_color = Column(String(20), nullable=True, default="#06B6D4")
     welcome_message = Column(
         Text, nullable=True, default="您好！我是Basjoo助手，有什么可以帮您的吗？"
     )
+    welcome_message_i18n = Column(JSON, nullable=True)
+    restricted_reply_i18n = Column(JSON, nullable=True)
     history_days = Column(Integer, nullable=False, default=30)
 
     # 状态

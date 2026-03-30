@@ -8,6 +8,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import Any, Dict, List, Optional
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -109,6 +110,83 @@ def mask_api_key(api_key: Optional[str]) -> Optional[str]:
     return f"{api_key[:3]}***{api_key[-4:]}"
 
 
+def resolve_i18n_text(
+    i18n_map: Optional[Dict[str, str]],
+    fallback: Optional[str],
+    locale: Optional[str],
+) -> Optional[str]:
+    if i18n_map:
+        if locale and i18n_map.get(locale):
+            return i18n_map[locale]
+        if i18n_map.get("zh-CN"):
+            return i18n_map["zh-CN"]
+        if i18n_map.get("en-US"):
+            return i18n_map["en-US"]
+    return fallback
+
+
+def detect_text_locale(text: str) -> str:
+    return "zh-CN" if any("\u4e00" <= char <= "\u9fff" for char in text) else "en-US"
+
+
+async def build_auto_translated_i18n_map(
+    agent: Agent,
+    text: Optional[str],
+) -> Optional[Dict[str, str]]:
+    if not text:
+        return None
+
+    normalized_text = text.strip()
+    if not normalized_text:
+        return None
+
+    source_locale = detect_text_locale(normalized_text)
+    target_locale = "en-US" if source_locale == "zh-CN" else "zh-CN"
+    translations = {source_locale: normalized_text}
+
+    if not agent.api_key:
+        return translations
+
+    try:
+        llm = get_llm_service(agent, use_mock=False)
+        response_chunks = []
+        async for chunk in llm.chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Translate the following UI copy into zh-CN and en-US. Preserve tone, intent, and brevity. "
+                        "Return JSON only with exactly two keys: zh-CN and en-US. "
+                        f"Source locale: {source_locale}. Source text: {normalized_text}"
+                    ),
+                }
+            ],
+            system_prompt=(
+                "You are a professional product localization assistant. "
+                "Return valid JSON only. Do not wrap in markdown."
+            ),
+            stream=False,
+            temperature=0,
+        ):
+            response_chunks.append(chunk)
+
+        response_text = "".join(response_chunks).strip()
+        translated = json.loads(response_text)
+        if not isinstance(translated, dict):
+            return translations
+
+        zh_text = translated.get("zh-CN")
+        en_text = translated.get("en-US")
+        if isinstance(zh_text, str) and zh_text.strip():
+            translations["zh-CN"] = zh_text.strip()
+        if isinstance(en_text, str) and en_text.strip():
+            translations["en-US"] = en_text.strip()
+    except Exception as exc:
+        logger.warning("Failed to auto-translate widget copy: %s", exc)
+
+    return translations
+
+
 def build_agent_config(agent: Agent) -> dict:
     return {
         "id": agent.id,
@@ -142,13 +220,16 @@ def build_agent_config(agent: Agent) -> dict:
         "url_fetch_interval_days": agent.url_fetch_interval_days,
         "rate_limit_per_hour": agent.rate_limit_per_hour,
         "restricted_reply": agent.restricted_reply,
+        "restricted_reply_i18n": agent.restricted_reply_i18n,
         "enable_turnstile": agent.enable_turnstile,
         "turnstile_site_key": agent.turnstile_site_key,
         "turnstile_secret_key_set": bool(agent.turnstile_secret_key),
         "persona_type": agent.persona_type,
         "widget_title": agent.widget_title,
+        "widget_title_i18n": agent.widget_title_i18n,
         "widget_color": agent.widget_color,
         "welcome_message": agent.welcome_message,
+        "welcome_message_i18n": agent.welcome_message_i18n,
         "history_days": agent.history_days,
         "is_active": agent.is_active,
         "created_at": agent.created_at,
@@ -489,6 +570,7 @@ async def prepare_chat_request(
     agent_embedding_model = agent.embedding_model
     agent_rate_limit_per_hour = agent.rate_limit_per_hour
     agent_restricted_reply = agent.restricted_reply
+    agent_restricted_reply_i18n = agent.restricted_reply_i18n
     use_mock_llm = not agent.api_key
     if use_mock_llm:
         logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
@@ -522,7 +604,11 @@ async def prepare_chat_request(
         )
 
         if messages_last_hour >= agent_rate_limit_per_hour:
-            limit_reply = agent_restricted_reply or "抱歉，当前服务受限，请稍后再试。"
+            limit_reply = resolve_i18n_text(
+                agent_restricted_reply_i18n,
+                agent_restricted_reply or "抱歉，当前服务受限，请稍后再试。",
+                request.locale,
+            )
             logger.info(f"Session {request.session_id} exceeded rate limit, returning auto reply")
             return {
                 "mode": "rate_limited",
@@ -530,15 +616,16 @@ async def prepare_chat_request(
                 "session": session,
             }
 
-    # Try to get QA items from Redis cache first
-    from services.redis_service import get_redis
-    qa_cache_key = f"qa_items:{agent_id}"
     qa_items = None
-    try:
-        redis = await get_redis()
-        qa_items = await redis.get_cache(qa_cache_key)
-    except Exception:
-        qa_items = None
+    if not os.getenv("BASJOO_TEST_MODE") == "1":
+        # Try to get QA items from Redis cache first
+        from services.redis_service import get_redis
+        qa_cache_key = f"qa_items:{agent_id}"
+        try:
+            redis = await get_redis()
+            qa_items = await redis.get_cache(qa_cache_key)
+        except Exception:
+            qa_items = None
 
     if qa_items is None:
         qa_result = await db.execute(select(QAItem).where(QAItem.agent_id == agent_id))
@@ -550,12 +637,13 @@ async def prepare_chat_request(
             }
             for qa in qa_result.scalars().all()
         ]
-        # Cache for 5 minutes
-        try:
-            redis = await get_redis()
-            await redis.set_cache(qa_cache_key, qa_items, ttl=300)
-        except Exception:
-            pass
+        if not os.getenv("BASJOO_TEST_MODE") == "1":
+            # Cache for 5 minutes
+            try:
+                redis = await get_redis()
+                await redis.set_cache(qa_cache_key, qa_items, ttl=300)
+            except Exception:
+                pass
 
     history_result = await db.execute(
         select(ChatMessage)
@@ -798,6 +886,9 @@ async def publish_chat_response(
     assistant_content: Optional[str] = None,
 ) -> None:
     """Broadcast chat updates to admin websocket subscribers."""
+    if os.getenv("BASJOO_TEST_MODE") == "1":
+        return
+
     from services.websocket_service import manager
 
     await manager.publish(
@@ -1282,6 +1373,18 @@ async def update_agent(
     if persona_type and persona_type in PERSONA_PRESETS:
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
+    auto_translate_fields = {
+        "widget_title": "widget_title_i18n",
+        "welcome_message": "welcome_message_i18n",
+        "restricted_reply": "restricted_reply_i18n",
+    }
+    for source_field, i18n_field in auto_translate_fields.items():
+        if source_field in update_data:
+            update_data[i18n_field] = await build_auto_translated_i18n_map(
+                agent,
+                update_data.get(source_field),
+            )
+
     for field, value in update_data.items():
         setattr(agent, field, value)
 
@@ -1724,8 +1827,10 @@ async def get_public_config(
         "ws_base": f"wss://{host}" if scheme == "https" else f"ws://{host}",
         "default_agent_id": agent.id if agent else None,
         "widget_title": agent.widget_title if agent else None,
+        "widget_title_i18n": agent.widget_title_i18n if agent else None,
         "widget_color": agent.widget_color if agent else None,
         "welcome_message": agent.welcome_message if agent else None,
+        "welcome_message_i18n": agent.welcome_message_i18n if agent else None,
         "turnstile_enabled": turnstile_ready,
         "turnstile_site_key": turnstile_site_key if turnstile_ready else None,
     }

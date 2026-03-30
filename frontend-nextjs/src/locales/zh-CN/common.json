@@ -330,6 +330,8 @@
     "restrictedReplyLabel": "自动回复",
     "restrictedReplyPlaceholder": "抱歉，当前服务受限，请稍后再试。",
     "restrictedReplyDesc": "当服务受限（如对话次数超限、AI 服务异常等）时，向访客展示此自动回复内容",
+    "multilingualSettings": "自动翻译",
+    "multilingualSettingsDesc": "系统会在 AI 设置可用时，根据你填写的默认文案自动生成中英文版本，并根据访客浏览器语言显示对应内容。",
     "secureStorage": "您的 API 密钥将被安全存储，不会泄露",
     "pleaseConfigureApiKey": "请先配置 API 密钥才能使用 AI 对话功能",
     "widgetAppearance": "Widget 外观",

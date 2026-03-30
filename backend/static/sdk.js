@@ -152,8 +152,8 @@
         }
         // 用户参数优先，否则使用后端配置，最后使用默认值
         self.config.themeColor = self.config.themeColor || data.widget_color || defaults.themeColor;
-        self.config.title = self.config.title || data.widget_title || defaults.title;
-        self.config.welcomeMessage = self.config.welcomeMessage || data.welcome_message || defaults.welcomeMessage;
+        self.config.title = self.config.title || self.resolveI18nText(data.widget_title_i18n, data.widget_title || defaults.title);
+        self.config.welcomeMessage = self.config.welcomeMessage || self.resolveI18nText(data.welcome_message_i18n, data.welcome_message || defaults.welcomeMessage);
         self.turnstileSiteKey = data.turnstile_enabled ? (data.turnstile_site_key || null) : null;
 
         // 重新计算主题
@@ -227,6 +227,21 @@
     return 'zh-CN';
   };
 
+  BasjooWidget.prototype.getEffectiveLocale = function() {
+    if (this.config.language === 'zh-CN' || this.config.language === 'en-US') {
+      return this.config.language;
+    }
+    return this.getBrowserLanguage();
+  };
+
+  BasjooWidget.prototype.resolveI18nText = function(i18nMap, fallback) {
+    var locale = this.getEffectiveLocale();
+    if (i18nMap && i18nMap[locale]) return i18nMap[locale];
+    if (i18nMap && i18nMap['zh-CN']) return i18nMap['zh-CN'];
+    if (i18nMap && i18nMap['en-US']) return i18nMap['en-US'];
+    return fallback;
+  };
+
   /**
    * 获取本地化文本
    */
@@ -243,7 +258,7 @@
       'openSource': { 'zh-CN': '打开来源', 'en-US': 'Open source' },
       'document': { 'zh-CN': '文档', 'en-US': 'Document' }
     };
-    var lang = this.config.language === 'auto' ? this.getBrowserLanguage() : this.config.language;
+    var lang = this.getEffectiveLocale();
     return (texts[key] && texts[key][lang]) || texts[key]['zh-CN'];
   };
 
@@ -1467,6 +1482,7 @@
           body: JSON.stringify({
             agent_id: this.config.agentId,
             message: text,
+            locale: this.getEffectiveLocale(),
             session_id: this.sessionId,
             visitor_id: this.visitorId,
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,

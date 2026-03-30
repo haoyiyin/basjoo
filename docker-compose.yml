@@ -205,9 +205,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-      - NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8000
-      - BACKEND_PROXY_TARGET=http://host.docker.internal:8000
+      - NEXT_PUBLIC_API_BASE_URL=
+      - NEXT_PUBLIC_WS_BASE_URL=
+      - BACKEND_PROXY_TARGET=http://backend-dev:8000
     volumes:
       - ./frontend-nextjs:/app
       - /app/node_modules

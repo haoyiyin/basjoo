@@ -126,6 +126,15 @@ async def init_db():
                 top_k=5,
                 similarity_threshold=0.5,
                 enable_context=False,
+                widget_title_i18n={"zh-CN": "AI 客服", "en-US": "AI Assistant"},
+                welcome_message_i18n={
+                    "zh-CN": "您好！我是Basjoo助手，有什么可以帮您的吗？",
+                    "en-US": "Hello! I'm the Basjoo assistant. How can I help you?",
+                },
+                restricted_reply_i18n={
+                    "zh-CN": "抱歉，当前服务受限，请稍后再试。",
+                    "en-US": "Sorry, the service is currently limited. Please try again later.",
+                },
             )
             session.add(default_agent)
             await session.commit()

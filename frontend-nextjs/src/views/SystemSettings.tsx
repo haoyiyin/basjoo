@@ -231,6 +231,16 @@ export default function SystemSettings() {
     }
   }, [agent, t])
 
+  const renderAutoTranslateHint = useCallback(() => (
+    <p style={{
+      marginTop: 'var(--space-2)',
+      fontSize: 'var(--text-xs)',
+      color: 'var(--color-text-muted)',
+    }}>
+      {t('labels.multilingualSettingsDesc')}
+    </p>
+  ), [t])
+
   if (loading) {
     return (
       <AdminLayout>
@@ -582,6 +592,7 @@ export default function SystemSettings() {
                 onChange={(e) => handleChangeWithAutoSave('widget_title', e.target.value)}
                 placeholder={t('labels.welcomeMessage')}
               />
+              {renderAutoTranslateHint()}
             </div>
             <div>
               <label style={{
@@ -717,6 +728,7 @@ export default function SystemSettings() {
               resize: 'vertical',
             }}
           />
+          {renderAutoTranslateHint()}
         </div>
 
         <div className="glass-card" style={{
@@ -928,6 +940,7 @@ export default function SystemSettings() {
             }}>
               {t('labels.restrictedReplyDesc')}
             </p>
+            {renderAutoTranslateHint()}
           </div>
         </div>
 

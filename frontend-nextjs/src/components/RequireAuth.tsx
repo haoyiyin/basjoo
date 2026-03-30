@@ -1,7 +1,7 @@
 'use client';
 
-import { Navigate } from 'react-router-dom';
 import React from 'react';
+import { Navigate } from '../router/react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export const RequireAuth = ({ children }: { children: React.ReactNode }) => {

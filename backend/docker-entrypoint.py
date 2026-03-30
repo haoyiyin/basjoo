@@ -228,6 +228,18 @@ def migrate_sqlite_schema():
                 "turnstile_secret_key",
                 "VARCHAR(255)",
             ),
+            (
+                "widget_title_i18n",
+                "TEXT",
+            ),
+            (
+                "welcome_message_i18n",
+                "TEXT",
+            ),
+            (
+                "restricted_reply_i18n",
+                "TEXT",
+            ),
         ],
     }
 

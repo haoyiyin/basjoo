@@ -330,6 +330,8 @@
     "restrictedReplyLabel": "Auto Reply",
     "restrictedReplyPlaceholder": "Sorry, the service is currently restricted. Please try again later.",
     "restrictedReplyDesc": "Message shown to visitors when service is restricted (e.g., rate limit exceeded, AI service unavailable)",
+    "multilingualSettings": "Auto translation",
+    "multilingualSettingsDesc": "When AI settings are available, the system automatically generates Chinese and English versions from your default copy and shows the right one based on the visitor's browser language.",
     "secureStorage": "Your API key will be securely stored and will not be leaked",
     "pleaseConfigureApiKey": "Please configure API key first to use AI conversation features",
     "widgetAppearance": "Widget Appearance",
