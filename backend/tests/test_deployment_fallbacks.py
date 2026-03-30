@@ -65,6 +65,74 @@ def test_settings_reuses_existing_secret_key_file(monkeypatch, tmp_path):
 
 
 
+def test_settings_generates_agent_id_file_when_env_missing(monkeypatch, tmp_path):
+    agent_id_file = tmp_path / ".agent_id"
+    config, _ = _reload_config_module(
+        monkeypatch,
+        tmp_path,
+        AGENT_ID_FILE=str(agent_id_file),
+        DEFAULT_AGENT_ID="",
+    )
+
+    settings = config.Settings()
+
+    assert settings.default_agent_id.startswith("agt_")
+    assert len(settings.default_agent_id) == 16
+    assert agent_id_file.exists()
+    assert agent_id_file.read_text(encoding="utf-8").strip() == settings.default_agent_id
+
+
+
+def test_settings_reuses_existing_agent_id_file(monkeypatch, tmp_path):
+    agent_id_file = tmp_path / ".agent_id"
+    agent_id_file.write_text("agt_abcdef123456", encoding="utf-8")
+
+    config, _ = _reload_config_module(
+        monkeypatch,
+        tmp_path,
+        AGENT_ID_FILE=str(agent_id_file),
+        DEFAULT_AGENT_ID="",
+    )
+
+    settings = config.Settings()
+
+    assert settings.default_agent_id == "agt_abcdef123456"
+
+
+
+def test_settings_persists_default_agent_id_override(monkeypatch, tmp_path):
+    agent_id_file = tmp_path / ".agent_id"
+    config, _ = _reload_config_module(
+        monkeypatch,
+        tmp_path,
+        AGENT_ID_FILE=str(agent_id_file),
+        DEFAULT_AGENT_ID="agt_123456789abc",
+    )
+
+    settings = config.Settings()
+
+    assert settings.default_agent_id == "agt_123456789abc"
+    assert agent_id_file.read_text(encoding="utf-8").strip() == "agt_123456789abc"
+
+
+
+def test_settings_ignores_invalid_default_agent_id(monkeypatch, tmp_path):
+    agent_id_file = tmp_path / ".agent_id"
+    agent_id_file.write_text("agt_abcdef123456", encoding="utf-8")
+
+    config, _ = _reload_config_module(
+        monkeypatch,
+        tmp_path,
+        AGENT_ID_FILE=str(agent_id_file),
+        DEFAULT_AGENT_ID="invalid-agent-id",
+    )
+
+    settings = config.Settings()
+
+    assert settings.default_agent_id == "agt_abcdef123456"
+
+
+
 def test_settings_defaults_cors_to_wildcard_when_env_missing(monkeypatch, tmp_path):
     config, _ = _reload_config_module(monkeypatch, tmp_path)
 

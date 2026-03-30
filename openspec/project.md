@@ -10,7 +10,7 @@
 - **Multi-LLM Support**: OpenAI, Anthropic (Claude), Google (Gemini), Azure OpenAI, and compatible APIs
 - **Admin Dashboard**: Full management interface for knowledge, agents, and settings
 
-**Status**: Production-ready with 126 passing tests, zero bugs, and SSS+ quality certification.
+**Status**: Production-ready repository with FastAPI backend, Next.js admin dashboard, embeddable widget, and Docker-based deployment.
 
 ## Tech Stack
 
@@ -20,8 +20,8 @@
 | Python | 3.11+ | Runtime |
 | FastAPI | 0.115.0 | Async web framework |
 | SQLAlchemy | 2.0.35 | Async ORM with aiosqlite |
-| FAISS | 1.10.0 | Vector similarity search |
-| sentence-transformers | 2.7.0 | Text embeddings |
+| Qdrant | Docker service | Vector similarity search |
+| Jina embeddings / provider-specific embeddings | External API | Text embeddings |
 | APScheduler | 3.10.4 | Background task scheduling |
 | Pydantic | 2.10.1 | Request/response validation |
 | OpenAI SDK | 1.54.0 | LLM API client |
@@ -46,7 +46,9 @@
 ### Infrastructure
 - **Docker + Docker Compose**: Container orchestration
 - **Nginx**: Reverse proxy for frontend
-- **SQLite**: Default database (PostgreSQL for production)
+- **SQLite**: Default application database
+- **Redis**: Rate limiting, cache fallback, task coordination
+- **Qdrant**: Vector storage and retrieval
 
 ## Project Conventions
 
@@ -107,9 +109,9 @@ const { t } = useTranslation('common')
 - **Protected Routes**: Wrap with `<RequireAuth>` component
 
 #### Service Layer
-- `llm_service.py`: LLM API abstraction (supports Mock mode)
-- `rag.py`: RAG retrieval and response generation
-- `vector_store.py`: FAISS index management
+- `llm_service.py`: LLM API abstraction (supports multiple providers and mock mode)
+- `rag_qdrant.py`: RAG retrieval and response generation against Qdrant
+- `qdrant_store.py`: Qdrant collection and vector management
 - `scraper.py`: URL content extraction via Jina Reader API
 - `scheduler.py`: Background tasks with APScheduler
 
@@ -118,7 +120,7 @@ const { t } = useTranslation('common')
 #### Backend Tests
 - **Framework**: pytest + pytest-asyncio
 - **Location**: `backend/tests/`
-- **Coverage**: 126 test cases across 9 categories
+- **Coverage**: broad backend coverage across API, deployment, stress, edge-case, integration, observability, security, and service-layer scenarios
 - **Categories**: Core API, Production, Stress, Edge Case, Integration, Observability, Extreme Stress, Security, Service Layer
 
 ```bash
@@ -157,7 +159,7 @@ pytest --cov=. --cov-report=html
 
 ### RAG Flow
 1. User sends message → `/api/v1/chat`
-2. System retrieves relevant contexts from FAISS index (Q&A + URL content)
+2. System retrieves relevant contexts from the agent's Qdrant collection (Q&A + URL content)
 3. Contexts are injected into LLM prompt with system prompt
 4. LLM generates response with source citations
 5. Response includes `sources` array for transparency
@@ -211,10 +213,12 @@ pytest --cov=. --cov-report=html
 
 ### Key Configuration
 ```bash
-# Required
-SECRET_KEY=your-secret-key
+# Required or zero-config persisted on first startup
+SECRET_KEY=
+DEFAULT_AGENT_ID=
 
-# LLM (choose one, or use Mock mode without any)
+# LLM (choose provider-specific keys as needed)
+DEEPSEEK_API_KEY=
 OPENAI_API_KEY=sk-xxx
 ANTHROPIC_API_KEY=sk-ant-xxx
 GOOGLE_API_KEY=xxx
@@ -222,9 +226,10 @@ AZURE_OPENAI_API_KEY=xxx
 
 # Optional
 JINA_API_KEY=xxx
-DATABASE_URL=sqlite:///./basjoo.db
+DATABASE_URL=sqlite:////app/data/basjoo.db
 ALLOWED_ORIGINS=http://localhost:3000
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+SECRET_KEY_FILE=/app/data/.secret_key
+ENCRYPTION_KEY_FILE=/app/data/.encryption_key
 ```
 
 ## File Locations Quick Reference

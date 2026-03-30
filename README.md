@@ -26,7 +26,9 @@ The stack also uses **SQLite** for application data, **Redis** for rate limiting
 - Qdrant-backed retrieval and index rebuild jobs
 - Streaming chat responses over Server-Sent Events
 - Embeddable website widget with session persistence
+- Widget copy auto-translation by visitor locale
 - Optional Cloudflare Turnstile verification for public chat
+- Offline agent fallback replies and admin-side error alerts
 - Admin authentication and dashboard management flows
 - Dockerized development and production-style deployment paths
 
@@ -75,6 +77,7 @@ Useful Docker commands:
 ```bash
 docker compose logs -f backend-dev frontend-dev nginx
 docker compose --profile dev up -d --build backend-dev frontend-dev
+bash scripts/prod_stability_check.sh
 ```
 
 Default dev ports:
@@ -161,6 +164,7 @@ Important runtime settings used in the current codebase include:
 - `QDRANT_PORT`
 - `SECRET_KEY`
 - `SECRET_KEY_FILE`
+- `DEFAULT_AGENT_ID`
 - `JINA_API_KEY`
 - `DEEPSEEK_API_KEY`
 - `TURNSTILE_SITE_KEY`
@@ -175,6 +179,7 @@ Important runtime settings used in the current codebase include:
 Notes:
 
 - If `SECRET_KEY` is missing or insecure, the backend generates one and persists it to `SECRET_KEY_FILE`.
+- `DEFAULT_AGENT_ID` can be used to restore or pin a known widget agent ID during migrations; see the deployment section below for the preservation workflow.
 - The dev compose profile sets permissive CORS and local API URLs by default.
 - The production compose profile expects mounted persistent backend data under `/app/data`.
 
@@ -248,6 +253,12 @@ The active UI is the Next.js app in `frontend-nextjs/`.
 
 The backend serves widget-related assets directly, including `/sdk.js`.
 
+Recent widget and admin behavior highlights:
+
+- widget titles, welcome copy, and restricted/offline reply copy can be localized and auto-translated by visitor locale
+- admins can configure offline fallback replies and see backend-side error alerts in the dashboard
+- URL fetch/rebuild flows include improved cancellation, polling, and status-sync behavior
+
 ## Testing
 
 Backend tests are under `backend/tests/`.
@@ -285,6 +296,27 @@ pytest tests/test_api.py::test_name
 - nginx is configured with `client_max_body_size 12m` so oversized requests can reach the backend and return JSON errors instead of nginx HTML errors.
 - Optional HTTPS is enabled only when readable certificate and key files exist in `./ssl`.
 - Backend responses that bypass standard middleware should still apply CORS headers so embedded widget requests do not fail cross-origin.
+- The backend persists the default widget agent ID to `/app/data/.agent_id`. As long as the backend data volume is preserved, existing widget embed codes keep working after redeployments.
+- If you know an older widget agent ID that must keep working, set `DEFAULT_AGENT_ID=agt_xxxxxxxxxxxx` before first boot of the new deployment.
+- Avoid `docker compose down -v` or deleting the backend data volume unless you are intentionally rotating widget/embed identity.
+
+### Preserving existing widget embeds across redeployments
+
+Recommended production workflow:
+
+1. Preserve the backend data volume mounted at `/app/data`.
+2. Redeploy with `docker compose --profile prod up -d --build`.
+3. If you are migrating to a new server and know the old widget `agentId`, set `DEFAULT_AGENT_ID` before starting the backend.
+4. Back up at least `/app/data/basjoo.db` and `/app/data/.agent_id`.
+
+Example `.env` snippet for migration:
+
+```bash
+SECRET_KEY=
+DEFAULT_AGENT_ID=agt_123456789abc
+```
+
+If the old data volume is lost and the old `agentId` is unknown, old widget embeds cannot be recovered automatically because the embed code references the previous agent ID directly.
 
 ## API surface at a glance
 

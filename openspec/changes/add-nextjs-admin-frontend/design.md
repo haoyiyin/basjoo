@@ -6,7 +6,7 @@ The admin UI now lives in `frontend-nextjs/` as the canonical dashboard applicat
   - Deliver the admin dashboard from a new Next.js App Router app.
   - Preserve current admin URLs and major page capabilities.
   - Keep JWT auth client-side with `localStorage` persistence.
-  - Keep all admin, chat, SSE, WebSocket, and knowledge APIs on the Python backend.
+  - Keep all admin, chat, SSE, and knowledge APIs on the Python backend.
   - Replace the existing frontend service at `/` once the new app is ready.
 - Non-Goals:
   - Rewriting backend APIs into Next.js API routes.
@@ -31,7 +31,7 @@ The admin UI now lives in `frontend-nextjs/` as the canonical dashboard applicat
   - Why: The user explicitly chose to keep the existing CSS, and reusing it minimizes UI drift.
   - Alternatives considered: Tailwind or a new component library would increase scope and visual regression risk.
 
-- Decision: Keep the Python backend as the system of record for all admin APIs, streaming chat, and WebSocket delivery.
+- Decision: Keep the Python backend as the system of record for all admin APIs, streaming chat, and session data delivery.
   - Why: The backend already owns those contracts and the user explicitly chose not to migrate APIs.
   - Alternatives considered: Next.js API routes would duplicate or fragment the current backend responsibilities.
 
@@ -46,7 +46,7 @@ The admin UI now lives in `frontend-nextjs/` as the canonical dashboard applicat
 - Running a parallel codebase during migration increases temporary maintenance overhead.
   - Mitigation: Keep the migration scoped to the admin frontend and plan any legacy cleanup as a separate follow-up.
 
-- SSE and WebSocket behavior can regress if origin/proxy handling changes.
+- SSE streaming and session update behavior can regress if origin/proxy handling changes.
   - Mitigation: Preserve the current backend endpoints and explicitly validate playground streaming plus admin session live updates.
 
 ## Migration Plan
@@ -55,7 +55,7 @@ The admin UI now lives in `frontend-nextjs/` as the canonical dashboard applicat
 3. Port the admin pages to their App Router equivalents, keeping backend integrations unchanged.
 4. Add Docker/dev/prod support for the new Next.js service.
 5. Update nginx and compose so `/` resolves to the Next.js service while backend endpoints keep their current routing.
-6. Validate route parity, auth flows, SSE streaming, WebSocket updates, and deployment behavior before enabling the cutover.
+6. Validate route parity, auth flows, SSE streaming, session live updates, and deployment behavior before enabling the cutover.
 
 ## Open Questions
 - None. The migration will use client-only auth guards and will replace the existing frontend at `/` after implementation.

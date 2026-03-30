@@ -53,6 +53,37 @@ engine = _create_engine(database_url)
 AsyncSessionLocal = _create_sessionmaker(engine)
 
 
+def _build_default_agent(workspace_id: int):
+    from models import Agent
+
+    return Agent(
+        id=settings.default_agent_id,
+        workspace_id=workspace_id,
+        name="AI Agent",
+        description="Default AI Customer Service Agent",
+        system_prompt="You are a helpful customer service assistant.",
+        model="deepseek-chat",
+        temperature=0.7,
+        max_tokens=1024,
+        api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+        api_base="https://api.deepseek.com/v1",
+        jina_api_key=os.getenv("JINA_API_KEY", ""),
+        embedding_model="jina-embeddings-v3",
+        top_k=5,
+        similarity_threshold=0.5,
+        enable_context=False,
+        widget_title_i18n={"zh-CN": "AI 客服", "en-US": "AI Assistant"},
+        welcome_message_i18n={
+            "zh-CN": "您好！我是Basjoo助手，有什么可以帮您的吗？",
+            "en-US": "Hello! I'm the Basjoo assistant. How can I help you?",
+        },
+        restricted_reply_i18n={
+            "zh-CN": "抱歉，当前服务受限，请稍后再试。",
+            "en-US": "Sorry, the service is currently limited. Please try again later.",
+        },
+    )
+
+
 async def configure_database(new_database_url: str):
     global database_url, engine, AsyncSessionLocal
     await engine.dispose()
@@ -111,35 +142,25 @@ async def init_db():
             default_quota = WorkspaceQuota(workspace_id=default_workspace.id)
             session.add(default_quota)
 
-            default_agent = Agent(
-                workspace_id=default_workspace.id,
-                name="AI Agent",
-                description="Default AI Customer Service Agent",
-                system_prompt="You are a helpful customer service assistant.",
-                model="deepseek-chat",
-                temperature=0.7,
-                max_tokens=1024,
-                api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-                api_base="https://api.deepseek.com/v1",
-                jina_api_key=os.getenv("JINA_API_KEY", ""),
-                embedding_model="jina-embeddings-v3",
-                top_k=5,
-                similarity_threshold=0.5,
-                enable_context=False,
-                widget_title_i18n={"zh-CN": "AI 客服", "en-US": "AI Assistant"},
-                welcome_message_i18n={
-                    "zh-CN": "您好！我是Basjoo助手，有什么可以帮您的吗？",
-                    "en-US": "Hello! I'm the Basjoo assistant. How can I help you?",
-                },
-                restricted_reply_i18n={
-                    "zh-CN": "抱歉，当前服务受限，请稍后再试。",
-                    "en-US": "Sorry, the service is currently limited. Please try again later.",
-                },
-            )
+            default_agent = _build_default_agent(default_workspace.id)
             session.add(default_agent)
             await session.commit()
 
             print(f"✓ 创建默认工作空间(ID={default_workspace.id})")
             print(f"✓ 创建默认Agent(ID={default_agent.id})")
         else:
-            print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
+            agent_result = await session.execute(
+                select(Agent.id).where(Agent.workspace_id == existing_workspace.id).limit(1)
+            )
+            existing_agent_id = agent_result.scalar_one_or_none()
+
+            if existing_agent_id:
+                print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
+                print(f"✓ 默认Agent已存在(ID={existing_agent_id})")
+            else:
+                default_agent = _build_default_agent(existing_workspace.id)
+                session.add(default_agent)
+                await session.commit()
+
+                print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
+                print(f"✓ 已为默认工作空间创建Agent(ID={default_agent.id})")

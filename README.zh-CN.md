@@ -29,7 +29,9 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 - 基于 Qdrant 的检索与索引重建任务
 - 基于 Server-Sent Events 的流式聊天回复
 - 可嵌入网站的聊天组件，并带有会话持久化能力
+- 根据访客语言自动翻译 widget 文案
 - 面向公开聊天入口的可选 Cloudflare Turnstile 验证
+- 离线智能体兜底回复与管理端错误告警
 - 管理员认证与后台管理流程
 - Docker 化的开发和生产风格部署路径
 
@@ -78,6 +80,7 @@ docker compose --profile prod up -d
 ```bash
 docker compose logs -f backend-dev frontend-dev nginx
 docker compose --profile dev up -d --build backend-dev frontend-dev
+bash scripts/prod_stability_check.sh
 ```
 
 默认开发端口：
@@ -164,6 +167,7 @@ pytest tests/test_api.py::test_name
 - `QDRANT_PORT`
 - `SECRET_KEY`
 - `SECRET_KEY_FILE`
+- `DEFAULT_AGENT_ID`
 - `JINA_API_KEY`
 - `DEEPSEEK_API_KEY`
 - `TURNSTILE_SITE_KEY`
@@ -178,6 +182,7 @@ pytest tests/test_api.py::test_name
 说明：
 
 - 如果 `SECRET_KEY` 缺失或被判定为不安全，后端会自动生成并写入 `SECRET_KEY_FILE`。
+- `DEFAULT_AGENT_ID` 可用于迁移时恢复或固定已知的 widget agent ID；保留旧嵌入代码的完整流程见下方部署章节。
 - Docker Compose 的开发环境默认启用宽松的 CORS 和本地 API 地址。
 - 生产风格环境默认依赖挂载到 `/app/data` 的持久化数据目录。
 
@@ -251,6 +256,12 @@ pytest tests/test_api.py::test_name
 
 后端会直接提供与 widget 相关的资源，包括 `/sdk.js`。
 
+近期 widget 与后台行为补充：
+
+- widget 标题、欢迎语、受限/离线回复文案支持按访客语言自动本地化
+- 管理员可以配置离线兜底回复，并在后台看到服务端错误告警
+- URL 抓取与训练流程的取消、轮询和状态同步体验已增强
+
 ## 测试
 
 后端测试位于 `backend/tests/`。
@@ -288,6 +299,25 @@ pytest tests/test_api.py::test_name
 - nginx 已配置 `client_max_body_size 12m`，这样超大请求可以到达后端并返回 JSON 错误，而不是直接返回 nginx HTML 错误页。
 - 只有当 `./ssl` 中存在可读证书和私钥时，才会启用可选 HTTPS。
 - 如果后端存在绕过标准中间件链的提前返回，也应补齐 CORS 头，避免嵌入式 widget 出现跨域失败。
+- 后端会将默认 widget agent ID 持久化到 `/app/data/.agent_id`。只要保留 backend 数据卷，重新部署后旧的 widget 嵌入代码仍然可用。
+- 如果你知道历史上已上线 widget 的旧 `agentId`，可在新部署首次启动前设置 `DEFAULT_AGENT_ID=agt_xxxxxxxxxxxx`，以保持旧嵌入代码兼容。
+- 除非你明确想重置 widget 身份，否则不要执行 `docker compose down -v`，也不要删除 backend 数据卷。
+
+### 重新部署时保留旧 widget 的推荐流程
+
+1. 保留挂载到 `/app/data` 的 backend 数据卷。
+2. 使用 `docker compose --profile prod up -d --build` 重新部署。
+3. 如果是在新机器迁移且你知道旧 widget 的 `agentId`，请在启动前设置 `DEFAULT_AGENT_ID`。
+4. 至少备份 `/app/data/basjoo.db` 和 `/app/data/.agent_id`。
+
+迁移时的 `.env` 示例：
+
+```bash
+SECRET_KEY=
+DEFAULT_AGENT_ID=agt_123456789abc
+```
+
+如果旧数据卷已经丢失，且旧 `agentId` 也无法获取，则无法自动恢复旧 widget，因为嵌入代码里直接引用了之前的 agent ID。
 
 ## API 概览
 

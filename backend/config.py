@@ -1,6 +1,7 @@
 import logging
 import secrets
 import stat
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,8 @@ INSECURE_SECRET_VALUES = {
     "your-secret-key-change-in-production",
     "dev-secret-key",
 }
+
+DEFAULT_AGENT_ID_FILE = "/app/data/.agent_id"
 
 
 def _is_missing_or_insecure_secret(value: Optional[str]) -> bool:
@@ -54,6 +57,52 @@ def _generate_and_save_secret_key(secret_key_file: str) -> str:
     return secret_key
 
 
+def _is_valid_agent_id(value: Optional[str]) -> bool:
+    normalized = (value or "").strip()
+    if not normalized.startswith("agt_"):
+        return False
+    suffix = normalized[4:]
+    return len(suffix) == 12 and all(char in "0123456789abcdef" for char in suffix)
+
+
+
+def _load_agent_id_from_file(agent_id_file: str) -> Optional[str]:
+    try:
+        path = Path(agent_id_file)
+        if not path.exists():
+            return None
+
+        agent_id = path.read_text(encoding="utf-8").strip()
+        return agent_id if _is_valid_agent_id(agent_id) else None
+    except Exception as exc:
+        logger.warning("Failed to load agent id from %s: %s", agent_id_file, exc)
+        return None
+
+
+
+def _save_agent_id(agent_id_file: str, agent_id: str) -> None:
+    path = Path(agent_id_file)
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(agent_id, encoding="utf-8")
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist agent id to %s: %s.",
+            agent_id_file,
+            exc,
+        )
+
+
+
+def _generate_and_save_agent_id(agent_id_file: str) -> str:
+    agent_id = f"agt_{uuid.uuid4().hex[:12]}"
+    _save_agent_id(agent_id_file, agent_id)
+    logger.info("Generated default agent id file at %s", agent_id_file)
+    return agent_id
+
+
 class Settings(BaseSettings):
     """应用配置"""
 
@@ -86,6 +135,8 @@ class Settings(BaseSettings):
     # JWT 认证
     secret_key: str = ""
     secret_key_file: str = "/app/data/.secret_key"
+    default_agent_id: str = ""
+    agent_id_file: str = DEFAULT_AGENT_ID_FILE
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
 
@@ -116,6 +167,9 @@ class Settings(BaseSettings):
         secret_key_file = self.secret_key_file.strip() or "/app/data/.secret_key"
         object.__setattr__(self, "secret_key_file", secret_key_file)
 
+        agent_id_file = self.agent_id_file.strip() or DEFAULT_AGENT_ID_FILE
+        object.__setattr__(self, "agent_id_file", agent_id_file)
+
         if not self.allowed_origins.strip():
             object.__setattr__(self, "allowed_origins", "*")
 
@@ -130,6 +184,25 @@ class Settings(BaseSettings):
             if not resolved_secret:
                 resolved_secret = _generate_and_save_secret_key(secret_key_file)
             object.__setattr__(self, "secret_key", resolved_secret)
+
+        resolved_agent_id = self.default_agent_id.strip()
+        if resolved_agent_id and not _is_valid_agent_id(resolved_agent_id):
+            logger.warning(
+                "Ignoring invalid DEFAULT_AGENT_ID %r. Expected format agt_<12 lowercase hex chars>.",
+                resolved_agent_id,
+            )
+            resolved_agent_id = ""
+
+        if resolved_agent_id:
+            _save_agent_id(agent_id_file, resolved_agent_id)
+        else:
+            file_agent_id = _load_agent_id_from_file(agent_id_file)
+            if file_agent_id:
+                resolved_agent_id = file_agent_id
+            else:
+                resolved_agent_id = _generate_and_save_agent_id(agent_id_file)
+
+        object.__setattr__(self, "default_agent_id", resolved_agent_id)
 
     @property
     def cors_origins_list(self) -> list[str]:

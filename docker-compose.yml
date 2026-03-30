@@ -59,6 +59,7 @@ services:
       - QDRANT_PORT=6333
       - SECRET_KEY=${SECRET_KEY:-}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
+      - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
       - REQUIRE_SECRET_KEY=${REQUIRE_SECRET_KEY:-true}
       - "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}"
       - "ALLOWED_METHODS=${ALLOWED_METHODS:-GET,POST,PUT,DELETE,OPTIONS}"
@@ -150,6 +151,7 @@ services:
       - QDRANT_PORT=6333
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
+      - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
       - ALLOWED_ORIGINS=*
       - ALLOWED_METHODS=GET,POST,PUT,DELETE,OPTIONS
       - ALLOWED_HEADERS=Content-Type,Authorization,X-Requested-With,Accept

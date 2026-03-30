@@ -24,7 +24,7 @@ The system SHALL protect admin dashboard routes with the existing JWT token stor
 - **THEN** the dashboard restores the admin session without requiring a new login
 
 ### Requirement: Backend Integration Parity
-The system SHALL keep the Python backend as the system of record for admin authentication, agent settings, knowledge management, SSE chat streaming, and admin WebSocket updates.
+The system SHALL keep the Python backend as the system of record for admin authentication, agent settings, knowledge management, and SSE chat streaming.
 
 #### Scenario: Playground continues to stream responses from the Python backend
 - **WHEN** an administrator sends a playground message from the Next.js dashboard
@@ -33,7 +33,7 @@ The system SHALL keep the Python backend as the system of record for admin authe
 
 #### Scenario: Session center continues to receive live updates
 - **WHEN** an administrator opens the sessions UI in the Next.js dashboard
-- **THEN** the frontend connects to the existing Python admin WebSocket endpoint
+- **THEN** the frontend continues to use the existing backend-backed polling and refresh behavior
 - **AND** session updates and new messages continue to refresh the UI
 
 ### Requirement: Theme and Locale Persistence

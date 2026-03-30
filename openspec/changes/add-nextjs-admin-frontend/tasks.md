@@ -1,10 +1,10 @@
 ## 1. Scaffolding
-- [x] 1.1 Create `frontend-nextjs/` with Next.js App Router, TypeScript, lint/build configuration, and environment handling for backend API/WebSocket access.
+- [x] 1.1 Create `frontend-nextjs/` with Next.js App Router, TypeScript, lint/build configuration, and environment handling for backend API access.
 - [x] 1.2 Add the base application shell, global styles, shared assets, and provider wiring required for theme, locale, and auth state.
 
 ## 2. Shared runtime parity
 - [x] 2.1 Port the existing auth, theme, locale, and media-query behaviors into Next-compatible client modules while keeping JWT + `localStorage` semantics unchanged.
-- [x] 2.2 Port the typed backend API client and ensure SSE chat streaming plus admin WebSocket integrations continue to use the Python backend.
+- [x] 2.2 Port the typed backend API client and ensure SSE chat streaming plus admin session update integrations continue to use the Python backend.
 
 ## 3. Route and page migration
 - [x] 3.1 Implement App Router pages for `/login`, `/register`, `/setup`, `/`, `/sessions`, `/chat/[sessionId]`, `/urls`, `/qa`, `/settings/system`, and `/playground`.

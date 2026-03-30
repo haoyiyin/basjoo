@@ -48,8 +48,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `backend/main.py` creates the FastAPI app, mounts auth plus `/api/v1` routers, configures CORS/i18n/rate limiting, and starts schedulers/Redis in non-test mode.
 - Early responses that bypass Starlette CORS must use `apply_cors_headers()` from `backend/middleware/rate_limit.py` so embedded widget requests still receive CORS headers.
-- `backend/config.py` centralizes settings. Secrets can come from env vars or on-disk key files; missing/insecure `SECRET_KEY` values are auto-generated and persisted.
-- `backend/database.py` sets up the async SQLAlchemy engine/sessionmaker and initializes default workspace/agent data.
+- `backend/config.py` centralizes settings. Secrets can come from env vars or on-disk key files; missing/insecure `SECRET_KEY` values are auto-generated and persisted. The default widget agent ID is also persisted to `/app/data/.agent_id`, and can be overridden with `DEFAULT_AGENT_ID`.
+- `backend/database.py` sets up the async SQLAlchemy engine/sessionmaker and initializes default workspace/agent data using the configured persistent default agent ID.
 - `backend/models.py` is the system-of-record schema: workspace/agent config, URL and QA knowledge sources, document chunks, chat sessions/messages, quotas, index jobs, and admin users.
 
 ### Chat, RAG, and indexing
