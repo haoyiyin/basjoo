@@ -504,7 +504,12 @@ function ChatPanel({
               type="text"
               value={input}
               onChange={(e) => onInputChange(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && onSendMessage()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  onSendMessage()
+                }
+              }}
               placeholder={isSettingsSaving ? t('status.saving') : t('playground.inputPlaceholder')}
               disabled={isLoading || isSettingsSaving}
               style={{
@@ -645,15 +650,4 @@ function ChatPanel({
   );
 }
 
-// Use React.memo to prevent unnecessary re-renders
-// Only re-render when props actually change
-export default memo(ChatPanel, (prevProps, nextProps) => {
-  return (
-    prevProps.input === nextProps.input &&
-    prevProps.isLoading === nextProps.isLoading &&
-    prevProps.isSettingsSaving === nextProps.isSettingsSaving &&
-    prevProps.agent === nextProps.agent &&
-    prevProps.messages.length === nextProps.messages.length &&
-    prevProps.messages[prevProps.messages.length - 1] === nextProps.messages[nextProps.messages.length - 1]
-  );
-});
+export default memo(ChatPanel);

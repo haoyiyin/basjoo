@@ -503,6 +503,7 @@ export default function Playground() {
             messages={messages}
             input={input}
             isLoading={isLoading}
+            isSettingsSaving={isSettingsSaving}
             agent={agent}
             onInputChange={handleInputChange}
             onSendMessage={handleSendMessage}
