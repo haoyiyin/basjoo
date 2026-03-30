@@ -193,15 +193,6 @@ export default function URLManagement() {
       const result = await api.createURLs(agentId, [newUrl]);
       alert(t('labels.urlManagement.addedCount', { count: result.created }));
 
-      try {
-        const discoverResult = await api.discoverURLs(agentId, newUrl, 1, 10);
-        if (discoverResult.created > 0) {
-          alert(t('labels.urlManagement.discoveredCount', { discovered: discoverResult.discovered, created: discoverResult.created }));
-        }
-      } catch (discoverError) {
-        console.error(t('labels.urlManagement.discoverFailed'), discoverError);
-      }
-
       setNewUrl('');
       await loadURLs();
     } catch (error) {
@@ -260,11 +251,6 @@ export default function URLManagement() {
     const pollURLs = async () => {
       pollCount++;
 
-      if (pollCount > maxPolls) {
-        stopPolling();
-        return;
-      }
-
       try {
         // 同时查询 URL 列表和任务状态
         const [data, tasksStatus] = await Promise.all([
@@ -302,7 +288,7 @@ export default function URLManagement() {
         }
 
         // 备选停止条件：如果轮询超过 30 次仍没有变化，可能是抓取失败
-        if (consecutiveNoChange > 30) {
+        if (consecutiveNoChange > 30 && !tasksStatus.is_crawling) {
           await stopPolling();
         }
       } catch (error) {
