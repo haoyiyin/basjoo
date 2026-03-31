@@ -151,6 +151,25 @@ class APIService {
     return localStorage.getItem('basjoo_locale') || 'zh-CN';
   }
 
+  private getStreamBaseUrl(): string {
+    if (this.baseUrl) {
+      return this.baseUrl;
+    }
+
+    if (typeof window === 'undefined') {
+      return this.baseUrl;
+    }
+
+    const { protocol, hostname, port } = window.location;
+    const isFrontendDevPort = port === '3000';
+
+    if ((protocol === 'http:' || protocol === 'https:') && isFrontendDevPort) {
+      return `${protocol}//${hostname}:8000`;
+    }
+
+    return this.baseUrl;
+  }
+
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -220,6 +239,8 @@ class APIService {
       onContent: (chunk: string) => void;
       onDone: (meta: StreamDoneMeta) => void;
       onError: (error: string) => void;
+      onThinking?: (elapsed: number) => void;
+      onThinkingDone?: () => void;
     },
     options?: {
       signal?: AbortSignal;
@@ -230,7 +251,8 @@ class APIService {
       locale: request.locale || this.getLocale(),
     };
 
-    const url = new URL(`${this.baseUrl}/api/v1/chat/stream`, window.location.origin);
+    const streamBaseUrl = this.getStreamBaseUrl();
+    const url = new URL(`${streamBaseUrl}/api/v1/chat/stream`, window.location.origin);
     url.searchParams.set('locale', this.getLocale());
 
     const token = localStorage.getItem('token');
@@ -263,7 +285,7 @@ class APIService {
     let buffer = '';
     let streamEnded = false;
 
-    const processEvent = (rawEvent: string) => {
+    const processEvent = async (rawEvent: string) => {
       if (!rawEvent.trim()) {
         return;
       }
@@ -288,6 +310,12 @@ class APIService {
       switch (eventName) {
         case 'sources':
           callbacks.onSources(Array.isArray(payload.sources) ? payload.sources : []);
+          break;
+        case 'thinking':
+          callbacks.onThinking?.(typeof payload.elapsed === 'number' ? payload.elapsed : 0);
+          break;
+        case 'thinking_done':
+          callbacks.onThinkingDone?.();
           break;
         case 'content':
           callbacks.onContent(typeof payload.content === 'string' ? payload.content : '');
@@ -323,15 +351,22 @@ class APIService {
         : { index: lfIndex, length: 2 };
     };
 
+    const streamReadTimeout = 90_000;
+
     while (!streamEnded) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+          window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
+        }),
+      ]);
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
       let delimiter = findEventDelimiter();
       while (delimiter) {
         const rawEvent = buffer.slice(0, delimiter.index);
         buffer = buffer.slice(delimiter.index + delimiter.length);
-        processEvent(rawEvent.replace(/\r\n/g, '\n'));
+        await processEvent(rawEvent.replace(/\r\n/g, '\n'));
         if (streamEnded) {
           break;
         }
@@ -345,7 +380,7 @@ class APIService {
 
     if (!streamEnded) {
       if (buffer.trim()) {
-        processEvent(buffer);
+        await processEvent(buffer);
       }
       if (!streamEnded) {
         throw new Error('Stream ended unexpectedly');

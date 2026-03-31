@@ -74,6 +74,7 @@ export default function Dashboard() {
     has_pending: boolean
   } | null>(null)
   const [agentId, setAgentId] = useState<string | null>(null)
+  const [agentIdCopied, setAgentIdCopied] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -99,6 +100,22 @@ export default function Dashboard() {
     if (hour < 12) return t('time.goodMorning')
     if (hour < 18) return t('time.goodAfternoon')
     return t('time.goodEvening')
+  }
+
+  const handleCopyAgentId = async () => {
+    if (!agentId) return
+    try {
+      await navigator.clipboard.writeText(agentId)
+    } catch {
+      const textArea = document.createElement('textarea')
+      textArea.value = agentId
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+    }
+    setAgentIdCopied(true)
+    setTimeout(() => setAgentIdCopied(false), 2000)
   }
 
   return (
@@ -405,6 +422,26 @@ export default function Dashboard() {
                   }}>
                     {agentId ? t('status.configured') : t('status.notConfigured')}
                   </div>
+                  {agentId && (
+                    <button
+                      onClick={handleCopyAgentId}
+                      style={{
+                        marginTop: '4px',
+                        padding: 0,
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        fontSize: 'var(--text-xs)',
+                        color: agentIdCopied ? 'var(--color-success)' : 'var(--color-text-muted)',
+                        fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
+                        textAlign: 'left',
+                        wordBreak: 'break-all',
+                      }}
+                      title={agentIdCopied ? t('status.success') : t('buttons.copy')}
+                    >
+                      {agentIdCopied ? `${t('status.success')}: ${agentId}` : `ID: ${agentId}`}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

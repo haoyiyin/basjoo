@@ -67,7 +67,17 @@
    */
   BasjooWidget.prototype.detectApiBase = function(configuredApiBase) {
     if (configuredApiBase) {
-      return configuredApiBase;
+      try {
+        var configuredUrl = new URL(configuredApiBase, window.location.href);
+        if ((configuredUrl.protocol === 'http:' || configuredUrl.protocol === 'https:') && configuredUrl.port === '3000') {
+          var directBase = configuredUrl.protocol + '//' + configuredUrl.hostname + ':8000';
+          console.info('[Basjoo Widget] Rewriting configured dev apiBase to direct backend:', directBase);
+          return directBase;
+        }
+        return configuredUrl.toString().replace(/\/$/, '');
+      } catch (error) {
+        return configuredApiBase;
+      }
     }
 
     var currentScript = document.currentScript;

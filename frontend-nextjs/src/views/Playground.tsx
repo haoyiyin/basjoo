@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../services/api'
@@ -161,21 +162,32 @@ export default function Playground() {
 
     const isStaleRequest = () => requestId !== streamRequestIdRef.current;
 
-    const updateStreamingMessage = (updater: (message: ChatPanelMessage) => ChatPanelMessage) => {
+    const updateStreamingMessage = (
+      updater: (message: ChatPanelMessage) => ChatPanelMessage,
+      options?: { sync?: boolean }
+    ) => {
       if (isStaleRequest()) {
         return;
       }
 
-      setMessages(prev => {
-        const index = prev.findIndex(message => message.clientId === streamingMessageClientId);
-        if (index === -1) {
-          return prev;
-        }
+      const applyUpdate = () => {
+        setMessages(prev => {
+          const index = prev.findIndex(message => message.clientId === streamingMessageClientId);
+          if (index === -1) {
+            return prev;
+          }
 
-        const next = [...prev];
-        next[index] = updater(next[index]);
-        return next;
-      });
+          const next = [...prev];
+          next[index] = updater(next[index]);
+          return next;
+        });
+      };
+
+      if (options?.sync) {
+        flushSync(applyUpdate);
+      } else {
+        applyUpdate();
+      }
     };
 
     const finalizeStreamingMessage = (meta?: StreamDoneMeta, usage?: UsageInfo | null) => {
@@ -205,6 +217,7 @@ export default function Playground() {
           sources: streamSources,
           usage: usage ?? meta?.usage ?? undefined,
           isStreaming: false,
+          thinkingElapsed: undefined,
         };
         return next;
       });
@@ -241,6 +254,24 @@ export default function Playground() {
             sources,
           }));
         },
+        onThinking: (elapsed) => {
+          if (isStaleRequest()) {
+            return;
+          }
+          updateStreamingMessage(message => ({
+            ...message,
+            thinkingElapsed: elapsed,
+          }));
+        },
+        onThinkingDone: () => {
+          if (isStaleRequest()) {
+            return;
+          }
+          updateStreamingMessage(message => ({
+            ...message,
+            thinkingElapsed: undefined,
+          }));
+        },
         onContent: (chunk) => {
           if (isStaleRequest()) {
             return;
@@ -248,7 +279,8 @@ export default function Playground() {
           updateStreamingMessage(message => ({
             ...message,
             content: message.content + chunk,
-          }));
+            thinkingElapsed: undefined,
+          }), { sync: true });
         },
         onDone: (meta) => {
           finalizeStreamingMessage(meta);

@@ -27,6 +27,7 @@ export default function SystemSettings() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [agentIdCopied, setAgentIdCopied] = useState(false)
   const [agent, setAgent] = useState<Agent | null>(null)
   const [serverApiBase, setServerApiBase] = useState<string>('')
   const turnstileSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -172,10 +173,22 @@ export default function SystemSettings() {
     }
   }, [])
 
+  const getEmbedApiBase = () => {
+    const rawApiBase = serverApiBase || API_BASE_URL || 'http://localhost:8000'
+
+    try {
+      const url = new URL(rawApiBase, window.location.origin)
+      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.port === '3000') {
+        return `${url.protocol}//${url.hostname}:8000`
+      }
+      return url.toString().replace(/\/$/, '')
+    } catch {
+      return rawApiBase
+    }
+  }
+
   const getEmbedCode = () => {
-    // 优先使用后端动态返回的服务器地址
-    // 如果获取失败，回退到环境变量配置
-    const apiBase = serverApiBase || API_BASE_URL || 'http://localhost:8000'
+    const apiBase = getEmbedApiBase()
     const sdkVersion = '2.0.0'
     const turnstileComment = agent?.enable_turnstile
       ? `\n<!-- Bot protection enabled for this agent -->`
@@ -207,6 +220,22 @@ export default function SystemSettings() {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
+  }
+
+  const handleCopyAgentId = async () => {
+    if (!settings.agent_id) return
+    try {
+      await navigator.clipboard.writeText(settings.agent_id)
+    } catch {
+      const textArea = document.createElement('textarea')
+      textArea.value = settings.agent_id
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+    }
+    setAgentIdCopied(true)
+    setTimeout(() => setAgentIdCopied(false), 2000)
   }
 
   const getAgentErrorMessage = useCallback((errorCode?: string | null) => {
@@ -1161,7 +1190,47 @@ export default function SystemSettings() {
               </p>
             </div>
           </div>
-          
+
+          {settings.agent_id && (
+            <button
+              onClick={handleCopyAgentId}
+              className="btn-secondary"
+              style={{
+                width: '100%',
+                marginBottom: 'var(--space-4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--space-3)',
+                padding: 'var(--space-3) var(--space-4)',
+                textAlign: 'left',
+                background: agentIdCopied ? 'rgba(16, 185, 129, 0.1)' : 'var(--color-bg-secondary)',
+                borderColor: agentIdCopied ? 'rgba(16, 185, 129, 0.3)' : undefined,
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                  Agent ID
+                </span>
+                <code style={{
+                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--color-text-primary)',
+                  wordBreak: 'break-all',
+                }}>
+                  {settings.agent_id}
+                </code>
+              </div>
+              <span style={{
+                fontSize: 'var(--text-xs)',
+                color: agentIdCopied ? '#10B981' : 'var(--color-text-muted)',
+                flexShrink: 0,
+              }}>
+                {agentIdCopied ? t('status.success') : t('buttons.copy')}
+              </span>
+            </button>
+          )}
+
           <div style={{
             background: 'var(--color-bg-tertiary)',
             borderRadius: 'var(--radius-md)',

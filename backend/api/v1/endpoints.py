@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -430,6 +431,7 @@ def get_safe_stream_error_message(code: str) -> str:
         "BAD_REQUEST": "Invalid chat request",
         "PERSISTENCE_ERROR": "Failed to save streamed chat response",
         "CHAT_ERROR": "Chat stream failed",
+        "STREAM_TIMEOUT": "Chat stream timed out",
     }
     return messages.get(code, "Chat stream failed")
 
@@ -585,7 +587,7 @@ async def prepare_chat_request(
             "quota_id": quota.id,
         }
 
-    if agent_rate_limit_per_hour > 0 and request.session_id:
+    if agent_rate_limit_per_hour > 0 and request.session_id and not admin_user:
         from datetime import timedelta
 
         one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -698,7 +700,10 @@ async def prepare_chat_request(
 
     current_rag_service = None
     retrieval_results: List[Dict[str, Any]] = []
-    if agent_jina_api_key:
+    should_retrieve_context = bool(agent_jina_api_key and not admin_user)
+    if admin_user and agent_jina_api_key:
+        logger.info("Skipping RAG retrieval for admin Playground chat to reduce first-token latency")
+    if should_retrieve_context:
         try:
             current_rag_service = ensure_vector_services(
                 jina_api_key=agent_jina_api_key,
@@ -966,17 +971,36 @@ async def chat(
         reasoning_effort = chat_context["reasoning_effort"]
         use_mock_llm = chat_context["use_mock_llm"]
 
+        # Restricted reply config for graceful LLM failure fallback
+        _agent = chat_context["agent"]
+        _restricted_reply = _agent.restricted_reply
+        _restricted_reply_i18n = _agent.restricted_reply_i18n
+
     # Phase 2: LLM call without DB connection
-    reply_parts = []
-    async for chunk in llm.chat_completion(
-        messages=messages,
-        system_prompt=None,
-        stream=True,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        reasoning_effort=reasoning_effort,
-    ):
-        reply_parts.append(chunk)
+    try:
+        reply_parts = []
+        async for chunk in llm.chat_completion(
+            messages=messages,
+            system_prompt=None,
+            stream=True,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        ):
+            reply_parts.append(chunk)
+    except Exception:
+        logger.exception("LLM call failed in non-streaming chat")
+        fallback = resolve_i18n_text(
+            _restricted_reply_i18n,
+            _restricted_reply or "抱歉，当前服务繁忙，请稍后再试。",
+            request.locale,
+        )
+        return ChatResponse(
+            reply=fallback,
+            sources=sources,
+            usage=None,
+            session_id=session_public_id,
+        )
 
     reply = "".join(reply_parts)
     real_usage = llm.get_last_usage()
@@ -1031,6 +1055,8 @@ async def chat_stream(
     """
 
     async def event_generator():
+        request_start = time.monotonic()
+
         # Phase 1: Preparation with short-lived DB session
         async with database.AsyncSessionLocal() as prep_db:
             try:
@@ -1079,6 +1105,18 @@ async def chat_stream(
                 reasoning_effort = chat_context["reasoning_effort"]
                 use_mock_llm = chat_context["use_mock_llm"]
 
+                # Restricted reply config for graceful LLM failure fallback
+                _agent = chat_context["agent"]
+                _restricted_reply = _agent.restricted_reply
+                _restricted_reply_i18n = _agent.restricted_reply_i18n
+
+                logger.info(
+                    "chat_stream prepare done agent_id=%s session_id=%s prepare_ms=%.1f",
+                    request.agent_id,
+                    session_public_id,
+                    (time.monotonic() - request_start) * 1000,
+                )
+
             except HTTPException as error:
                 error_code = get_stream_error_code(error)
                 yield sse_event(
@@ -1095,7 +1133,13 @@ async def chat_stream(
         yield sse_event("sources", {"sources": sources})
 
         reply_parts = []
+        stream_start = time.monotonic()
+        max_stream_duration = 300.0
+        content_started = False
+        thinking_started = False
+        first_token_logged = False
         try:
+            stream_create_start = time.monotonic()
             stream_iter = llm.chat_completion(
                 messages=messages,
                 system_prompt=None,
@@ -1104,25 +1148,76 @@ async def chat_stream(
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
             ).__aiter__()
+            logger.info(
+                "chat_stream stream created agent_id=%s session_id=%s stream_create_ms=%.1f",
+                request.agent_id,
+                session_public_id,
+                (time.monotonic() - stream_create_start) * 1000,
+            )
 
             while True:
+                elapsed = time.monotonic() - stream_start
+                if elapsed > max_stream_duration:
+                    logger.warning("Stream timeout after %.0fs", elapsed)
+                    fallback = resolve_i18n_text(
+                        _restricted_reply_i18n,
+                        _restricted_reply or "抱歉，当前服务繁忙，请稍后再试。",
+                        request.locale,
+                    )
+                    yield sse_event("content", {"content": fallback})
+                    yield sse_event(
+                        "done",
+                        {
+                            "message_id": None,
+                            "session_id": session_public_id,
+                            "usage": None,
+                            "taken_over": False,
+                        },
+                    )
+                    return
+
                 try:
                     chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=15.0)
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
+                    thinking_started = True
+                    yield sse_event("thinking", {"elapsed": int(time.monotonic() - stream_start)})
                     continue
 
                 reply_parts.append(chunk)
+                if not content_started and chunk.strip():
+                    content_started = True
+                    if not first_token_logged:
+                        first_token_logged = True
+                        logger.info(
+                            "chat_stream first token agent_id=%s session_id=%s first_token_ms=%.1f total_before_first_ms=%.1f",
+                            request.agent_id,
+                            session_public_id,
+                            (time.monotonic() - stream_start) * 1000,
+                            (time.monotonic() - request_start) * 1000,
+                        )
+                    if thinking_started:
+                        yield sse_event("thinking_done", {})
                 yield sse_event("content", {"content": chunk})
+                await asyncio.sleep(0)
         except Exception:
             logger.exception("LLM streaming failed")
+            # Graceful fallback: return agent's restricted reply instead of a technical error
+            fallback = resolve_i18n_text(
+                _restricted_reply_i18n,
+                _restricted_reply or "抱歉，当前服务繁忙，请稍后再试。",
+                request.locale,
+            )
+            yield sse_event("content", {"content": fallback})
             yield sse_event(
-                "error",
+                "done",
                 {
-                    "error": get_safe_stream_error_message("CHAT_ERROR"),
-                    "code": "CHAT_ERROR",
+                    "message_id": None,
+                    "session_id": session_public_id,
+                    "usage": None,
+                    "taken_over": False,
                 },
             )
             return

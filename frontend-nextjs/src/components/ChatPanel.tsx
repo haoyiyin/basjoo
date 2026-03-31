@@ -12,10 +12,12 @@ export interface Message {
   sources?: Source[];
   usage?: UsageInfo;
   isStreaming?: boolean;
+  thinkingElapsed?: number;
   timestamp: Date;
 }
 
 export interface Agent {
+  id?: string;
   name: string;
   model: string;
   temperature: number;
@@ -207,6 +209,25 @@ function ChatPanel({
 }: ChatPanelProps) {
   const { t } = useTranslation('common');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [agentIdCopied, setAgentIdCopied] = useState(false);
+
+  const handleCopyAgentId = async () => {
+    if (!agent?.id) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(agent.id);
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = agent.id;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    }
+    setAgentIdCopied(true);
+    window.setTimeout(() => setAgentIdCopied(false), 2000);
+  };
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -292,6 +313,29 @@ function ChatPanel({
               <span style={{ color: 'var(--color-text-muted)' }}>{t('playground.temperature')}</span>
               <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{agent.temperature}</span>
             </div>
+
+            {agent.id && (
+              <button
+                onClick={handleCopyAgentId}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 10px',
+                  background: 'var(--color-bg-glass)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: 'var(--text-xs)',
+                  cursor: 'pointer',
+                  color: agentIdCopied ? 'var(--color-success)' : 'var(--color-text-muted)',
+                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
+                }}
+                title={agentIdCopied ? t('status.success') : t('buttons.copy')}
+              >
+                <span>Agent ID</span>
+                <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{agent.id}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -377,19 +421,36 @@ function ChatPanel({
                     }}>
                       {msg.role === 'assistant' ? (
                         <div>
-                          <MarkdownRenderer content={msg.content} />
-                          {msg.isStreaming && (
-                            <span
-                              style={{
-                                display: 'inline-block',
-                                width: '0.5rem',
-                                height: '1em',
-                                marginLeft: '0.15rem',
-                                verticalAlign: 'text-bottom',
-                                background: 'var(--color-accent-primary)',
-                                animation: 'blinkCursor 1s steps(1) infinite',
-                              }}
-                            />
+                          {msg.isStreaming && !msg.content && typeof msg.thinkingElapsed === 'number' ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                              <LoadingDots />
+                              <span style={{ color: 'var(--color-text-muted)' }}>
+                                {typeof msg.thinkingElapsed === 'number'
+                                  ? `${t('status.thinking')} ${msg.thinkingElapsed}s`
+                                  : t('status.thinking')}
+                              </span>
+                            </div>
+                          ) : msg.isStreaming && !msg.content ? null : (
+                            <>
+                              {msg.isStreaming ? (
+                                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
+                              ) : (
+                                <MarkdownRenderer content={msg.content} />
+                              )}
+                              {msg.isStreaming && (
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    width: '0.5rem',
+                                    height: '1em',
+                                    marginLeft: '0.15rem',
+                                    verticalAlign: 'text-bottom',
+                                    background: 'var(--color-accent-primary)',
+                                    animation: 'blinkCursor 1s steps(1) infinite',
+                                  }}
+                                />
+                              )}
+                            </>
                           )}
                         </div>
                       ) : (

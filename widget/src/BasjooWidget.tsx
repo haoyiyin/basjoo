@@ -68,6 +68,7 @@ interface StreamErrorPayload {
 interface StreamEventPayload {
   sources?: Source[];
   content?: string;
+  elapsed?: number;
 }
 
 interface ChatHistoryMessage {
@@ -97,6 +98,10 @@ class BasjooWidget {
   private isSending = false;
   private streamingMessage: HTMLDivElement | null = null;
   private streamingMessageContent: HTMLDivElement | null = null;
+  private thinkingIndicator: HTMLDivElement | null = null;
+  private thinkingIndicatorText: HTMLSpanElement | null = null;
+  private thinkingElapsed = 0;
+  private thinkingTimerId: number | null = null;
   private currentStreamContent = '';
   private currentStreamSources: Source[] = [];
   private turnstileSiteKey: string | null = null;
@@ -136,7 +141,17 @@ class BasjooWidget {
 
   private detectApiBase(configuredApiBase?: string): string {
     if (configuredApiBase) {
-      return configuredApiBase;
+      try {
+        const url = new URL(configuredApiBase, window.location.href)
+        if ((url.protocol === 'http:' || url.protocol === 'https:') && url.port === '3000') {
+          const directBase = `${url.protocol}//${url.hostname}:8000`
+          console.info('[Basjoo Widget] Rewriting configured dev apiBase to direct backend:', directBase)
+          return directBase
+        }
+        return url.toString().replace(/\/$/, '')
+      } catch {
+        return configuredApiBase;
+      }
     }
 
     const currentScript = document.currentScript;
@@ -792,9 +807,38 @@ class BasjooWidget {
       .basjoo-loading-dot:nth-child(1) { animation-delay: -0.32s; }
       .basjoo-loading-dot:nth-child(2) { animation-delay: -0.16s; }
 
+      .basjoo-thinking {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        align-self: flex-start;
+        max-width: 80%;
+        padding: 10px 14px;
+        border-radius: 12px;
+        border-bottom-left-radius: 4px;
+        background: ${messageBg};
+        color: ${textColor};
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .basjoo-thinking-icon {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: ${mutedColor};
+        animation: basjoo-pulse 1.5s ease-in-out infinite;
+        flex-shrink: 0;
+      }
+
       @keyframes basjoo-bounce {
         0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
         40% { transform: scale(1); opacity: 1; }
+      }
+
+      @keyframes basjoo-pulse {
+        0%, 100% { opacity: 0.45; transform: scale(0.9); }
+        50% { opacity: 1; transform: scale(1.1); }
       }
 
       .basjoo-error {
@@ -918,7 +962,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'citationSources' | 'document' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'openSource'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'citationSources' | 'document' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'openSource' | 'thinking'): string {
     const isEnglish = this.getEffectiveLocale() === 'en-US';
 
     const texts: Record<string, { en: string; zh: string }> = {
@@ -933,6 +977,7 @@ class BasjooWidget {
       messageTooLong: { en: 'Message too long (max 2000 characters)', zh: '消息过长（最多2000字符）' },
       greetingBubble: { en: 'Hi! How can I help you?', zh: '你好！有什么可以帮您？' },
       newMessage: { en: 'New message', zh: '新消息' },
+      thinking: { en: 'Thinking...', zh: '思考中...' },
     };
 
     return isEnglish ? texts[key].en : texts[key].zh;
@@ -1118,6 +1163,58 @@ class BasjooWidget {
     return messageDiv;
   }
 
+  private formatThinkingText(): string {
+    return `${this.getText('thinking')} ${this.thinkingElapsed}s`;
+  }
+
+  private showThinkingIndicator(elapsed = 0): void {
+    this.hideLoading();
+    this.thinkingElapsed = elapsed;
+
+    if (!this.thinkingIndicator) {
+      const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
+      const indicator = document.createElement('div');
+      indicator.className = 'basjoo-thinking';
+
+      const dot = document.createElement('span');
+      dot.className = 'basjoo-thinking-icon';
+      indicator.appendChild(dot);
+
+      const text = document.createElement('span');
+      indicator.appendChild(text);
+
+      messagesContainer.appendChild(indicator);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+      this.thinkingIndicator = indicator;
+      this.thinkingIndicatorText = text;
+    }
+
+    if (this.thinkingIndicatorText) {
+      this.thinkingIndicatorText.textContent = this.formatThinkingText();
+    }
+
+    if (this.thinkingTimerId === null) {
+      this.thinkingTimerId = window.setInterval(() => {
+        this.thinkingElapsed += 1;
+        if (this.thinkingIndicatorText) {
+          this.thinkingIndicatorText.textContent = this.formatThinkingText();
+        }
+      }, 1000);
+    }
+  }
+
+  private hideThinkingIndicator(): void {
+    if (this.thinkingTimerId !== null) {
+      window.clearInterval(this.thinkingTimerId);
+      this.thinkingTimerId = null;
+    }
+    this.thinkingIndicator?.remove();
+    this.thinkingIndicator = null;
+    this.thinkingIndicatorText = null;
+    this.thinkingElapsed = 0;
+  }
+
   private removeStreamingMessage(): void {
     this.streamingMessage?.remove();
     this.streamingMessage = null;
@@ -1157,6 +1254,7 @@ class BasjooWidget {
 
   private appendToStreamingMessage(chunk: string): void {
     if (!this.streamingMessage || !this.streamingMessageContent) {
+      this.hideThinkingIndicator();
       this.createStreamingMessage();
     }
 
@@ -1349,6 +1447,14 @@ class BasjooWidget {
             ? (payload as StreamEventPayload).sources!
             : [];
           break;
+        case 'thinking':
+          this.showThinkingIndicator(typeof (payload as StreamEventPayload).elapsed === 'number'
+            ? (payload as StreamEventPayload).elapsed!
+            : 0);
+          break;
+        case 'thinking_done':
+          this.hideThinkingIndicator();
+          break;
         case 'content':
           this.appendToStreamingMessage((payload as StreamEventPayload).content || '');
           break;
@@ -1403,8 +1509,15 @@ class BasjooWidget {
         : { index: lfIndex, length: 2 };
     };
 
+    const streamReadTimeout = 90_000;
+
     while (!streamCompleted) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+          window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
+        }),
+      ]);
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
       let delimiter = findEventDelimiter();
@@ -1570,7 +1683,6 @@ class BasjooWidget {
         }
 
         this.hideLoading();
-        this.createStreamingMessage();
         await this.consumeStream(response);
         return;
       } catch (error: any) {
@@ -1586,6 +1698,7 @@ class BasjooWidget {
         }
 
         this.hideLoading();
+        this.hideThinkingIndicator();
         this.removeStreamingMessage();
         console.warn(`[Basjoo Widget] Stream attempt ${attempt + 1} failed, retrying...`);
         await new Promise(resolve => window.setTimeout(resolve, 1000));
@@ -1615,6 +1728,7 @@ class BasjooWidget {
       await this.sendMessageWithRetry(message);
     } catch (error: any) {
       this.hideLoading();
+      this.hideThinkingIndicator();
       this.removeStreamingMessage();
       console.error('[Basjoo Widget] Error sending message:', error);
 
@@ -1655,6 +1769,7 @@ class BasjooWidget {
     // 停止轮询和标题闪烁
     this.stopPolling();
     this.stopTitleBlink();
+    this.hideThinkingIndicator();
     this.removeStreamingMessage();
 
     const turnstile = (window as WindowWithTurnstile).turnstile;

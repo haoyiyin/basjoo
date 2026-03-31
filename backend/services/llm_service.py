@@ -8,6 +8,7 @@ LLM 服务抽象层 - 支持多个 AI 提供商
 - Mock (用于测试)
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator, List, Dict, Optional
 import logging
@@ -368,6 +369,7 @@ class OpenAIProvider(BaseLLMService):
                         self.set_last_usage(chunk.usage)
                     if chunk.choices and chunk.choices[0].delta.content:
                         yield chunk.choices[0].delta.content
+                        await asyncio.sleep(0)
             else:
                 # 非流式返回
                 self.set_last_usage(getattr(response, "usage", None))
@@ -476,6 +478,7 @@ class OpenAINativeProvider(BaseLLMService):
                         self.set_last_usage(chunk.usage)
                     if chunk.choices and chunk.choices[0].delta.content:
                         yield chunk.choices[0].delta.content
+                        await asyncio.sleep(0)
             else:
                 # 非流式返回
                 self.set_last_usage(getattr(response, "usage", None))
@@ -607,6 +610,7 @@ class GoogleProvider(BaseLLMService):
                 async for chunk in response:
                     if chunk.text:
                         yield chunk.text
+                        await asyncio.sleep(0)
             else:
                 response = await self.client.generate_content_async(
                     full_prompt,
