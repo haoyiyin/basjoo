@@ -80,6 +80,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The active frontend container is `frontend-nextjs`; compose and nginx configs route traffic to that app, not the legacy frontend.
 - Nginx should allow bodies larger than the backend guard: `nginx/conf.d/default.conf` sets `client_max_body_size 12m` so oversized requests reach FastAPI and return JSON 413 responses.
 - Optional HTTPS is enabled by `nginx/docker-entrypoint.sh` only when readable cert/key files exist in `./ssl`; otherwise the stack stays in HTTP-only mode.
+- When HTTPS is enabled, nginx redirects HTTP requests to HTTPS automatically.
+- `SERVER_DOMAIN` can be passed to nginx to enforce a canonical host: matching hostnames are served, direct IP/other-host access is dropped with nginx 444, and `/health` stays available for probes.
 
 ## Testing notes
 

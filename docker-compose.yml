@@ -119,6 +119,8 @@ services:
       context: ./nginx
       dockerfile: Dockerfile
     container_name: basjoo-nginx
+    environment:
+      - SERVER_DOMAIN=${SERVER_DOMAIN:-}
     ports:
       - "80:8080"
       - "443:8443"

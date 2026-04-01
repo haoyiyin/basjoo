@@ -26,7 +26,8 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 - Active frontend is `frontend-nextjs/`; the older `frontend/` directory is legacy/reference only.
 - nginx request body limit is configured larger than the backend guard so oversized requests can be handled by FastAPI with JSON responses.
-- HTTPS enablement in nginx is conditional on readable certificate files mounted under `./ssl`.
+- HTTPS enablement in nginx is conditional on readable certificate files mounted under `./ssl`, and HTTP now redirects to HTTPS automatically when certificates are present.
+- nginx can now enforce a canonical host via `SERVER_DOMAIN`, dropping direct IP or other-host access with nginx 444 while keeping `/health` available for probes.
 - Backend startup persists generated secret keys when configured values are missing or insecure.
 - Backend startup now persists the default widget agent ID to `/app/data/.agent_id` so existing widget embeds keep working across normal redeployments.
 - Docker Compose dev/prod backend services now accept `DEFAULT_AGENT_ID` so operators can restore or pin a known widget agent ID during migrations.

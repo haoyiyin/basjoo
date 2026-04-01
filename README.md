@@ -175,11 +175,13 @@ Important runtime settings used in the current codebase include:
 - `RATE_LIMIT_PER_MINUTE`
 - `RATE_LIMIT_BURST_SIZE`
 - `LOG_LEVEL`
+- `SERVER_DOMAIN`
 
 Notes:
 
 - If `SECRET_KEY` is missing or insecure, the backend generates one and persists it to `SECRET_KEY_FILE`.
 - `DEFAULT_AGENT_ID` can be used to restore or pin a known widget agent ID during migrations; see the deployment section below for the preservation workflow.
+- `SERVER_DOMAIN` is consumed by the nginx service in the production compose profile to enforce a canonical host and block direct IP/other-host access.
 - The dev compose profile sets permissive CORS and local API URLs by default.
 - The production compose profile expects mounted persistent backend data under `/app/data`.
 
@@ -295,6 +297,9 @@ pytest tests/test_api.py::test_name
 - The active frontend service is `frontend-nextjs`, not the legacy `frontend/` directory.
 - nginx is configured with `client_max_body_size 12m` so oversized requests can reach the backend and return JSON errors instead of nginx HTML errors.
 - Optional HTTPS is enabled only when readable certificate and key files exist in `./ssl`.
+- When certificates are present, nginx serves HTTPS on port 443 and redirects HTTP requests on port 80 to HTTPS automatically.
+- `SERVER_DOMAIN` can be set for the nginx service to enforce a canonical hostname. When set, nginx serves only that host, rejects direct IP or unexpected Host access with nginx 444, and keeps `/health` available for load balancer probes.
+- If `SERVER_DOMAIN` is not set, nginx keeps accepting requests by the incoming host as before.
 - Backend responses that bypass standard middleware should still apply CORS headers so embedded widget requests do not fail cross-origin.
 - The backend persists the default widget agent ID to `/app/data/.agent_id`. As long as the backend data volume is preserved, existing widget embed codes keep working after redeployments.
 - If you know an older widget agent ID that must keep working, set `DEFAULT_AGENT_ID=agt_xxxxxxxxxxxx` before first boot of the new deployment.

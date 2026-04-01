@@ -178,11 +178,13 @@ pytest tests/test_api.py::test_name
 - `RATE_LIMIT_PER_MINUTE`
 - `RATE_LIMIT_BURST_SIZE`
 - `LOG_LEVEL`
+- `SERVER_DOMAIN`
 
 说明：
 
 - 如果 `SECRET_KEY` 缺失或被判定为不安全，后端会自动生成并写入 `SECRET_KEY_FILE`。
 - `DEFAULT_AGENT_ID` 可用于迁移时恢复或固定已知的 widget agent ID；保留旧嵌入代码的完整流程见下方部署章节。
+- `SERVER_DOMAIN` 由生产环境中的 nginx 服务使用，用于限制规范域名并阻止直接 IP/其他 Host 访问。
 - Docker Compose 的开发环境默认启用宽松的 CORS 和本地 API 地址。
 - 生产风格环境默认依赖挂载到 `/app/data` 的持久化数据目录。
 
@@ -298,6 +300,9 @@ pytest tests/test_api.py::test_name
 - 当前有效前端服务是 `frontend-nextjs`，不是旧的 `frontend/`。
 - nginx 已配置 `client_max_body_size 12m`，这样超大请求可以到达后端并返回 JSON 错误，而不是直接返回 nginx HTML 错误页。
 - 只有当 `./ssl` 中存在可读证书和私钥时，才会启用可选 HTTPS。
+- 当证书存在时，nginx 会在 443 提供 HTTPS，并将 80 上的 HTTP 请求自动重定向到 HTTPS。
+- 可以为 nginx 设置 `SERVER_DOMAIN` 作为规范域名。设置后，nginx 只响应该域名；直接 IP 访问或其他 Host 请求会被 nginx 以 444 丢弃，同时保留 `/health` 供负载均衡探活使用。
+- 如果未设置 `SERVER_DOMAIN`，nginx 会保持当前按请求 Host 正常响应的行为。
 - 如果后端存在绕过标准中间件链的提前返回，也应补齐 CORS 头，避免嵌入式 widget 出现跨域失败。
 - 后端会将默认 widget agent ID 持久化到 `/app/data/.agent_id`。只要保留 backend 数据卷，重新部署后旧的 widget 嵌入代码仍然可用。
 - 如果你知道历史上已上线 widget 的旧 `agentId`，可在新部署首次启动前设置 `DEFAULT_AGENT_ID=agt_xxxxxxxxxxxx`，以保持旧嵌入代码兼容。
