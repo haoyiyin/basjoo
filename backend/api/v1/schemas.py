@@ -19,7 +19,7 @@ class ChatRequest(BaseModel):
         max_length=1000,
         description="用户消息（限制1000字符防止内存耗尽攻击）",
     )
-    locale: Optional[str] = Field("zh-CN", description="语言")
+    locale: Optional[str] = Field(None, description="语言")
     session_id: Optional[str] = Field(
         None, max_length=200, description="会话ID（用于多轮对话）"
     )
@@ -72,7 +72,7 @@ class ContextRequest(BaseModel):
     agent_id: str = Field(..., description="Agent ID")
     query: str = Field(..., min_length=1, max_length=500, description="查询文本")
     top_k: Optional[int] = Field(5, ge=1, le=20, description="返回结果数")
-    locale: Optional[str] = Field("zh-CN", description="语言代码")
+    locale: Optional[str] = Field(None, description="语言代码")
 
 
 class ContextItem(BaseModel):

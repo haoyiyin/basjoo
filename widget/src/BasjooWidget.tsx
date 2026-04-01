@@ -10,7 +10,7 @@ interface WidgetConfig {
   logoUrl?: string;
   title?: string;
   welcomeMessage?: string;
-  language?: 'auto' | 'zh-CN' | 'en-US';
+  language?: 'auto' | string;
   position?: 'left' | 'right';
   theme?: 'light' | 'dark' | 'auto';
   turnstileSiteKey?: string;
@@ -77,6 +77,23 @@ interface ChatHistoryMessage {
   content: string;
   sources?: Source[];
 }
+
+const LOCALE_ALIAS_MAP: Record<string, string> = {
+  en: 'en-US',
+  fr: 'fr-FR',
+  ja: 'ja-JP',
+  de: 'de-DE',
+  es: 'es-ES',
+  'zh-hans': 'zh-CN',
+  'zh-cn': 'zh-CN',
+  'zh-sg': 'zh-CN',
+  'zh-hant': 'zh-Hant',
+  'zh-tw': 'zh-TW',
+  'zh-hk': 'zh-HK',
+  'zh-mo': 'zh-HK',
+}
+
+const WIDGET_LOCALE_DEFAULTS = ['en-US', 'zh-CN'] as const
 
 class BasjooWidget {
   private config: Required<WidgetConfig>;
@@ -207,27 +224,136 @@ class BasjooWidget {
     return 'light';
   }
 
-  private getEffectiveLocale(): 'zh-CN' | 'en-US' {
-    if (this.config.language === 'zh-CN' || this.config.language === 'en-US') {
-      return this.config.language;
+  private normalizeLocale(locale?: string | null): string | null {
+    if (!locale) {
+      return null
     }
-    return navigator.language.startsWith('en') ? 'en-US' : 'zh-CN';
+
+    const cleaned = locale.trim().replace(/_/g, '-')
+    if (!cleaned) {
+      return null
+    }
+
+    const parts = cleaned.split('-').filter(Boolean)
+    if (parts.length === 0) {
+      return null
+    }
+
+    const normalizedParts = [parts[0].toLowerCase()]
+    for (const part of parts.slice(1)) {
+      if (/^[A-Za-z]{4}$/.test(part)) {
+        normalizedParts.push(part[0].toUpperCase() + part.slice(1).toLowerCase())
+      } else if (/^[A-Za-z]{2,3}$/.test(part)) {
+        normalizedParts.push(part.toUpperCase())
+      } else {
+        normalizedParts.push(part)
+      }
+    }
+
+    const normalized = normalizedParts.join('-')
+    return LOCALE_ALIAS_MAP[normalized.toLowerCase()] || normalized
+  }
+
+  private getPreferredLocales(): string[] {
+    const locales = new Set<string>()
+
+    const explicitLocale = this.config.language !== 'auto'
+      ? this.normalizeLocale(this.config.language)
+      : null
+    if (explicitLocale) {
+      locales.add(explicitLocale)
+    } else {
+      const browserLocales = Array.isArray(navigator.languages) && navigator.languages.length > 0
+        ? navigator.languages
+        : [navigator.language]
+      for (const locale of browserLocales) {
+        const normalized = this.normalizeLocale(locale)
+        if (normalized) {
+          locales.add(normalized)
+        }
+      }
+    }
+
+    for (const locale of WIDGET_LOCALE_DEFAULTS) {
+      locales.add(locale)
+    }
+    return Array.from(locales)
+  }
+
+  private buildLocaleFallbacks(locale?: string | null): string[] {
+    const normalized = this.normalizeLocale(locale)
+    if (!normalized) {
+      return [...WIDGET_LOCALE_DEFAULTS]
+    }
+
+    const fallbacks = [normalized]
+    const language = normalized.split('-', 1)[0]
+    const lowerNormalized = normalized.toLowerCase()
+
+    if (language === 'zh') {
+      if (normalized.includes('Hant') || ['zh-tw', 'zh-hk', 'zh-mo'].includes(lowerNormalized)) {
+        fallbacks.push('zh-Hant', 'zh-TW', 'zh-HK', 'zh-CN', 'zh')
+      } else {
+        fallbacks.push('zh-Hans', 'zh-CN', 'zh')
+      }
+    } else {
+      const preferredMap: Record<string, string> = {
+        en: 'en-US',
+        fr: 'fr-FR',
+        ja: 'ja-JP',
+        de: 'de-DE',
+        es: 'es-ES',
+      }
+      if (preferredMap[language]) {
+        fallbacks.push(preferredMap[language])
+      }
+      fallbacks.push(language)
+    }
+
+    fallbacks.push(...WIDGET_LOCALE_DEFAULTS)
+    return Array.from(new Set(fallbacks.map(item => this.normalizeLocale(item)).filter((item): item is string => Boolean(item))))
+  }
+
+  private getEffectiveLocale(): string {
+    return this.getPreferredLocales()[0] || 'en-US'
   }
 
   private resolveI18nText(
     i18nMap: Record<string, string> | null | undefined,
     fallback: string,
   ): string {
-    const locale = this.getEffectiveLocale()
-    if (i18nMap?.[locale]) {
-      return i18nMap[locale]
+    if (!i18nMap) {
+      return fallback
     }
-    if (i18nMap?.['zh-CN']) {
-      return i18nMap['zh-CN']
+
+    const normalizedEntries = new Map<string, string>()
+    const orderedValues: string[] = []
+    for (const [key, value] of Object.entries(i18nMap)) {
+      if (typeof value !== 'string') {
+        continue
+      }
+      const cleaned = value.trim()
+      if (!cleaned) {
+        continue
+      }
+      const normalizedKey = this.normalizeLocale(key) || key
+      normalizedEntries.set(normalizedKey, cleaned)
+      orderedValues.push(cleaned)
     }
-    if (i18nMap?.['en-US']) {
-      return i18nMap['en-US']
+
+    for (const locale of this.getPreferredLocales()) {
+      for (const candidate of this.buildLocaleFallbacks(locale)) {
+        const matched = normalizedEntries.get(candidate)
+        if (matched) {
+          return matched
+        }
+      }
     }
+
+    if (orderedValues.length > 0) {
+      return orderedValues[0]
+    }
+
     return fallback
   }
 
@@ -963,24 +1089,22 @@ class BasjooWidget {
    * Get localized text based on language setting
    */
   private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'citationSources' | 'document' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'openSource' | 'thinking'): string {
-    const isEnglish = this.getEffectiveLocale() === 'en-US';
-
-    const texts: Record<string, { en: string; zh: string }> = {
-      sendFailed: { en: 'Send failed, please try again later', zh: '发送失败，请稍后重试' },
-      networkError: { en: 'Network connection failed, please check your connection', zh: '网络连接失败，请检查网络' },
-      quotaExceeded: { en: 'Daily message limit reached', zh: '今日消息已达上限' },
-      takenOverNotice: { en: 'Your conversation has been transferred to a human agent. Please wait for their reply.', zh: '已转接人工客服，请等待回复。' },
-      inputPlaceholder: { en: 'Type your question...', zh: '输入您的问题...' },
-      citationSources: { en: 'Citation Sources', zh: '引用来源' },
-      openSource: { en: 'Open source', zh: '打开来源' },
-      document: { en: 'Document', zh: '文档' },
-      messageTooLong: { en: 'Message too long (max 2000 characters)', zh: '消息过长（最多2000字符）' },
-      greetingBubble: { en: 'Hi! How can I help you?', zh: '你好！有什么可以帮您？' },
-      newMessage: { en: 'New message', zh: '新消息' },
-      thinking: { en: 'Thinking...', zh: '思考中...' },
+    const texts: Record<string, Record<string, string>> = {
+      sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
+      networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
+      quotaExceeded: { 'en-US': 'Daily message limit reached', 'zh-CN': '今日消息已达上限' },
+      takenOverNotice: { 'en-US': 'Your conversation has been transferred to a human agent. Please wait for their reply.', 'zh-CN': '已转接人工客服，请等待回复。' },
+      inputPlaceholder: { 'en-US': 'Type your question...', 'zh-CN': '输入您的问题...' },
+      citationSources: { 'en-US': 'Citation Sources', 'zh-CN': '引用来源' },
+      openSource: { 'en-US': 'Open source', 'zh-CN': '打开来源' },
+      document: { 'en-US': 'Document', 'zh-CN': '文档' },
+      messageTooLong: { 'en-US': 'Message too long (max 2000 characters)', 'zh-CN': '消息过长（最多2000字符）' },
+      greetingBubble: { 'en-US': 'Hi! How can I help you?', 'zh-CN': '你好！有什么可以帮您？' },
+      newMessage: { 'en-US': 'New message', 'zh-CN': '新消息' },
+      thinking: { 'en-US': 'Thinking...', 'zh-CN': '思考中...' },
     };
 
-    return isEnglish ? texts[key].en : texts[key].zh;
+    return this.resolveI18nText(texts[key], texts[key]['en-US'] || texts[key]['zh-CN'] || key)
   }
 
   /**

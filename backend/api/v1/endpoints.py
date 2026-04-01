@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import database
 from database import get_db
 from api.endpoints.auth import get_current_admin
+from i18n.core import build_locale_fallbacks, normalize_locale
 from models import (
     Agent,
     URLSource,
@@ -111,18 +112,47 @@ def mask_api_key(api_key: Optional[str]) -> Optional[str]:
     return f"{api_key[:3]}***{api_key[-4:]}"
 
 
+AUTO_TRANSLATED_WIDGET_LOCALES = (
+    "zh-CN",
+    "en-US",
+    "fr-FR",
+    "ja-JP",
+    "de-DE",
+    "es-ES",
+)
+
+
 def resolve_i18n_text(
     i18n_map: Optional[Dict[str, str]],
     fallback: Optional[str],
     locale: Optional[str],
 ) -> Optional[str]:
-    if i18n_map:
-        if locale and i18n_map.get(locale):
-            return i18n_map[locale]
-        if i18n_map.get("zh-CN"):
-            return i18n_map["zh-CN"]
-        if i18n_map.get("en-US"):
-            return i18n_map["en-US"]
+    if not i18n_map:
+        return fallback
+
+    normalized_map: Dict[str, str] = {}
+    ordered_values: list[str] = []
+    for key, value in i18n_map.items():
+        if not isinstance(value, str):
+            continue
+        cleaned = value.strip()
+        if not cleaned:
+            continue
+        normalized_key = normalize_locale(key) or key
+        normalized_map[normalized_key] = cleaned
+        ordered_values.append(cleaned)
+
+    for candidate in build_locale_fallbacks(locale):
+        if candidate in normalized_map:
+            return normalized_map[candidate]
+
+    for candidate in ("en-US", "zh-CN"):
+        if candidate in normalized_map:
+            return normalized_map[candidate]
+
+    if ordered_values:
+        return ordered_values[0]
+
     return fallback
 
 
@@ -142,10 +172,10 @@ async def build_auto_translated_i18n_map(
         return None
 
     source_locale = detect_text_locale(normalized_text)
-    target_locale = "en-US" if source_locale == "zh-CN" else "zh-CN"
+    target_locales = [locale for locale in AUTO_TRANSLATED_WIDGET_LOCALES if locale != source_locale]
     translations = {source_locale: normalized_text}
 
-    if not agent.api_key:
+    if not agent.api_key or not target_locales:
         return translations
 
     try:
@@ -156,8 +186,10 @@ async def build_auto_translated_i18n_map(
                 {
                     "role": "user",
                     "content": (
-                        "Translate the following UI copy into zh-CN and en-US. Preserve tone, intent, and brevity. "
-                        "Return JSON only with exactly two keys: zh-CN and en-US. "
+                        "Translate the following UI copy into these locales: "
+                        f"{', '.join(target_locales)}. "
+                        "Preserve tone, intent, and brevity. "
+                        f"Return JSON only with exactly these keys: {', '.join(target_locales)}. "
                         f"Source locale: {source_locale}. Source text: {normalized_text}"
                     ),
                 }
@@ -176,12 +208,10 @@ async def build_auto_translated_i18n_map(
         if not isinstance(translated, dict):
             return translations
 
-        zh_text = translated.get("zh-CN")
-        en_text = translated.get("en-US")
-        if isinstance(zh_text, str) and zh_text.strip():
-            translations["zh-CN"] = zh_text.strip()
-        if isinstance(en_text, str) and en_text.strip():
-            translations["en-US"] = en_text.strip()
+        for locale_key in target_locales:
+            translated_text = translated.get(locale_key)
+            if isinstance(translated_text, str) and translated_text.strip():
+                translations[locale_key] = translated_text.strip()
     except Exception as exc:
         logger.warning("Failed to auto-translate widget copy: %s", exc)
 
