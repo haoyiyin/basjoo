@@ -266,10 +266,13 @@
       'takenOverNotice': { 'zh-CN': '已转接人工客服，请等待回复。', 'en-US': 'Your conversation has been transferred to a human agent. Please wait for their reply.' },
       'citationSources': { 'zh-CN': '引用来源', 'en-US': 'Citation Sources' },
       'openSource': { 'zh-CN': '打开来源', 'en-US': 'Open source' },
-      'document': { 'zh-CN': '文档', 'en-US': 'Document' }
+      'document': { 'zh-CN': '文档', 'en-US': 'Document' },
+      'greetingBubble': { 'zh-CN': '你好！有什么可以帮您？', 'en-US': 'Hi! How can I help you?' },
+      'newMessage': { 'zh-CN': '新消息', 'en-US': 'New message' },
+      'thinking': { 'zh-CN': '思考中...', 'en-US': 'Thinking...' }
     };
     var lang = this.getEffectiveLocale();
-    return (texts[key] && texts[key][lang]) || texts[key]['zh-CN'];
+    return (texts[key] && texts[key][lang]) || (texts[key] && texts[key]['zh-CN']) || key;
   };
 
   /**
