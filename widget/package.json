@@ -10,8 +10,8 @@
   "scripts": {
     "build": "npm run typecheck && npm run build:dev && npm run build:prod",
     "build:dev": "esbuild src/BasjooWidget.tsx --bundle --format=esm --outfile=dist/basjoo-widget.js --sourcemap",
-    "build:prod": "esbuild src/BasjooWidget.tsx --bundle --format=iife --global-name=BasjooWidget --outfile=dist/basjoo-widget.min.js --minify --sourcemap",
-    "dev": "esbuild src/BasjooWidget.tsx --bundle --format=iife --global-name=BasjooWidget --outfile=example/basjoo-widget.js --servedir=example",
+    "build:prod": "esbuild src/BasjooWidget.tsx --bundle --format=iife --outfile=dist/basjoo-widget.min.js --minify --sourcemap",
+    "dev": "esbuild src/BasjooWidget.tsx --bundle --format=iife --outfile=example/basjoo-widget.js --servedir=example",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },

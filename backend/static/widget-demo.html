@@ -263,8 +263,6 @@
     <p>Basjoo Widget 嵌入测试页面 | Docker 部署环境</p>
   </footer>
 
-<!-- Basjoo Widget v3.0 -->
-<script src="/sdk.js?v=3.0.0"></script>
 <script>
   (async function () {
     const fallbackApiBase = window.location.origin;
@@ -272,6 +270,16 @@
     const agentIdElement = document.getElementById('agent-id-value');
     const statusElement = document.getElementById('widget-status');
     const embedCodeElement = document.getElementById('embed-code-display');
+
+    function loadSdk(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Failed to load sdk.js'));
+        document.body.appendChild(script);
+      });
+    }
 
     try {
       const response = await fetch('/api/v1/config:public');
@@ -289,18 +297,24 @@
       apiBaseElement.textContent = apiBase;
       agentIdElement.textContent = agentId || '未找到默认 Agent';
 
-      const sdkVersion = '2.0.0';
+      const sdkVersion = '2.0.1';
       const sdkUrl = new URL(`${apiBase}/sdk.js`);
       sdkUrl.searchParams.set('v', sdkVersion);
-      sdkUrl.searchParams.set('agentId', agentId);
-      sdkUrl.searchParams.set('apiBase', apiBase);
-      sdkUrl.searchParams.set('themeColor', themeColor);
-      sdkUrl.searchParams.set('title', title);
-      sdkUrl.searchParams.set('welcomeMessage', welcomeMessage);
+
+      const widgetConfig = {
+        agentId,
+        apiBase,
+        themeColor,
+        title,
+        welcomeMessage,
+      };
 
       const embedCode = [
         '<!-- Basjoo Widget 嵌入代码 -->',
         `<script src="${sdkUrl.toString()}"><` + '/script>',
+        '<script>',
+        `  new window.BasjooWidget(${JSON.stringify(widgetConfig, null, 2)}).init()`,
+        '<' + '/script>',
       ].join('\n');
 
       embedCodeElement.textContent = embedCode;
@@ -310,10 +324,9 @@
         return;
       }
 
-      const demoScript = document.createElement('script');
-      demoScript.src = sdkUrl.toString();
-      document.body.appendChild(demoScript);
-      statusElement.textContent = '已加载公开配置';
+      await loadSdk(sdkUrl.toString());
+      new window.BasjooWidget(widgetConfig).init();
+      statusElement.textContent = '已加载公开配置并初始化 Widget';
     } catch (error) {
       apiBaseElement.textContent = fallbackApiBase;
       agentIdElement.textContent = '加载失败';

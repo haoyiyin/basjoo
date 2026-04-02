@@ -94,6 +94,67 @@ const LOCALE_ALIAS_MAP: Record<string, string> = {
 }
 
 const WIDGET_LOCALE_DEFAULTS = ['en-US', 'zh-CN'] as const
+const AUTO_INIT_PARAM_KEYS = [
+  'agentId',
+  'apiBase',
+  'themeColor',
+  'logoUrl',
+  'title',
+  'welcomeMessage',
+  'language',
+  'position',
+  'theme',
+  'turnstileSiteKey',
+] as const
+const AUTO_INIT_FLAG = '__basjooWidgetAutoInitScheduled'
+
+function buildDefaultLogoUrl(apiBase: string): string {
+  if (!apiBase) {
+    return '/basjoo-logo.png'
+  }
+
+  try {
+    return new URL('/basjoo-logo.png', `${apiBase}/`).toString()
+  } catch {
+    return '/basjoo-logo.png'
+  }
+}
+
+function getAutoInitConfig(script: HTMLScriptElement): WidgetConfig | null {
+  try {
+    const scriptUrl = new URL(script.src, window.location.href)
+    const hasBootstrapParams = AUTO_INIT_PARAM_KEYS.some(key => scriptUrl.searchParams.has(key))
+
+    if (!hasBootstrapParams) {
+      return null
+    }
+
+    const agentId = scriptUrl.searchParams.get('agentId')?.trim() || ''
+    if (!agentId) {
+      console.warn('[Basjoo Widget] Detected sdk.js query parameters but agentId is missing. The widget will not initialize automatically.')
+      return null
+    }
+
+    const position = scriptUrl.searchParams.get('position')?.trim()
+    const theme = scriptUrl.searchParams.get('theme')?.trim()
+
+    return {
+      agentId,
+      apiBase: scriptUrl.searchParams.get('apiBase')?.trim() || undefined,
+      themeColor: scriptUrl.searchParams.get('themeColor')?.trim() || undefined,
+      logoUrl: scriptUrl.searchParams.get('logoUrl')?.trim() || undefined,
+      title: scriptUrl.searchParams.get('title')?.trim() || undefined,
+      welcomeMessage: scriptUrl.searchParams.get('welcomeMessage')?.trim() || undefined,
+      language: scriptUrl.searchParams.get('language')?.trim() || undefined,
+      position: position === 'left' || position === 'right' ? position : undefined,
+      theme: theme === 'light' || theme === 'dark' || theme === 'auto' ? theme : undefined,
+      turnstileSiteKey: scriptUrl.searchParams.get('turnstileSiteKey')?.trim() || undefined,
+    }
+  } catch {
+    console.warn('[Basjoo Widget] Failed to parse sdk.js query parameters for auto-initialization.')
+    return null
+  }
+}
 
 class BasjooWidget {
   private config: Required<WidgetConfig>;
@@ -133,7 +194,7 @@ class BasjooWidget {
       agentId: config.agentId,
       apiBase,
       themeColor: config.themeColor || '#3B82F6',
-      logoUrl: config.logoUrl || '/basjoo-logo.png',
+      logoUrl: config.logoUrl || buildDefaultLogoUrl(apiBase),
       title: config.title || 'AI助手',
       welcomeMessage: config.welcomeMessage || '你好！有什么可以帮助您的吗？',
       language: config.language || 'auto',
@@ -397,9 +458,14 @@ class BasjooWidget {
    * 初始化Widget
    */
   init() {
+    if (!document.body) {
+      console.warn('[Basjoo Widget] document.body is not available yet. Call init() after DOMContentLoaded or place the embed code near the end of <body>.')
+      return
+    }
+
     if (document.getElementById('basjoo-widget-container')) {
-      console.warn('Basjoo Widget already initialized');
-      return;
+      console.warn('[Basjoo Widget] Initialization skipped because #basjoo-widget-container already exists. Avoid loading or initializing the widget twice on the same page.')
+      return
     }
 
     // 保存原始标题用于闪烁
@@ -1912,3 +1978,22 @@ class BasjooWidget {
 
 // 导出到全局（不使用 export default，避免 ES Module 格式）
 (window as any).BasjooWidget = BasjooWidget;
+
+const currentScript = document.currentScript
+if (currentScript instanceof HTMLScriptElement) {
+  const autoInitConfig = getAutoInitConfig(currentScript)
+  if (autoInitConfig) {
+    const windowWithFlags = window as Window & typeof globalThis & Record<string, unknown>
+    if (windowWithFlags[AUTO_INIT_FLAG]) {
+      console.warn('[Basjoo Widget] Automatic initialization already ran on this page. Skipping duplicate sdk.js bootstrap.')
+    } else {
+      windowWithFlags[AUTO_INIT_FLAG] = true
+      const start = () => new BasjooWidget(autoInitConfig).init()
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, { once: true })
+      } else {
+        start()
+      }
+    }
+  }
+}
