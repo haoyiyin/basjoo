@@ -18,17 +18,6 @@ const languages = [
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
-function resolveI18nText(
-  i18nMap: Record<string, string> | null | undefined,
-  fallback: string,
-  locale: string,
-): string {
-  if (i18nMap?.[locale]) return i18nMap[locale]
-  if (i18nMap?.['zh-CN']) return i18nMap['zh-CN']
-  if (i18nMap?.['en-US']) return i18nMap['en-US']
-  return fallback
-}
-
 export default function SystemSettings() {
   const { t, i18n } = useTranslation('common')
   const navigate = useNavigate()
@@ -42,16 +31,15 @@ export default function SystemSettings() {
   const [agent, setAgent] = useState<Agent | null>(null)
   const [serverApiBase, setServerApiBase] = useState<string>('')
   const turnstileSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const agentRef = useRef<Agent | null>(null)
 
   const [settings, setSettings] = useState({
     agent_id: '',
-    widget_title: t('labels.welcomeMessage'),
+    widget_title: '',
     widget_color: '#06B6D4',
-    welcome_message: t('labels.welcomeMessage'),
+    welcome_message: '',
     history_days: 30,
     rate_limit_per_hour: 100,
-    restricted_reply: t('labels.restrictedReplyPlaceholder'),
+    restricted_reply: '',
     enable_turnstile: false,
     turnstile_site_key: '',
     turnstile_secret_key: '',
@@ -89,63 +77,21 @@ export default function SystemSettings() {
     }
   }, [saveStatus])
 
-  useEffect(() => {
-    agentRef.current = agent
-  }, [agent])
-
-  useEffect(() => {
-    const currentAgent = agentRef.current
-    if (!currentAgent) return
-
-    const lang = i18n.language
-    setSettings(prev => ({
-      ...prev,
-      widget_title: resolveI18nText(
-        currentAgent.widget_title_i18n,
-        currentAgent.widget_title || t('labels.welcomeMessage'),
-        lang,
-      ),
-      welcome_message: resolveI18nText(
-        currentAgent.welcome_message_i18n,
-        currentAgent.welcome_message || t('labels.welcomeMessage'),
-        lang,
-      ),
-      restricted_reply: resolveI18nText(
-        currentAgent.restricted_reply_i18n,
-        currentAgent.restricted_reply || t('labels.restrictedReplyPlaceholder'),
-        lang,
-      ),
-    }))
-  }, [i18n.language, t])
-
   const fetchSettings = async () => {
     try {
       setLoading(true)
       setError(null)
 
       const agentData = await api.getDefaultAgent()
-      const currentLang = i18n.language
       setAgent(agentData)
       setSettings({
         agent_id: agentData.id || '',
-        widget_title: resolveI18nText(
-          agentData.widget_title_i18n,
-          agentData.widget_title || t('labels.welcomeMessage'),
-          currentLang,
-        ),
+        widget_title: agentData.widget_title || '',
         widget_color: agentData.widget_color || '#06B6D4',
-        welcome_message: resolveI18nText(
-          agentData.welcome_message_i18n,
-          agentData.welcome_message || t('labels.welcomeMessage'),
-          currentLang,
-        ),
+        welcome_message: agentData.welcome_message || '',
         history_days: agentData.history_days || 30,
         rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
-        restricted_reply: resolveI18nText(
-          agentData.restricted_reply_i18n,
-          agentData.restricted_reply || t('labels.restrictedReplyPlaceholder'),
-          currentLang,
-        ),
+        restricted_reply: agentData.restricted_reply || '',
         enable_turnstile: agentData.enable_turnstile ?? false,
         turnstile_site_key: agentData.turnstile_site_key || '',
         turnstile_secret_key: '',
@@ -254,8 +200,6 @@ export default function SystemSettings() {
       agentId: settings.agent_id || '',
       apiBase,
       themeColor: settings.widget_color || undefined,
-      title: settings.widget_title || undefined,
-      welcomeMessage: settings.welcome_message || undefined,
     }
 
     return `<!-- ${t('appName')} Widget -->

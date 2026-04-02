@@ -109,6 +109,8 @@ function buildDefaultLogoUrl(apiBase: string): string {
 
 class BasjooWidget {
   private config: Required<WidgetConfig>;
+  private readonly hasTitleOverride: boolean;
+  private readonly hasWelcomeMessageOverride: boolean;
   private container: HTMLElement | null = null;
   private button: HTMLElement | null = null;
   private chatWindow: HTMLElement | null = null;
@@ -140,6 +142,8 @@ class BasjooWidget {
 
   constructor(config: WidgetConfig) {
     const apiBase = this.detectApiBase(config.apiBase);
+    this.hasTitleOverride = typeof config.title === 'string' && config.title.trim().length > 0;
+    this.hasWelcomeMessageOverride = typeof config.welcomeMessage === 'string' && config.welcomeMessage.trim().length > 0;
 
     this.config = {
       agentId: config.agentId,
@@ -159,7 +163,6 @@ class BasjooWidget {
     this.visitorId = localStorage.getItem(this.VISITOR_STORAGE_KEY) || this.generateVisitorId();
 
     this.effectiveTheme = this.getEffectiveTheme();
-    void this.loadPublicConfig();
   }
 
   private generateVisitorId(): string {
@@ -392,8 +395,12 @@ class BasjooWidget {
         this.config.agentId = data.default_agent_id
       }
       this.config.themeColor = this.config.themeColor || data.widget_color || '#3B82F6'
-      this.config.title = this.config.title || this.resolveI18nText(data.widget_title_i18n, data.widget_title || 'AI助手')
-      this.config.welcomeMessage = this.config.welcomeMessage || this.resolveI18nText(data.welcome_message_i18n, data.welcome_message || '你好！有什么可以帮助您的吗？')
+      if (!this.hasTitleOverride) {
+        this.config.title = this.resolveI18nText(data.widget_title_i18n, data.widget_title || 'AI助手')
+      }
+      if (!this.hasWelcomeMessageOverride) {
+        this.config.welcomeMessage = this.resolveI18nText(data.welcome_message_i18n, data.welcome_message || '你好！有什么可以帮助您的吗？')
+      }
       const turnstileConfig = data
       this.turnstileSiteKey = turnstileConfig.turnstile_enabled ? (turnstileConfig.turnstile_site_key || null) : null
       this.effectiveTheme = this.getEffectiveTheme()
@@ -408,7 +415,7 @@ class BasjooWidget {
   /**
    * 初始化Widget
    */
-  init() {
+  async init() {
     if (!document.body) {
       console.warn('[Basjoo Widget] document.body is not available yet. Call init() after DOMContentLoaded or place the embed code near the end of <body>.')
       return
@@ -418,6 +425,8 @@ class BasjooWidget {
       console.warn('[Basjoo Widget] Initialization skipped because #basjoo-widget-container already exists. Avoid loading or initializing the widget twice on the same page.')
       return
     }
+
+    await this.loadPublicConfig()
 
     // 保存原始标题用于闪烁
     this.originalTitle = document.title;

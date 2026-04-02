@@ -174,9 +174,11 @@ async def test_chat_stream_hides_internal_errors(public_client, default_agent_id
 
     assert response.status_code == 200
     body = response.text
-    assert "event: error" in body
+    assert "event: error" not in body
     assert "provider secret exploded" not in body
-    assert '"code": "CHAT_ERROR"' in body
+    assert "event: content" in body
+    assert "event: done" in body
+    assert "Sorry, the service is currently limited." in body
 
 
 @pytest.mark.asyncio

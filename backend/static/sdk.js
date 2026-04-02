@@ -1,338 +1,4 @@
-/**
- * Basjoo Widget SDK v2.0 - 专业客服风格
- * 可嵌入的智能聊天组件
- */
-(function() {
-  'use strict';
-
-  // SDK版本号，用于缓存控制
-  var SDK_VERSION = '2.0.1';
-
-  /**
-   * BasjooWidget 构造函数
-   * @param {Object} config - 配置对象
-   */
-  function BasjooWidget(config) {
-    this.config = {
-      agentId: config.agentId,
-      apiBase: this.detectApiBase(config.apiBase),
-      themeColor: config.themeColor || null,  // null 表示需要从后端获取
-      logoUrl: config.logoUrl || '/basjoo-logo.png',
-      title: config.title || null,
-      welcomeMessage: config.welcomeMessage || null,
-      language: config.language || 'auto',
-      position: config.position || 'right',
-      theme: config.theme || 'auto'
-    };
-
-    this.container = null;
-    this.button = null;
-    this.chatWindow = null;
-    this.messages = [];
-    this.sessionId = localStorage.getItem('basjoo_session_' + this.config.agentId);
-    this.visitorId = localStorage.getItem('basjoo_visitor_id') || this.generateVisitorId();
-    this.isOpen = false;
-    this.effectiveTheme = 'light';
-    this.originalTitle = '';
-    this.titleBlinkInterval = null;
-    this.hasUnread = false;
-    this.pollIntervalId = null;
-    this.lastMessageId = 0;
-    this.takenOver = false;
-    this.isSending = false;
-    this.streamingMessage = null;
-    this.streamingMessageContent = null;
-    this.currentStreamContent = '';
-    this.currentStreamSources = [];
-    this.turnstileSiteKey = config.turnstileSiteKey || null;
-    this.turnstileWidgetId = null;
-    this.turnstileContainer = null;
-    this.turnstileScriptPromise = null;
-
-    this.effectiveTheme = this.getEffectiveTheme();
-    this.loadConfigAndInit();  // 先加载配置，再初始化
-  }
-
-  /**
-   * 生成访客ID
-   */
-  BasjooWidget.prototype.generateVisitorId = function() {
-    var visitorId = 'visitor_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('basjoo_visitor_id', visitorId);
-    return visitorId;
-  };
-
-  /**
-   * 检测 API 基础地址
-   */
-  BasjooWidget.prototype.detectApiBase = function(configuredApiBase) {
-    if (configuredApiBase) {
-      try {
-        var configuredUrl = new URL(configuredApiBase, window.location.href);
-        if ((configuredUrl.protocol === 'http:' || configuredUrl.protocol === 'https:') && configuredUrl.port === '3000') {
-          var directBase = configuredUrl.protocol + '//' + configuredUrl.hostname + ':8000';
-          console.info('[Basjoo Widget] Rewriting configured dev apiBase to direct backend:', directBase);
-          return directBase;
-        }
-        return configuredUrl.toString().replace(/\/$/, '');
-      } catch (error) {
-        return configuredApiBase;
-      }
-    }
-
-    var currentScript = document.currentScript;
-    if (currentScript && currentScript.src) {
-      try {
-        var currentScriptUrl = new URL(currentScript.src, window.location.href);
-        console.info('[Basjoo Widget] Detected API base from current script:', currentScriptUrl.origin);
-        return currentScriptUrl.origin;
-      } catch (error) {
-        // Ignore and continue fallback detection.
-      }
-    }
-
-    var scripts = document.querySelectorAll('script[src]');
-    for (var i = 0; i < scripts.length; i++) {
-      var src = scripts[i].getAttribute('src') || '';
-      if (src.indexOf('sdk.js') === -1 && src.indexOf('basjoo') === -1) {
-        continue;
-      }
-
-      try {
-        var scriptUrl = new URL(src, window.location.href);
-        console.info('[Basjoo Widget] Detected API base from script src:', scriptUrl.origin);
-        return scriptUrl.origin;
-      } catch (error) {
-        // Ignore invalid script URLs and continue scanning.
-      }
-    }
-
-    var port = window.location.port;
-    if (port === '3000' || port === '5173') {
-      var devBase = window.location.protocol + '//' + window.location.hostname + ':8000';
-      console.info('[Basjoo Widget] Development mode detected, using:', devBase);
-      return devBase;
-    }
-
-    if (window.location.protocol === 'file:') {
-      console.error('[Basjoo Widget] Cannot determine API base from a local file. Please set apiBase explicitly.');
-      return '';
-    }
-
-    console.warn('[Basjoo Widget] Falling back to window.location.origin. Set apiBase explicitly if the API is hosted elsewhere.');
-    return window.location.origin;
-  };
-
-  /**
-   * 从后端加载配置并初始化
-   */
-  BasjooWidget.prototype.loadConfigAndInit = function() {
-    var self = this;
-
-    // 默认值
-    var defaults = {
-      themeColor: '#0EA5E9',
-      title: '在线客服',
-      welcomeMessage: '您好！我是您的专属客服助手，有什么可以帮助您的吗？'
-    };
-
-    // 调用后端公开配置接口获取 Widget 配置
-    if (!this.config.apiBase) {
-      console.warn('[Basjoo Widget] Skipping public config fetch because apiBase could not be determined.');
-      self.config.themeColor = self.config.themeColor || defaults.themeColor;
-      self.config.title = self.config.title || defaults.title;
-      self.config.welcomeMessage = self.config.welcomeMessage || defaults.welcomeMessage;
-      self.init();
-      return;
-    }
-
-    var publicConfigUrl = new URL(this.config.apiBase + '/api/v1/config:public');
-    if (this.config.agentId) {
-      publicConfigUrl.searchParams.set('agent_id', this.config.agentId);
-    }
-
-    fetch(publicConfigUrl.toString())
-      .then(function(response) {
-        if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-        return response.json();
-      })
-      .then(function(data) {
-        if (!self.config.agentId && data.default_agent_id) {
-          self.config.agentId = data.default_agent_id;
-        }
-        // 用户参数优先，否则使用后端配置，最后使用默认值
-        self.config.themeColor = self.config.themeColor || data.widget_color || defaults.themeColor;
-        self.config.title = self.config.title || self.resolveI18nText(data.widget_title_i18n, data.widget_title || defaults.title);
-        self.config.welcomeMessage = self.config.welcomeMessage || self.resolveI18nText(data.welcome_message_i18n, data.welcome_message || defaults.welcomeMessage);
-        self.turnstileSiteKey = data.turnstile_enabled ? (data.turnstile_site_key || null) : null;
-
-        // 重新计算主题
-        self.effectiveTheme = self.getEffectiveTheme();
-
-        // 初始化 UI
-        self.init();
-      })
-      .catch(function(error) {
-        console.warn('[Basjoo Widget] Failed to load public config, using defaults.', error);
-        if (error instanceof TypeError) {
-          console.warn('[Basjoo Widget] Public config request may be blocked by CORS, network issues, or an incorrect apiBase:', self.config.apiBase);
-        }
-        // 使用默认值
-        self.config.themeColor = self.config.themeColor || defaults.themeColor;
-        self.config.title = self.config.title || defaults.title;
-        self.config.welcomeMessage = self.config.welcomeMessage || defaults.welcomeMessage;
-        self.init();
-      });
-  };
-
-  /**
-   * 调整颜色亮度
-   */
-  BasjooWidget.prototype.adjustColor = function(color, amount) {
-    var usePound = false;
-    if (color[0] === '#') {
-      color = color.slice(1);
-      usePound = true;
-    }
-    var num = parseInt(color, 16);
-    var r = (num >> 16) + amount;
-    if (r > 255) r = 255; else if (r < 0) r = 0;
-    var b = ((num >> 8) & 0x00FF) + amount;
-    if (b > 255) b = 255; else if (b < 0) b = 0;
-    var g = (num & 0x0000FF) + amount;
-    if (g > 255) g = 255; else if (g < 0) g = 0;
-    return (usePound ? '#' : '') + (g | (b << 8) | (r << 16)).toString(16).padStart(6, '0');
-  };
-
-  /**
-   * 将 hex 颜色转换为 rgba
-   */
-  BasjooWidget.prototype.hexToRgba = function(hex, alpha) {
-    var r = parseInt(hex.slice(1, 3), 16);
-    var g = parseInt(hex.slice(3, 5), 16);
-    var b = parseInt(hex.slice(5, 7), 16);
-    return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
-  };
-
-  /**
-   * 获取有效主题
-   */
-  BasjooWidget.prototype.getEffectiveTheme = function() {
-    if (this.config.theme === 'light' || this.config.theme === 'dark') {
-      return this.config.theme;
-    }
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return 'light';
-  };
-
-  /**
-   * 获取浏览器语言
-   */
-  BasjooWidget.prototype.getBrowserLanguage = function() {
-    var lang = navigator.language || navigator.userLanguage || 'zh-CN';
-    if (lang.startsWith('zh')) return 'zh-CN';
-    if (lang.startsWith('en')) return 'en-US';
-    return 'zh-CN';
-  };
-
-  BasjooWidget.prototype.getEffectiveLocale = function() {
-    if (this.config.language === 'zh-CN' || this.config.language === 'en-US') {
-      return this.config.language;
-    }
-    return this.getBrowserLanguage();
-  };
-
-  BasjooWidget.prototype.resolveI18nText = function(i18nMap, fallback) {
-    var locale = this.getEffectiveLocale();
-    if (i18nMap && i18nMap[locale]) return i18nMap[locale];
-    if (i18nMap && i18nMap['zh-CN']) return i18nMap['zh-CN'];
-    if (i18nMap && i18nMap['en-US']) return i18nMap['en-US'];
-    return fallback;
-  };
-
-  /**
-   * 获取本地化文本
-   */
-  BasjooWidget.prototype.getText = function(key) {
-    var texts = {
-      'inputPlaceholder': { 'zh-CN': '输入消息...', 'en-US': 'Type a message...' },
-      'send': { 'zh-CN': '发送', 'en-US': 'Send' },
-      'messageTooLong': { 'zh-CN': '消息过长，请控制在2000字以内', 'en-US': 'Message too long, please keep it under 2000 characters' },
-      'sendFailed': { 'zh-CN': '发送失败，请稍后重试', 'en-US': 'Send failed, please try again later' },
-      'networkError': { 'zh-CN': '网络连接失败，请检查网络', 'en-US': 'Network connection failed, please check your connection' },
-      'quotaExceeded': { 'zh-CN': '今日消息已达上限', 'en-US': 'Daily message limit reached' },
-      'takenOverNotice': { 'zh-CN': '已转接人工客服，请等待回复。', 'en-US': 'Your conversation has been transferred to a human agent. Please wait for their reply.' },
-      'citationSources': { 'zh-CN': '引用来源', 'en-US': 'Citation Sources' },
-      'openSource': { 'zh-CN': '打开来源', 'en-US': 'Open source' },
-      'document': { 'zh-CN': '文档', 'en-US': 'Document' },
-      'greetingBubble': { 'zh-CN': '你好！有什么可以帮您？', 'en-US': 'Hi! How can I help you?' },
-      'newMessage': { 'zh-CN': '新消息', 'en-US': 'New message' },
-      'thinking': { 'zh-CN': '思考中...', 'en-US': 'Thinking...' }
-    };
-    var lang = this.getEffectiveLocale();
-    return (texts[key] && texts[key][lang]) || (texts[key] && texts[key]['zh-CN']) || key;
-  };
-
-  /**
-   * 初始化 Widget
-   */
-  BasjooWidget.prototype.init = function() {
-    if (document.getElementById('basjoo-widget-container')) {
-      console.warn('Basjoo Widget already initialized');
-      return;
-    }
-
-    this.createStyles();
-    this.createContainer();
-    this.createButton();
-    this.createChatWindow();
-
-    // 页面加载时立即启动标题闪烁提醒，吸引用户打开聊天窗口
-    this.startTitleBlink();
-
-    if (this.sessionId) {
-      // 有会话 ID，从后端加载历史消息
-      this.loadHistory();
-    } else if (this.config.welcomeMessage) {
-      this.addMessage({
-        role: 'assistant',
-        content: this.config.welcomeMessage,
-        timestamp: new Date()
-      });
-    }
-
-    this.showUnreadBadge();
-  };
-
-  /**
-   * 创建样式
-   */
-  BasjooWidget.prototype.createStyles = function() {
-    var isDark = this.effectiveTheme === 'dark';
-    var bgColor = isDark ? '#1a1a2e' : '#ffffff';
-    var textColor = isDark ? '#e4e4e7' : '#18181b';
-    var mutedColor = isDark ? '#a1a1aa' : '#71717a';
-    var borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)';
-    var inputBg = isDark ? '#27273a' : '#f4f4f5';
-    var messageBg = isDark ? '#2d2d44' : '#f4f4f5';
-
-    var style = document.createElement('style');
-    style.id = 'basjoo-widget-styles-v3';
-    style.textContent = `
-      /* ===== 基础重置 ===== */
-      #basjoo-widget-container {
-        --bw-primary: ${this.config.themeColor};
-        --bw-primary-dark: ${this.adjustColor(this.config.themeColor, -15)};
-        --bw-bg: ${bgColor};
-        --bw-text: ${textColor};
-        --bw-muted: ${mutedColor};
-        --bw-border: ${borderColor};
-        --bw-input-bg: ${inputBg};
-        --bw-message-bg: ${messageBg};
-      }
-
+"use strict";(()=>{var f={en:"en-US",fr:"fr-FR",ja:"ja-JP",de:"de-DE",es:"es-ES","zh-hans":"zh-CN","zh-cn":"zh-CN","zh-sg":"zh-CN","zh-hant":"zh-Hant","zh-tw":"zh-TW","zh-hk":"zh-HK","zh-mo":"zh-HK"},p=["en-US","zh-CN"];function b(u){if(!u)return"/basjoo-logo.png";try{return new URL("/basjoo-logo.png",`${u}/`).toString()}catch{return"/basjoo-logo.png"}}var m=class{constructor(e){this.container=null;this.button=null;this.chatWindow=null;this.messages=[];this.sessionId=null;this.isOpen=!1;this.VISITOR_STORAGE_KEY="basjoo_visitor_id";this.effectiveTheme="light";this.originalTitle="";this.titleBlinkInterval=null;this.hasUnread=!1;this.pollIntervalId=null;this.lastMessageId=0;this.isSending=!1;this.streamingMessage=null;this.streamingMessageContent=null;this.thinkingIndicator=null;this.thinkingIndicatorText=null;this.thinkingElapsed=0;this.thinkingTimerId=null;this.currentStreamContent="";this.currentStreamSources=[];this.turnstileSiteKey=null;this.turnstileWidgetId=null;this.turnstileContainer=null;this.turnstileScriptPromise=null;let t=this.detectApiBase(e.apiBase);this.hasTitleOverride=typeof e.title=="string"&&e.title.trim().length>0,this.hasWelcomeMessageOverride=typeof e.welcomeMessage=="string"&&e.welcomeMessage.trim().length>0,this.config={agentId:e.agentId,apiBase:t,themeColor:e.themeColor||"#3B82F6",logoUrl:e.logoUrl||b(t),title:e.title||"AI\u52A9\u624B",welcomeMessage:e.welcomeMessage||"\u4F60\u597D\uFF01\u6709\u4EC0\u4E48\u53EF\u4EE5\u5E2E\u52A9\u60A8\u7684\u5417\uFF1F",language:e.language||"auto",position:e.position||"right",theme:e.theme||"auto",turnstileSiteKey:e.turnstileSiteKey||""},this.STORAGE_KEY=`basjoo_session_${this.config.agentId}`,this.sessionId=localStorage.getItem(this.STORAGE_KEY),this.visitorId=localStorage.getItem(this.VISITOR_STORAGE_KEY)||this.generateVisitorId(),this.effectiveTheme=this.getEffectiveTheme()}generateVisitorId(){let e=`visitor_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,11)}`;return localStorage.setItem(this.VISITOR_STORAGE_KEY,e),e}detectApiBase(e){if(e)try{let n=new URL(e,window.location.href);if((n.protocol==="http:"||n.protocol==="https:")&&n.port==="3000"){let o=`${n.protocol}//${n.hostname}:8000`;return console.info("[Basjoo Widget] Rewriting configured dev apiBase to direct backend:",o),o}return n.toString().replace(/\/$/,"")}catch{return e}let t=document.currentScript;if(t instanceof HTMLScriptElement&&t.src)try{let n=new URL(t.src,window.location.href);return console.info("[Basjoo Widget] Detected API base from current script:",n.origin),n.origin}catch{}let i=document.querySelectorAll("script[src]");for(let n of i){let o=n.getAttribute("src")||"";if(!(!o.includes("sdk.js")&&!o.includes("basjoo")))try{let r=new URL(o,window.location.href);return console.info("[Basjoo Widget] Detected API base from script src:",r.origin),r.origin}catch{}}let s=window.location.port;if(s==="3000"||s==="5173"){let n=`${window.location.protocol}//${window.location.hostname}:8000`;return console.info("[Basjoo Widget] Development mode detected, using:",n),n}return window.location.protocol==="file:"?(console.error("[Basjoo Widget] Cannot determine API base from a local file. Please set apiBase explicitly."),""):(console.warn("[Basjoo Widget] Falling back to window.location.origin. Set apiBase explicitly if the API is hosted elsewhere."),window.location.origin)}getEffectiveTheme(){return this.config.theme==="light"||this.config.theme==="dark"?this.config.theme:typeof window<"u"&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}normalizeLocale(e){if(!e)return null;let t=e.trim().replace(/_/g,"-");if(!t)return null;let i=t.split("-").filter(Boolean);if(i.length===0)return null;let s=[i[0].toLowerCase()];for(let o of i.slice(1))/^[A-Za-z]{4}$/.test(o)?s.push(o[0].toUpperCase()+o.slice(1).toLowerCase()):/^[A-Za-z]{2,3}$/.test(o)?s.push(o.toUpperCase()):s.push(o);let n=s.join("-");return f[n.toLowerCase()]||n}getPreferredLocales(){let e=new Set,t=this.config.language!=="auto"?this.normalizeLocale(this.config.language):null;if(t)e.add(t);else{let i=Array.isArray(navigator.languages)&&navigator.languages.length>0?navigator.languages:[navigator.language];for(let s of i){let n=this.normalizeLocale(s);n&&e.add(n)}}for(let i of p)e.add(i);return Array.from(e)}buildLocaleFallbacks(e){let t=this.normalizeLocale(e);if(!t)return[...p];let i=[t],s=t.split("-",1)[0],n=t.toLowerCase();if(s==="zh")t.includes("Hant")||["zh-tw","zh-hk","zh-mo"].includes(n)?i.push("zh-Hant","zh-TW","zh-HK","zh-CN","zh"):i.push("zh-Hans","zh-CN","zh");else{let o={en:"en-US",fr:"fr-FR",ja:"ja-JP",de:"de-DE",es:"es-ES"};o[s]&&i.push(o[s]),i.push(s)}return i.push(...p),Array.from(new Set(i.map(o=>this.normalizeLocale(o)).filter(o=>!!o)))}getEffectiveLocale(){return this.getPreferredLocales()[0]||"en-US"}resolveI18nText(e,t){if(!e)return t;let i=new Map,s=[];for(let[n,o]of Object.entries(e)){if(typeof o!="string")continue;let r=o.trim();if(!r)continue;let a=this.normalizeLocale(n)||n;i.set(a,r),s.push(r)}for(let n of this.getPreferredLocales())for(let o of this.buildLocaleFallbacks(n)){let r=i.get(o);if(r)return r}return s.length>0?s[0]:t}async loadPublicConfig(){if(this.turnstileSiteKey=this.config.turnstileSiteKey||null,!this.config.apiBase){console.warn("[Basjoo Widget] Skipping public config fetch because apiBase could not be determined.");return}try{let e=new URL(`${this.config.apiBase}/api/v1/config:public`);this.config.agentId&&e.searchParams.set("agent_id",this.config.agentId);let t=await fetch(e.toString());if(!t.ok)throw new Error(`HTTP ${t.status}: ${t.statusText}`);let i=await t.json();!this.config.agentId&&i.default_agent_id&&(this.config.agentId=i.default_agent_id),this.config.themeColor=this.config.themeColor||i.widget_color||"#3B82F6",this.hasTitleOverride||(this.config.title=this.resolveI18nText(i.widget_title_i18n,i.widget_title||"AI\u52A9\u624B")),this.hasWelcomeMessageOverride||(this.config.welcomeMessage=this.resolveI18nText(i.welcome_message_i18n,i.welcome_message||"\u4F60\u597D\uFF01\u6709\u4EC0\u4E48\u53EF\u4EE5\u5E2E\u52A9\u60A8\u7684\u5417\uFF1F"));let s=i;this.turnstileSiteKey=s.turnstile_enabled&&s.turnstile_site_key||null,this.effectiveTheme=this.getEffectiveTheme()}catch(e){console.warn("[Basjoo Widget] Failed to load public config, using defaults.",e),e instanceof TypeError&&console.warn("[Basjoo Widget] Public config request may be blocked by CORS, network issues, or an incorrect apiBase:",this.config.apiBase)}}async init(){if(!document.body){console.warn("[Basjoo Widget] document.body is not available yet. Call init() after DOMContentLoaded or place the embed code near the end of <body>.");return}if(document.getElementById("basjoo-widget-container")){console.warn("[Basjoo Widget] Initialization skipped because #basjoo-widget-container already exists. Avoid loading or initializing the widget twice on the same page.");return}if(await this.loadPublicConfig(),this.originalTitle=document.title,this.createStyles(),this.createContainer(),this.createButton(),this.createChatWindow(),this.showGreetingBubble(),this.startTitleBlink(),this.sessionId){this.loadHistory();return}this.config.welcomeMessage&&this.addMessage({role:"assistant",content:this.config.welcomeMessage,timestamp:new Date})}showGreetingBubble(){if(!this.button)return;let e=document.createElement("div");e.className="basjoo-greeting-bubble",e.textContent=this.getText("greetingBubble");let t=this.config.position;e.style.position="fixed",e.style.bottom="100px",e.style[t]="24px",e.style.zIndex="9999",document.body.appendChild(e),setTimeout(()=>{e.remove()},5e3)}async loadHistory(){if(this.sessionId){try{let e=await fetch(`${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}`);if(!e.ok)throw new Error("Failed to load history");let t=await e.json();if(t&&t.length>0){for(let i of t)this.addMessage({role:i.role==="user"?"user":"assistant",content:i.content,sources:i.sources,timestamp:new Date}),i.id>this.lastMessageId&&(this.lastMessageId=i.id);this.startPolling();return}}catch{}this.sessionId=null,localStorage.removeItem(this.STORAGE_KEY),this.config.welcomeMessage&&this.addMessage({role:"assistant",content:this.config.welcomeMessage,timestamp:new Date})}}startTitleBlink(){if(this.titleBlinkInterval)return;this.hasUnread=!0;let e=!0;this.titleBlinkInterval=window.setInterval(()=>{document.title=e?this.originalTitle:"❗ "+this.getText("newMessage"),e=!e},1e3)}stopTitleBlink(){this.titleBlinkInterval&&(clearInterval(this.titleBlinkInterval),this.titleBlinkInterval=null),document.title=this.originalTitle,this.hasUnread=!1}createStyles(){let e=document.createElement("style");e.id="basjoo-widget-styles";let t=this.effectiveTheme==="dark",i=t?"#1a1a2e":"white",s=t?"#e2e8f0":"#1f2937",n=t?"#94a3b8":"#6b7280",o=t?"rgba(148, 163, 184, 0.2)":"#e5e7eb",r=t?"#0f0f1a":"white",a=t?"#2d2d44":"#f3f4f6",l=t?"rgba(239, 68, 68, 0.2)":"#fef2f2";e.textContent=`
       #basjoo-widget-container * {
         box-sizing: border-box;
         margin: 0;
@@ -340,94 +6,101 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       }
 
-      /* ===== 浮动按钮 ===== */
       #basjoo-widget-button {
         position: fixed;
-        bottom: 20px;
-        ${this.config.position === 'left' ? 'left' : 'right'}: 20px;
+        bottom: 24px;
+        ${this.config.position==="left"?"left":"right"}: 24px;
         width: 60px;
         height: 60px;
         border-radius: 50%;
-        background: linear-gradient(135deg, var(--bw-primary), var(--bw-primary-dark));
+        background-color: ${this.config.themeColor};
         cursor: pointer;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.15), 0 2px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         display: flex;
         align-items: center;
         justify-content: center;
-        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s;
+        transition: transform 0.2s, box-shadow 0.2s;
         z-index: 9999;
       }
 
       #basjoo-widget-button:hover {
-        transform: scale(1.08);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+        transform: scale(1.05);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+      }
+
+      .basjoo-greeting-bubble {
+        background: white;
+        color: ${s};
+        padding: 10px 14px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        font-size: 13px;
+        line-height: 1.4;
+        animation: basjoo-bubble-fadein 0.3s ease-out;
+        max-width: 200px;
+      }
+
+      .basjoo-greeting-bubble::after {
+        content: '';
+        position: absolute;
+        bottom: -6px;
+        ${this.config.position==="left"?"left":"right"}: 30px;
+        width: 12px;
+        height: 12px;
+        background: white;
+        transform: rotate(45deg);
+        border-bottom: 1px solid ${o};
+        border-right: 1px solid ${o};
+      }
+
+      @keyframes basjoo-bubble-fadein {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       #basjoo-widget-button svg {
-        width: 28px;
-        height: 28px;
+        width: 30px;
+        height: 30px;
         fill: white;
       }
 
-      /* 未读红点 */
-      .basjoo-unread-badge {
-        position: absolute;
-        top: -2px;
-        right: -2px;
-        width: 20px;
-        height: 20px;
-        background: #ef4444;
-        color: white;
-        border-radius: 50%;
-        font-size: 11px;
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 6px rgba(239,68,68,0.4);
-        animation: basjoo-pulse 2s infinite;
-      }
-
-      @keyframes basjoo-pulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.1); }
-      }
-
-      /* ===== 聊天窗口 ===== */
       #basjoo-chat-window {
         position: fixed;
-        bottom: 90px;
-        ${this.config.position === 'left' ? 'left' : 'right'}: 20px;
-        width: 360px;
-        height: 520px;
-        max-width: calc(100vw - 40px);
-        max-height: calc(100vh - 110px);
-        background: var(--bw-bg);
-        border-radius: 16px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+        bottom: 96px;
+        ${this.config.position==="left"?"left":"right"}: 24px;
+        width: 380px;
+        height: 600px;
+        max-height: calc(100vh - 120px);
+        background: ${i};
+        border-radius: 20px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
         display: flex;
         flex-direction: column;
-        z-index: 9998;
-        opacity: 0;
-        transform: translateY(16px) scale(0.96);
-        pointer-events: none;
-        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         overflow: hidden;
-        border: 1px solid var(--bw-border);
+        transform: scale(0);
+        transform-origin: ${this.config.position==="left"?"bottom left":"bottom right"};
+        transition: transform 0.3s ease;
+        z-index: 9998;
       }
 
       #basjoo-chat-window.open {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-        pointer-events: all;
+        transform: scale(1);
       }
 
-      /* ===== 头部 ===== */
+      #basjoo-chat-window.closing {
+        transform: scale(0);
+      }
+
       .basjoo-header {
-        height: 60px;
-        padding: 0 20px !important;
-        background: linear-gradient(135deg, var(--bw-primary), var(--bw-primary-dark));
+        background: linear-gradient(135deg, ${this.config.themeColor} 0%, ${this.adjustColor(this.config.themeColor,-20)} 100%);
         color: white;
+        padding: 20px 24px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -437,82 +110,71 @@
       .basjoo-header-title {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
+        font-size: 18px;
         font-weight: 600;
-        font-size: 15px;
       }
 
       .basjoo-header-logo {
         width: 32px;
         height: 32px;
-        border-radius: 8px;
-        background: white;
-        padding: 4px;
         object-fit: contain;
-        margin-left: 4px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.2);
+        padding: 4px;
+        flex-shrink: 0;
       }
 
       .basjoo-close {
-        width: 36px;
-        height: 36px;
-        background: rgba(255,255,255,0.15);
+        width: 32px;
+        height: 32px;
         border: none;
-        color: white;
-        cursor: pointer;
+        background: rgba(255,255,255,0.15);
         border-radius: 8px;
+        cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        transition: all 0.2s;
-        margin: 0 8px !important;
-        flex-shrink: 0;
+        transition: background 0.2s;
+        color: white;
       }
 
       .basjoo-close:hover {
         background: rgba(255,255,255,0.25);
-        transform: rotate(90deg);
       }
 
-      /* ===== 消息区域 ===== */
       .basjoo-messages {
         flex: 1;
         overflow-y: auto;
-        padding: 20px !important;
+        padding: 20px;
         display: flex;
         flex-direction: column;
         gap: 16px;
-        background: var(--bw-bg);
+        background: ${r};
       }
 
       .basjoo-message {
-        max-width: 80%;
-        padding: 12px 16px !important;
-        border-radius: 12px;
-        font-size: 14px;
-        line-height: 1.5;
-        animation: basjoo-message-in 0.3s ease-out;
-        margin-top: 4px !important;
-        margin-bottom: 0 !important;
-      }
-
-      @keyframes basjoo-message-in {
-        from { opacity: 0; transform: translateY(8px); }
-        to { opacity: 1; transform: translateY(0); }
+        display: flex;
+        flex-direction: column;
+        max-width: 85%;
+        animation: basjoo-message-fadein 0.3s ease-out;
       }
 
       .basjoo-message-user {
         align-self: flex-end;
-        background: linear-gradient(135deg, var(--bw-primary), var(--bw-primary-dark));
-        color: white;
-        border-bottom-right-radius: 4px;
       }
 
       .basjoo-message-assistant {
         align-self: flex-start;
-        background: var(--bw-message-bg);
-        color: var(--bw-text);
-        border-bottom-left-radius: 4px;
-        border: 1px solid var(--bw-border);
+      }
+
+      .basjoo-message-content {
+        padding: 12px 16px;
+        border-radius: 16px;
+        font-size: 14px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
 
       .basjoo-message-content p,
@@ -520,7 +182,7 @@
       .basjoo-message-content ol,
       .basjoo-message-content pre,
       .basjoo-message-content blockquote {
-        margin: 0 0 0.75em 0;
+        margin: 0 0 10px;
       }
 
       .basjoo-message-content p:last-child,
@@ -533,142 +195,69 @@
 
       .basjoo-message-content ul,
       .basjoo-message-content ol {
-        padding-left: 1.25rem;
+        padding-left: 18px;
       }
 
       .basjoo-message-content code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 0.92em;
-        background: ${isDark ? 'rgba(15, 15, 26, 0.8)' : 'rgba(255, 255, 255, 0.75)'};
-        border: 1px solid var(--bw-border);
-        border-radius: 6px;
-        padding: 0.1rem 0.35rem;
+        font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+        font-size: 12px;
+        background: rgba(15, 23, 42, 0.08);
+        padding: 1px 4px;
+        border-radius: 4px;
       }
 
       .basjoo-message-content pre {
-        overflow-x: auto;
-        padding: 0.875rem 1rem;
-        background: ${isDark ? '#0f0f1a' : '#ffffff'};
-        border: 1px solid var(--bw-border);
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 10px 12px;
         border-radius: 10px;
+        overflow-x: auto;
       }
 
       .basjoo-message-content pre code {
         background: transparent;
-        border: none;
         padding: 0;
+        color: inherit;
       }
 
       .basjoo-message-content a {
-        color: var(--bw-primary);
+        color: ${this.adjustColor(this.config.themeColor,-10)};
         text-decoration: underline;
       }
 
       .basjoo-message-content blockquote {
-        padding-left: 0.875rem;
-        border-left: 3px solid var(--bw-primary);
-        color: var(--bw-muted);
+        padding-left: 12px;
+        border-left: 3px solid rgba(148, 163, 184, 0.4);
+        color: ${n};
       }
 
-      .basjoo-stream-cursor {
-        display: inline-block;
-        width: 0.5rem;
-        height: 1em;
-        margin-left: 0.12rem;
-        vertical-align: text-bottom;
-        background: var(--bw-primary);
-        animation: basjoo-cursor-blink 1s steps(1) infinite;
-      }
-
-      @keyframes basjoo-cursor-blink {
-        0%, 50% { opacity: 1; }
-        50.01%, 100% { opacity: 0; }
-      }
-
-      .basjoo-sources {
-        margin-top: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-
-      .basjoo-sources-label {
-        font-size: 12px;
-        color: var(--bw-muted);
-      }
-
-      .basjoo-citation-card {
-        background: var(--bw-message-bg);
-        border: 1px solid var(--bw-border);
-        border-radius: 8px;
-        overflow: hidden;
-      }
-
-      .basjoo-citation-trigger {
-        width: 100%;
-        border: none;
-        background: transparent;
-        color: inherit;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        cursor: pointer;
-        text-align: left;
-      }
-
-      .basjoo-citation-number {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        background: var(--bw-primary);
+      .basjoo-message-user .basjoo-message-content {
+        background: ${this.config.themeColor};
         color: white;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 10px;
-        font-weight: 700;
-        flex-shrink: 0;
+        border-bottom-right-radius: 4px;
       }
 
-      .basjoo-citation-title {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        color: var(--bw-text);
+      .basjoo-message-user .basjoo-message-content a {
+        color: white;
       }
 
-      .basjoo-citation-arrow {
-        color: var(--bw-muted);
-        transition: transform 0.2s ease;
-        flex-shrink: 0;
+      .basjoo-message-user .basjoo-message-content code {
+        background: rgba(255, 255, 255, 0.18);
+        color: white;
       }
 
-      .basjoo-citation-card[open] .basjoo-citation-arrow {
-        transform: rotate(180deg);
+      .basjoo-message-assistant .basjoo-message-content {
+        background: ${a};
+        color: ${s};
+        border-bottom-left-radius: 4px;
       }
 
-      .basjoo-citation-body {
-        border-top: 1px solid var(--bw-border);
-        padding: 8px 10px;
-        font-size: 12px;
-        color: var(--bw-muted);
-        line-height: 1.5;
+      .basjoo-message-error .basjoo-message-content {
+        background: ${l};
+        color: ${t?"#fca5a5":"#dc2626"};
+        border: 1px solid ${t?"rgba(239,68,68,0.35)":"#fecaca"};
       }
 
-      .basjoo-citation-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        margin-bottom: 8px;
-        color: var(--bw-primary);
-        text-decoration: none;
-        word-break: break-all;
-      }
-
-      /* 加载动画 */
       .basjoo-loading {
         display: flex;
         gap: 4px;
@@ -681,7 +270,7 @@
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: var(--bw-muted);
+        background: ${n};
         animation: basjoo-bounce 1.4s infinite ease-in-out both;
       }
 
@@ -693,13 +282,12 @@
         40% { transform: scale(1); opacity: 1; }
       }
 
-      /* ===== 输入区域 ===== */
       .basjoo-input-area {
         padding: 16px 20px 24px 20px !important;
-        border-top: 1px solid var(--bw-border);
+        border-top: 1px solid ${o};
         display: flex;
         gap: 12px;
-        background: var(--bw-bg);
+        background: ${i};
         flex-shrink: 0;
       }
 
@@ -707,32 +295,32 @@
         flex: 1;
         height: 48px;
         padding: 0 20px 0 20px !important;
-        border: 1px solid var(--bw-border);
+        border: 1px solid ${o};
         border-radius: 24px;
         font-size: 14px;
         outline: none;
         transition: all 0.2s;
-        background: var(--bw-input-bg);
-        color: var(--bw-text);
+        background: ${r};
+        color: ${s};
         margin-bottom: 8px !important;
         margin-left: 4px !important;
       }
 
       .basjoo-input::placeholder {
-        color: var(--bw-muted);
+        color: ${n};
       }
 
       .basjoo-input:focus {
-        border-color: var(--bw-primary);
-        box-shadow: 0 0 0 3px ${this.hexToRgba(this.config.themeColor, 0.1)};
+        border-color: ${this.config.themeColor};
+        box-shadow: 0 0 0 3px ${this.hexToRgba(this.config.themeColor,0.1)};
       }
 
       .basjoo-send {
         width: 48px;
         height: 48px;
-        border-radius: 50%;
-        background: var(--bw-primary);
         border: none;
+        border-radius: 50%;
+        background: ${this.config.themeColor};
         color: white;
         cursor: pointer;
         display: flex;
@@ -740,16 +328,11 @@
         justify-content: center;
         transition: all 0.2s;
         flex-shrink: 0;
-        margin-bottom: 8px !important;
       }
 
-      .basjoo-send:hover {
-        background: var(--bw-primary-dark);
+      .basjoo-send:hover:not(:disabled) {
         transform: scale(1.05);
-      }
-
-      .basjoo-send:active {
-        transform: scale(0.95);
+        box-shadow: 0 4px 12px ${this.hexToRgba(this.config.themeColor,0.3)};
       }
 
       .basjoo-send:disabled {
@@ -757,92 +340,204 @@
         cursor: not-allowed;
       }
 
-      /* ===== 滚动条 ===== */
-      .basjoo-messages::-webkit-scrollbar {
-        width: 4px;
+      .basjoo-send svg {
+        width: 20px;
+        height: 20px;
+        stroke: currentColor;
       }
 
-      .basjoo-messages::-webkit-scrollbar-track {
+      .basjoo-error {
+        padding: 12px 16px;
+        background: ${l};
+        color: ${t?"#fca5a5":"#dc2626"};
+        font-size: 13px;
+        text-align: center;
+        border-top: 1px solid ${t?"rgba(239,68,68,0.35)":"#fecaca"};
+      }
+
+      .basjoo-message-time {
+        font-size: 11px;
+        color: ${n};
+        margin-top: 4px;
+        padding: 0 4px;
+      }
+
+      .basjoo-message-user .basjoo-message-time {
+        text-align: right;
+      }
+
+      .basjoo-unread-badge {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 10px;
+        background: #ef4444;
+        color: white;
+        font-size: 11px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid white;
+      }
+
+      .basjoo-source-list {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .basjoo-source-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: ${n};
+      }
+
+      .basjoo-source-item {
+        background: ${r};
+        border: 1px solid ${o};
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .basjoo-source-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: none;
         background: transparent;
+        cursor: pointer;
+        text-align: left;
+        color: inherit;
       }
 
-      .basjoo-messages::-webkit-scrollbar-thumb {
-        background: var(--bw-border);
-        border-radius: 2px;
+      .basjoo-source-item[open] .basjoo-source-arrow {
+        transform: rotate(180deg);
       }
 
-      .basjoo-messages::-webkit-scrollbar-thumb:hover {
-        background: var(--bw-muted);
+      .basjoo-source-index {
+        width: 18px;
+        height: 18px;
+        border-radius: 6px;
+        background: ${this.config.themeColor};
+        color: white;
+        font-size: 10px;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
       }
 
-      /* ===== 响应式 ===== */
+      .basjoo-source-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+      }
+
+      .basjoo-source-arrow {
+        color: ${n};
+        transition: transform 0.2s ease;
+        flex-shrink: 0;
+      }
+
+      .basjoo-source-body {
+        padding: 0 12px 12px;
+        border-top: 1px solid ${o};
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .basjoo-source-link {
+        color: ${this.adjustColor(this.config.themeColor,-10)};
+        text-decoration: none;
+        font-size: 12px;
+        word-break: break-all;
+      }
+
+      .basjoo-source-link:hover {
+        text-decoration: underline;
+      }
+
+      .basjoo-source-snippet {
+        font-size: 12px;
+        color: ${n};
+        line-height: 1.5;
+      }
+
+      .basjoo-thinking {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: ${n};
+        font-size: 12px;
+        margin-top: 8px;
+      }
+
+      .basjoo-thinking-spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid ${this.hexToRgba(this.config.themeColor,0.2)};
+        border-top-color: ${this.config.themeColor};
+        border-radius: 50%;
+        animation: basjoo-spin 0.8s linear infinite;
+      }
+
+      @keyframes basjoo-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes basjoo-message-fadein {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
       @media (max-width: 480px) {
         #basjoo-chat-window {
           width: calc(100vw - 32px);
-          height: calc(100vh - 100px);
-          bottom: 80px;
-          ${this.config.position === 'left' ? 'left' : 'right'}: 16px;
+          height: calc(100vh - 120px);
+          max-height: 640px;
+          bottom: 88px;
+          left: 16px !important;
+          right: 16px !important;
         }
 
         #basjoo-widget-button {
-          width: 52px;
-          height: 52px;
           bottom: 16px;
-          ${this.config.position === 'left' ? 'left' : 'right'}: 16px;
+          ${this.config.position==="left"?"left":"right"}: 16px;
         }
       }
-    `;
-    document.head.appendChild(style);
-  };
-
-  /**
-   * 创建容器
-   */
-  BasjooWidget.prototype.createContainer = function() {
-    this.container = document.createElement('div');
-    this.container.id = 'basjoo-widget-container';
-    document.body.appendChild(this.container);
-  };
-
-  /**
-   * 创建按钮
-   */
-  BasjooWidget.prototype.createButton = function() {
-    var self = this;
-    this.button = document.createElement('div');
-    this.button.id = 'basjoo-widget-button';
-    this.button.innerHTML = `
+    `,document.head.appendChild(e)}adjustColor(e,t){let i=!1;e[0]==="#"&&(e=e.slice(1),i=!0);let s=parseInt(e,16),n=(s>>16)+t,o=(s>>8&255)+t,r=(s&255)+t;return n>255?n=255:n<0&&(n=0),o>255?o=255:o<0&&(o=0),r>255?r=255:r<0&&(r=0),(i?"#":"")+((n<<16|o<<8|r).toString(16).padStart(6,"0"))}hexToRgba(e,t){let i=e.replace("#","");if(i.length===3){let[o,r,a]=i.split("");i=`${o}${o}${r}${r}${a}${a}`}let s=parseInt(i,16),n=s>>16&255,o=s>>8&255,r=s&255;return`rgba(${n}, ${o}, ${r}, ${t})`}createContainer(){this.container=document.createElement("div"),this.container.id="basjoo-widget-container",document.body.appendChild(this.container)}createButton(){this.button=document.createElement("div"),this.button.id="basjoo-widget-button",this.button.innerHTML=`
       <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
         <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
       </svg>
-    `;
-    this.button.addEventListener('click', function() {
-      self.toggle();
-    });
-    this.container.appendChild(this.button);
-  };
-
-  /**
-   * 创建聊天窗口
-   */
-  BasjooWidget.prototype.createChatWindow = function() {
-    var self = this;
-    this.chatWindow = document.createElement('div');
-    this.chatWindow.id = 'basjoo-chat-window';
-
-    var logoUrl = this.config.logoUrl;
-    if (logoUrl && logoUrl.startsWith('/')) {
-      logoUrl = this.config.apiBase + logoUrl;
-    }
-
-    this.chatWindow.innerHTML = `
+    `,this.button.addEventListener("click",()=>this.toggle()),this.container.appendChild(this.button)}createChatWindow(){var e;this.chatWindow=document.createElement("div"),this.chatWindow.id="basjoo-chat-window",this.chatWindow.innerHTML=`
       <div class="basjoo-header">
         <div class="basjoo-header-title">
-          ${logoUrl ? `<img src="${logoUrl}" class="basjoo-header-logo" alt="">` : ''}
+          ${this.config.logoUrl?`<img src="${this.config.logoUrl}" class="basjoo-header-logo" alt="">`:""}
           <span>${this.config.title}</span>
         </div>
-        <button class="basjoo-close" aria-label="关闭">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <button class="basjoo-close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
@@ -850,782 +545,32 @@
       </div>
       <div class="basjoo-messages"></div>
       <div class="basjoo-input-area">
-        <input type="text" class="basjoo-input" placeholder="${this.getText('inputPlaceholder')}" maxlength="2000">
-        <button class="basjoo-send" aria-label="发送">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <input type="text" class="basjoo-input" placeholder="${this.getText("inputPlaceholder")}" maxlength="2000">
+        <button class="basjoo-send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
           </svg>
         </button>
       </div>
-    `;
-
-    this.chatWindow.querySelector('.basjoo-close').addEventListener('click', function() {
-      self.toggle();
-    });
-
-    var input = this.chatWindow.querySelector('.basjoo-input');
-    var sendBtn = this.chatWindow.querySelector('.basjoo-send');
-
-    var sendMessage = function() {
-      var text = input.value.trim();
-      if (text) {
-        if (text.length > 2000) {
-          self.showError(self.getText('messageTooLong'));
-          return;
-        }
-        self.sendMessage(text);
-        input.value = '';
-      }
-    };
-
-    sendBtn.addEventListener('click', sendMessage);
-    input.addEventListener('keypress', function(e) {
-      if (e.key === 'Enter') sendMessage();
-    });
-
-    this.container.appendChild(this.chatWindow);
-  };
-
-  /**
-   * 显示未读消息红点
-   */
-  BasjooWidget.prototype.showUnreadBadge = function() {
-    if (!this.button) return;
-    var existingBadge = this.button.querySelector('.basjoo-unread-badge');
-    if (existingBadge) existingBadge.remove();
-
-    var badge = document.createElement('div');
-    badge.className = 'basjoo-unread-badge';
-    badge.textContent = '1';
-    this.button.appendChild(badge);
-  };
-
-  /**
-   * 隐藏未读消息红点
-   */
-  BasjooWidget.prototype.hideUnreadBadge = function() {
-    var badge = this.button.querySelector('.basjoo-unread-badge');
-    if (badge) badge.remove();
-  };
-
-  /**
-   * 切换窗口显示
-   */
-  BasjooWidget.prototype.toggle = function() {
-    this.isOpen = !this.isOpen;
-    if (this.isOpen) {
-      this.chatWindow.classList.add('open');
-      this.hideUnreadBadge();
-      this.stopTitleBlink();
-    } else {
-      this.chatWindow.classList.remove('open');
-    }
-  };
-
-  /**
-   * 添加消息
-   */
-  BasjooWidget.prototype.escapeHtml = function(text) {
-    return String(text || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  };
-
-  BasjooWidget.prototype.renderMarkdown = function(markdown) {
-    if (!markdown) return '';
-
-    var self = this;
-    var blocks = markdown.replace(/\r\n/g, '\n').split(/\n{2,}/).map(function(block) {
-      return block.trim();
-    }).filter(Boolean);
-
-    function renderInline(text) {
-      var html = self.escapeHtml(text);
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-      html = html.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
-      html = html.replace(/(^|[^_])_([^_]+)_(?!_)/g, '$1<em>$2</em>');
-      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function(match, label, url) {
-        var safeUrl = self.escapeHtml(url);
-        return '<a href="' + safeUrl + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
-      });
-      return html;
-    }
-
-    return blocks.map(function(block) {
-      if (/^```/.test(block) && /```$/.test(block)) {
-        var code = block.replace(/^```\w*\n?/, '').replace(/```$/, '');
-        return '<pre><code>' + self.escapeHtml(code) + '</code></pre>';
-      }
-      if (/^(?:[-*]\s.+\n?)+$/.test(block)) {
-        return '<ul>' + block.split('\n').map(function(line) {
-          return line.replace(/^[-*]\s+/, '').trim();
-        }).filter(Boolean).map(function(line) {
-          return '<li>' + renderInline(line) + '</li>';
-        }).join('') + '</ul>';
-      }
-      if (/^(?:\d+\.\s.+\n?)+$/.test(block)) {
-        return '<ol>' + block.split('\n').map(function(line) {
-          return line.replace(/^\d+\.\s+/, '').trim();
-        }).filter(Boolean).map(function(line) {
-          return '<li>' + renderInline(line) + '</li>';
-        }).join('') + '</ol>';
-      }
-      if (/^>\s?/.test(block)) {
-        var quote = block.split('\n').map(function(line) {
-          return line.replace(/^>\s?/, '');
-        }).join('<br>');
-        return '<blockquote>' + renderInline(quote) + '</blockquote>';
-      }
-      if (/^#{1,6}\s/.test(block)) {
-        var headingText = block.replace(/^#{1,6}\s+/, '');
-        return '<p><strong>' + renderInline(headingText) + '</strong></p>';
-      }
-      return '<p>' + renderInline(block).replace(/\n/g, '<br>') + '</p>';
-    }).join('');
-  };
-
-  BasjooWidget.prototype.updateMessageContent = function(element, content) {
-    element.innerHTML = this.renderMarkdown(content);
-  };
-
-  BasjooWidget.prototype.createCitationCard = function(source, index) {
-    var details = document.createElement('details');
-    details.className = 'basjoo-citation-card';
-
-    var summary = document.createElement('summary');
-    summary.className = 'basjoo-citation-trigger';
-
-    var number = document.createElement('span');
-    number.className = 'basjoo-citation-number';
-    number.textContent = String(index + 1);
-
-    var title = document.createElement('span');
-    title.className = 'basjoo-citation-title';
-    title.textContent = source.type === 'url'
-      ? (source.title || source.url || this.getText('document'))
-      : (source.question || this.getText('citationSources'));
-
-    var arrow = document.createElement('span');
-    arrow.className = 'basjoo-citation-arrow';
-    arrow.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
-
-    summary.appendChild(number);
-    summary.appendChild(title);
-    summary.appendChild(arrow);
-    details.appendChild(summary);
-
-    var body = document.createElement('div');
-    body.className = 'basjoo-citation-body';
-
-    if (source.type === 'url' && source.url) {
-      var link = document.createElement('a');
-      link.className = 'basjoo-citation-link';
-      link.href = source.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = this.getText('openSource');
-      body.appendChild(link);
-
-      var urlText = document.createElement('div');
-      urlText.textContent = source.url;
-      body.appendChild(urlText);
-    }
-
-    var snippet = document.createElement('div');
-    snippet.textContent = source.snippet || source.question || source.title || source.url || this.getText('document');
-    body.appendChild(snippet);
-    details.appendChild(body);
-
-    return details;
-  };
-
-  BasjooWidget.prototype.renderSources = function(container, sources) {
-    if (!sources || !sources.length) return;
-
-    var sourcesWrapper = document.createElement('div');
-    sourcesWrapper.className = 'basjoo-sources';
-
-    var label = document.createElement('div');
-    label.className = 'basjoo-sources-label';
-    label.textContent = this.getText('citationSources') + ' (' + sources.length + ')';
-    sourcesWrapper.appendChild(label);
-
-    for (var i = 0; i < sources.length; i++) {
-      sourcesWrapper.appendChild(this.createCitationCard(sources[i], i));
-    }
-
-    container.appendChild(sourcesWrapper);
-  };
-
-  BasjooWidget.prototype.createMessageElement = function(message) {
-    var messageEl = document.createElement('div');
-    messageEl.className = 'basjoo-message basjoo-message-' + message.role;
-
-    var contentEl = document.createElement('div');
-    contentEl.className = 'basjoo-message-content';
-    this.updateMessageContent(contentEl, message.content);
-    messageEl.appendChild(contentEl);
-
-    if (message.sources && message.sources.length > 0) {
-      this.renderSources(messageEl, message.sources);
-    }
-
-    return messageEl;
-  };
-
-  BasjooWidget.prototype.removeStreamingMessage = function() {
-    if (this.streamingMessage) this.streamingMessage.remove();
-    this.streamingMessage = null;
-    this.streamingMessageContent = null;
-    this.currentStreamContent = '';
-    this.currentStreamSources = [];
-  };
-
-  BasjooWidget.prototype.createStreamingMessage = function() {
-    var messagesContainer = this.chatWindow.querySelector('.basjoo-messages');
-    var messageEl = document.createElement('div');
-    messageEl.className = 'basjoo-message basjoo-message-assistant';
-
-    var wrapper = document.createElement('div');
-    wrapper.style.display = 'inline';
-
-    var contentEl = document.createElement('div');
-    contentEl.className = 'basjoo-message-content';
-    contentEl.style.display = 'inline';
-    wrapper.appendChild(contentEl);
-
-    var cursor = document.createElement('span');
-    cursor.className = 'basjoo-stream-cursor';
-    wrapper.appendChild(cursor);
-
-    messageEl.appendChild(wrapper);
-    messagesContainer.appendChild(messageEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-    this.streamingMessage = messageEl;
-    this.streamingMessageContent = contentEl;
-    this.currentStreamContent = '';
-    this.currentStreamSources = [];
-    return messageEl;
-  };
-
-  BasjooWidget.prototype.appendToStreamingMessage = function(chunk) {
-    if (!this.streamingMessage || !this.streamingMessageContent) {
-      this.createStreamingMessage();
-    }
-    this.currentStreamContent += chunk;
-    if (this.streamingMessageContent) {
-      this.updateMessageContent(this.streamingMessageContent, this.currentStreamContent);
-    }
-    var messagesContainer = this.chatWindow.querySelector('.basjoo-messages');
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  };
-
-  BasjooWidget.prototype.finalizeStreamingMessage = function(sources) {
-    sources = sources || [];
-    if (!this.streamingMessage || !this.streamingMessageContent) return;
-    if (!this.currentStreamContent.trim()) {
-      this.removeStreamingMessage();
-      return;
-    }
-
-    var cursor = this.streamingMessage.querySelector('.basjoo-stream-cursor');
-    if (cursor) cursor.remove();
-    this.currentStreamSources = sources;
-
-    if (sources.length > 0) {
-      this.renderSources(this.streamingMessage, sources);
-    }
-
-    this.messages.push({
-      role: 'assistant',
-      content: this.currentStreamContent,
-      sources: sources,
-      timestamp: new Date()
-    });
-
-    var messagesContainer = this.chatWindow.querySelector('.basjoo-messages');
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-    this.streamingMessage = null;
-    this.streamingMessageContent = null;
-    this.currentStreamContent = '';
-    this.currentStreamSources = [];
-  };
-
-  BasjooWidget.prototype.addMessage = function(message) {
-    var messagesContainer = this.chatWindow.querySelector('.basjoo-messages');
-    this.messages.push(message);
-    if (!message.content) return;
-    messagesContainer.appendChild(this.createMessageElement(message));
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  };
-
-  /**
-   * 显示加载动画
-   */
-  BasjooWidget.prototype.showLoading = function() {
-    var messagesContainer = this.chatWindow.querySelector('.basjoo-messages');
-    var loadingEl = document.createElement('div');
-    loadingEl.className = 'basjoo-loading';
-    loadingEl.id = 'basjoo-loading-indicator';
-    loadingEl.innerHTML = `
+    `;let t=this.chatWindow.querySelector(".basjoo-close"),i=this.chatWindow.querySelector(".basjoo-input"),s=this.chatWindow.querySelector(".basjoo-send"),n=()=>{if(this.isSending)return;let o=i.value.trim();o&&(o.length>2e3?(this.showError(this.getText("messageTooLong")),0):(this.sendMessage(o),i.value=""))};s.addEventListener("click",n),i.addEventListener("keypress",o=>{o.key==="Enter"&&n()}),(e=this.container)==null||e.appendChild(this.chatWindow)}toggle(){this.isOpen?this.close():this.open()}open(){var e;this.isOpen=!0,(e=this.chatWindow)==null||e.classList.add("open"),this.stopTitleBlink();let t=this.chatWindow==null?void 0:this.chatWindow.querySelector(".basjoo-input");setTimeout(()=>{t==null||t.focus()},300)}close(){var e;this.isOpen=!1,(e=this.chatWindow)==null||e.classList.remove("open")}showError(e){var t=this.chatWindow==null?void 0:this.chatWindow.querySelector(".basjoo-error");t&&t.remove();let i=document.createElement("div");i.className="basjoo-error",i.textContent=e,this.chatWindow&&this.chatWindow.appendChild(i),setTimeout(()=>{i.remove()},5e3)}getText(e){let t={sendFailed:{"en-US":"Send failed, please try again later","zh-CN":"发送失败，请稍后重试"},networkError:{"en-US":"Network connection failed, please check your connection","zh-CN":"网络连接失败，请检查网络"},quotaExceeded:{"en-US":"Daily message limit reached","zh-CN":"今日消息已达上限"},takenOverNotice:{"en-US":"Your conversation has been transferred to a human agent. Please wait for their reply.","zh-CN":"已转接人工客服，请等待回复。"},inputPlaceholder:{"en-US":"Type your question...","zh-CN":"输入您的问题..."},citationSources:{"en-US":"Citation Sources","zh-CN":"引用来源"},openSource:{"en-US":"Open source","zh-CN":"打开来源"},document:{"en-US":"Document","zh-CN":"文档"},messageTooLong:{"en-US":"Message too long (max 2000 characters)","zh-CN":"消息过长（最多2000字符）"},greetingBubble:{"en-US":"Hi! How can I help you?","zh-CN":"你好！有什么可以帮您？"},newMessage:{"en-US":"New message","zh-CN":"新消息"},thinking:{"en-US":"Thinking...","zh-CN":"思考中..."}};return this.resolveI18nText(t[e],t[e]["en-US"]||t[e]["zh-CN"]||e)}formatMessageContent(e){let t=e.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");return t=t.replace(/^### (.*)$/gm,"<h3>$1</h3>"),t=t.replace(/^## (.*)$/gm,"<h2>$1</h2>"),t=t.replace(/^# (.*)$/gm,"<h1>$1</h1>"),t=t.replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>"),t=t.replace(/\*(.*?)\*/g,"<em>$1</em>"),t=t.replace(/`([^`]+)`/g,"<code>$1</code>"),t=t.replace(/```([\s\S]*?)```/g,'<pre><code>$1</code></pre>'),t=t.replace(/^> (.*)$/gm,"<blockquote>$1</blockquote>"),t=t.replace(/^- (.*)$/gm,"<li>$1</li>"),t=t.replace(/(<li>.*<\/li>)/gs,"<ul>$1</ul>"),t=t.replace(/\[(.*?)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'),t=t.split(/\n{2,}/).map(i=>i.match(/^<(h\d|ul|pre|blockquote)/)?i:`<p>${i.replace(/\n/g,"<br>")}</p>`).join("")}createSourceList(e){let t=document.createElement("div");if(t.className="basjoo-source-list",!e||e.length===0)return t;let i=document.createElement("div");i.className="basjoo-source-header",i.innerHTML=`
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 12h6"></path>
+        <path d="M12 9v6"></path>
+        <circle cx="12" cy="12" r="10"></circle>
+      </svg>
+      <span>${this.getText("citationSources")}</span>
+    `,t.appendChild(i),e.forEach((s,n)=>{var l,c,y,d,g;let o=document.createElement("details");o.className="basjoo-source-item";let r=document.createElement("summary");r.className="basjoo-source-toggle";let a=((l=s.title)!=null?l:s.url)||this.getText("document");r.innerHTML=`
+        <span class="basjoo-source-index">${n+1}</span>
+        <span class="basjoo-source-title">${a}</span>
+        <svg class="basjoo-source-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      `;let h=document.createElement("div");if(h.className="basjoo-source-body",s.url){let v=document.createElement("a");v.className="basjoo-source-link",v.href=s.url,v.target="_blank",v.rel="noopener noreferrer",v.textContent=`${this.getText("openSource")}: ${s.url}`,h.appendChild(v)}let w=((c=s.snippet)!=null?c:s.question)||((y=s.title)!=null?y:s.url)||this.getText("document");if(w){let v=document.createElement("div");v.className="basjoo-source-snippet",v.textContent=w,h.appendChild(v)}o.appendChild(r),h.childNodes.length>0&&o.appendChild(h),t.appendChild(o)}),t}createMessageElement(e){let t=document.createElement("div");t.className=`basjoo-message basjoo-message-${e.role}`;let i=document.createElement("div");i.className="basjoo-message-content",i.innerHTML=this.formatMessageContent(e.content),t.appendChild(i),e.sources&&e.sources.length>0&&t.appendChild(this.createSourceList(e.sources));let s=document.createElement("div");return s.className="basjoo-message-time",s.textContent=e.timestamp.toLocaleTimeString([],"hour"in[]?void 0:{hour:"2-digit",minute:"2-digit"}),t.appendChild(s),t}scrollToBottom(){let e=this.chatWindow==null?void 0:this.chatWindow.querySelector(".basjoo-messages");e&&(e.scrollTop=e.scrollHeight)}showLoading(){let e=this.chatWindow==null?void 0:this.chatWindow.querySelector(".basjoo-messages");if(!e)return;let t=document.createElement("div");t.className="basjoo-loading",t.id="basjoo-loading",t.innerHTML=`
       <div class="basjoo-loading-dot"></div>
       <div class="basjoo-loading-dot"></div>
       <div class="basjoo-loading-dot"></div>
-    `;
-    messagesContainer.appendChild(loadingEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  };
-
-  /**
-   * 隐藏加载动画
-   */
-  BasjooWidget.prototype.hideLoading = function() {
-    var loadingEl = document.getElementById('basjoo-loading-indicator');
-    if (loadingEl) loadingEl.remove();
-  };
-
-  /**
-   * 显示错误
-   */
-  BasjooWidget.prototype.showError = function(message) {
-    var self = this;
-    var messagesContainer = this.chatWindow.querySelector('.basjoo-messages');
-    var errorEl = document.createElement('div');
-    errorEl.style.cssText = 'padding:10px 14px;background:#fef2f2;color:#dc2626;border-radius:8px;font-size:13px;margin:8px 0;border:1px solid rgba(220,38,38,0.2);';
-    errorEl.textContent = message;
-    messagesContainer.appendChild(errorEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    setTimeout(function() { errorEl.remove(); }, 3000);
-  };
-
-  /**
-   * 加载聊天历史（页面刷新后恢复）
-   */
-  BasjooWidget.prototype.loadHistory = function() {
-    if (!this.sessionId) return;
-
-    var self = this;
-    fetch(this.config.apiBase + '/api/v1/chat/messages?session_id=' + encodeURIComponent(this.sessionId))
-      .then(function(response) {
-        if (!response.ok) throw new Error('Failed to load history');
-        return response.json();
-      })
-      .then(function(messages) {
-        if (messages && messages.length > 0) {
-          for (var i = 0; i < messages.length; i++) {
-            self.addMessage({
-              role: messages[i].role === 'user' ? 'user' : 'assistant',
-              content: messages[i].content,
-              sources: messages[i].sources
-            });
-            if (messages[i].id > self.lastMessageId) {
-              self.lastMessageId = messages[i].id;
-            }
-          }
-          self.startPolling();
-        } else {
-          // 会话无消息或已过期，清除 sessionId，显示欢迎消息
-          self.sessionId = null;
-          localStorage.removeItem('basjoo_session_' + self.config.agentId);
-          if (self.config.welcomeMessage) {
-            self.addMessage({ role: 'assistant', content: self.config.welcomeMessage, timestamp: new Date() });
-          }
-        }
-      })
-      .catch(function() {
-        // 加载失败（如会话已过期404），清除并显示欢迎消息
-        self.sessionId = null;
-        localStorage.removeItem('basjoo_session_' + self.config.agentId);
-        if (self.config.welcomeMessage) {
-          self.addMessage({ role: 'assistant', content: self.config.welcomeMessage, timestamp: new Date() });
-        }
-      });
-  };
-
-  /**
-   * 开始轮询新消息
-   */
-  BasjooWidget.prototype.startPolling = function() {
-    if (this.pollIntervalId) return;
-    var self = this;
-    this.pollIntervalId = setInterval(function() { self.pollMessages(); }, 3000);
-  };
-
-  /**
-   * 停止轮询
-   */
-  BasjooWidget.prototype.stopPolling = function() {
-    if (this.pollIntervalId) {
-      clearInterval(this.pollIntervalId);
-      this.pollIntervalId = null;
-    }
-  };
-
-  /**
-   * 轮询拉取新消息
-   */
-  BasjooWidget.prototype.pollMessages = function() {
-    if (!this.sessionId) return;
-    var self = this;
-    fetch(this.config.apiBase + '/api/v1/chat/messages?session_id=' + encodeURIComponent(this.sessionId) + '&after_id=' + this.lastMessageId + '&role=assistant')
-      .then(function(response) {
-        if (!response.ok) return;
-        return response.json();
-      })
-      .then(function(messages) {
-        if (!messages) return;
-        for (var i = 0; i < messages.length; i++) {
-          if (messages[i].content) {
-            self.addMessage({ role: 'assistant', content: messages[i].content, sources: messages[i].sources });
-            if (!self.isOpen) {
-              self.startTitleBlink();
-              self.showUnreadBadge();
-            }
-          }
-          if (messages[i].id > self.lastMessageId) {
-            self.lastMessageId = messages[i].id;
-          }
-        }
-      })
-      .catch(function() {
-        // 轮询失败静默忽略
-      });
-  };
-
-  /**
-   * 发送消息
-   */
-  BasjooWidget.prototype.consumeStream = async function(response) {
-    if (!response.body) throw new Error('Streaming response body is unavailable');
-
-    var reader = response.body.getReader();
-    var decoder = new TextDecoder();
-    var buffer = '';
-    var streamCompleted = false;
-    var self = this;
-
-    function processEvent(rawEvent) {
-      if (!rawEvent.trim()) return;
-
-      var eventName = 'message';
-      var dataLines = [];
-      rawEvent.split('\n').forEach(function(line) {
-        if (line.indexOf('event:') === 0) {
-          eventName = line.slice(6).trim();
-        } else if (line.indexOf('data:') === 0) {
-          dataLines.push(line.slice(5).replace(/^\s*/, ''));
-        }
-      });
-
-      if (!dataLines.length) return;
-      var payload = JSON.parse(dataLines.join('\n'));
-
-      switch (eventName) {
-        case 'sources':
-          self.currentStreamSources = Array.isArray(payload.sources) ? payload.sources : [];
-          break;
-        case 'content':
-          self.appendToStreamingMessage(payload.content || '');
-          break;
-        case 'done':
-          if (payload.session_id) {
-            self.sessionId = payload.session_id;
-            localStorage.setItem('basjoo_session_' + self.config.agentId, self.sessionId);
-            self.startPolling();
-          }
-          if (typeof payload.message_id === 'number' && payload.message_id > self.lastMessageId) {
-            self.lastMessageId = payload.message_id;
-          }
-          if (payload.taken_over) {
-            self.removeStreamingMessage();
-            self.addMessage({ role: 'assistant', content: self.getText('takenOverNotice'), timestamp: new Date() });
-          } else {
-            self.finalizeStreamingMessage(self.currentStreamSources);
-            if (!self.isOpen) {
-              self.startTitleBlink();
-              self.showUnreadBadge();
-            }
-          }
-          streamCompleted = true;
-          break;
-        case 'error':
-          throw new Error(payload.error || 'Stream failed');
-        default:
-          break;
-      }
-    }
-
-    function findEventDelimiter() {
-      var crlfIndex = buffer.indexOf('\r\n\r\n');
-      var lfIndex = buffer.indexOf('\n\n');
-      if (crlfIndex === -1 && lfIndex === -1) return null;
-      if (crlfIndex === -1) return { index: lfIndex, length: 2 };
-      if (lfIndex === -1) return { index: crlfIndex, length: 4 };
-      return crlfIndex < lfIndex ? { index: crlfIndex, length: 4 } : { index: lfIndex, length: 2 };
-    }
-
-    while (!streamCompleted) {
-      var result = await reader.read();
-      var value = result.value || new Uint8Array();
-      buffer += decoder.decode(value, { stream: !result.done });
-
-      var delimiter = findEventDelimiter();
-      while (delimiter) {
-        var rawEvent = buffer.slice(0, delimiter.index);
-        buffer = buffer.slice(delimiter.index + delimiter.length);
-        processEvent(rawEvent.replace(/\r\n/g, '\n'));
-        if (streamCompleted) break;
-        delimiter = findEventDelimiter();
-      }
-
-      if (result.done) break;
-    }
-
-    if (!streamCompleted) {
-      if (buffer.trim()) processEvent(buffer);
-      if (!streamCompleted) throw new Error('Stream ended unexpectedly');
-    }
-  };
-
-  BasjooWidget.prototype.ensureTurnstileReady = async function() {
-    if (!this.turnstileSiteKey) return;
-    if (window.turnstile && this.turnstileWidgetId) return;
-
-    if (!this.turnstileScriptPromise) {
-      this.turnstileScriptPromise = new Promise(function(resolve, reject) {
-        var existingScript = document.querySelector('script[src^="https://challenges.cloudflare.com/turnstile/v0/api.js"]');
-        if (existingScript) {
-          if (window.turnstile) {
-            resolve();
-            return;
-          }
-          existingScript.addEventListener('load', function() { resolve(); }, { once: true });
-          existingScript.addEventListener('error', function() { reject(new Error('Failed to load Turnstile')); }, { once: true });
-          return;
-        }
-
-        var script = document.createElement('script');
-        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-        script.async = true;
-        script.defer = true;
-        script.onload = function() { resolve(); };
-        script.onerror = function() { reject(new Error('Failed to load Turnstile')); };
-        document.head.appendChild(script);
-      });
-    }
-
-    await this.turnstileScriptPromise;
-
-    if (!window.turnstile) {
-      throw new Error('Turnstile unavailable');
-    }
-
-    if (!this.turnstileContainer) {
-      this.turnstileContainer = document.createElement('div');
-      this.turnstileContainer.style.display = 'none';
-      document.body.appendChild(this.turnstileContainer);
-    }
-
-    if (!this.turnstileWidgetId) {
-      this.turnstileWidgetId = window.turnstile.render(this.turnstileContainer, {
-        sitekey: this.turnstileSiteKey,
-        execution: 'execute',
-        appearance: 'execute'
-      });
-    }
-  };
-
-  BasjooWidget.prototype.getTurnstileToken = async function() {
-    if (!this.turnstileSiteKey) return undefined;
-
-    await this.ensureTurnstileReady();
-
-    if (!window.turnstile || !this.turnstileWidgetId) {
-      throw new Error('Turnstile unavailable');
-    }
-
-    var self = this;
-    return await new Promise(function(resolve, reject) {
-      var timeoutId = window.setTimeout(function() { reject(new Error('Turnstile timeout')); }, 10000);
-      var container = self.turnstileContainer;
-
-      window.turnstile.remove(self.turnstileWidgetId);
-      self.turnstileWidgetId = window.turnstile.render(container, {
-        sitekey: self.turnstileSiteKey,
-        execution: 'execute',
-        appearance: 'execute',
-        callback: function(token) {
-          window.clearTimeout(timeoutId);
-          resolve(token);
-        },
-        'error-callback': function() {
-          window.clearTimeout(timeoutId);
-          reject(new Error('Turnstile failed'));
-        },
-        'expired-callback': function() {
-          window.clearTimeout(timeoutId);
-          reject(new Error('Turnstile expired'));
-        }
-      });
-
-      window.turnstile.execute(self.turnstileWidgetId);
-    });
-  };
-
-  BasjooWidget.prototype.sendMessageWithRetry = async function(text) {
-    var lastError = null;
-
-    for (var attempt = 0; attempt <= 1; attempt++) {
-      try {
-        var turnstileToken = await this.getTurnstileToken();
-        var response = await fetch(this.config.apiBase + '/api/v1/chat/stream', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'text/event-stream'
-          },
-          body: JSON.stringify({
-            agent_id: this.config.agentId,
-            message: text,
-            locale: this.getEffectiveLocale(),
-            session_id: this.sessionId,
-            visitor_id: this.visitorId,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            turnstile_token: turnstileToken
-          })
-        });
-
-        if (!response.ok) {
-          var detail = 'HTTP ' + response.status + ': ' + response.statusText;
-          try {
-            var errorPayload = await response.json();
-            detail = errorPayload.message || errorPayload.detail || detail;
-          } catch (parseError) {}
-          throw new Error(detail);
-        }
-
-        this.hideLoading();
-        this.createStreamingMessage();
-        await this.consumeStream(response);
-        return;
-      } catch (error) {
-        lastError = error;
-        var errorText = error && error.message ? String(error.message) : '';
-        var isRetryable = error instanceof TypeError
-          || errorText.indexOf('fetch') !== -1
-          || errorText.indexOf('Failed to fetch') !== -1
-          || errorText.indexOf('Stream ended unexpectedly') !== -1;
-
-        if (!isRetryable || attempt >= 1) {
-          throw error;
-        }
-
-        this.hideLoading();
-        this.removeStreamingMessage();
-        console.warn('[Basjoo Widget] Stream attempt ' + (attempt + 1) + ' failed, retrying...');
-        await new Promise(function(resolve) { window.setTimeout(resolve, 1000); });
-        this.showLoading();
-      }
-    }
-
-    throw lastError;
-  };
-
-  BasjooWidget.prototype.sendMessage = async function(text) {
-    var self = this;
-    if (this.isSending) return;
-    this.isSending = true;
-
-    this.addMessage({ role: 'user', content: text });
-    this.showLoading();
-
-    try {
-      await this.sendMessageWithRetry(text);
-    } catch (error) {
-      self.hideLoading();
-      self.removeStreamingMessage();
-      console.error('[Basjoo Widget] Error sending message:', error);
-
-      var errorMessage = self.getText('sendFailed');
-      var consoleHint = '';
-      var errorText = error && error.message ? String(error.message) : '';
-
-      if (error instanceof TypeError || errorText.indexOf('fetch') !== -1 || errorText.indexOf('NetworkError') !== -1) {
-        errorMessage = self.getText('networkError');
-        consoleHint = 'Request may be blocked by CORS, network connectivity, or an incorrect apiBase. Current apiBase: ' + (self.config.apiBase || '(not set)');
-      } else if (errorText.indexOf('429') !== -1 || errorText.toLowerCase().indexOf('quota') !== -1) {
-        errorMessage = self.getText('quotaExceeded');
-      } else if (errorText.toLowerCase().indexOf('turnstile') !== -1 || errorText.toLowerCase().indexOf('bot verification') !== -1 || errorText.indexOf('403') !== -1) {
-        consoleHint = 'Bot protection verification failed. Check Turnstile site key, secret key, and allowed hostnames.';
-      } else if (errorText.indexOf('401') !== -1) {
-        consoleHint = 'Authentication failed. Please check the agent configuration and public API access.';
-      }
-
-      if (!self.config.apiBase) {
-        consoleHint = 'apiBase could not be determined. When embedding the widget from a local file, set apiBase explicitly or load the SDK from the target server.';
-      }
-
-      if (consoleHint) {
-        console.error('[Basjoo Widget]', consoleHint);
-      }
-
-      self.showError(errorMessage);
-    } finally {
-      this.isSending = false;
-    }
-  };
-
-  /**
-   * 开始标题闪烁
-   */
-  BasjooWidget.prototype.startTitleBlink = function() {
-    if (this.titleBlinkInterval) return;
-    this.originalTitle = document.title;
-    this.hasUnread = true;
-    var self = this;
-    var blink = true;
-    this.titleBlinkInterval = setInterval(function() {
-      document.title = blink ? self.originalTitle : '❗ ' + self.getText('newMessage');
-      blink = !blink;
-    }, 1000);
-  };
-
-  /**
-   * 停止标题闪烁
-   */
-  BasjooWidget.prototype.stopTitleBlink = function() {
-    if (this.titleBlinkInterval) {
-      clearInterval(this.titleBlinkInterval);
-      this.titleBlinkInterval = null;
-      document.title = this.originalTitle;
-    }
-  };
-
-  BasjooWidget.getSdkScript = function() {
-    if (document.currentScript && document.currentScript.src && document.currentScript.src.indexOf('sdk.js') !== -1) {
-      return document.currentScript;
-    }
-
-    var scripts = document.querySelectorAll('script[src]');
-    for (var i = scripts.length - 1; i >= 0; i--) {
-      var src = scripts[i].getAttribute('src') || '';
-      if (src.indexOf('sdk.js') !== -1) {
-        return scripts[i];
-      }
-    }
-
-    return null;
-  };
-
-  // 暴露到全局
-  window.BasjooWidget = BasjooWidget;
-
-})();
+    `,e.appendChild(t),e.scrollTop=e.scrollHeight}hideLoading(){let e=document.getElementById("basjoo-loading");e&&e.remove()}showThinking(e){let t=this.chatWindow==null?void 0:this.chatWindow.querySelector(".basjoo-messages");if(!t)return;this.thinkingIndicator||(this.thinkingIndicator=document.createElement("div"),this.thinkingIndicator.className="basjoo-thinking",this.thinkingIndicator.innerHTML=`
+        <span class="basjoo-thinking-spinner"></span>
+        <span>${this.getText("thinking")}</span>
+      `,t.appendChild(this.thinkingIndicator)),t.scrollTop=t.scrollHeight}hideThinking(){this.thinkingIndicator&&(this.thinkingIndicator.remove(),this.thinkingIndicator=null)}addMessage(e){let t=this.chatWindow==null?void 0:this.chatWindow.querySelector(".basjoo-messages");if(!t)return;if(!e.content){console.error("Message content is null or undefined:",e);return}this.messages.push(e);let i=this.createMessageElement(e);t.appendChild(i),t.scrollTop=t.scrollHeight}sendMessage(e){if(!e.trim())return;this.addMessage({role:"user",content:e,timestamp:new Date}),this.showLoading(),this.sendMessageWithRetry(e).catch(t=>{this.hideLoading(),this.hideThinking(),console.error("Send message failed:",t),this.addMessage({role:"assistant",content:this.getText("sendFailed"),timestamp:new Date})})}async getTurnstileToken(){if(!this.turnstileSiteKey)return null;if(!this.turnstileScriptPromise){this.turnstileScriptPromise=new Promise((e,t)=>{if((window).turnstile){e();return}let i=document.createElement("script");i.src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",i.async=!0,i.defer=!0,i.onload=()=>e(),i.onerror=()=>t(new Error("Failed to load Turnstile script")),document.head.appendChild(i)})}if(await this.turnstileScriptPromise,!this.turnstileContainer){this.turnstileContainer=document.createElement("div"),this.turnstileContainer.style.display="none",document.body.appendChild(this.turnstileContainer)}return new Promise((e,t)=>{let i=window.setTimeout(()=>{t(new Error("Turnstile timed out"))},1e4);if(!this.turnstileWidgetId){this.turnstileWidgetId=window.turnstile.render(this.turnstileContainer,{sitekey:this.turnstileSiteKey,callback:s=>{window.clearTimeout(i),e(s)},"error-callback":()=>{window.clearTimeout(i),t(new Error("Turnstile error"))},"expired-callback":()=>{window.clearTimeout(i),t(new Error("Turnstile expired"))}})}window.turnstile.execute(this.turnstileWidgetId)})}async sendMessageWithRetry(e){let t=null;for(let i=0;i<=1;i++)try{let s=Intl.DateTimeFormat().resolvedOptions().timeZone,n=await this.getTurnstileToken(),o=await fetch(`${this.config.apiBase}/api/v1/chat/stream`,{method:"POST",headers:{"Content-Type":"application/json",Accept:"text/event-stream"},body:JSON.stringify({agent_id:this.config.agentId,message:e,locale:this.getEffectiveLocale(),session_id:this.sessionId||void 0,visitor_id:this.visitorId,timezone:s,turnstile_token:n})});if(!o.ok){let r=`HTTP ${o.status}: ${o.statusText}`;try{let a=await o.json();r=a.message||a.detail||r}catch{}throw new Error(r)}return this.hideLoading(),await this.consumeStream(o)}catch(s){t=s;let n=String(s==null?void 0:s.message||""),o=s instanceof TypeError||n.includes("fetch")||n.includes("Failed to fetch")||n.includes("Stream ended unexpectedly");if(!o||i>=1)throw s}throw t}async consumeStream(e){var a;let t=e.body;if(!t)throw new Error("Response body is empty");let i=t.getReader(),s=new TextDecoder,n="",o={content:"",sources:[]};for(;;){let{done:l,value:c}=await i.read();if(l)break;n+=s.decode(c,{stream:!0});let y=n.split("\n\n");n=y.pop()||"";for(let d of y){if(!d.startsWith("data:"))continue;let g=d.replace(/^data:\s*/,"");if(!g)continue;try{let h=JSON.parse(g);switch(h.type){case"sources":o.sources=Array.isArray(h.sources)?h.sources:[];break;case"thinking":this.hideLoading(),this.showThinking(h.elapsed);break;case"thinking_done":this.hideThinking();break;case"content":this.hideLoading(),this.hideThinking(),o.content+=h.content||"";break;case"done":this.hideThinking(),o.content&&this.addMessage({role:"assistant",content:o.content,sources:o.sources,timestamp:new Date}),h.session_id&&(this.sessionId=h.session_id,localStorage.setItem(this.STORAGE_KEY,h.session_id)),h.taken_over&&this.addMessage({role:"assistant",content:this.getText("takenOverNotice"),timestamp:new Date});break;case"error":throw new Error(h.error||this.getText("networkError"))}}catch(h){throw console.error("Failed to process stream chunk:",h),h}}}((a=i.releaseLock)==null?void 0:a.call(i))}startPolling(){if(this.pollIntervalId)return;this.pollIntervalId=window.setInterval(async()=>{if(!this.sessionId||this.isOpen)return;try{let e=await fetch(`${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&after_id=${this.lastMessageId}&role=assistant`);if(!e.ok)return;let t=await e.json();Array.isArray(t)&&t.length>0&&t.forEach(i=>{i.id>this.lastMessageId&&(this.lastMessageId=i.id),this.addMessage({role:"assistant",content:i.content,sources:i.sources,timestamp:new Date}),this.startTitleBlink()})}catch(e){console.warn("Polling failed:",e)}},5e3)}stopPolling(){this.pollIntervalId&&(clearInterval(this.pollIntervalId),this.pollIntervalId=null)}};window.BasjooWidget=m;})();

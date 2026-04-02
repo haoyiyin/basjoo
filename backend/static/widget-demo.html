@@ -291,9 +291,6 @@
       const apiBase = config.api_base || fallbackApiBase;
       const agentId = config.default_agent_id || '';
       const themeColor = config.widget_color || '#3b82f6';
-      const title = config.widget_title || '在线客服';
-      const welcomeMessage = config.welcome_message || '您好！有什么可以帮您的吗？';
-
       apiBaseElement.textContent = apiBase;
       agentIdElement.textContent = agentId || '未找到默认 Agent';
 
@@ -305,8 +302,6 @@
         agentId,
         apiBase,
         themeColor,
-        title,
-        welcomeMessage,
       };
 
       const embedCode = [
