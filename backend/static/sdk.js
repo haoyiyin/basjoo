@@ -6,7 +6,7 @@
   'use strict';
 
   // SDK版本号，用于缓存控制
-  var SDK_VERSION = '2.0.0';
+  var SDK_VERSION = '2.0.1';
 
   /**
    * BasjooWidget 构造函数
@@ -1625,61 +1625,7 @@
     return null;
   };
 
-  BasjooWidget.readAutoInitConfig = function() {
-    var script = BasjooWidget.getSdkScript();
-    if (!script || !script.src) {
-      return null;
-    }
-
-    try {
-      var scriptUrl = new URL(script.src, window.location.href);
-      var params = scriptUrl.searchParams;
-      var agentId = params.get('agentId') || params.get('agent_id') || '';
-      var apiBase = params.get('apiBase') || params.get('api_base') || scriptUrl.origin;
-      var themeColor = params.get('themeColor') || params.get('theme_color') || null;
-      var title = params.get('title') || null;
-      var welcomeMessage = params.get('welcomeMessage') || params.get('welcome_message') || null;
-      var logoUrl = params.get('logoUrl') || params.get('logo_url') || null;
-      var language = params.get('language') || 'auto';
-      var position = params.get('position') || 'right';
-      var theme = params.get('theme') || 'auto';
-
-      if (!agentId && !params.has('autoInit')) {
-        return null;
-      }
-
-      return {
-        agentId: agentId,
-        apiBase: apiBase,
-        themeColor: themeColor,
-        title: title,
-        welcomeMessage: welcomeMessage,
-        logoUrl: logoUrl,
-        language: language,
-        position: position,
-        theme: theme
-      };
-    } catch (error) {
-      console.warn('[Basjoo Widget] Failed to parse auto-init config from sdk.js URL.', error);
-      return null;
-    }
-  };
-
-  BasjooWidget.autoInit = function() {
-    var config = BasjooWidget.readAutoInitConfig();
-    if (!config) {
-      return;
-    }
-
-    if (document.getElementById('basjoo-widget-container')) {
-      return;
-    }
-
-    new BasjooWidget(config);
-  };
-
   // 暴露到全局
   window.BasjooWidget = BasjooWidget;
-  BasjooWidget.autoInit();
 
 })();

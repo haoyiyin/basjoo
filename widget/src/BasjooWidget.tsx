@@ -94,19 +94,6 @@ const LOCALE_ALIAS_MAP: Record<string, string> = {
 }
 
 const WIDGET_LOCALE_DEFAULTS = ['en-US', 'zh-CN'] as const
-const AUTO_INIT_PARAM_KEYS = [
-  'agentId',
-  'apiBase',
-  'themeColor',
-  'logoUrl',
-  'title',
-  'welcomeMessage',
-  'language',
-  'position',
-  'theme',
-  'turnstileSiteKey',
-] as const
-const AUTO_INIT_FLAG = '__basjooWidgetAutoInitScheduled'
 
 function buildDefaultLogoUrl(apiBase: string): string {
   if (!apiBase) {
@@ -117,42 +104,6 @@ function buildDefaultLogoUrl(apiBase: string): string {
     return new URL('/basjoo-logo.png', `${apiBase}/`).toString()
   } catch {
     return '/basjoo-logo.png'
-  }
-}
-
-function getAutoInitConfig(script: HTMLScriptElement): WidgetConfig | null {
-  try {
-    const scriptUrl = new URL(script.src, window.location.href)
-    const hasBootstrapParams = AUTO_INIT_PARAM_KEYS.some(key => scriptUrl.searchParams.has(key))
-
-    if (!hasBootstrapParams) {
-      return null
-    }
-
-    const agentId = scriptUrl.searchParams.get('agentId')?.trim() || ''
-    if (!agentId) {
-      console.warn('[Basjoo Widget] Detected sdk.js query parameters but agentId is missing. The widget will not initialize automatically.')
-      return null
-    }
-
-    const position = scriptUrl.searchParams.get('position')?.trim()
-    const theme = scriptUrl.searchParams.get('theme')?.trim()
-
-    return {
-      agentId,
-      apiBase: scriptUrl.searchParams.get('apiBase')?.trim() || undefined,
-      themeColor: scriptUrl.searchParams.get('themeColor')?.trim() || undefined,
-      logoUrl: scriptUrl.searchParams.get('logoUrl')?.trim() || undefined,
-      title: scriptUrl.searchParams.get('title')?.trim() || undefined,
-      welcomeMessage: scriptUrl.searchParams.get('welcomeMessage')?.trim() || undefined,
-      language: scriptUrl.searchParams.get('language')?.trim() || undefined,
-      position: position === 'left' || position === 'right' ? position : undefined,
-      theme: theme === 'light' || theme === 'dark' || theme === 'auto' ? theme : undefined,
-      turnstileSiteKey: scriptUrl.searchParams.get('turnstileSiteKey')?.trim() || undefined,
-    }
-  } catch {
-    console.warn('[Basjoo Widget] Failed to parse sdk.js query parameters for auto-initialization.')
-    return null
   }
 }
 
@@ -1978,22 +1929,3 @@ class BasjooWidget {
 
 // 导出到全局（不使用 export default，避免 ES Module 格式）
 (window as any).BasjooWidget = BasjooWidget;
-
-const currentScript = document.currentScript
-if (currentScript instanceof HTMLScriptElement) {
-  const autoInitConfig = getAutoInitConfig(currentScript)
-  if (autoInitConfig) {
-    const windowWithFlags = window as Window & typeof globalThis & Record<string, unknown>
-    if (windowWithFlags[AUTO_INIT_FLAG]) {
-      console.warn('[Basjoo Widget] Automatic initialization already ran on this page. Skipping duplicate sdk.js bootstrap.')
-    } else {
-      windowWithFlags[AUTO_INIT_FLAG] = true
-      const start = () => new BasjooWidget(autoInitConfig).init()
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start, { once: true })
-      } else {
-        start()
-      }
-    }
-  }
-}

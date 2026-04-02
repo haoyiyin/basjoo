@@ -243,7 +243,7 @@ export default function SystemSettings() {
 
   const getEmbedCode = () => {
     const apiBase = getEmbedApiBase()
-    const sdkVersion = '2.0.1'
+    const sdkVersion = '2.0.2'
     const turnstileComment = agent?.enable_turnstile
       ? `\n<!-- Bot protection enabled for this agent -->`
       : ''
