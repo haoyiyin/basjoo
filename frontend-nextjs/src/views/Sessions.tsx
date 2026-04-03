@@ -43,6 +43,7 @@ export default function Sessions() {
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectAttemptRef = useRef(0)
   const isMountedRef = useRef(true)
   const selectedSessionRef = useRef<Session | null>(null)
 
@@ -103,6 +104,7 @@ export default function Sessions() {
       wsRef.current = new WebSocket(wsUrl)
 
       wsRef.current.onopen = () => {
+        reconnectAttemptRef.current = 0
         console.log('WebSocket connected')
       }
 
@@ -129,7 +131,9 @@ export default function Sessions() {
 
       wsRef.current.onclose = () => {
         if (isMountedRef.current) {
-          reconnectTimeoutRef.current = setTimeout(connectWebSocket, 5000)
+          const delay = Math.min(30000, 1000 * (2 ** reconnectAttemptRef.current))
+          reconnectAttemptRef.current += 1
+          reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay)
         }
       }
     } catch {
@@ -186,7 +190,7 @@ export default function Sessions() {
 
       if (!response.ok) {
         console.error('Failed to takeover session:', response.statusText)
-        alert('Failed to takeover session')
+        alert(t('errors.takeoverFailed'))
         return
       }
 
@@ -196,7 +200,7 @@ export default function Sessions() {
       }
     } catch (error) {
       console.error('Failed to takeover session:', error)
-      alert('Failed to takeover session')
+      alert(t('errors.takeoverFailed'))
     }
   }
 
@@ -219,7 +223,7 @@ export default function Sessions() {
 
       if (!response.ok) {
         console.error('Failed to send message:', response.statusText)
-        alert('Failed to send message')
+        alert(t('errors.sendFailed'))
         return
       }
 
@@ -227,7 +231,7 @@ export default function Sessions() {
       await fetchMessages(selectedSession.id)
     } catch (error) {
       console.error('Failed to send message:', error)
-      alert('Failed to send message')
+      alert(t('errors.sendFailed'))
     } finally {
       setSendingMessage(false)
     }

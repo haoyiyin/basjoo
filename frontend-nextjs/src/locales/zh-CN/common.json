@@ -110,7 +110,9 @@
     "agentErrorPROVIDER_RATE_LIMITED": "AI 服务商已限流，请稍后重试",
     "agentErrorPROVIDER_UNAVAILABLE": "AI 服务暂时不可用，请检查网络或服务商状态",
     "agentErrorMODEL_NOT_FOUND": "AI 模型不存在，请检查模型名称",
-    "agentErrorPROVIDER_ERROR": "AI 服务调用失败，请检查配置或稍后重试"
+    "agentErrorPROVIDER_ERROR": "AI 服务调用失败，请检查配置或稍后重试",
+    "sendFailed": "发送消息失败",
+    "takeoverFailed": "接管会话失败"
   },
   "time": {
     "goodMorning": "早上好",

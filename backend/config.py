@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
 
+    # LLM / Embedding reliability
+    llm_test_timeout_seconds: int = 10
+    llm_retry_attempts: int = 3
+    llm_retry_base_delay_seconds: float = 1.0
+    llm_retry_max_delay_seconds: float = 8.0
+    embedding_cache_max_entries: int = 1000
+    embedding_cache_trim_count: int = 200
+
     # CORS 配置
     # 生产环境建议配置具体域名，例如 "https://example.com,https://app.example.com"
     # 使用 * 允许所有来源，适用于公开的无凭证接口

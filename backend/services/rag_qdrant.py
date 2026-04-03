@@ -14,7 +14,7 @@ class QdrantRAGService:
     def __init__(
         self,
         vector_store: QdrantVectorStore,
-        default_model: str = "gpt-4.1-mini",
+        default_model: str = "gpt-4o-mini",
         default_temperature: float = 0.7,
         default_max_tokens: int = 1024,
     ):

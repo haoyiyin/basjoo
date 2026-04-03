@@ -107,10 +107,8 @@ class JinaEmbeddingClient:
                     # Cache single query results
                     if len(texts) == 1:
                         self._embedding_cache[texts[0]] = embeddings[0]
-                        # Limit cache size to prevent memory bloat
-                        if len(self._embedding_cache) > 1000:
-                            # Remove oldest entries (first 200)
-                            keys_to_remove = list(self._embedding_cache.keys())[:200]
+                        if len(self._embedding_cache) > settings.embedding_cache_max_entries:
+                            keys_to_remove = list(self._embedding_cache.keys())[:settings.embedding_cache_trim_count]
                             for key in keys_to_remove:
                                 del self._embedding_cache[key]
 

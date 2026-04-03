@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from typing import List
 import logging
 import csv
-import uuid
 import asyncio
 
 import database
@@ -18,7 +17,6 @@ from models import (
     QAItem,
     WorkspaceQuota,
     DocumentChunk,
-    IndexJob,
 )
 from api.v1.schemas import (
     URLCreateRequest,
@@ -44,29 +42,6 @@ qdrant_store = None
 text_chunker = TextChunker()
 
 
-async def trigger_auto_rebuild(agent_id: str):
-    """在所有URL抓取完成后自动触发索引重建"""
-    from api.v1.index_endpoints import rebuild_index_task
-    
-    job_id = f"job_auto_{uuid.uuid4().hex[:12]}"
-    
-    async with database.AsyncSessionLocal() as db:
-        # 创建索引任务记录
-        job = IndexJob(
-            id=job_id,
-            agent_id=agent_id,
-            status="queued",
-            job_type="full",
-            created_at=func.now(),
-        )
-        db.add(job)
-        await db.commit()
-    
-    # 执行重建任务
-    await rebuild_index_task(agent_id, job_id, force=True)
-    logger.info(f"Auto rebuild triggered for agent {agent_id}, job {job_id}")
-
-
 # ========== URL Management ==========
 
 
@@ -77,7 +52,7 @@ async def _run_tracked_task(agent_id: str, task_id: str, coro):
     await coro
 
 
-async def fetch_url_task(url_source_id: int, auto_rebuild: bool = False):
+async def fetch_url_task(url_source_id: int):
     """异步抓取URL任务 - 使用短生命周期 DB session"""
     agent_id = None
     task_id = f"fetch_{url_source_id}"

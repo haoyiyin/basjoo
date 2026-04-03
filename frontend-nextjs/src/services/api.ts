@@ -353,38 +353,43 @@ class APIService {
 
     const streamReadTimeout = 90_000;
 
-    while (!streamEnded) {
-      const { done, value } = await Promise.race([
-        reader.read(),
-        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
-          window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
-        }),
-      ]);
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    try {
+      while (!streamEnded) {
+        const { done, value } = await Promise.race([
+          reader.read(),
+          new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+            window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
+          }),
+        ]);
 
-      let delimiter = findEventDelimiter();
-      while (delimiter) {
-        const rawEvent = buffer.slice(0, delimiter.index);
-        buffer = buffer.slice(delimiter.index + delimiter.length);
-        await processEvent(rawEvent.replace(/\r\n/g, '\n'));
-        if (streamEnded) {
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+        let delimiter = findEventDelimiter();
+        while (delimiter) {
+          const rawEvent = buffer.slice(0, delimiter.index);
+          buffer = buffer.slice(delimiter.index + delimiter.length);
+          await processEvent(rawEvent.replace(/\r\n/g, '\n'));
+          if (streamEnded) {
+            break;
+          }
+          delimiter = findEventDelimiter();
+        }
+
+        if (done) {
           break;
         }
-        delimiter = findEventDelimiter();
       }
 
-      if (done) {
-        break;
-      }
-    }
-
-    if (!streamEnded) {
-      if (buffer.trim()) {
-        await processEvent(buffer);
-      }
       if (!streamEnded) {
-        throw new Error('Stream ended unexpectedly');
+        if (buffer.trim()) {
+          await processEvent(buffer);
+        }
+        if (!streamEnded) {
+          throw new Error('Stream ended unexpectedly');
+        }
       }
+    } finally {
+      reader.releaseLock();
     }
   }
 
@@ -603,15 +608,17 @@ class APIService {
   }
 
   // API Test Methods
-  async testAIApi(agentId: string): Promise<{ success: boolean; message: string }> {
+  async testAIApi(agentId: string, overrides?: Partial<Agent>): Promise<{ success: boolean; message: string }> {
     return this.request(`/api/v1/agent:test-ai-api?agent_id=${agentId}`, {
       method: 'POST',
+      body: JSON.stringify(overrides ?? {}),
     });
   }
 
-  async testJinaApi(agentId: string): Promise<{ success: boolean; message: string }> {
+  async testJinaApi(agentId: string, overrides?: Partial<Agent>): Promise<{ success: boolean; message: string }> {
     return this.request(`/api/v1/agent:test-jina-api?agent_id=${agentId}`, {
       method: 'POST',
+      body: JSON.stringify(overrides ?? {}),
     });
   }
 

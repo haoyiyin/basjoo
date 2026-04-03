@@ -294,7 +294,7 @@
       apiBaseElement.textContent = apiBase;
       agentIdElement.textContent = agentId || '未找到默认 Agent';
 
-      const sdkVersion = '2.0.2';
+      const sdkVersion = String(Date.now());
       const sdkUrl = new URL(`${apiBase}/sdk.js`);
       sdkUrl.searchParams.set('v', sdkVersion);
 

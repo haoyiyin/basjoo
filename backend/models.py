@@ -76,7 +76,7 @@ class Agent(Base):
     system_prompt = Column(
         Text, nullable=False, default="You are a helpful customer service assistant."
     )
-    model = Column(String(100), nullable=False, default="gpt-4.1-mini")
+    model = Column(String(100), nullable=False, default="gpt-4o-mini")
     temperature = Column(Float, nullable=False, default=0.7)
     max_tokens = Column(Integer, nullable=False, default=1024)
     reasoning_effort = Column(

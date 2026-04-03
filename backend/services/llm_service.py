@@ -9,12 +9,17 @@ LLM 服务抽象层 - 支持多个 AI 提供商
 """
 
 import asyncio
+import random
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, List, Dict, Optional
+from typing import AsyncGenerator, List, Dict, Optional, Awaitable, Callable, TypeVar
 import logging
 import html
 
+from config import settings
+
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class LLMError(Exception):
@@ -92,6 +97,9 @@ def classify_llm_error(error: Exception) -> LLMError:
         or "unavailable" in lowered_message
         or "temporarily down" in lowered_message
         or "service unavailable" in lowered_message
+        or "timeouterror" in error_name
+        or "readtimeout" in error_name
+        or "connecttimeout" in error_name
         or "apiconnectionerror" in error_name
         or "apierror" in error_name
     ):
@@ -103,6 +111,48 @@ def classify_llm_error(error: Exception) -> LLMError:
 def supports_openai_reasoning_effort(model: str) -> bool:
     """判断 OpenAI 模型是否支持 reasoning_effort 参数"""
     return model.lower().startswith(("o1", "o3", "o4"))
+
+
+async def retry_llm_operation(
+    operation_name: str,
+    operation: Callable[[], Awaitable[T]],
+) -> T:
+    """Retry transient provider failures with exponential backoff and jitter."""
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, settings.llm_retry_attempts + 1):
+        try:
+            return await operation()
+        except Exception as error:
+            classified = classify_llm_error(error)
+            if not isinstance(classified, (ProviderRateLimitedError, ProviderUnavailableError)):
+                raise classified from error
+            last_error = classified
+            if attempt >= settings.llm_retry_attempts:
+                raise classified from error
+
+            delay_cap = min(
+                settings.llm_retry_max_delay_seconds,
+                settings.llm_retry_base_delay_seconds * (2 ** (attempt - 1)),
+            )
+            delay = delay_cap + random.uniform(0, max(delay_cap * 0.1, 0.1))
+            logger.warning(
+                "%s failed with %s on attempt %s/%s, retrying in %.2fs",
+                operation_name,
+                classified.code,
+                attempt,
+                settings.llm_retry_attempts,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    if last_error:
+        raise last_error
+    raise ProviderUnavailableError(f"{operation_name} failed without an error")
+
+
+async def run_with_timeout(awaitable: Awaitable[T], timeout_seconds: int) -> T:
+    return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
 
 
 # ========== 抽象基类 ==========
@@ -335,7 +385,6 @@ class OpenAIProvider(BaseLLMService):
             str: 消息片段
         """
         try:
-            # 添加系统提示词
             if system_prompt:
                 messages = [{"role": "system", "content": system_prompt}] + messages
 
@@ -359,11 +408,15 @@ class OpenAIProvider(BaseLLMService):
                 request_params["max_tokens"],
             )
 
-            # 兼容接口默认忽略 reasoning_effort，仅保留参数签名兼容上层调用
-            response = await self.client.chat.completions.create(**request_params)
+            async def create_response():
+                return await self.client.chat.completions.create(**request_params)
+
+            response = await retry_llm_operation(
+                "openai-compatible chat request",
+                create_response,
+            )
 
             if stream:
-                # 流式返回
                 async for chunk in response:
                     if getattr(chunk, "usage", None):
                         self.set_last_usage(chunk.usage)
@@ -371,11 +424,12 @@ class OpenAIProvider(BaseLLMService):
                         yield chunk.choices[0].delta.content
                         await asyncio.sleep(0)
             else:
-                # 非流式返回
                 self.set_last_usage(getattr(response, "usage", None))
                 if response.choices:
                     yield response.choices[0].message.content
 
+        except LLMError:
+            raise
         except Exception as e:
             logger.error(f"OpenAI API 调用失败: {str(e)}")
             raise classify_llm_error(e) from e
@@ -383,10 +437,13 @@ class OpenAIProvider(BaseLLMService):
     async def test_connection(self) -> bool:
         """测试 OpenAI API 连通性"""
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=5,
+            await run_with_timeout(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=5,
+                ),
+                settings.llm_test_timeout_seconds,
             )
             return True
         except Exception as e:
@@ -448,7 +505,6 @@ class OpenAINativeProvider(BaseLLMService):
             str: 消息片段
         """
         try:
-            # 添加系统提示词
             if system_prompt:
                 messages = [{"role": "system", "content": system_prompt}] + messages
 
@@ -468,11 +524,15 @@ class OpenAINativeProvider(BaseLLMService):
             if reasoning_effort and supports_openai_reasoning_effort(self.model):
                 request_params["reasoning_effort"] = reasoning_effort
 
-            # 调用 API
-            response = await self.client.chat.completions.create(**request_params)
+            async def create_response():
+                return await self.client.chat.completions.create(**request_params)
+
+            response = await retry_llm_operation(
+                "openai-native chat request",
+                create_response,
+            )
 
             if stream:
-                # 流式返回
                 async for chunk in response:
                     if getattr(chunk, "usage", None):
                         self.set_last_usage(chunk.usage)
@@ -480,11 +540,12 @@ class OpenAINativeProvider(BaseLLMService):
                         yield chunk.choices[0].delta.content
                         await asyncio.sleep(0)
             else:
-                # 非流式返回
                 self.set_last_usage(getattr(response, "usage", None))
                 if response.choices:
                     yield response.choices[0].message.content
 
+        except LLMError:
+            raise
         except Exception as e:
             logger.error(f"OpenAI Native API 调用失败: {str(e)}")
             raise classify_llm_error(e) from e
@@ -492,10 +553,13 @@ class OpenAINativeProvider(BaseLLMService):
     async def test_connection(self) -> bool:
         """测试 OpenAI API 连通性"""
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=5,
+            await run_with_timeout(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=5,
+                ),
+                settings.llm_test_timeout_seconds,
             )
             return True
         except Exception as e:
@@ -574,8 +638,6 @@ class GoogleProvider(BaseLLMService):
             str: 消息片段
         """
         try:
-            # Google Gemini API 格式
-            # 将消息转换为 Gemini 格式
             prompt_parts = []
 
             if system_prompt:
@@ -599,25 +661,37 @@ class GoogleProvider(BaseLLMService):
                 "max_output_tokens": 2000 if max_tokens is None else max_tokens,
             }
 
-            # 调用 API
-            if stream:
-                response = await self.client.generate_content_async(
+            async def create_stream_response():
+                return await self.client.generate_content_async(
                     full_prompt,
                     stream=True,
                     generation_config=generation_config,
                 )
 
+            async def create_response():
+                return await self.client.generate_content_async(
+                    full_prompt,
+                    generation_config=generation_config,
+                )
+
+            if stream:
+                response = await retry_llm_operation(
+                    "google chat request",
+                    create_stream_response,
+                )
                 async for chunk in response:
                     if chunk.text:
                         yield chunk.text
                         await asyncio.sleep(0)
             else:
-                response = await self.client.generate_content_async(
-                    full_prompt,
-                    generation_config=generation_config,
+                response = await retry_llm_operation(
+                    "google chat request",
+                    create_response,
                 )
                 yield response.text
 
+        except LLMError:
+            raise
         except Exception as e:
             logger.error(f"Google API 调用失败: {str(e)}")
             raise classify_llm_error(e) from e
@@ -625,8 +699,11 @@ class GoogleProvider(BaseLLMService):
     async def test_connection(self) -> bool:
         """测试 Google API 连通性"""
         try:
-            response = await self.client.generate_content_async(
-                "Hello", generation_config={"max_output_tokens": 5}
+            await run_with_timeout(
+                self.client.generate_content_async(
+                    "Hello", generation_config={"max_output_tokens": 5}
+                ),
+                settings.llm_test_timeout_seconds,
             )
             return True
         except Exception as e:

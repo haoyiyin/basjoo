@@ -113,6 +113,7 @@ class BasjooWidget {
   private readonly hasWelcomeMessageOverride: boolean;
   private container: HTMLElement | null = null;
   private button: HTMLElement | null = null;
+  private unreadBadge: HTMLSpanElement | null = null;
   private chatWindow: HTMLElement | null = null;
   private messages: ChatMessage[] = [];
   private sessionId: string | null = null;
@@ -531,6 +532,7 @@ class BasjooWidget {
     if (this.titleBlinkInterval) return;
 
     this.hasUnread = true;
+    this.updateUnreadBadge();
     let showOriginal = true;
 
     this.titleBlinkInterval = window.setInterval(() => {
@@ -549,6 +551,7 @@ class BasjooWidget {
     }
     document.title = this.originalTitle;
     this.hasUnread = false;
+    this.updateUnreadBadge();
   }
 
   /**
@@ -565,12 +568,10 @@ class BasjooWidget {
     const inputBg = isDark ? '#0f0f1a' : 'white';
     const messageBg = isDark ? '#2d2d44' : '#f3f4f6';
     const errorBg = isDark ? 'rgba(239, 68, 68, 0.2)' : '#fef2f2';
-    
+
     style.textContent = `
-      #basjoo-widget-container * {
+      #basjoo-widget-container, #basjoo-widget-container * {
         box-sizing: border-box;
-        margin: 0;
-        padding: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       }
 
@@ -594,6 +595,30 @@ class BasjooWidget {
       #basjoo-widget-button:hover {
         transform: scale(1.05);
         box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+      }
+
+      #basjoo-widget-button svg {
+        width: 30px;
+        height: 30px;
+        fill: white;
+      }
+
+      .basjoo-unread-badge {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 10px;
+        background: #ef4444;
+        color: white;
+        font-size: 11px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid white;
       }
 
       .basjoo-greeting-bubble {
@@ -632,12 +657,6 @@ class BasjooWidget {
         }
       }
 
-      #basjoo-widget-button svg {
-        width: 30px;
-        height: 30px;
-        fill: white;
-      }
-
       #basjoo-chat-window {
         position: fixed;
         bottom: 96px;
@@ -646,151 +665,204 @@ class BasjooWidget {
         height: 600px;
         max-height: calc(100vh - 120px);
         background: ${bgColor};
-        border-radius: 12px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, ${isDark ? '0.4' : '0.15'});
+        border-radius: 20px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
         display: flex;
         flex-direction: column;
+        overflow: hidden;
+        transform: scale(0);
+        transform-origin: ${this.config.position === 'left' ? 'bottom left' : 'bottom right'};
+        transition: transform 0.3s ease;
         z-index: 9998;
-        opacity: 0;
-        transform: translateY(20px);
-        pointer-events: none;
-        transition: opacity 0.3s, transform 0.3s;
       }
 
       #basjoo-chat-window.open {
-        opacity: 1;
-        transform: translateY(0);
-        pointer-events: all;
+        transform: scale(1);
+      }
+
+      #basjoo-chat-window.closing {
+        transform: scale(0);
       }
 
       .basjoo-header {
-        padding: 16px;
-        background: ${this.config.themeColor};
+        background: linear-gradient(135deg, ${this.config.themeColor} 0%, ${this.adjustColor(this.config.themeColor, -20)} 100%);
         color: white;
-        border-radius: 12px 12px 0 0;
+        padding: 20px 24px;
         display: flex;
         align-items: center;
         justify-content: space-between;
+        flex-shrink: 0;
       }
 
       .basjoo-header-title {
         display: flex;
         align-items: center;
         gap: 12px;
+        font-size: 18px;
         font-weight: 600;
-        font-size: 16px;
       }
 
       .basjoo-header-logo {
         width: 32px;
         height: 32px;
-        border-radius: 6px;
-        background: white;
+        object-fit: contain;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.2);
         padding: 4px;
+        flex-shrink: 0;
       }
 
       .basjoo-close {
-        background: none;
+        width: 32px;
+        height: 32px;
         border: none;
-        color: white;
+        background: rgba(255,255,255,0.15);
+        border-radius: 8px;
         cursor: pointer;
-        padding: 4px;
-        opacity: 0.8;
-        transition: opacity 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s;
+        color: white;
       }
 
       .basjoo-close:hover {
-        opacity: 1;
+        background: rgba(255,255,255,0.25);
       }
 
       .basjoo-messages {
         flex: 1;
         overflow-y: auto;
-        padding: 16px;
+        padding: 20px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        background: ${bgColor};
+        gap: 16px;
+        background: ${inputBg};
       }
 
-      .basjoo-message {
-        max-width: 80%;
-        padding: 10px 14px;
-        border-radius: 12px;
-        font-size: 14px;
-        line-height: 1.5;
+      #basjoo-widget-container .basjoo-message {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        max-width: 85%;
+        min-width: 0;
+        width: fit-content;
+        animation: basjoo-message-fadein 0.3s ease-out;
       }
 
-      .basjoo-message-user {
+      #basjoo-widget-container .basjoo-message-user {
         align-self: flex-end;
-        background: ${this.config.themeColor};
-        color: white;
-        border-bottom-right-radius: 4px;
+        align-items: flex-end;
+      }
+
+      #basjoo-widget-container .basjoo-message-assistant {
+        align-self: flex-start;
+        align-items: flex-start;
+      }
+
+      #basjoo-widget-container .basjoo-message-content {
+        display: block;
+        align-self: flex-start;
+        width: fit-content;
+        max-width: 100%;
+        min-width: 0;
+        padding: 12px 16px;
+        border-radius: 16px;
+        font-size: 14px;
+        line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;
+        overflow-wrap: anywhere;
       }
 
-      .basjoo-message-assistant {
-        align-self: flex-start;
-        background: ${messageBg};
-        color: ${textColor};
-        border-bottom-left-radius: 4px;
-        word-break: break-word;
+      #basjoo-widget-container .basjoo-message-user .basjoo-message-content {
+        align-self: flex-end;
       }
 
-      .basjoo-message-content p,
-      .basjoo-message-content ul,
-      .basjoo-message-content ol,
-      .basjoo-message-content pre,
-      .basjoo-message-content blockquote {
-        margin: 0 0 0.75em 0;
+      #basjoo-widget-container .basjoo-message-content > * {
+        display: block;
+        max-width: 100%;
       }
 
-      .basjoo-message-content p:last-child,
-      .basjoo-message-content ul:last-child,
-      .basjoo-message-content ol:last-child,
-      .basjoo-message-content pre:last-child,
-      .basjoo-message-content blockquote:last-child {
+      #basjoo-widget-container .basjoo-message-content p,
+      #basjoo-widget-container .basjoo-message-content ul,
+      #basjoo-widget-container .basjoo-message-content ol,
+      #basjoo-widget-container .basjoo-message-content pre,
+      #basjoo-widget-container .basjoo-message-content blockquote {
+        margin: 0 0 10px;
+      }
+
+      #basjoo-widget-container .basjoo-message-content p:last-child,
+      #basjoo-widget-container .basjoo-message-content ul:last-child,
+      #basjoo-widget-container .basjoo-message-content ol:last-child,
+      #basjoo-widget-container .basjoo-message-content pre:last-child,
+      #basjoo-widget-container .basjoo-message-content blockquote:last-child {
         margin-bottom: 0;
       }
 
-      .basjoo-message-content ul,
-      .basjoo-message-content ol {
-        padding-left: 1.25rem;
+      #basjoo-widget-container .basjoo-message-content ul,
+      #basjoo-widget-container .basjoo-message-content ol {
+        padding-left: 18px;
       }
 
-      .basjoo-message-content code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 0.92em;
-        background: ${isDark ? 'rgba(15, 15, 26, 0.8)' : 'rgba(255, 255, 255, 0.75)'};
-        border: 1px solid ${borderColor};
-        border-radius: 6px;
-        padding: 0.1rem 0.35rem;
+      #basjoo-widget-container .basjoo-message-content code {
+        font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+        font-size: 12px;
+        background: rgba(15, 23, 42, 0.08);
+        padding: 1px 4px;
+        border-radius: 4px;
       }
 
-      .basjoo-message-content pre {
-        overflow-x: auto;
-        padding: 0.875rem 1rem;
-        background: ${isDark ? '#0f0f1a' : '#ffffff'};
-        border: 1px solid ${borderColor};
+      #basjoo-widget-container .basjoo-message-content pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 10px 12px;
         border-radius: 10px;
+        overflow-x: auto;
       }
 
-      .basjoo-message-content pre code {
+      #basjoo-widget-container .basjoo-message-content pre code {
         background: transparent;
-        border: none;
         padding: 0;
+        color: inherit;
       }
 
-      .basjoo-message-content a {
-        color: ${this.config.themeColor};
+      #basjoo-widget-container .basjoo-message-content a {
+        color: ${this.adjustColor(this.config.themeColor, -10)};
         text-decoration: underline;
       }
 
-      .basjoo-message-content blockquote {
-        padding-left: 0.875rem;
-        border-left: 3px solid ${this.config.themeColor};
+      #basjoo-widget-container .basjoo-message-content blockquote {
+        padding-left: 12px;
+        border-left: 3px solid rgba(148, 163, 184, 0.4);
         color: ${mutedColor};
+      }
+
+      #basjoo-widget-container .basjoo-message-user .basjoo-message-content {
+        background: ${this.config.themeColor};
+        color: white;
+        border-bottom-right-radius: 4px;
+      }
+
+      #basjoo-widget-container .basjoo-message-user .basjoo-message-content a {
+        color: white;
+      }
+
+      #basjoo-widget-container .basjoo-message-user .basjoo-message-content code {
+        background: rgba(255, 255, 255, 0.18);
+        color: white;
+      }
+
+      #basjoo-widget-container .basjoo-message-assistant .basjoo-message-content {
+        background: ${messageBg};
+        color: ${textColor};
+        border-bottom-left-radius: 4px;
+      }
+
+      #basjoo-widget-container .basjoo-message-error .basjoo-message-content {
+        background: ${errorBg};
+        color: ${isDark ? '#fca5a5' : '#dc2626'};
+        border: 1px solid ${isDark ? 'rgba(239,68,68,0.35)' : '#fecaca'};
       }
 
       .basjoo-stream-cursor {
@@ -808,144 +880,12 @@ class BasjooWidget {
         50.01%, 100% { opacity: 0; }
       }
 
-      .basjoo-sources {
-        margin-top: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-
-      .basjoo-sources-label {
-        font-size: 12px;
-        color: ${mutedColor};
-      }
-
-      .basjoo-citation-card {
-        background: ${messageBg};
-        border: 1px solid ${borderColor};
-        border-radius: 8px;
-        overflow: hidden;
-      }
-
-      .basjoo-citation-trigger {
-        width: 100%;
-        border: none;
-        background: transparent;
-        color: inherit;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        cursor: pointer;
-        text-align: left;
-      }
-
-      .basjoo-citation-number {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        background: ${this.config.themeColor};
-        color: white;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 10px;
-        font-weight: 700;
-        flex-shrink: 0;
-      }
-
-      .basjoo-citation-title {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        color: ${textColor};
-      }
-
-      .basjoo-citation-arrow {
-        color: ${mutedColor};
-        transition: transform 0.2s ease;
-        flex-shrink: 0;
-      }
-
-      .basjoo-citation-card[open] .basjoo-citation-arrow {
-        transform: rotate(180deg);
-      }
-
-      .basjoo-citation-body {
-        border-top: 1px solid ${borderColor};
-        padding: 8px 10px;
-        font-size: 12px;
-        color: ${mutedColor};
-        line-height: 1.5;
-      }
-
-      .basjoo-citation-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        margin-bottom: 8px;
-        color: ${this.config.themeColor};
-        text-decoration: none;
-        word-break: break-all;
-      }
-
-      .basjoo-input-area {
-        padding: 12px 16px;
-        border-top: 1px solid ${borderColor};
-        display: flex;
-        gap: 8px;
-        background: ${bgColor};
-      }
-
-      .basjoo-input {
-        flex: 1;
-        padding: 10px 14px;
-        border: 1px solid ${borderColor};
-        border-radius: 20px;
-        font-size: 14px;
-        outline: none;
-        transition: border-color 0.2s;
-        background: ${inputBg};
-        color: ${textColor};
-      }
-
-      .basjoo-input::placeholder {
-        color: ${mutedColor};
-      }
-
-      .basjoo-input:focus {
-        border-color: ${this.config.themeColor};
-      }
-
-      .basjoo-send {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        background: ${this.config.themeColor};
-        border: none;
-        color: white;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: opacity 0.2s;
-      }
-
-      .basjoo-send:hover {
-        opacity: 0.9;
-      }
-
-      .basjoo-send:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-
       .basjoo-loading {
         display: flex;
         gap: 4px;
-        padding: 12px;
+        padding: 12px 16px !important;
+        align-self: flex-start;
+        margin-top: 4px !important;
       }
 
       .basjoo-loading-dot {
@@ -959,59 +899,293 @@ class BasjooWidget {
       .basjoo-loading-dot:nth-child(1) { animation-delay: -0.32s; }
       .basjoo-loading-dot:nth-child(2) { animation-delay: -0.16s; }
 
-      .basjoo-thinking {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        align-self: flex-start;
-        max-width: 80%;
-        padding: 10px 14px;
-        border-radius: 12px;
-        border-bottom-left-radius: 4px;
-        background: ${messageBg};
-        color: ${textColor};
-        font-size: 14px;
-        line-height: 1.5;
-      }
-
-      .basjoo-thinking-icon {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: ${mutedColor};
-        animation: basjoo-pulse 1.5s ease-in-out infinite;
-        flex-shrink: 0;
-      }
-
       @keyframes basjoo-bounce {
-        0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+        0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
         40% { transform: scale(1); opacity: 1; }
       }
 
-      @keyframes basjoo-pulse {
-        0%, 100% { opacity: 0.45; transform: scale(0.9); }
-        50% { opacity: 1; transform: scale(1.1); }
+      .basjoo-input-area {
+        padding: 16px 20px 24px 20px !important;
+        border-top: 1px solid ${borderColor};
+        display: flex;
+        gap: 12px;
+        background: ${bgColor};
+        flex-shrink: 0;
+      }
+
+      .basjoo-input {
+        flex: 1;
+        height: 48px;
+        padding: 0 20px 0 20px !important;
+        border: 1px solid ${borderColor};
+        border-radius: 24px;
+        font-size: 14px;
+        outline: none;
+        transition: all 0.2s;
+        background: ${inputBg};
+        color: ${textColor};
+        margin-bottom: 8px !important;
+        margin-left: 4px !important;
+      }
+
+      .basjoo-input::placeholder {
+        color: ${mutedColor};
+      }
+
+      .basjoo-input:focus {
+        border-color: ${this.config.themeColor};
+        box-shadow: 0 0 0 3px ${this.hexToRgba(this.config.themeColor, 0.1)};
+      }
+
+      .basjoo-send {
+        width: 48px;
+        height: 48px;
+        border: none;
+        border-radius: 50%;
+        background: ${this.config.themeColor};
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+
+      .basjoo-send:hover:not(:disabled) {
+        transform: scale(1.05);
+        box-shadow: 0 4px 12px ${this.hexToRgba(this.config.themeColor, 0.3)};
+      }
+
+      .basjoo-send:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .basjoo-send svg {
+        width: 20px;
+        height: 20px;
+        stroke: currentColor;
       }
 
       .basjoo-error {
-        padding: 12px;
+        padding: 12px 16px;
         background: ${errorBg};
-        color: #991b1b;
-        border-radius: 8px;
+        color: ${isDark ? '#fca5a5' : '#dc2626'};
         font-size: 13px;
-        margin: 8px 0;
+        text-align: center;
+        border-top: 1px solid ${isDark ? 'rgba(239,68,68,0.35)' : '#fecaca'};
+      }
+
+      #basjoo-widget-container .basjoo-message-time {
+        font-size: 11px;
+        color: ${mutedColor};
+        margin-top: 4px;
+        padding: 0 4px;
+      }
+
+      #basjoo-widget-container .basjoo-message-user .basjoo-message-time {
+        text-align: right;
+      }
+
+      #basjoo-widget-container .basjoo-source-list {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .basjoo-source-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: ${mutedColor};
+      }
+
+      .basjoo-source-item {
+        background: ${inputBg};
+        border: 1px solid ${borderColor};
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .basjoo-source-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+        color: inherit;
+      }
+
+      .basjoo-source-item[open] .basjoo-source-arrow {
+        transform: rotate(180deg);
+      }
+
+      .basjoo-source-index {
+        width: 18px;
+        height: 18px;
+        border-radius: 6px;
+        background: ${this.config.themeColor};
+        color: white;
+        font-size: 10px;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .basjoo-source-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+      }
+
+      .basjoo-source-arrow {
+        color: ${mutedColor};
+        transition: transform 0.2s ease;
+        flex-shrink: 0;
+      }
+
+      .basjoo-source-body {
+        padding: 0 12px 12px;
+        border-top: 1px solid ${borderColor};
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .basjoo-source-link {
+        color: ${this.adjustColor(this.config.themeColor, -10)};
+        text-decoration: none;
+        font-size: 12px;
+        word-break: break-all;
+      }
+
+      .basjoo-source-link:hover {
+        text-decoration: underline;
+      }
+
+      .basjoo-source-snippet {
+        font-size: 12px;
+        color: ${mutedColor};
+        line-height: 1.5;
+      }
+
+      .basjoo-thinking {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: ${mutedColor};
+        font-size: 12px;
+        margin-top: 8px;
+      }
+
+      .basjoo-thinking-spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid ${this.hexToRgba(this.config.themeColor, 0.2)};
+        border-top-color: ${this.config.themeColor};
+        border-radius: 50%;
+        animation: basjoo-spin 0.8s linear infinite;
+      }
+
+      @keyframes basjoo-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes basjoo-message-fadein {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       @media (max-width: 480px) {
         #basjoo-chat-window {
-          width: calc(100vw - 48px);
+          width: calc(100vw - 32px);
           height: calc(100vh - 120px);
-          bottom: 96px;
-          ${this.config.position === 'left' ? 'left' : 'right'}: 24px;
+          max-height: 640px;
+          bottom: 88px;
+          left: 16px !important;
+          right: 16px !important;
+        }
+
+        #basjoo-widget-button {
+          bottom: 16px;
+          ${this.config.position === 'left' ? 'left' : 'right'}: 16px;
         }
       }
     `;
     document.head.appendChild(style);
+  }
+
+  private adjustColor(hex: string, amount: number): string {
+    let useHash = false;
+    let color = hex;
+    if (color[0] === '#') {
+      color = color.slice(1);
+      useHash = true;
+    }
+
+    const num = parseInt(color, 16);
+    let r = (num >> 16) + amount;
+    let g = ((num >> 8) & 255) + amount;
+    let b = (num & 255) + amount;
+
+    r = Math.max(0, Math.min(255, r));
+    g = Math.max(0, Math.min(255, g));
+    b = Math.max(0, Math.min(255, b));
+
+    return `${useHash ? '#' : ''}${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+  }
+
+  private hexToRgba(hex: string, alpha: number): string {
+    let color = hex.replace('#', '');
+    if (color.length === 3) {
+      const [r, g, b] = color.split('');
+      color = `${r}${r}${g}${g}${b}${b}`;
+    }
+
+    const num = parseInt(color, 16);
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private updateUnreadBadge() {
+    if (!this.button) {
+      return;
+    }
+
+    if (this.hasUnread) {
+      if (!this.unreadBadge) {
+        const badge = document.createElement('span');
+        badge.className = 'basjoo-unread-badge';
+        badge.textContent = '1';
+        this.button.appendChild(badge);
+        this.unreadBadge = badge;
+      }
+      return;
+    }
+
+    this.unreadBadge?.remove();
+    this.unreadBadge = null;
   }
 
   /**
@@ -1036,6 +1210,7 @@ class BasjooWidget {
     `;
     this.button.addEventListener('click', () => this.toggle());
     this.container!.appendChild(this.button);
+    this.updateUnreadBadge();
   }
 
   /**
@@ -1070,7 +1245,7 @@ class BasjooWidget {
     `;
 
     const closeBtn = this.chatWindow.querySelector('.basjoo-close') as HTMLElement;
-    closeBtn.addEventListener('click', () => this.toggle());
+    closeBtn.addEventListener('click', () => this.close());
 
     const input = this.chatWindow.querySelector('.basjoo-input') as HTMLInputElement;
     const sendBtn = this.chatWindow.querySelector('.basjoo-send') as HTMLButtonElement;
@@ -1102,13 +1277,29 @@ class BasjooWidget {
    * 切换聊天窗口
    */
   private toggle() {
-    this.isOpen = !this.isOpen;
-    this.chatWindow?.classList.toggle('open', this.isOpen);
-
-    // 打开聊天窗口时停止标题闪烁
     if (this.isOpen) {
-      this.stopTitleBlink();
+      this.close();
+      return;
     }
+    this.open();
+  }
+
+  private open() {
+    this.isOpen = true;
+    this.chatWindow?.classList.remove('closing');
+    this.chatWindow?.classList.add('open');
+    this.stopTitleBlink();
+    this.updateUnreadBadge();
+    const input = this.chatWindow?.querySelector('.basjoo-input') as HTMLInputElement | null;
+    setTimeout(() => {
+      input?.focus();
+    }, 300);
+  }
+
+  private close() {
+    this.isOpen = false;
+    this.chatWindow?.classList.remove('open');
+    this.chatWindow?.classList.add('closing');
   }
 
   /**
@@ -1218,83 +1409,90 @@ class BasjooWidget {
     return renderedBlocks.join('');
   }
 
-  private updateMessageContent(element: HTMLElement, content: string): void {
-    element.innerHTML = this.renderMarkdown(content);
+  private updateMessageContent(element: HTMLElement, content: string, includeCursor = false): void {
+    element.innerHTML = this.renderMarkdown(content) + (includeCursor ? '<span class="basjoo-stream-cursor"></span>' : '');
   }
 
-  private createCitationCard(source: Source, index: number): HTMLElement {
-    const details = document.createElement('details');
-    details.className = 'basjoo-citation-card';
+  private createSourceList(sources: Source[]): HTMLElement {
+    const sourceList = document.createElement('div');
+    sourceList.className = 'basjoo-source-list';
+    if (!sources || sources.length === 0) {
+      return sourceList;
+    }
 
-    const summary = document.createElement('summary');
-    summary.className = 'basjoo-citation-trigger';
-
-    const number = document.createElement('span');
-    number.className = 'basjoo-citation-number';
-    number.textContent = String(index + 1);
-
-    const title = document.createElement('span');
-    title.className = 'basjoo-citation-title';
-    title.textContent = source.type === 'url'
-      ? (source.title || source.url || this.getText('document'))
-      : (source.question || this.getText('citationSources'));
-
-    const arrow = document.createElement('span');
-    arrow.className = 'basjoo-citation-arrow';
-    arrow.innerHTML = `
+    const header = document.createElement('div');
+    header.className = 'basjoo-source-header';
+    header.innerHTML = `
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <polyline points="6 9 12 15 18 9"></polyline>
+        <path d="M9 12h6"></path>
+        <path d="M12 9v6"></path>
+        <circle cx="12" cy="12" r="10"></circle>
       </svg>
+      <span>${this.getText('citationSources')}</span>
     `;
-
-    summary.appendChild(number);
-    summary.appendChild(title);
-    summary.appendChild(arrow);
-    details.appendChild(summary);
-
-    const body = document.createElement('div');
-    body.className = 'basjoo-citation-body';
-
-    if (source.type === 'url' && source.url) {
-      const link = document.createElement('a');
-      link.className = 'basjoo-citation-link';
-      link.href = source.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = this.getText('openSource');
-      body.appendChild(link);
-
-      const urlText = document.createElement('div');
-      urlText.textContent = source.url;
-      body.appendChild(urlText);
-    }
-
-    const snippet = document.createElement('div');
-    snippet.textContent = source.snippet || source.question || source.title || source.url || this.getText('document');
-    body.appendChild(snippet);
-    details.appendChild(body);
-
-    return details;
-  }
-
-  private renderSources(container: HTMLElement, sources: Source[]): void {
-    if (!sources.length) {
-      return;
-    }
-
-    const sourcesWrapper = document.createElement('div');
-    sourcesWrapper.className = 'basjoo-sources';
-
-    const label = document.createElement('div');
-    label.className = 'basjoo-sources-label';
-    label.textContent = `${this.getText('citationSources')} (${sources.length})`;
-    sourcesWrapper.appendChild(label);
+    sourceList.appendChild(header);
 
     sources.forEach((source, index) => {
-      sourcesWrapper.appendChild(this.createCitationCard(source, index));
+      const item = document.createElement('details');
+      item.className = 'basjoo-source-item';
+
+      const summary = document.createElement('summary');
+      summary.className = 'basjoo-source-toggle';
+      const title = source.title ?? source.url ?? this.getText('document');
+
+      const indexBadge = document.createElement('span');
+      indexBadge.className = 'basjoo-source-index';
+      indexBadge.textContent = String(index + 1);
+
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'basjoo-source-title';
+      titleSpan.textContent = title;
+
+      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      arrow.setAttribute('class', 'basjoo-source-arrow');
+      arrow.setAttribute('width', '14');
+      arrow.setAttribute('height', '14');
+      arrow.setAttribute('viewBox', '0 0 24 24');
+      arrow.setAttribute('fill', 'none');
+      arrow.setAttribute('stroke', 'currentColor');
+      arrow.setAttribute('stroke-width', '2');
+
+      const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      polyline.setAttribute('points', '6 9 12 15 18 9');
+      arrow.appendChild(polyline);
+
+      summary.appendChild(indexBadge);
+      summary.appendChild(titleSpan);
+      summary.appendChild(arrow);
+
+      const body = document.createElement('div');
+      body.className = 'basjoo-source-body';
+      if (source.url) {
+        const link = document.createElement('a');
+        link.className = 'basjoo-source-link';
+        link.href = source.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = `${this.getText('openSource')}: ${source.url}`;
+        body.appendChild(link);
+      }
+
+      const snippetText = source.snippet ?? source.question ?? source.title ?? source.url ?? this.getText('document');
+      if (snippetText) {
+        const snippet = document.createElement('div');
+        snippet.className = 'basjoo-source-snippet';
+        snippet.textContent = snippetText;
+        body.appendChild(snippet);
+      }
+
+      item.appendChild(summary);
+      if (body.childNodes.length > 0) {
+        item.appendChild(body);
+      }
+      sourceList.appendChild(item);
     });
 
-    container.appendChild(sourcesWrapper);
+    return sourceList;
   }
 
   private createMessageElement(message: ChatMessage): HTMLDivElement {
@@ -1307,8 +1505,13 @@ class BasjooWidget {
     messageDiv.appendChild(contentDiv);
 
     if (message.sources && message.sources.length > 0) {
-      this.renderSources(messageDiv, message.sources);
+      messageDiv.appendChild(this.createSourceList(message.sources));
     }
+
+    const timeDiv = document.createElement('div');
+    timeDiv.className = 'basjoo-message-time';
+    timeDiv.textContent = message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    messageDiv.appendChild(timeDiv);
 
     return messageDiv;
   }
@@ -1320,29 +1523,27 @@ class BasjooWidget {
   private showThinkingIndicator(elapsed = 0): void {
     this.hideLoading();
     this.thinkingElapsed = elapsed;
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
 
     if (!this.thinkingIndicator) {
-      const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
       const indicator = document.createElement('div');
       indicator.className = 'basjoo-thinking';
-
-      const dot = document.createElement('span');
-      dot.className = 'basjoo-thinking-icon';
-      indicator.appendChild(dot);
-
-      const text = document.createElement('span');
-      indicator.appendChild(text);
-
+      indicator.innerHTML = `
+        <span class="basjoo-thinking-spinner"></span>
+        <span>${this.getText('thinking')}</span>
+      `;
       messagesContainer.appendChild(indicator);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
       this.thinkingIndicator = indicator;
-      this.thinkingIndicatorText = text;
+      this.thinkingIndicatorText = indicator.querySelector('span:last-child') as HTMLSpanElement | null;
     }
 
     if (this.thinkingIndicatorText) {
       this.thinkingIndicatorText.textContent = this.formatThinkingText();
     }
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
     if (this.thinkingTimerId === null) {
       this.thinkingTimerId = window.setInterval(() => {
@@ -1374,23 +1575,21 @@ class BasjooWidget {
   }
 
   private createStreamingMessage(): HTMLDivElement {
-    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
     const messageDiv = document.createElement('div');
     messageDiv.className = 'basjoo-message basjoo-message-assistant';
 
-    const contentWrapper = document.createElement('div');
-    contentWrapper.style.display = 'inline';
-
     const contentDiv = document.createElement('div');
     contentDiv.className = 'basjoo-message-content';
-    contentDiv.style.display = 'inline';
-    contentWrapper.appendChild(contentDiv);
+    messageDiv.appendChild(contentDiv);
 
-    const cursor = document.createElement('span');
-    cursor.className = 'basjoo-stream-cursor';
-    contentWrapper.appendChild(cursor);
-
-    messageDiv.appendChild(contentWrapper);
+    if (!messagesContainer) {
+      this.streamingMessage = messageDiv;
+      this.streamingMessageContent = contentDiv;
+      this.currentStreamContent = '';
+      this.currentStreamSources = [];
+      return messageDiv;
+    }
 
     messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -1410,7 +1609,7 @@ class BasjooWidget {
 
     this.currentStreamContent += chunk;
     if (this.streamingMessageContent) {
-      this.updateMessageContent(this.streamingMessageContent, this.currentStreamContent);
+      this.updateMessageContent(this.streamingMessageContent, this.currentStreamContent, true);
     }
 
     const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
@@ -1432,7 +1631,7 @@ class BasjooWidget {
     this.currentStreamSources = sources;
 
     if (sources.length > 0) {
-      this.renderSources(this.streamingMessage, sources);
+      this.streamingMessage.appendChild(this.createSourceList(sources));
     }
 
     this.messages.push({
@@ -1456,23 +1655,36 @@ class BasjooWidget {
    */
   private addMessage(message: ChatMessage) {
     this.messages.push(message);
-    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
 
     if (!message.content) {
       console.error('Message content is null or undefined:', message);
       return;
     }
 
+    if (!messagesContainer) {
+      return;
+    }
+
     const messageDiv = this.createMessageElement(message);
     messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    if (message.role === 'assistant' && !this.isOpen) {
+      this.hasUnread = true;
+      this.updateUnreadBadge();
+    }
   }
 
   /**
    * 显示加载动画
    */
   private showLoading() {
-    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
+
     const loadingDiv = document.createElement('div');
     loadingDiv.className = 'basjoo-loading';
     loadingDiv.id = 'basjoo-loading';
@@ -1497,7 +1709,11 @@ class BasjooWidget {
    * 显示错误
    */
   private showError(message: string) {
-    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
+
     const errorDiv = document.createElement('div');
     errorDiv.className = 'basjoo-error';
     errorDiv.textContent = message;

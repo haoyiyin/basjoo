@@ -101,7 +101,7 @@ export default function URLManagement() {
       }
     };
     checkJinaKey();
-  }, [agentId, navigate]);
+  }, [agentId, jinaKeyReady, navigate]);
 
   useEffect(() => {
     if (agentId && jinaKeyReady) {
@@ -158,7 +158,7 @@ export default function URLManagement() {
     }
   };
 
-  const loadURLs = async () => {
+  const loadURLs = useCallback(async () => {
     if (!agentId || !jinaKeyReady) return;
     setLoading(true);
     try {
@@ -166,7 +166,6 @@ export default function URLManagement() {
       setUrls(data.urls);
       setTotal(data.total);
 
-      // 检测是否有正在抓取的URL，自动开启轮询（除非用户已手动停止实时更新）
       const hasPendingOrFetching = data.urls.some(
         (url) => url.status === 'pending' || url.status === 'fetching'
       );
@@ -179,7 +178,7 @@ export default function URLManagement() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [agentId, jinaKeyReady, crawlPolling, t]);
 
   const handleAddURL = async () => {
     if (!agentId) return;
@@ -309,7 +308,7 @@ export default function URLManagement() {
         pollingIntervalRef.current = null;
       }
     };
-  }, [crawlPolling, agentId, crawlStartCount, stopPolling]);
+  }, [crawlPolling, agentId, crawlStartCount, stopPolling, loadURLs]);
 
   // Cleanup on unmount
   useEffect(() => {

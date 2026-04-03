@@ -495,14 +495,23 @@ async def get_or_create_chat_session(
 
     country = None
     if request.timezone:
-        if "Shanghai" in request.timezone or "Beijing" in request.timezone:
-            country = "中国"
-        elif "Tokyo" in request.timezone:
-            country = "日本"
-        elif "London" in request.timezone:
-            country = "英国"
-        elif "New_York" in request.timezone or "Los_Angeles" in request.timezone:
-            country = "美国"
+        timezone_country_map = {
+            "Asia/Shanghai": "中国",
+            "Asia/Beijing": "中国",
+            "Asia/Hong_Kong": "中国香港",
+            "Asia/Tokyo": "日本",
+            "Asia/Seoul": "韩国",
+            "Asia/Singapore": "新加坡",
+            "Europe/London": "英国",
+            "Europe/Paris": "法国",
+            "Europe/Berlin": "德国",
+            "America/New_York": "美国",
+            "America/Los_Angeles": "美国",
+            "America/Chicago": "美国",
+            "America/Toronto": "加拿大",
+            "Australia/Sydney": "澳大利亚",
+        }
+        country = timezone_country_map.get(request.timezone)
 
     requested_session_id = request.session_id or f"sess_{agent_id}_{uuid.uuid4().hex[:12]}"
     session = ChatSession(
@@ -1718,6 +1727,7 @@ async def get_tasks_status(
 @router.post("/agent:test-ai-api")
 async def test_ai_api(
     agent_id: str,
+    payload: Optional[AgentUpdateRequest] = None,
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1730,15 +1740,21 @@ async def test_ai_api(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    agent_api_key = agent.api_key
+    agent_api_key = payload.api_key if payload and payload.api_key is not None else agent.api_key
     if not agent_api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="API key not configured"
         )
 
     try:
-        # 使用LLM服务测试连接
-        llm = get_llm_service(agent, use_mock=False)
+        llm = get_llm_service(
+            agent,
+            use_mock=False,
+            api_key=agent_api_key,
+            api_base=payload.api_base if payload and payload.api_base is not None else agent.api_base,
+            model=payload.model if payload and payload.model is not None else agent.model,
+            provider_type=payload.provider_type if payload and payload.provider_type is not None else agent.provider_type,
+        )
         messages = [{"role": "user", "content": "Hello"}]
 
         # 尝试发送一个简单消息
@@ -1767,6 +1783,7 @@ async def test_ai_api(
 @router.post("/agent:test-jina-api")
 async def test_jina_api(
     agent_id: str,
+    payload: Optional[AgentUpdateRequest] = None,
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1779,17 +1796,16 @@ async def test_jina_api(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    agent_jina_api_key = agent.jina_api_key
+    agent_jina_api_key = payload.jina_api_key if payload and payload.jina_api_key is not None else agent.jina_api_key
     if not agent_jina_api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Jina API key not configured"
         )
 
     try:
-        # 测试Jina API
         import httpx
         response = httpx.post(
-            "https://api.jina.ai/v1/embeddings",
+            settings.jina_embedding_api_base,
             headers={"Authorization": f"Bearer {agent_jina_api_key}"},
             json={"model": "jina-embeddings-v3", "input": ["test"]},
             timeout=30,

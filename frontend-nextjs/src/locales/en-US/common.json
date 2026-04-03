@@ -110,7 +110,9 @@
     "agentErrorPROVIDER_RATE_LIMITED": "The AI provider is rate limiting requests. Please try again later.",
     "agentErrorPROVIDER_UNAVAILABLE": "The AI provider is temporarily unavailable. Please check network or provider status.",
     "agentErrorMODEL_NOT_FOUND": "The configured AI model was not found. Please verify the model name.",
-    "agentErrorPROVIDER_ERROR": "The AI provider request failed. Please review the configuration or try again later."
+    "agentErrorPROVIDER_ERROR": "The AI provider request failed. Please review the configuration or try again later.",
+    "sendFailed": "Failed to send message",
+    "takeoverFailed": "Failed to take over session"
   },
   "time": {
     "goodMorning": "Good morning",

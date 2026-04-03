@@ -75,7 +75,7 @@ export default function QAManagement() {
       }
     };
     checkJinaKey();
-  }, [agentId, navigate]);
+  }, [agentId, jinaKeyReady, navigate]);
 
   useEffect(() => {
     if (agentId && jinaKeyReady) {

@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { API_BASE_URL } from '../lib/env'
 
 interface Admin {
@@ -19,24 +19,88 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+const TOKEN_STORAGE_KEY = 'token'
+const ADMIN_STORAGE_KEY = 'admin'
+
+function parseJwtPayload(token: string): { exp?: number } | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length < 2) {
+      return null
+    }
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    return JSON.parse(window.atob(padded))
+  } catch {
+    return null
+  }
+}
+
+function isTokenExpired(token: string): boolean {
+  const payload = parseJwtPayload(token)
+  if (!payload?.exp) {
+    return false
+  }
+  return payload.exp * 1000 <= Date.now()
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [admin, setAdmin] = useState<Admin | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  // 初始化:从 localStorage 读取 token
-  useEffect(() => {
-    const savedToken = localStorage.getItem('token')
-    const savedAdmin = localStorage.getItem('admin')
+  const logout = useCallback(() => {
+    setToken(null)
+    setAdmin(null)
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    localStorage.removeItem(ADMIN_STORAGE_KEY)
+  }, [])
 
-    if (savedToken && savedAdmin) {
-      setToken(savedToken)
-      setAdmin(JSON.parse(savedAdmin))
+  useEffect(() => {
+    const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY)
+    const savedAdmin = localStorage.getItem(ADMIN_STORAGE_KEY)
+
+    if (savedToken && savedAdmin && !isTokenExpired(savedToken)) {
+      try {
+        setToken(savedToken)
+        setAdmin(JSON.parse(savedAdmin))
+      } catch {
+        localStorage.removeItem(TOKEN_STORAGE_KEY)
+        localStorage.removeItem(ADMIN_STORAGE_KEY)
+      }
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY)
+      localStorage.removeItem(ADMIN_STORAGE_KEY)
     }
 
     setIsLoading(false)
   }, [])
+
+  useEffect(() => {
+    if (!token) {
+      return
+    }
+
+    const payload = parseJwtPayload(token)
+    if (!payload?.exp) {
+      return
+    }
+
+    const expiresAt = payload.exp * 1000
+    const delay = expiresAt - Date.now()
+    if (delay <= 0) {
+      logout()
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      logout()
+    }, delay)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [logout, token])
 
   const login = async (email: string, password: string) => {
     const response = await fetch(`${API_BASE_URL}/api/admin/login`, {
@@ -55,8 +119,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(data.access_token)
     setAdmin(data.admin)
 
-    localStorage.setItem('token', data.access_token)
-    localStorage.setItem('admin', JSON.stringify(data.admin))
+    localStorage.setItem(TOKEN_STORAGE_KEY, data.access_token)
+    localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(data.admin))
   }
 
   const register = async (email: string, password: string, name: string) => {
@@ -73,13 +137,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // 注册后自动登录
     await login(email, password)
-  }
-
-  const logout = () => {
-    setToken(null)
-    setAdmin(null)
-    localStorage.removeItem('token')
-    localStorage.removeItem('admin')
   }
 
   return (

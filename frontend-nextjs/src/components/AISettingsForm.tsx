@@ -175,7 +175,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
   const handleSave = useCallback(async () => {
     if (!agent) return
 
-    // 验证 custom persona 不能为空
     if (selectedPersona === 'custom' && !formData.system_prompt.trim()) {
       setPersonaError(true)
       return
@@ -183,6 +182,11 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
 
     setSaving(true)
     setError(null)
+    setApiKeyError(false)
+    setJinaKeyError(false)
+
+    let aiKeyTestFailed = false
+    let jinaKeyTestFailed = false
 
     try {
       const updateData: Partial<Agent> = {
@@ -209,6 +213,22 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
 
       if (formData.jina_api_key.trim()) {
         updateData.jina_api_key = formData.jina_api_key
+      }
+
+      if (formData.api_key.trim()) {
+        const aiTestResult = await api.testAIApi(agent.id, updateData)
+        if (!aiTestResult.success) {
+          aiKeyTestFailed = true
+          throw new Error(t('errors.aiApiTestFailed'))
+        }
+      }
+
+      if (formData.jina_api_key.trim()) {
+        const jinaTestResult = await api.testJinaApi(agent.id, updateData)
+        if (!jinaTestResult.success) {
+          jinaKeyTestFailed = true
+          throw new Error(t('errors.jinaApiTestFailed'))
+        }
       }
 
       const updatedAgent = await api.updateAgent(agent.id, updateData)
@@ -238,6 +258,12 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         }
       } else {
         errorMessage = String(err) || t('errors.saveFailed')
+      }
+      if (aiKeyTestFailed) {
+        setApiKeyError(true)
+      }
+      if (jinaKeyTestFailed) {
+        setJinaKeyError(true)
       }
       setError(errorMessage)
     } finally {

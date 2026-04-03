@@ -72,6 +72,8 @@ function CitationCard({ source, index }: { source: Source; index: number }) {
     >
       <button
         onClick={() => setIsExpanded(!isExpanded)}
+        aria-expanded={isExpanded}
+        aria-label={source.type === 'url' ? (source.title || source.url || 'citation source') : (source.question || 'citation source')}
         style={{
           width: '100%',
           padding: '8px 12px',
@@ -317,6 +319,7 @@ function ChatPanel({
             {agent.id && (
               <button
                 onClick={handleCopyAgentId}
+                aria-label="Copy Agent ID"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -346,7 +349,7 @@ function ChatPanel({
         overflow: 'auto',
         padding: 'var(--space-4)',
         background: 'var(--color-bg-primary)',
-      }}>
+      }} aria-live="polite">
         {messages.length === 0 ? (
           <div style={{
             height: '100%',
@@ -563,6 +566,7 @@ function ChatPanel({
           }}>
             <input
               type="text"
+              aria-label={t('playground.inputPlaceholder')}
               value={input}
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={(e) => {
@@ -590,6 +594,7 @@ function ChatPanel({
             {input.length > 0 && (
               <button
                 onClick={() => onInputChange('')}
+                aria-label={t('buttons.clear')}
                 style={{
                   position: 'absolute',
                   right: '12px',
@@ -617,6 +622,7 @@ function ChatPanel({
           </div>
           <button
             onClick={onClearChat}
+            aria-label={t('buttons.clear')}
             className="btn-secondary"
             style={{
               padding: 'var(--space-3)',
@@ -635,6 +641,7 @@ function ChatPanel({
           </button>
           <button
             onClick={onSendMessage}
+            aria-label={t('buttons.send')}
             disabled={isLoading || isSettingsSaving || !input.trim()}
             style={{
               padding: 'var(--space-3) var(--space-5)',

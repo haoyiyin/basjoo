@@ -134,7 +134,7 @@ export default function Chat() {
 
       if (!response.ok) {
         console.error('Failed to send message:', response.statusText)
-        alert('Failed to send message')
+        alert(t('errors.sendFailed'))
         return
       }
 
@@ -142,7 +142,7 @@ export default function Chat() {
       await fetchMessages()
     } catch (error) {
       console.error('Error sending message:', error)
-      alert('Failed to send message')
+      alert(t('errors.sendFailed'))
     }
   }
 
