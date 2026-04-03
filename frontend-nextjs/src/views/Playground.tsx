@@ -15,7 +15,6 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 interface ChatParamOverrides {
   temperature: number;
   max_tokens: number;
-  reasoning_effort: 'low' | 'medium' | 'high' | null;
 }
 
 type TabType = 'settings' | 'preview';
@@ -38,7 +37,6 @@ export default function Playground() {
   const [chatParams, setChatParams] = useState<ChatParamOverrides>({
     temperature: 0.7,
     max_tokens: 1024,
-    reasoning_effort: null,
   });
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamingMessageClientIdRef = useRef<number | null>(null);
@@ -58,7 +56,6 @@ export default function Playground() {
       setChatParams({
         temperature: data.temperature,
         max_tokens: data.max_tokens,
-        reasoning_effort: data.reasoning_effort ?? null,
       });
     } catch (error) {
       console.error('Failed to load default agent:', error);
@@ -239,7 +236,6 @@ export default function Playground() {
         params: {
           temperature: chatParams.temperature,
           max_tokens: chatParams.max_tokens,
-          reasoning_effort: chatParams.reasoning_effort,
         },
       };
 
@@ -338,7 +334,6 @@ export default function Playground() {
       setChatParams({
         temperature: updatedAgent.temperature,
         max_tokens: updatedAgent.max_tokens,
-        reasoning_effort: updatedAgent.reasoning_effort ?? null,
       });
     }
 

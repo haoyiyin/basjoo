@@ -215,7 +215,6 @@ class TestEdgeCases:
                     "max_tokens": 1,
                     "top_k": 1,
                     "similarity_threshold": 0.0,
-                    "reasoning_effort": "low",
                 }
             )
             assert response.status_code == 200
@@ -228,7 +227,6 @@ class TestEdgeCases:
                     "max_tokens": 4096,
                     "top_k": 20,
                     "similarity_threshold": 1.0,
-                    "reasoning_effort": "high",
                 }
             )
             assert response.status_code == 200
@@ -242,20 +240,12 @@ class TestEdgeCases:
             )
             assert response.status_code == 422  # Validation error
 
-            response = await client.put(
-                f"/api/v1/agent?agent_id={agent_id}",
-                json={
-                    "reasoning_effort": "extreme",
-                }
-            )
-            assert response.status_code == 422
         finally:
             restore_payload = {
                 "temperature": original_config["temperature"],
                 "max_tokens": original_config["max_tokens"],
                 "top_k": original_config["top_k"],
                 "similarity_threshold": original_config["similarity_threshold"],
-                "reasoning_effort": original_config["reasoning_effort"],
             }
 
             await client.put(

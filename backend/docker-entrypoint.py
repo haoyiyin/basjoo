@@ -197,10 +197,6 @@ def migrate_sqlite_schema():
         ],
         "agents": [
             (
-                "reasoning_effort",
-                "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high') OR reasoning_effort IS NULL)",
-            ),
-            (
                 "restricted_reply",
                 "TEXT",
             ),

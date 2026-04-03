@@ -92,7 +92,7 @@ class TestSystemObservability:
 
         # Verify all important config fields
         required_fields = [
-            "id", "name", "model", "temperature", "max_tokens", "reasoning_effort",
+            "id", "name", "model", "temperature", "max_tokens",
             "top_k", "similarity_threshold", "widget_title",
             "widget_color", "welcome_message", "is_active"
         ]

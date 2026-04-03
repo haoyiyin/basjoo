@@ -263,9 +263,6 @@ class AgentConfig(BaseModel):
     model: str
     temperature: float = Field(..., ge=0, le=2)
     max_tokens: int = Field(..., ge=1, le=4096)
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
-        None, description="Reasoning effort level"
-    )
     api_key_set: bool = Field(
         default=False, description="Whether API key is configured"
     )
@@ -364,9 +361,6 @@ class AgentUpdateRequest(BaseModel):
     model: Optional[str] = Field(None, min_length=1)
     temperature: Optional[float] = Field(None, ge=0, le=2)
     max_tokens: Optional[int] = Field(None, ge=1, le=4096)
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
-        None, description="Reasoning effort level"
-    )
     api_key: Optional[str] = Field(None, min_length=0)
     api_base: Optional[str] = Field(None, min_length=1)
     jina_api_key: Optional[str] = Field(None, min_length=0)

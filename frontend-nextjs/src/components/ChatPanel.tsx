@@ -23,7 +23,6 @@ export interface Agent {
   temperature: number;
   max_tokens: number;
   system_prompt: string;
-  reasoning_effort?: 'low' | 'medium' | 'high' | null;
 }
 
 interface ChatPanelProps {

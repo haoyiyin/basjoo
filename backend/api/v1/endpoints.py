@@ -227,7 +227,6 @@ def build_agent_config(agent: Agent) -> dict:
         "model": agent.model,
         "temperature": agent.temperature,
         "max_tokens": agent.max_tokens,
-        "reasoning_effort": agent.reasoning_effort,
         "api_key_set": bool(agent.api_key),
         "api_key_masked": mask_api_key(agent.api_key),
         "api_base": agent.api_base,
@@ -604,7 +603,6 @@ async def prepare_chat_request(
     agent_similarity_threshold = agent.similarity_threshold
     agent_temperature = agent.temperature
     agent_max_tokens = agent.max_tokens
-    agent_reasoning_effort = agent.reasoning_effort
     agent_system_prompt = agent.system_prompt
     agent_enable_context = agent.enable_context
     agent_jina_api_key = agent.jina_api_key
@@ -726,17 +724,6 @@ async def prepare_chat_request(
         max_tokens,
     )
 
-    reasoning_effort = agent_reasoning_effort
-    if "reasoning_effort" in params:
-        requested_reasoning_effort = params.get("reasoning_effort")
-        if requested_reasoning_effort is None:
-            reasoning_effort = None
-        elif requested_reasoning_effort in {"low", "medium", "high"}:
-            reasoning_effort = requested_reasoning_effort
-
-    if reasoning_effort not in {"low", "medium", "high"}:
-        reasoning_effort = None
-
     current_rag_service = None
     retrieval_results: List[Dict[str, Any]] = []
     should_retrieve_context = bool(agent_jina_api_key)
@@ -804,7 +791,6 @@ async def prepare_chat_request(
         "sources": build_chat_sources(retrieval_results),
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "reasoning_effort": reasoning_effort,
     }
 
 
@@ -1005,7 +991,6 @@ async def chat(
         sources = chat_context["sources"]
         temperature = chat_context["temperature"]
         max_tokens = chat_context["max_tokens"]
-        reasoning_effort = chat_context["reasoning_effort"]
         use_mock_llm = chat_context["use_mock_llm"]
 
         # Restricted reply config for graceful LLM failure fallback
@@ -1022,7 +1007,6 @@ async def chat(
             stream=True,
             temperature=temperature,
             max_tokens=max_tokens,
-            reasoning_effort=reasoning_effort,
         ):
             reply_parts.append(chunk)
     except Exception:
@@ -1139,7 +1123,6 @@ async def chat_stream(
                 sources = chat_context["sources"]
                 temperature = chat_context["temperature"]
                 max_tokens = chat_context["max_tokens"]
-                reasoning_effort = chat_context["reasoning_effort"]
                 use_mock_llm = chat_context["use_mock_llm"]
 
                 # Restricted reply config for graceful LLM failure fallback
@@ -1183,7 +1166,6 @@ async def chat_stream(
                 stream=True,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                reasoning_effort=reasoning_effort,
             ).__aiter__()
             logger.info(
                 "chat_stream stream created agent_id=%s session_id=%s stream_create_ms=%.1f",

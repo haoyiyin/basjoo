@@ -193,34 +193,6 @@ def test_entrypoint_reuses_persisted_secret_key(monkeypatch, tmp_path):
     assert os.environ["SECRET_KEY"] == "persisted-secret"
 
 
-def test_entrypoint_migrates_agents_reasoning_effort_column(monkeypatch, tmp_path):
-    docker_entrypoint = _load_module_from_path("docker_entrypoint_test", BACKEND_DIR / "docker-entrypoint.py")
-
-    db_path = tmp_path / "basjoo.db"
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute("CREATE TABLE agents (id TEXT PRIMARY KEY)")
-        conn.commit()
-    finally:
-        conn.close()
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-
-    docker_entrypoint.migrate_sqlite_schema()
-
-    conn = sqlite3.connect(db_path)
-    try:
-        columns = {
-            row[1]: row[2]
-            for row in conn.execute("PRAGMA table_info(agents)").fetchall()
-        }
-    finally:
-        conn.close()
-
-    assert "reasoning_effort" in columns
-
-
-
 def test_env_bootstrap_creates_missing_env_file(tmp_path):
     env_bootstrap = _load_module_from_path("env_bootstrap_test", BACKEND_DIR / "env_bootstrap.py")
     project_root = tmp_path / "project"

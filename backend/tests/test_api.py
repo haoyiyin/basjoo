@@ -50,7 +50,6 @@ async def test_get_default_agent(client):
     assert "id" in data
     assert "name" in data
     assert "model" in data
-    assert "reasoning_effort" in data
 
 
 @pytest.mark.asyncio

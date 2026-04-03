@@ -11,7 +11,6 @@ export interface ChatRequest {
   params?: {
     temperature?: number;
     max_tokens?: number;
-    reasoning_effort?: 'low' | 'medium' | 'high' | null;
   };
 }
 
@@ -56,7 +55,6 @@ export interface Agent {
   model: string;
   temperature: number;
   max_tokens: number;
-  reasoning_effort?: 'low' | 'medium' | 'high' | null;
   api_format?: 'openai' | 'openai_compatible' | 'anthropic' | 'google';
   api_key?: string;
   api_key_set?: boolean;

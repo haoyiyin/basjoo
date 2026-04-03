@@ -8,14 +8,12 @@ import type { Agent, ProviderType } from '../services/api'
 
 type PersonaType = 'general' | 'customer-service' | 'sales' | 'custom';
 type ApiFormatType = 'openai' | 'openai_compatible' | 'anthropic' | 'google';
-type ReasoningEffortSetting = 'off' | 'low' | 'medium' | 'high';
 
 const PERSONA_TYPES: PersonaType[] = ['general', 'customer-service', 'sales', 'custom'];
 
 interface ChatParamOverrides {
   temperature: number;
   max_tokens: number;
-  reasoning_effort: 'low' | 'medium' | 'high' | null;
 }
 
 interface AISettingsFormProps {
@@ -45,7 +43,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     model: '',
     temperature: 0.7,
     max_tokens: 1024,
-    reasoning_effort: 'off' as ReasoningEffortSetting,
     api_key: '',
     api_base: '',
     jina_api_key: '',
@@ -76,9 +73,8 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     onChatParamsChange?.({
       temperature: formData.temperature,
       max_tokens: formData.max_tokens,
-      reasoning_effort: formData.reasoning_effort === 'off' ? null : formData.reasoning_effort,
     })
-  }, [formData.temperature, formData.max_tokens, formData.reasoning_effort, onChatParamsChange])
+  }, [formData.temperature, formData.max_tokens, onChatParamsChange])
 
   useEffect(() => {
     onSaveBusyChange?.(saving)
@@ -101,7 +97,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         model: agentData.model || 'deepseek-chat',
         temperature: agentData.temperature ?? 0.7,
         max_tokens: agentData.max_tokens ?? 1024,
-        reasoning_effort: agentData.reasoning_effort ?? 'off',
         api_key: '',
         api_base: agentData.api_base || 'https://api.deepseek.com/v1',
         jina_api_key: '',
@@ -195,7 +190,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         model: formData.model,
         temperature: formData.temperature,
         max_tokens: formData.max_tokens,
-        reasoning_effort: formData.reasoning_effort === 'off' ? null : formData.reasoning_effort,
         api_base: formData.api_base,
         provider_type: formData.provider_type,
         api_format: formData.api_format,
@@ -238,7 +232,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         ...prev,
         api_key: '',
         jina_api_key: '',
-        reasoning_effort: updatedAgent.reasoning_effort ?? 'off',
       }))
       onSave?.(updatedAgent)
     } catch (err) {
@@ -303,7 +296,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.model,
     formData.temperature,
     formData.max_tokens,
-    formData.reasoning_effort,
     formData.api_base,
     formData.provider_type,
     formData.api_format,
@@ -656,38 +648,6 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
               style={{ width: '100%' }}
             />
           </div>
-        </div>
-
-        <div style={{ marginTop: 'var(--space-4)' }}>
-          <label style={{
-            display: 'block',
-            marginBottom: 'var(--space-2)',
-            fontSize: 'var(--text-sm)',
-            fontWeight: 500,
-            color: 'var(--color-text-secondary)',
-          }}>
-            {t('labels.reasoningEffort')}
-          </label>
-          <select
-            value={formData.reasoning_effort}
-            onChange={(e) => setFormData({ ...formData, reasoning_effort: e.target.value as ReasoningEffortSetting })}
-            style={{
-              width: '100%',
-              maxWidth: compact ? '100%' : '50%',
-              padding: 'var(--space-3)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--color-border)',
-              background: 'var(--color-bg-primary)',
-              color: 'var(--color-text-primary)',
-              fontSize: 'var(--text-sm)',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="off">{t('labels.reasoningEffortOff')}</option>
-            <option value="low">{t('labels.reasoningEffortLow')}</option>
-            <option value="medium">{t('labels.reasoningEffortMedium')}</option>
-            <option value="high">{t('labels.reasoningEffortHigh')}</option>
-          </select>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>

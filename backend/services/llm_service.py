@@ -108,8 +108,8 @@ def classify_llm_error(error: Exception) -> LLMError:
     return LLMError(message)
 
 
-def supports_openai_reasoning_effort(model: str) -> bool:
-    """判断 OpenAI 模型是否支持 reasoning_effort 参数"""
+def skips_openai_temperature(model: str) -> bool:
+    """Return whether an OpenAI native model rejects temperature overrides."""
     return model.lower().startswith(("o1", "o3", "o4"))
 
 
@@ -224,7 +224,6 @@ class BaseLLMService(ABC):
         stream: bool = True,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        reasoning_effort: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         聊天完成接口
@@ -268,7 +267,6 @@ class MockLLMService(BaseLLMService):
         stream: bool = True,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        reasoning_effort: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Mock 聊天完成
@@ -371,7 +369,6 @@ class OpenAIProvider(BaseLLMService):
         stream: bool = True,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        reasoning_effort: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         OpenAI 聊天完成
@@ -491,7 +488,6 @@ class OpenAINativeProvider(BaseLLMService):
         stream: bool = True,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        reasoning_effort: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         OpenAI 聊天完成
@@ -516,13 +512,10 @@ class OpenAINativeProvider(BaseLLMService):
                 "stream": stream,
                 "max_tokens": 2000 if max_tokens is None else max_tokens,
             }
+            if not skips_openai_temperature(self.model):
+                request_params["temperature"] = 0.7 if temperature is None else temperature
             if stream:
                 request_params["stream_options"] = {"include_usage": True}
-            if not supports_openai_reasoning_effort(self.model):
-                request_params["temperature"] = 0.7 if temperature is None else temperature
-
-            if reasoning_effort and supports_openai_reasoning_effort(self.model):
-                request_params["reasoning_effort"] = reasoning_effort
 
             async def create_response():
                 return await self.client.chat.completions.create(**request_params)
@@ -624,7 +617,6 @@ class GoogleProvider(BaseLLMService):
         stream: bool = True,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        reasoning_effort: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Google Gemini 聊天完成
