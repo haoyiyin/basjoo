@@ -8,7 +8,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy import event
 import os
 
-from config import settings
+from config import settings, DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
 
 
 def _to_async_database_url(database_url: str) -> str:
@@ -64,13 +64,13 @@ def _build_default_agent(workspace_id: int):
         system_prompt="You are a helpful customer service assistant.",
         model="deepseek-chat",
         temperature=0.7,
-        max_tokens=1024,
+        max_tokens=DEFAULT_AGENT_MAX_TOKENS,
         api_key=os.getenv("DEEPSEEK_API_KEY", ""),
         api_base="https://api.deepseek.com/v1",
         jina_api_key=os.getenv("JINA_API_KEY", ""),
         embedding_model="jina-embeddings-v3",
         top_k=5,
-        similarity_threshold=0.5,
+        similarity_threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         enable_context=False,
         widget_title_i18n={"zh-CN": "AI 客服", "en-US": "AI Assistant"},
         welcome_message_i18n={

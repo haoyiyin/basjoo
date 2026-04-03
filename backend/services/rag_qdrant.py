@@ -3,6 +3,7 @@
 from typing import List, Dict, Any, Optional
 import logging
 
+from config import DEFAULT_AGENT_SIMILARITY_THRESHOLD
 from .qdrant_store import QdrantVectorStore
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,6 @@ class QdrantRAGService:
         vector_store: QdrantVectorStore,
         default_model: str = "gpt-4o-mini",
         default_temperature: float = 0.7,
-        default_max_tokens: int = 1024,
     ):
         """
         初始化RAG服务
@@ -25,19 +25,17 @@ class QdrantRAGService:
             vector_store: Qdrant 向量存储实例
             default_model: 默认LLM模型
             default_temperature: 默认温度
-            default_max_tokens: 默认最大token数
         """
         self.vector_store = vector_store
         self.default_model = default_model
         self.default_temperature = default_temperature
-        self.default_max_tokens = default_max_tokens
 
     def retrieve(
         self,
         agent_id: str,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.5,  # 提高阈值以提升检索质量
+        threshold: float = DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         include_qa: bool = True,
         qa_items: List[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
@@ -137,7 +135,7 @@ class QdrantRAGService:
         agent_id: str,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.5,
+        threshold: float = DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         include_qa: bool = True,
         qa_items: List[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:

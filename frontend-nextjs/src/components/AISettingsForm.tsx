@@ -42,14 +42,12 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     system_prompt: '',
     model: '',
     temperature: 0.7,
-    max_tokens: 1024,
     api_key: '',
     api_base: '',
     jina_api_key: '',
     provider_type: 'openai' as ProviderType,
     api_format: 'openai' as ApiFormatType,
     top_k: 5,
-    similarity_threshold: 0.5,
     enable_context: false,
     rate_limit_per_hour: 100,
     restricted_reply: '',
@@ -72,9 +70,9 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
   useEffect(() => {
     onChatParamsChange?.({
       temperature: formData.temperature,
-      max_tokens: formData.max_tokens,
+      max_tokens: agent?.max_tokens ?? 1024,
     })
-  }, [formData.temperature, formData.max_tokens, onChatParamsChange])
+  }, [agent?.max_tokens, formData.temperature, onChatParamsChange])
 
   useEffect(() => {
     onSaveBusyChange?.(saving)
@@ -96,14 +94,12 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         system_prompt: agentData.system_prompt || '',
         model: agentData.model || 'deepseek-chat',
         temperature: agentData.temperature ?? 0.7,
-        max_tokens: agentData.max_tokens ?? 1024,
         api_key: '',
         api_base: agentData.api_base || 'https://api.deepseek.com/v1',
         jina_api_key: '',
         provider_type: agentData.provider_type || 'openai',
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
         top_k: agentData.top_k ?? 5,
-        similarity_threshold: agentData.similarity_threshold ?? 0.5,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
         restricted_reply: agentData.restricted_reply ?? t('labels.restrictedReplyPlaceholder'),
@@ -189,12 +185,10 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         system_prompt: formData.system_prompt,
         model: formData.model,
         temperature: formData.temperature,
-        max_tokens: formData.max_tokens,
         api_base: formData.api_base,
         provider_type: formData.provider_type,
         api_format: formData.api_format,
         top_k: formData.top_k,
-        similarity_threshold: formData.similarity_threshold,
         enable_context: formData.enable_context,
         rate_limit_per_hour: formData.rate_limit_per_hour,
         restricted_reply: formData.restricted_reply,
@@ -295,12 +289,10 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.system_prompt,
     formData.model,
     formData.temperature,
-    formData.max_tokens,
     formData.api_base,
     formData.provider_type,
     formData.api_format,
     formData.top_k,
-    formData.similarity_threshold,
     formData.enable_context,
     formData.rate_limit_per_hour,
     formData.restricted_reply,
@@ -606,48 +598,25 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
-          <div>
-            <label style={{
-              display: 'block',
-              marginBottom: 'var(--space-2)',
-              fontSize: 'var(--text-sm)',
-              fontWeight: 500,
-              color: 'var(--color-text-secondary)',
-            }}>
-              {t('labels.temperature')} ({formData.temperature})
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              value={formData.temperature}
-              onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
-              style={{ width: '100%' }}
-            />
-          </div>
-
-          <div>
-            <label style={{
-              display: 'block',
-              marginBottom: 'var(--space-2)',
-              fontSize: 'var(--text-sm)',
-              fontWeight: 500,
-              color: 'var(--color-text-secondary)',
-            }}>
-              {t('labels.maxTokens')} ({formData.max_tokens})
-            </label>
-            <input
-              type="range"
-              min="256"
-              max="4096"
-              step="256"
-              value={formData.max_tokens}
-              onChange={(e) => setFormData({ ...formData, max_tokens: parseInt(e.target.value, 10) })}
-              style={{ width: '100%' }}
-            />
-          </div>
+        <div>
+          <label style={{
+            display: 'block',
+            marginBottom: 'var(--space-2)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 500,
+            color: 'var(--color-text-secondary)',
+          }}>
+            {t('labels.temperature')} ({formData.temperature})
+          </label>
+          <input
+            type="range"
+            min="0"
+            max="2"
+            step="0.1"
+            value={formData.temperature}
+            onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
+            style={{ width: '100%' }}
+          />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
@@ -752,90 +721,66 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
           />
         </div>
 
-        {/* Jina API与相似度并排 */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
-          <div>
-            <label style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: 'var(--space-2)',
-              fontSize: 'var(--text-sm)',
-              fontWeight: 500,
-              color: 'var(--color-text-secondary)',
-            }}>
-              <span>
-                {t('labels.jinaEmbeddingApiKey')}
-                {agent?.jina_api_key_set && (
-                  <span style={{
-                    marginLeft: 'var(--space-2)',
-                    color: 'var(--color-success)',
-                    fontSize: 'var(--text-xs)',
-                  }}>
-                    ✓ {t('labels.configured')}
-                  </span>
-                )}
-              </span>
+        <div>
+          <label style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 'var(--space-2)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 500,
+            color: 'var(--color-text-secondary)',
+          }}>
+            <span>
+              {t('labels.jinaEmbeddingApiKey')}
               {agent?.jina_api_key_set && (
-                <button
-                  onClick={handleClearJinaKey}
-                  disabled={saving}
-                  style={{
-                    fontSize: 'var(--text-xs)',
-                    color: 'var(--color-error)',
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: saving ? 'not-allowed' : 'pointer',
-                    opacity: saving ? 0.5 : 1,
-                    padding: '0',
-                    textDecoration: 'underline',
-                  }}
-                >
-                  {t('buttons.clear')}
-                </button>
+                <span style={{
+                  marginLeft: 'var(--space-2)',
+                  color: 'var(--color-success)',
+                  fontSize: 'var(--text-xs)',
+                }}>
+                  ✓ {t('labels.configured')}
+                </span>
               )}
-            </label>
-            <input
-              type="password"
-              value={formData.jina_api_key}
-              onChange={(e) => {
-                setFormData({ ...formData, jina_api_key: e.target.value })
-                setJinaKeyError(false)
-              }}
-              placeholder={agent?.jina_api_key_set ? t('placeholders.enterJinaKey') : "jina_..."}
-              style={(highlightJinaKey || jinaKeyError) ? { border: '2px solid #ef4444' } : undefined}
-            />
-            {(highlightJinaKey || jinaKeyError) && (
-              <div style={{
-                marginTop: 'var(--space-2)',
-                color: '#ef4444',
-                fontSize: 'var(--text-xs)',
-              }}>
-                {jinaKeyError ? t('errors.jinaApiKeyInvalid') : t('labels.jinaKeyRequired')}
-              </div>
+            </span>
+            {agent?.jina_api_key_set && (
+              <button
+                onClick={handleClearJinaKey}
+                disabled={saving}
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--color-error)',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: saving ? 'not-allowed' : 'pointer',
+                  opacity: saving ? 0.5 : 1,
+                  padding: '0',
+                  textDecoration: 'underline',
+                }}
+              >
+                {t('buttons.clear')}
+              </button>
             )}
-          </div>
-
-          <div>
-            <label style={{
-              display: 'block',
-              marginBottom: 'var(--space-2)',
-              fontSize: 'var(--text-sm)',
-              fontWeight: 500,
-              color: 'var(--color-text-secondary)',
+          </label>
+          <input
+            type="password"
+            value={formData.jina_api_key}
+            onChange={(e) => {
+              setFormData({ ...formData, jina_api_key: e.target.value })
+              setJinaKeyError(false)
+            }}
+            placeholder={agent?.jina_api_key_set ? t('placeholders.enterJinaKey') : "jina_..."}
+            style={(highlightJinaKey || jinaKeyError) ? { border: '2px solid #ef4444' } : undefined}
+          />
+          {(highlightJinaKey || jinaKeyError) && (
+            <div style={{
+              marginTop: 'var(--space-2)',
+              color: '#ef4444',
+              fontSize: 'var(--text-xs)',
             }}>
-              {t('labels.similarityThreshold')} ({formData.similarity_threshold})
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={formData.similarity_threshold}
-              onChange={(e) => setFormData({ ...formData, similarity_threshold: parseFloat(e.target.value) })}
-              style={{ width: '100%' }}
-            />
-          </div>
+              {jinaKeyError ? t('errors.jinaApiKeyInvalid') : t('labels.jinaKeyRequired')}
+            </div>
+          )}
         </div>
 
         <div style={{

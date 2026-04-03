@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import database
 from database import get_db
+from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
 from api.endpoints.auth import get_current_admin
 from i18n.core import build_locale_fallbacks, normalize_locale
 from models import (
@@ -226,7 +227,7 @@ def build_agent_config(agent: Agent) -> dict:
         "system_prompt": agent.system_prompt,
         "model": agent.model,
         "temperature": agent.temperature,
-        "max_tokens": agent.max_tokens,
+        "max_tokens": DEFAULT_AGENT_MAX_TOKENS,
         "api_key_set": bool(agent.api_key),
         "api_key_masked": mask_api_key(agent.api_key),
         "api_base": agent.api_base,
@@ -244,7 +245,7 @@ def build_agent_config(agent: Agent) -> dict:
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
         "top_k": agent.top_k,
-        "similarity_threshold": agent.similarity_threshold,
+        "similarity_threshold": DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         "enable_context": agent.enable_context,
         "enable_auto_fetch": agent.enable_auto_fetch,
         "url_fetch_interval_days": agent.url_fetch_interval_days,
@@ -600,9 +601,9 @@ async def prepare_chat_request(
     agent_id = agent.id
     agent_workspace_id = agent.workspace_id
     agent_top_k = agent.top_k
-    agent_similarity_threshold = agent.similarity_threshold
+    agent_similarity_threshold = DEFAULT_AGENT_SIMILARITY_THRESHOLD
     agent_temperature = agent.temperature
-    agent_max_tokens = agent.max_tokens
+    agent_max_tokens = DEFAULT_AGENT_MAX_TOKENS
     agent_system_prompt = agent.system_prompt
     agent_enable_context = agent.enable_context
     agent_jina_api_key = agent.jina_api_key
@@ -1416,7 +1417,7 @@ async def get_contexts(
         agent_id=agent_id,
         query=request.query,
         top_k=request.top_k,
-        threshold=agent.similarity_threshold,
+        threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         qa_items=qa_items,
     )
 

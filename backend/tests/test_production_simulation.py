@@ -435,7 +435,6 @@ class TestProductionSimulation:
             json={
                 "name": "Updated Agent Name",
                 "temperature": 0.5,
-                "max_tokens": 2048,
                 "welcome_message": "Welcome to updated agent!"
             }
         )
@@ -447,7 +446,7 @@ class TestProductionSimulation:
         data = response.json()
         assert data["name"] == "Updated Agent Name"
         assert data["temperature"] == 0.5
-        assert data["max_tokens"] == 2048
+        assert data["max_tokens"] == 1024
 
 
 # Import json for special characters test

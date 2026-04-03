@@ -245,7 +245,6 @@ class TestIntegrationWorkflows:
             json={
                 "name": "Test Agent Updated",
                 "temperature": 0.9,
-                "max_tokens": 2048,
                 "welcome_message": "Welcome to the updated agent!",
                 "widget_color": "#FF5733"
             }
@@ -258,7 +257,6 @@ class TestIntegrationWorkflows:
 
         assert updated_config["name"] == "Test Agent Updated"
         assert updated_config["temperature"] == 0.9
-        assert updated_config["max_tokens"] == 2048
         assert updated_config["welcome_message"] == "Welcome to the updated agent!"
         assert updated_config["widget_color"] == "#FF5733"
 
@@ -266,7 +264,6 @@ class TestIntegrationWorkflows:
         restore_payload = {
             "name": original_config["name"],
             "temperature": original_config["temperature"],
-            "max_tokens": original_config["max_tokens"],
             "welcome_message": original_config["welcome_message"],
             "widget_color": original_config["widget_color"],
         }

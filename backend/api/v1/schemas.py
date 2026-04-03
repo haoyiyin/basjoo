@@ -360,7 +360,6 @@ class AgentUpdateRequest(BaseModel):
     system_prompt: Optional[str] = Field(None, min_length=1)
     model: Optional[str] = Field(None, min_length=1)
     temperature: Optional[float] = Field(None, ge=0, le=2)
-    max_tokens: Optional[int] = Field(None, ge=1, le=4096)
     api_key: Optional[str] = Field(None, min_length=0)
     api_base: Optional[str] = Field(None, min_length=1)
     jina_api_key: Optional[str] = Field(None, min_length=0)
@@ -382,7 +381,6 @@ class AgentUpdateRequest(BaseModel):
     crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
     crawl_max_pages: Optional[int] = Field(None, ge=1, le=100, description="Max pages for site crawling")
     top_k: Optional[int] = Field(None, ge=1, le=20)
-    similarity_threshold: Optional[float] = Field(None, ge=0, le=1)
     enable_context: Optional[bool] = Field(
         None, description="Enable conversation context"
     )

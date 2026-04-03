@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import httpx
 
-from config import settings
+from config import settings, DEFAULT_AGENT_SIMILARITY_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +367,7 @@ class QdrantVectorStore:
         agent_id: str,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.5,  # 提高阈值以提升检索质量
+        threshold: float = DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         source_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -479,7 +479,7 @@ class QdrantVectorStore:
         agent_id: str,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.5,
+        threshold: float = DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         source_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """

@@ -16,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
+from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
 import hashlib
 import uuid
 
@@ -78,7 +79,7 @@ class Agent(Base):
     )
     model = Column(String(100), nullable=False, default="gpt-4o-mini")
     temperature = Column(Float, nullable=False, default=0.7)
-    max_tokens = Column(Integer, nullable=False, default=1024)
+    max_tokens = Column(Integer, nullable=False, default=DEFAULT_AGENT_MAX_TOKENS)
 
     # API配置
     api_key = Column(String(500), nullable=True)
@@ -126,7 +127,7 @@ class Agent(Base):
 
     # 检索配置
     top_k = Column(Integer, nullable=False, default=5)
-    similarity_threshold = Column(Float, nullable=False, default=0.5)
+    similarity_threshold = Column(Float, nullable=False, default=DEFAULT_AGENT_SIMILARITY_THRESHOLD)
     enable_context = Column(Boolean, nullable=False, default=False)
 
     # AI对话限制配置

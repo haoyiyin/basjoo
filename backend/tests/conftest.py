@@ -8,6 +8,8 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from config import DEFAULT_AGENT_SIMILARITY_THRESHOLD
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 TEST_DB_DIR = BACKEND_DIR / ".pytest_dbs"
 
@@ -60,7 +62,7 @@ def mock_qdrant_store(monkeypatch, request):
             store_data[agent_id] = list(chunks)
             return len(chunks)
 
-        def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = 0.5, source_type=None):
+        def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = DEFAULT_AGENT_SIMILARITY_THRESHOLD, source_type=None):
             chunks = store_data.get(agent_id, [])
             results = []
             query_lower = query.lower()

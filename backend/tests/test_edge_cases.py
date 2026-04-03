@@ -212,9 +212,7 @@ class TestEdgeCases:
                 f"/api/v1/agent?agent_id={agent_id}",
                 json={
                     "temperature": 0.0,
-                    "max_tokens": 1,
                     "top_k": 1,
-                    "similarity_threshold": 0.0,
                 }
             )
             assert response.status_code == 200
@@ -224,9 +222,7 @@ class TestEdgeCases:
                 f"/api/v1/agent?agent_id={agent_id}",
                 json={
                     "temperature": 2.0,
-                    "max_tokens": 4096,
                     "top_k": 20,
-                    "similarity_threshold": 1.0,
                 }
             )
             assert response.status_code == 200
@@ -243,9 +239,7 @@ class TestEdgeCases:
         finally:
             restore_payload = {
                 "temperature": original_config["temperature"],
-                "max_tokens": original_config["max_tokens"],
                 "top_k": original_config["top_k"],
-                "similarity_threshold": original_config["similarity_threshold"],
             }
 
             await client.put(
