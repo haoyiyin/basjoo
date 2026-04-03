@@ -1604,7 +1604,6 @@ class BasjooWidget {
       this.streamingMessage = messageDiv;
       this.streamingMessageContent = contentDiv;
       this.currentStreamContent = '';
-      this.currentStreamSources = [];
       return messageDiv;
     }
 
@@ -1614,7 +1613,6 @@ class BasjooWidget {
     this.streamingMessage = messageDiv;
     this.streamingMessageContent = contentDiv;
     this.currentStreamContent = '';
-    this.currentStreamSources = [];
     return messageDiv;
   }
 

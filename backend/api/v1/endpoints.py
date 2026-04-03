@@ -739,9 +739,7 @@ async def prepare_chat_request(
 
     current_rag_service = None
     retrieval_results: List[Dict[str, Any]] = []
-    should_retrieve_context = bool(agent_jina_api_key and not admin_user)
-    if admin_user and agent_jina_api_key:
-        logger.info("Skipping RAG retrieval for admin Playground chat to reduce first-token latency")
+    should_retrieve_context = bool(agent_jina_api_key)
     if should_retrieve_context:
         try:
             current_rag_service = ensure_vector_services(
