@@ -433,7 +433,18 @@ function ChatPanel({
                                   : t('status.thinking')}
                               </span>
                             </div>
-                          ) : msg.isStreaming && !msg.content ? null : (
+                          ) : msg.isStreaming && !msg.content ? (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                width: '0.5rem',
+                                height: '1em',
+                                verticalAlign: 'text-bottom',
+                                background: 'var(--color-accent-primary)',
+                                animation: 'blinkCursor 1s steps(1) infinite',
+                              }}
+                            />
+                          ) : (
                             <>
                               {msg.isStreaming ? (
                                 <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>

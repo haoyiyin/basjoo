@@ -1533,6 +1533,11 @@ class BasjooWidget {
 
   private showThinkingIndicator(elapsed = 0): void {
     this.hideLoading();
+    if (!this.currentStreamContent.trim()) {
+      this.streamingMessage?.remove();
+      this.streamingMessage = null;
+      this.streamingMessageContent = null;
+    }
     this.thinkingElapsed = elapsed;
     const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
     if (!messagesContainer) {
@@ -1585,13 +1590,14 @@ class BasjooWidget {
     this.currentStreamSources = [];
   }
 
-  private createStreamingMessage(): HTMLDivElement {
+  private createStreamingMessage(includeCursor = false): HTMLDivElement {
     const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
     const messageDiv = document.createElement('div');
     messageDiv.className = 'basjoo-message basjoo-message-assistant';
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'basjoo-message-content';
+    this.updateMessageContent(contentDiv, this.currentStreamContent, includeCursor);
     messageDiv.appendChild(contentDiv);
 
     if (!messagesContainer) {
@@ -2099,7 +2105,10 @@ class BasjooWidget {
       timestamp: new Date(),
     });
 
-    this.showLoading();
+    this.hideLoading();
+    this.hideThinkingIndicator();
+    this.removeStreamingMessage();
+    this.createStreamingMessage(true);
 
     try {
       await this.sendMessageWithRetry(message);
