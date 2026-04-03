@@ -12,23 +12,6 @@ import ChatPanel from '../components/ChatPanel';
 import type { Message as ChatPanelMessage, Agent as ChatPanelAgent } from '../components/ChatPanel';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
-function replaceSourcePlaceholders(content: string, sources: Source[] = []): string {
-  if (!content) {
-    return content;
-  }
-
-  return content.replace(/\[([^\]]+)\]\(#source-(\d+)\)/g, (_match, label: string, sourceIndexText: string) => {
-    const sourceIndex = Number(sourceIndexText) - 1;
-    const source = sources[sourceIndex];
-
-    if (!source || source.type !== 'url' || !source.url || !/^https?:\/\//.test(source.url)) {
-      return label;
-    }
-
-    return `[${label}](${source.url})`;
-  });
-}
-
 interface ChatParamOverrides {
   temperature: number;
   max_tokens: number;
@@ -228,7 +211,6 @@ export default function Playground() {
         const next = [...prev];
         next[index] = {
           ...next[index],
-          content: replaceSourcePlaceholders(next[index].content, streamSources),
           sources: streamSources,
           usage: usage ?? meta?.usage ?? undefined,
           isStreaming: false,

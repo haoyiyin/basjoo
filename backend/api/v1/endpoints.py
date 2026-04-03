@@ -2083,6 +2083,7 @@ async def get_session_messages(
             "id": msg.id,
             "role": msg.role,
             "content": msg.content,
+            "sources": msg.sources or [],
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
         }
         for msg in messages

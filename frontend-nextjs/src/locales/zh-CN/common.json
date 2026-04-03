@@ -543,5 +543,8 @@
     "hasPendingHint": "有内容待训练",
     "retrainStarted": "智能体训练已启动",
     "retrainFailed": "训练失败"
+  },
+  "citations": {
+    "references": "参考来源"
   }
 }

@@ -8,6 +8,7 @@ import HelpTooltip from '../components/HelpTooltip'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useIsMobile } from '../hooks/useMediaQuery'
 import { WS_BASE_URL } from '../lib/env'
+import { formatAssistantMessageContent } from '../utils/citations'
 
 interface Session {
   id: string
@@ -26,6 +27,14 @@ interface Message {
   id: number
   role: string
   content: string
+  sources?: Array<{
+    type: 'url' | 'qa'
+    title?: string
+    url?: string
+    snippet?: string
+    question?: string
+    id?: string
+  }>
   created_at: string
 }
 
@@ -582,8 +591,13 @@ export default function Sessions() {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                    {messages.map((msg) => (
-                      <div
+                    {messages.map((msg) => {
+                      const formattedAssistantContent = msg.role === 'user'
+                        ? null
+                        : formatAssistantMessageContent(msg.content, msg.sources ?? [])
+
+                      return (
+                        <div
                         key={msg.id}
                         style={{
                           display: 'flex',
@@ -613,7 +627,31 @@ export default function Sessions() {
                             lineHeight: 1.6,
                             whiteSpace: msg.role === 'user' ? 'pre-wrap' : undefined,
                           }}>
-                            {msg.role === 'user' ? msg.content : <MarkdownRenderer content={msg.content} />}
+                            {msg.role === 'user' ? msg.content : (
+                              <>
+                                <MarkdownRenderer content={formattedAssistantContent?.content ?? msg.content} />
+                                {formattedAssistantContent && formattedAssistantContent.references.length > 0 && (
+                                  <div style={{ marginTop: 'var(--space-3)', paddingTop: 'var(--space-3)', borderTop: '1px solid rgba(255,255,255,0.25)' }}>
+                                    <div style={{ fontSize: 'var(--text-xs)', opacity: 0.85, marginBottom: 'var(--space-2)', fontWeight: 600 }}>
+                                      {t('citations.references')}
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                                      {formattedAssistantContent.references.map((reference) => (
+                                        <a
+                                          key={reference.url}
+                                          href={reference.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          style={{ color: 'inherit', textDecoration: 'underline', fontSize: 'var(--text-sm)', fontWeight: 600, wordBreak: 'break-word' }}
+                                        >
+                                          {reference.title}
+                                        </a>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
                           </div>
                           <div style={{
                             fontSize: 'var(--text-xs)',
@@ -624,7 +662,8 @@ export default function Sessions() {
                           </div>
                         </div>
                       </div>
-                    ))}
+                      )
+                    })}
                     <div ref={messagesEndRef} />
                   </div>
                 )}

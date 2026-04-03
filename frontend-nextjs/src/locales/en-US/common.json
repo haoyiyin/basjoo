@@ -543,5 +543,8 @@
     "hasPendingHint": "Has pending content",
     "retrainStarted": "Agent training started",
     "retrainFailed": "Training failed"
+  },
+  "citations": {
+    "references": "References"
   }
 }

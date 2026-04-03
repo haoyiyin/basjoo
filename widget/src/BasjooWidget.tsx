@@ -78,21 +78,59 @@ interface ChatHistoryMessage {
   sources?: Source[];
 }
 
-function replaceSourcePlaceholders(content: string, sources: Source[] = []): string {
+function formatAssistantMessage(content: string, sources: Source[] = []): { content: string; references: Array<{ title: string; url: string }> } {
   if (!content) {
-    return content;
+    return { content, references: [] };
   }
 
-  return content.replace(/\[([^\]]+)\]\(#source-(\d+)\)/g, (_match, label: string, sourceIndexText: string) => {
-    const sourceIndex = Number(sourceIndexText) - 1;
-    const source = sources[sourceIndex];
+  const references: Array<{ title: string; url: string }> = [];
+  const seenUrls = new Set<string>();
+  const sourceByUrl = new Map<string, Source & { type: 'url'; url: string }>();
 
-    if (!source || source.type !== 'url' || !source.url || !/^https?:\/\//.test(source.url)) {
-      return label;
+  for (const source of sources) {
+    if (source.type !== 'url' || typeof source.url !== 'string' || !/^https?:\/\//.test(source.url) || sourceByUrl.has(source.url)) {
+      continue;
     }
+    sourceByUrl.set(source.url, source as Source & { type: 'url'; url: string });
+  }
 
-    return `[${label}](${source.url})`;
-  });
+  const addReference = (url: string) => {
+    if (seenUrls.has(url)) {
+      return;
+    }
+    seenUrls.add(url);
+    const source = sourceByUrl.get(url);
+    references.push({
+      title: source?.title?.trim() || url,
+      url,
+    });
+  };
+
+  const formattedContent = content.replace(
+    /\[([^\]]+)\]\((#source-(\d+)|https?:\/\/[^\s)]+)\)/g,
+    (_match, label: string, target: string, sourceIndexText?: string) => {
+      if (sourceIndexText) {
+        const sourceIndex = Number(sourceIndexText) - 1;
+        const source = sources[sourceIndex];
+        if (source && source.type === 'url' && source.url && /^https?:\/\//.test(source.url)) {
+          addReference(source.url);
+        }
+        return label;
+      }
+
+      if (sourceByUrl.has(target)) {
+        addReference(target);
+        return label;
+      }
+
+      return _match;
+    },
+  );
+
+  return {
+    content: formattedContent,
+    references,
+  };
 }
 
 const AUTO_INIT_SCRIPT_PARAM_MAP = {
@@ -1239,7 +1277,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -1250,6 +1288,7 @@ class BasjooWidget {
       greetingBubble: { 'en-US': 'Hi! How can I help you?', 'zh-CN': '你好！有什么可以帮您？' },
       newMessage: { 'en-US': 'New message', 'zh-CN': '新消息' },
       thinking: { 'en-US': 'Thinking...', 'zh-CN': '思考中...' },
+      references: { 'en-US': 'References', 'zh-CN': '参考来源' },
     };
 
     return this.resolveI18nText(texts[key], texts[key]['en-US'] || texts[key]['zh-CN'] || key)
@@ -1350,7 +1389,17 @@ class BasjooWidget {
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'basjoo-message-content';
-    this.updateMessageContent(contentDiv, replaceSourcePlaceholders(message.content, message.sources));
+
+    if (message.role === 'assistant') {
+      const formattedMessage = formatAssistantMessage(message.content, message.sources);
+      const referenceMarkdown = formattedMessage.references.length > 0
+        ? `\n\n**${this.getText('references')}**\n${formattedMessage.references.map((reference) => `- [${reference.title}](${reference.url})`).join('\n')}`
+        : '';
+      this.updateMessageContent(contentDiv, formattedMessage.content + referenceMarkdown);
+    } else {
+      this.updateMessageContent(contentDiv, message.content);
+    }
+
     messageDiv.appendChild(contentDiv);
 
     const timeDiv = document.createElement('div');
@@ -1481,7 +1530,11 @@ class BasjooWidget {
     const cursor = this.streamingMessage.querySelector('.basjoo-stream-cursor');
     cursor?.remove();
     this.currentStreamSources = sources;
-    const finalContent = replaceSourcePlaceholders(this.currentStreamContent, sources);
+    const formattedMessage = formatAssistantMessage(this.currentStreamContent, sources);
+    const referenceMarkdown = formattedMessage.references.length > 0
+      ? `\n\n**${this.getText('references')}**\n${formattedMessage.references.map((reference) => `- [${reference.title}](${reference.url})`).join('\n')}`
+      : '';
+    const finalContent = formattedMessage.content + referenceMarkdown;
     this.updateMessageContent(this.streamingMessageContent, finalContent);
 
     this.messages.push({

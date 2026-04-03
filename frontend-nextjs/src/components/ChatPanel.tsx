@@ -3,6 +3,7 @@
 import { useRef, useEffect, memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Source, UsageInfo } from '../services/api';
+import { formatAssistantMessageContent } from '../utils/citations';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 export interface Message {
@@ -80,6 +81,35 @@ function LoadingDots() {
           animation: 'bounce 1.4s ease-in-out 0.32s infinite both',
         }}
       />
+    </div>
+  );
+}
+
+function ReferenceList({ references }: { references: Array<{ title: string; url: string }> }) {
+  const { t } = useTranslation('common');
+
+  if (references.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{ marginTop: 'var(--space-3)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--color-border)' }}>
+      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
+        {t('citations.references')}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+        {references.map((reference) => (
+          <a
+            key={reference.url}
+            href={reference.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--color-accent-primary)', fontSize: 'var(--text-sm)', fontWeight: 500, wordBreak: 'break-word' }}
+          >
+            {reference.title}
+          </a>
+        ))}
+      </div>
     </div>
   );
 }
@@ -269,10 +299,15 @@ function ChatPanel({
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-            {messages.map((msg, idx) => (
-              <div
-                key={msg.clientId ?? idx}
-                style={{
+            {messages.map((msg, idx) => {
+              const formattedAssistantContent = msg.role === 'assistant'
+                ? formatAssistantMessageContent(msg.content, msg.sources)
+                : null;
+
+              return (
+                <div
+                  key={msg.clientId ?? idx}
+                  style={{
                   display: 'flex',
                   justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
                   animation: 'fadeIn 0.3s ease-out forwards',
@@ -325,7 +360,10 @@ function ChatPanel({
                               {msg.isStreaming ? (
                                 <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
                               ) : (
-                                <MarkdownRenderer content={msg.content} />
+                                <>
+                                  <MarkdownRenderer content={formattedAssistantContent?.content ?? msg.content} />
+                                  <ReferenceList references={formattedAssistantContent?.references ?? []} />
+                                </>
                               )}
                               {msg.isStreaming && <StreamingCursor marginLeft="0.15rem" />}
                             </>
@@ -358,7 +396,8 @@ function ChatPanel({
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {/* Loading State */}
             {isLoading && !messages.some((message) => message.isStreaming) && (
