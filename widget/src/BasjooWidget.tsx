@@ -1627,7 +1627,10 @@ class BasjooWidget {
       this.updateMessageContent(this.streamingMessageContent, this.currentStreamContent, true);
     }
 
-    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 

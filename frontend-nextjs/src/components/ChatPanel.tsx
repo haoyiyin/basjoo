@@ -164,6 +164,19 @@ function CitationCard({ source, index }: { source: Source; index: number }) {
   );
 }
 
+const streamingCursorStyle: React.CSSProperties = {
+  display: 'inline-block',
+  width: '0.5rem',
+  height: '1em',
+  verticalAlign: 'text-bottom',
+  background: 'var(--color-accent-primary)',
+  animation: 'blinkCursor 1s steps(1) infinite',
+};
+
+function StreamingCursor({ marginLeft }: { marginLeft?: string }) {
+  return <span style={marginLeft ? { ...streamingCursorStyle, marginLeft } : streamingCursorStyle} />;
+}
+
 // Loading dots animation
 function LoadingDots() {
   return (
@@ -434,16 +447,7 @@ function ChatPanel({
                               </span>
                             </div>
                           ) : msg.isStreaming && !msg.content ? (
-                            <span
-                              style={{
-                                display: 'inline-block',
-                                width: '0.5rem',
-                                height: '1em',
-                                verticalAlign: 'text-bottom',
-                                background: 'var(--color-accent-primary)',
-                                animation: 'blinkCursor 1s steps(1) infinite',
-                              }}
-                            />
+                            <StreamingCursor />
                           ) : (
                             <>
                               {msg.isStreaming ? (
@@ -451,19 +455,7 @@ function ChatPanel({
                               ) : (
                                 <MarkdownRenderer content={msg.content} />
                               )}
-                              {msg.isStreaming && (
-                                <span
-                                  style={{
-                                    display: 'inline-block',
-                                    width: '0.5rem',
-                                    height: '1em',
-                                    marginLeft: '0.15rem',
-                                    verticalAlign: 'text-bottom',
-                                    background: 'var(--color-accent-primary)',
-                                    animation: 'blinkCursor 1s steps(1) infinite',
-                                  }}
-                                />
-                              )}
+                              {msg.isStreaming && <StreamingCursor marginLeft="0.15rem" />}
                             </>
                           )}
                         </div>
