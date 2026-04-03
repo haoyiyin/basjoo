@@ -78,6 +78,17 @@ interface ChatHistoryMessage {
   sources?: Source[];
 }
 
+const AUTO_INIT_SCRIPT_PARAM_MAP = {
+  agentId: ['agentId', 'agent_id'],
+  apiBase: ['apiBase', 'api_base'],
+  themeColor: ['themeColor', 'theme_color'],
+  welcomeMessage: ['welcomeMessage', 'welcome_message'],
+  language: ['language', 'locale'],
+  position: ['position'],
+  theme: ['theme'],
+  turnstileSiteKey: ['turnstileSiteKey', 'turnstile_site_key'],
+} as const
+
 const LOCALE_ALIAS_MAP: Record<string, string> = {
   en: 'en-US',
   fr: 'fr-FR',
@@ -2154,3 +2165,128 @@ class BasjooWidget {
 
 // 导出到全局（不使用 export default，避免 ES Module 格式）
 (window as any).BasjooWidget = BasjooWidget;
+
+function getSearchParamValue(searchParams: URLSearchParams, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = searchParams.get(key)
+    if (value && value.trim()) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
+function findAutoInitScript(): HTMLScriptElement | null {
+  if (document.currentScript instanceof HTMLScriptElement) {
+    return document.currentScript
+  }
+
+  const scripts = Array.from(document.querySelectorAll('script[src]')) as HTMLScriptElement[]
+  for (let index = scripts.length - 1; index >= 0; index -= 1) {
+    const script = scripts[index]
+    const src = script.getAttribute('src') || ''
+    if (!src.includes('sdk.js')) {
+      continue
+    }
+    try {
+      const url = new URL(src, window.location.href)
+      if (getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.agentId)) {
+        return script
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return null
+}
+
+function getAutoInitConfig(script: HTMLScriptElement): WidgetConfig | null {
+  const src = script.getAttribute('src') || script.src
+  if (!src) {
+    return null
+  }
+
+  let url: URL
+  try {
+    url = new URL(src, window.location.href)
+  } catch {
+    return null
+  }
+
+  const agentId = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.agentId)
+  if (!agentId) {
+    return null
+  }
+
+  const config: WidgetConfig = { agentId }
+
+  const apiBase = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.apiBase)
+  if (apiBase) {
+    config.apiBase = apiBase
+  }
+
+  const themeColor = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.themeColor)
+  if (themeColor) {
+    config.themeColor = themeColor
+  }
+
+  const welcomeMessage = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.welcomeMessage)
+  if (welcomeMessage) {
+    config.welcomeMessage = welcomeMessage
+  }
+
+  const language = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.language)
+  if (language) {
+    config.language = language
+  }
+
+  const position = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.position)
+  if (position === 'left' || position === 'right') {
+    config.position = position
+  }
+
+  const theme = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.theme)
+  if (theme === 'light' || theme === 'dark' || theme === 'auto') {
+    config.theme = theme
+  }
+
+  const turnstileSiteKey = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.turnstileSiteKey)
+  if (turnstileSiteKey) {
+    config.turnstileSiteKey = turnstileSiteKey
+  }
+
+  return config
+}
+
+(function bootstrapBasjooWidget() {
+  const globalWindow = window as Window & typeof globalThis & {
+    __basjooWidgetAutoInitScheduled?: boolean
+  }
+
+  const script = findAutoInitScript()
+  if (!script) {
+    return
+  }
+
+  const config = getAutoInitConfig(script)
+  if (!config) {
+    return
+  }
+
+  if (globalWindow.__basjooWidgetAutoInitScheduled) {
+    return
+  }
+  globalWindow.__basjooWidgetAutoInitScheduled = true
+
+  const start = () => {
+    void new BasjooWidget(config).init()
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true })
+    return
+  }
+
+  start()
+})()

@@ -189,24 +189,22 @@ export default function SystemSettings() {
 
   const getEmbedCode = () => {
     const apiBase = getEmbedApiBase()
-    const sdkVersion = '2.0.2'
+    const sdkVersion = '2.1.0'
     const turnstileComment = agent?.enable_turnstile
       ? `\n<!-- Bot protection enabled for this agent -->`
       : ''
     const sdkUrl = new URL(`${apiBase}/sdk.js`)
     sdkUrl.searchParams.set('v', sdkVersion)
-
-    const widgetConfig = {
-      agentId: settings.agent_id || '',
-      apiBase,
-      themeColor: settings.widget_color || undefined,
+    if (settings.agent_id) {
+      sdkUrl.searchParams.set('agentId', settings.agent_id)
+    }
+    sdkUrl.searchParams.set('apiBase', apiBase)
+    if (settings.widget_color) {
+      sdkUrl.searchParams.set('themeColor', settings.widget_color)
     }
 
     return `<!-- ${t('appName')} Widget -->
-<script src="${sdkUrl.toString()}"></script>
-<script>
-  new window.BasjooWidget(${JSON.stringify(widgetConfig, null, 2)}).init()
-</script>${turnstileComment}`
+<script async src="${sdkUrl.toString()}"></script>${turnstileComment}`
   }
 
   const handleCopyEmbedCode = async () => {

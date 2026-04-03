@@ -297,19 +297,17 @@
       const sdkVersion = String(Date.now());
       const sdkUrl = new URL(`${apiBase}/sdk.js`);
       sdkUrl.searchParams.set('v', sdkVersion);
-
-      const widgetConfig = {
-        agentId,
-        apiBase,
-        themeColor,
-      };
+      if (agentId) {
+        sdkUrl.searchParams.set('agentId', agentId);
+      }
+      sdkUrl.searchParams.set('apiBase', apiBase);
+      if (themeColor) {
+        sdkUrl.searchParams.set('themeColor', themeColor);
+      }
 
       const embedCode = [
         '<!-- Basjoo Widget 嵌入代码 -->',
-        `<script src="${sdkUrl.toString()}"><` + '/script>',
-        '<script>',
-        `  new window.BasjooWidget(${JSON.stringify(widgetConfig, null, 2)}).init()`,
-        '<' + '/script>',
+        `<script async src="${sdkUrl.toString()}"><` + '/script>',
       ].join('\n');
 
       embedCodeElement.textContent = embedCode;
@@ -320,8 +318,7 @@
       }
 
       await loadSdk(sdkUrl.toString());
-      new window.BasjooWidget(widgetConfig).init();
-      statusElement.textContent = '已加载公开配置并初始化 Widget';
+      statusElement.textContent = '已加载公开配置并通过单脚本模式初始化 Widget';
     } catch (error) {
       apiBaseElement.textContent = fallbackApiBase;
       agentIdElement.textContent = '加载失败';
