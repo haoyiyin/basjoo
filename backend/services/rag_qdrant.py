@@ -302,6 +302,14 @@ class QdrantRAGService:
 
                 context_parts.append(f"[Source {i}] Q: {question}\nA: {answer}")
 
+        context_parts.append(
+            "Citation rules:\n"
+            "- If you reference a URL source, cite it inline with markdown using a placeholder like [keyword](#source-1).\n"
+            "- Only use source numbers that appear above.\n"
+            "- Do not invent or write raw external URLs yourself.\n"
+            "- Do not create visible links for QA sources."
+        )
+
         return "\n\n".join(context_parts)
 
     def extract_sources(

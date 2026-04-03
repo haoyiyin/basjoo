@@ -78,6 +78,23 @@ interface ChatHistoryMessage {
   sources?: Source[];
 }
 
+function replaceSourcePlaceholders(content: string, sources: Source[] = []): string {
+  if (!content) {
+    return content;
+  }
+
+  return content.replace(/\[([^\]]+)\]\(#source-(\d+)\)/g, (_match, label: string, sourceIndexText: string) => {
+    const sourceIndex = Number(sourceIndexText) - 1;
+    const source = sources[sourceIndex];
+
+    if (!source || source.type !== 'url' || !source.url || !/^https?:\/\//.test(source.url)) {
+      return label;
+    }
+
+    return `[${label}](${source.url})`;
+  });
+}
+
 const AUTO_INIT_SCRIPT_PARAM_MAP = {
   agentId: ['agentId', 'agent_id'],
   apiBase: ['apiBase', 'api_base'],
@@ -999,100 +1016,6 @@ class BasjooWidget {
         text-align: right;
       }
 
-      #basjoo-widget-container .basjoo-source-list {
-        margin-top: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-
-      .basjoo-source-header {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: ${mutedColor};
-      }
-
-      .basjoo-source-item {
-        background: ${inputBg};
-        border: 1px solid ${borderColor};
-        border-radius: 10px;
-        overflow: hidden;
-      }
-
-      .basjoo-source-toggle {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 12px;
-        border: none;
-        background: transparent;
-        cursor: pointer;
-        text-align: left;
-        color: inherit;
-      }
-
-      .basjoo-source-item[open] .basjoo-source-arrow {
-        transform: rotate(180deg);
-      }
-
-      .basjoo-source-index {
-        width: 18px;
-        height: 18px;
-        border-radius: 6px;
-        background: ${this.config.themeColor};
-        color: white;
-        font-size: 10px;
-        font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-      }
-
-      .basjoo-source-title {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-      }
-
-      .basjoo-source-arrow {
-        color: ${mutedColor};
-        transition: transform 0.2s ease;
-        flex-shrink: 0;
-      }
-
-      .basjoo-source-body {
-        padding: 0 12px 12px;
-        border-top: 1px solid ${borderColor};
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .basjoo-source-link {
-        color: ${this.adjustColor(this.config.themeColor, -10)};
-        text-decoration: none;
-        font-size: 12px;
-        word-break: break-all;
-      }
-
-      .basjoo-source-link:hover {
-        text-decoration: underline;
-      }
-
-      .basjoo-source-snippet {
-        font-size: 12px;
-        color: ${mutedColor};
-        line-height: 1.5;
-      }
-
       .basjoo-thinking {
         display: inline-flex;
         align-items: center;
@@ -1316,16 +1239,13 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'citationSources' | 'document' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'openSource' | 'thinking'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
       quotaExceeded: { 'en-US': 'Daily message limit reached', 'zh-CN': '今日消息已达上限' },
       takenOverNotice: { 'en-US': 'Your conversation has been transferred to a human agent. Please wait for their reply.', 'zh-CN': '已转接人工客服，请等待回复。' },
       inputPlaceholder: { 'en-US': 'Type your question...', 'zh-CN': '输入您的问题...' },
-      citationSources: { 'en-US': 'Citation Sources', 'zh-CN': '引用来源' },
-      openSource: { 'en-US': 'Open source', 'zh-CN': '打开来源' },
-      document: { 'en-US': 'Document', 'zh-CN': '文档' },
       messageTooLong: { 'en-US': 'Message too long (max 2000 characters)', 'zh-CN': '消息过长（最多2000字符）' },
       greetingBubble: { 'en-US': 'Hi! How can I help you?', 'zh-CN': '你好！有什么可以帮您？' },
       newMessage: { 'en-US': 'New message', 'zh-CN': '新消息' },
@@ -1424,100 +1344,14 @@ class BasjooWidget {
     element.innerHTML = this.renderMarkdown(content) + (includeCursor ? '<span class="basjoo-stream-cursor"></span>' : '');
   }
 
-  private createSourceList(sources: Source[]): HTMLElement {
-    const sourceList = document.createElement('div');
-    sourceList.className = 'basjoo-source-list';
-    if (!sources || sources.length === 0) {
-      return sourceList;
-    }
-
-    const header = document.createElement('div');
-    header.className = 'basjoo-source-header';
-    header.innerHTML = `
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M9 12h6"></path>
-        <path d="M12 9v6"></path>
-        <circle cx="12" cy="12" r="10"></circle>
-      </svg>
-      <span>${this.getText('citationSources')}</span>
-    `;
-    sourceList.appendChild(header);
-
-    sources.forEach((source, index) => {
-      const item = document.createElement('details');
-      item.className = 'basjoo-source-item';
-
-      const summary = document.createElement('summary');
-      summary.className = 'basjoo-source-toggle';
-      const title = source.title ?? source.url ?? this.getText('document');
-
-      const indexBadge = document.createElement('span');
-      indexBadge.className = 'basjoo-source-index';
-      indexBadge.textContent = String(index + 1);
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'basjoo-source-title';
-      titleSpan.textContent = title;
-
-      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      arrow.setAttribute('class', 'basjoo-source-arrow');
-      arrow.setAttribute('width', '14');
-      arrow.setAttribute('height', '14');
-      arrow.setAttribute('viewBox', '0 0 24 24');
-      arrow.setAttribute('fill', 'none');
-      arrow.setAttribute('stroke', 'currentColor');
-      arrow.setAttribute('stroke-width', '2');
-
-      const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      polyline.setAttribute('points', '6 9 12 15 18 9');
-      arrow.appendChild(polyline);
-
-      summary.appendChild(indexBadge);
-      summary.appendChild(titleSpan);
-      summary.appendChild(arrow);
-
-      const body = document.createElement('div');
-      body.className = 'basjoo-source-body';
-      if (source.url) {
-        const link = document.createElement('a');
-        link.className = 'basjoo-source-link';
-        link.href = source.url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.textContent = `${this.getText('openSource')}: ${source.url}`;
-        body.appendChild(link);
-      }
-
-      const snippetText = source.snippet ?? source.question ?? source.title ?? source.url ?? this.getText('document');
-      if (snippetText) {
-        const snippet = document.createElement('div');
-        snippet.className = 'basjoo-source-snippet';
-        snippet.textContent = snippetText;
-        body.appendChild(snippet);
-      }
-
-      item.appendChild(summary);
-      if (body.childNodes.length > 0) {
-        item.appendChild(body);
-      }
-      sourceList.appendChild(item);
-    });
-
-    return sourceList;
-  }
-
   private createMessageElement(message: ChatMessage): HTMLDivElement {
     const messageDiv = document.createElement('div');
     messageDiv.className = `basjoo-message basjoo-message-${message.role}`;
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'basjoo-message-content';
-    this.updateMessageContent(contentDiv, message.content);
+    this.updateMessageContent(contentDiv, replaceSourcePlaceholders(message.content, message.sources));
     messageDiv.appendChild(contentDiv);
-
-    if (message.sources && message.sources.length > 0) {
-      messageDiv.appendChild(this.createSourceList(message.sources));
-    }
 
     const timeDiv = document.createElement('div');
     timeDiv.className = 'basjoo-message-time';
@@ -1647,14 +1481,12 @@ class BasjooWidget {
     const cursor = this.streamingMessage.querySelector('.basjoo-stream-cursor');
     cursor?.remove();
     this.currentStreamSources = sources;
-
-    if (sources.length > 0) {
-      this.streamingMessage.appendChild(this.createSourceList(sources));
-    }
+    const finalContent = replaceSourcePlaceholders(this.currentStreamContent, sources);
+    this.updateMessageContent(this.streamingMessageContent, finalContent);
 
     this.messages.push({
       role: 'assistant',
-      content: this.currentStreamContent,
+      content: finalContent,
       sources,
       timestamp: new Date(),
     });

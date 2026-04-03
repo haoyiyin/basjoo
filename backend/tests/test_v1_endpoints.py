@@ -2,6 +2,20 @@ import json
 
 import pytest
 
+from api.v1.endpoints import replace_source_placeholders
+
+
+def test_replace_source_placeholders_uses_only_url_sources():
+    reply = "See [website](#source-1), [faq](#source-2), and [missing](#source-5)."
+    sources = [
+        {"type": "url", "url": "https://example.com/page"},
+        {"type": "qa", "question": "FAQ"},
+    ]
+
+    result = replace_source_placeholders(reply, sources)
+
+    assert result == "See [website](https://example.com/page), faq, and missing."
+
 
 @pytest.mark.asyncio
 async def test_list_urls_empty(client):
@@ -179,6 +193,148 @@ async def test_chat_stream_hides_internal_errors(public_client, default_agent_id
     assert "event: content" in body
     assert "event: done" in body
     assert "Sorry, the service is currently limited." in body
+
+
+@pytest.mark.asyncio
+async def test_chat_response_replaces_url_placeholders(public_client, default_agent_id, monkeypatch):
+    from api.v1 import endpoints
+
+    class PlaceholderLLM:
+        def __init__(self):
+            self.last_usage = None
+
+        async def chat_completion(self, *args, **kwargs):
+            yield "Use [website](#source-1) and [faq](#source-2)."
+
+        def get_last_usage(self):
+            return self.last_usage
+
+    async def fake_retrieve_async(*args, **kwargs):
+        return [
+            {
+                "type": "url",
+                "content": "Website content for testing inline citations.",
+                "metadata": {
+                    "title": "Example",
+                    "url": "https://example.com/page",
+                },
+            },
+            {
+                "type": "qa",
+                "content": "FAQ answer content.",
+                "metadata": {
+                    "question": "FAQ",
+                    "qa_id": "qa-1",
+                },
+            },
+        ]
+
+    monkeypatch.setattr(endpoints, "get_llm_service", lambda **kwargs: PlaceholderLLM())
+    monkeypatch.setattr(endpoints, "ensure_vector_services", lambda **kwargs: type(
+        "FakeRAG",
+        (),
+        {
+            "retrieve_async": staticmethod(fake_retrieve_async),
+            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] Q: FAQ\nA: Answer"),
+        },
+    )())
+
+    response = await public_client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "Tell me about the website",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reply"] == "Use [website](https://example.com/page) and faq."
+    assert payload["sources"][0]["url"] == "https://example.com/page"
+    assert payload["sources"][1]["type"] == "qa"
+
+    history_response = await public_client.get(
+        f"/api/v1/chat/messages?session_id={payload['session_id']}"
+    )
+    assert history_response.status_code == 200
+    assistant_messages = [message for message in history_response.json() if message["role"] == "assistant"]
+    assert assistant_messages[-1]["content"] == "Use [website](https://example.com/page) and faq."
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_replaces_url_placeholders(public_client, default_agent_id, monkeypatch):
+    from api.v1 import endpoints
+
+    class PlaceholderLLM:
+        def __init__(self):
+            self.last_usage = None
+
+        async def chat_completion(self, *args, **kwargs):
+            yield "Use"
+            yield " [website](#source-1)"
+            yield " and [faq](#source-2)."
+
+        def get_last_usage(self):
+            return self.last_usage
+
+    async def fake_retrieve_async(*args, **kwargs):
+        return [
+            {
+                "type": "url",
+                "content": "Website content for testing inline citations.",
+                "metadata": {
+                    "title": "Example",
+                    "url": "https://example.com/page",
+                },
+            },
+            {
+                "type": "qa",
+                "content": "FAQ answer content.",
+                "metadata": {
+                    "question": "FAQ",
+                    "qa_id": "qa-1",
+                },
+            },
+        ]
+
+    monkeypatch.setattr(endpoints, "get_llm_service", lambda **kwargs: PlaceholderLLM())
+    monkeypatch.setattr(endpoints, "ensure_vector_services", lambda **kwargs: type(
+        "FakeRAG",
+        (),
+        {
+            "retrieve_async": staticmethod(fake_retrieve_async),
+            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] Q: FAQ\nA: Answer"),
+        },
+    )())
+
+    response = await public_client.post(
+        "/api/v1/chat/stream",
+        json={
+            "agent_id": default_agent_id,
+            "message": "Tell me about the website",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "event: sources" in body
+    assert "event: content" in body
+    assert "#source-1" in body
+
+    done_payload = None
+    for raw_event in body.strip().split("\n\n"):
+        if raw_event.startswith("event: done"):
+            payload_lines = [line.split(":", 1)[1].strip() for line in raw_event.splitlines() if line.startswith("data:")]
+            done_payload = json.loads("\n".join(payload_lines))
+            break
+
+    assert done_payload is not None
+    history_response = await public_client.get(
+        f"/api/v1/chat/messages?session_id={done_payload['session_id']}"
+    )
+    assert history_response.status_code == 200
+    assistant_messages = [message for message in history_response.json() if message["role"] == "assistant"]
+    assert assistant_messages[-1]["content"] == "Use [website](https://example.com/page) and faq."
 
 
 @pytest.mark.asyncio

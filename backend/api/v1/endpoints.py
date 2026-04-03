@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -412,6 +413,33 @@ def build_chat_sources(retrieval_results: List[Dict[str, Any]]) -> List[Dict[str
     return sources
 
 
+_SOURCE_PLACEHOLDER_PATTERN = re.compile(r"\[([^\]]+)\]\(#source-(\d+)\)")
+
+
+def replace_source_placeholders(reply: str, sources: List[Dict[str, Any]]) -> str:
+    """Replace trusted source placeholders with real URLs and strip invalid ones."""
+    if not reply:
+        return reply
+
+    def _replace(match: re.Match[str]) -> str:
+        label = match.group(1)
+        source_index = int(match.group(2)) - 1
+        if source_index < 0 or source_index >= len(sources):
+            return label
+
+        source = sources[source_index]
+        if source.get("type") != "url":
+            return label
+
+        url = source.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            return label
+
+        return f"[{label}]({url})"
+
+    return _SOURCE_PLACEHOLDER_PATTERN.sub(_replace, reply)
+
+
 def build_chat_usage(
     messages: List[Dict[str, str]], reply: str, use_mock_llm: bool
 ) -> Optional[Dict[str, int]]:
@@ -759,7 +787,10 @@ async def prepare_chat_request(
     if context:
         system_content += (
             f"\n\nKnowledge base:\n{context}\n\n"
-            "Please answer based on the above knowledge base content."
+            "Please answer based on the above knowledge base content. "
+            "When you cite a URL source in the reply body, use markdown links with placeholders like "
+            "[keyword](#source-1) and only use the source numbers provided in the knowledge base. "
+            "Do not create visible links for QA sources or invent any external URLs."
         )
     else:
         system_content += (
@@ -1024,7 +1055,7 @@ async def chat(
             session_id=session_public_id,
         )
 
-    reply = "".join(reply_parts)
+    reply = replace_source_placeholders("".join(reply_parts), sources)
     real_usage = llm.get_last_usage()
     if real_usage:
         logger.info("chat usage from provider: %s", real_usage)
@@ -1242,7 +1273,7 @@ async def chat_stream(
             )
             return
 
-        reply = "".join(reply_parts)
+        reply = replace_source_placeholders("".join(reply_parts), sources)
         real_usage = llm.get_last_usage()
         if real_usage:
             logger.info("chat stream usage from provider: %s", real_usage)

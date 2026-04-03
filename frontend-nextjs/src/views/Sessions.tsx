@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
 import HelpTooltip from '../components/HelpTooltip'
+import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useIsMobile } from '../hooks/useMediaQuery'
 import { WS_BASE_URL } from '../lib/env'
 
@@ -610,9 +611,9 @@ export default function Sessions() {
                           <div style={{
                             fontSize: 'var(--text-base)',
                             lineHeight: 1.6,
-                            whiteSpace: 'pre-wrap',
+                            whiteSpace: msg.role === 'user' ? 'pre-wrap' : undefined,
                           }}>
-                            {msg.content}
+                            {msg.role === 'user' ? msg.content : <MarkdownRenderer content={msg.content} />}
                           </div>
                           <div style={{
                             fontSize: 'var(--text-xs)',
