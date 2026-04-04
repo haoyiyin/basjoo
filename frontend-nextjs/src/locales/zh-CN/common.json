@@ -273,6 +273,8 @@
     "apiBase": "API 基础地址",
     "modelName": "模型名称",
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
+    "modelNamePreferNonThinking": "建议优先配置非思考模型，通常更稳定，也更容易控制最终输出。",
+    "modelNameThinkingAdvice": "如需使用自带思考模型，请先在 Playground 中充分测试后再用于正式场景。",
     "modelNameTip1": "不同模型有不同的性能和成本特点。",
     "modelNameTip2": "确保您的API密钥支持所选模型。",
     "temperature": "温度",

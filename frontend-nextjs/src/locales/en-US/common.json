@@ -273,6 +273,8 @@
     "apiBase": "API Base URL",
     "modelName": "Model Name",
     "modelNameDesc": "Specify the LLM model to use, such as deepseek-chat, gpt-4, etc.",
+    "modelNamePreferNonThinking": "We recommend configuring a non-thinking model first, as it is usually more stable and easier to control in final output.",
+    "modelNameThinkingAdvice": "If you plan to use a built-in thinking model, test it thoroughly in Playground before using it in production scenarios.",
     "modelNameTip1": "Different models have different performance and cost characteristics.",
     "modelNameTip2": "Ensure your API key supports the selected model.",
     "temperature": "Temperature",

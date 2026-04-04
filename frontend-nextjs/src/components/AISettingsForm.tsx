@@ -607,6 +607,18 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
             color: 'var(--color-text-secondary)',
           }}>
             {t('labels.temperature')} ({formData.temperature})
+            <HelpTooltip
+              title={t('labels.temperature')}
+              content={[
+                t('labels.temperatureDesc'),
+                t('labels.tempTip1'),
+                t('labels.tempTip2'),
+                t('labels.tempTip3'),
+                t('labels.tempAdvice'),
+              ]}
+              position="top"
+              size="xs"
+            />
           </label>
           <input
             type="range"
@@ -712,6 +724,16 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
             color: 'var(--color-text-secondary)',
           }}>
             {t('labels.modelName')}
+            <HelpTooltip
+              title={t('labels.modelName')}
+              content={[
+                t('labels.modelNameDesc'),
+                t('labels.modelNamePreferNonThinking'),
+                t('labels.modelNameThinkingAdvice'),
+              ]}
+              position="top"
+              size="xs"
+            />
           </label>
           <input
             type="text"
