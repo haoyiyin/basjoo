@@ -32,6 +32,50 @@ The stack also uses **SQLite** for application data, **Redis** for rate limiting
 - Admin authentication and dashboard management flows
 - Dockerized development and production-style deployment paths
 
+## Feature walkthrough
+
+### Admin dashboard overview
+
+The admin dashboard is the operational center for configuring agents, reviewing knowledge coverage, and accessing the major management modules.
+
+![English admin dashboard screenshot](resource/screenshots/admin/en-US/dashboard.png)
+
+### Playground and AI configuration
+
+The Playground lets admins test replies, inspect retrieval behavior, and adjust model/provider settings from the same workflow.
+
+![English playground screenshot](resource/screenshots/admin/en-US/playground.png)
+
+### Website knowledge management
+
+The Websites page handles URL ingestion, crawling, auto-fetch settings, and retraining/index-refresh workflows for web content.
+
+![English website management screenshot](resource/screenshots/admin/en-US/websites.png)
+
+### Q&A knowledge management
+
+The Q&A page is used to create, batch import, edit, and rebuild structured question/answer knowledge.
+
+![English Q&A management screenshot](resource/screenshots/admin/en-US/qa.png)
+
+### Session operations
+
+The Sessions page shows live conversations, supports human takeover, and gives operators a single place to monitor visitor activity.
+
+![English sessions screenshot](resource/screenshots/admin/en-US/sessions.png)
+
+### System settings and widget appearance
+
+System Settings covers language/theme preferences, widget appearance, embed behavior, and other operational controls.
+
+![English system settings screenshot](resource/screenshots/admin/en-US/system-settings.png)
+
+### Embedded widget experience
+
+The widget provides the visitor-facing chat window with persisted sessions, multilingual copy, streaming responses, and knowledge-assisted replies.
+
+![English widget screenshot](resource/screenshots/widget/en-US/widget-window.png)
+
 ## Tech stack
 
 ### Backend

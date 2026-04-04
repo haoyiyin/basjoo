@@ -35,6 +35,50 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 - 管理员认证与后台管理流程
 - Docker 化的开发和生产风格部署路径
 
+## 功能演示
+
+### 管理后台总览
+
+管理后台是配置智能体、查看知识覆盖情况、进入各个运营模块的统一入口。
+
+![中文后台总览截图](resource/screenshots/admin/zh-CN/dashboard.png)
+
+### Playground 与 AI 配置
+
+Playground 页面可以测试回复效果、观察检索结果，并联动调整模型与服务商配置。
+
+![中文 Playground 截图](resource/screenshots/admin/zh-CN/playground.png)
+
+### 网站知识管理
+
+网站管理页面用于添加 URL、执行抓取、配置自动抓取，并触发训练/索引更新流程。
+
+![中文网站管理截图](resource/screenshots/admin/zh-CN/websites.png)
+
+### Q&A 知识管理
+
+Q&A 页面用于录入、批量导入、编辑问答条目，并在保存后重建知识索引。
+
+![中文 Q&A 管理截图](resource/screenshots/admin/zh-CN/qa.png)
+
+### 会话中心
+
+会话中心展示实时对话列表，支持人工接管，并帮助运营人员统一查看访客会话状态。
+
+![中文会话中心截图](resource/screenshots/admin/zh-CN/sessions.png)
+
+### 系统设置与 Widget 外观
+
+系统设置页面用于管理语言/主题偏好、Widget 外观、嵌入行为及其它后台配置。
+
+![中文系统设置截图](resource/screenshots/admin/zh-CN/system-settings.png)
+
+### 嵌入式 Widget 聊天窗口
+
+Widget 提供访客侧聊天入口，支持会话持久化、多语言文案、流式回复和知识辅助回答。
+
+![中文 Widget 截图](resource/screenshots/widget/zh-CN/widget-window.png)
+
 ## 技术栈
 
 ### 后端
