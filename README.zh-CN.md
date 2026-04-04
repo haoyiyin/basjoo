@@ -30,7 +30,7 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 - 基于 Server-Sent Events 的流式聊天回复
 - 可嵌入网站的聊天组件，并带有会话持久化能力
 - 根据访客语言自动翻译 widget 文案
-- 面向公开聊天入口的可选 Cloudflare Turnstile 验证
+- 面向公开聊天入口的按 Agent 配置的 Widget 域名白名单
 - 离线智能体兜底回复与管理端错误告警
 - 管理员认证与后台管理流程
 - Docker 化的开发和生产风格部署路径
@@ -170,8 +170,6 @@ pytest tests/test_api.py::test_name
 - `DEFAULT_AGENT_ID`
 - `JINA_API_KEY`
 - `DEEPSEEK_API_KEY`
-- `TURNSTILE_SITE_KEY`
-- `TURNSTILE_SECRET_KEY`
 - `ALLOWED_ORIGINS`
 - `ALLOWED_METHODS`
 - `ALLOWED_HEADERS`
@@ -254,7 +252,7 @@ pytest tests/test_api.py::test_name
 - 将访客 ID / 会话 ID 保存在 `localStorage`
 - 从 `/api/v1/chat/stream` 流式接收回复
 - 在人工接管场景后轮询新的助手消息
-- 在发送消息前按需加载并执行 Cloudflare Turnstile
+- 在配置时依赖服务端的 Widget 来源白名单校验
 
 后端会直接提供与 widget 相关的资源，包括 `/sdk.js`。
 

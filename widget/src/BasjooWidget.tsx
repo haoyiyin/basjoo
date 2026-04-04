@@ -13,29 +13,15 @@ interface WidgetConfig {
   language?: 'auto' | string;
   position?: 'left' | 'right';
   theme?: 'light' | 'dark' | 'auto';
-  turnstileSiteKey?: string;
 }
 
-interface TurnstilePublicConfig {
-  turnstile_enabled?: boolean;
-  turnstile_site_key?: string | null;
+interface PublicWidgetConfig {
   widget_title?: string | null;
   widget_title_i18n?: Record<string, string> | null;
   welcome_message?: string | null;
   welcome_message_i18n?: Record<string, string> | null;
   widget_color?: string | null;
   default_agent_id?: string | null;
-}
-
-interface TurnstileApi {
-  render: (container: HTMLElement | string, options: Record<string, unknown>) => string;
-  execute: (widgetIdOrSelector: string) => void;
-  reset: (widgetIdOrSelector: string) => void;
-  remove: (widgetIdOrSelector: string) => void;
-}
-
-type WindowWithTurnstile = Window & typeof globalThis & {
-  turnstile?: TurnstileApi;
 }
 
 interface ChatMessage {
@@ -141,7 +127,6 @@ const AUTO_INIT_SCRIPT_PARAM_MAP = {
   language: ['language', 'locale'],
   position: ['position'],
   theme: ['theme'],
-  turnstileSiteKey: ['turnstileSiteKey', 'turnstile_site_key'],
 } as const
 
 const LOCALE_ALIAS_MAP: Record<string, string> = {
@@ -202,10 +187,6 @@ class BasjooWidget {
   private thinkingTimerId: number | null = null;
   private currentStreamContent = '';
   private currentStreamSources: Source[] = [];
-  private turnstileSiteKey: string | null = null;
-  private turnstileWidgetId: string | null = null;
-  private turnstileContainer: HTMLDivElement | null = null;
-  private turnstileScriptPromise: Promise<void> | null = null;
 
   constructor(config: WidgetConfig) {
     const apiBase = this.detectApiBase(config.apiBase);
@@ -222,7 +203,6 @@ class BasjooWidget {
       language: config.language || 'auto',
       position: config.position || 'right',
       theme: config.theme || 'auto',
-      turnstileSiteKey: config.turnstileSiteKey || '',
     };
 
     this.STORAGE_KEY = `basjoo_session_${this.config.agentId}`;
@@ -440,8 +420,6 @@ class BasjooWidget {
   }
 
   private async loadPublicConfig() {
-    this.turnstileSiteKey = this.config.turnstileSiteKey || null;
-
     if (!this.config.apiBase) {
       console.warn('[Basjoo Widget] Skipping public config fetch because apiBase could not be determined.');
       return;
@@ -457,7 +435,7 @@ class BasjooWidget {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const data = await response.json() as TurnstilePublicConfig
+      const data = await response.json() as PublicWidgetConfig
       if (!this.config.agentId && data.default_agent_id) {
         this.config.agentId = data.default_agent_id
       }
@@ -468,8 +446,6 @@ class BasjooWidget {
       if (!this.hasWelcomeMessageOverride) {
         this.config.welcomeMessage = this.resolveI18nText(data.welcome_message_i18n, data.welcome_message || '你好！有什么可以帮助您的吗？')
       }
-      const turnstileConfig = data
-      this.turnstileSiteKey = turnstileConfig.turnstile_enabled ? (turnstileConfig.turnstile_site_key || null) : null
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
       console.warn('[Basjoo Widget] Failed to load public config, using defaults.', error)
@@ -1724,9 +1700,11 @@ class BasjooWidget {
         case 'thinking_done':
           this.hideThinkingIndicator();
           break;
-        case 'content':
-          this.appendToStreamingMessage((payload as StreamEventPayload).content || '');
+        case 'content': {
+          const contentChunk = (payload as StreamEventPayload).content || '';
+          this.appendToStreamingMessage(contentChunk);
           break;
+        }
         case 'done': {
           const donePayload = payload as StreamDoneMeta;
           if (donePayload.session_id) {
@@ -1753,8 +1731,14 @@ class BasjooWidget {
           streamCompleted = true;
           break;
         }
-        case 'error':
-          throw new Error((payload as StreamErrorPayload).error || 'Stream failed');
+        case 'error': {
+          const streamErrorPayload = payload as StreamErrorPayload;
+          const streamError = new Error(streamErrorPayload.error || 'Stream failed');
+          if (streamErrorPayload.code) {
+            streamError.name = streamErrorPayload.code;
+          }
+          throw streamError;
+        }
         default:
           break;
       }
@@ -1781,27 +1765,34 @@ class BasjooWidget {
     const streamReadTimeout = 90_000;
 
     while (!streamCompleted) {
-      const { done, value } = await Promise.race([
-        reader.read(),
-        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
-          window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
-        }),
-      ]);
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let timeoutId: number | null = null;
+      try {
+        const { done, value } = await Promise.race([
+          reader.read(),
+          new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+            timeoutId = window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
+          }),
+        ]);
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
-      let delimiter = findEventDelimiter();
-      while (delimiter) {
-        const rawEvent = buffer.slice(0, delimiter.index);
-        buffer = buffer.slice(delimiter.index + delimiter.length);
-        processEvent(rawEvent.replace(/\r\n/g, '\n'));
-        if (streamCompleted) {
+        let delimiter = findEventDelimiter();
+        while (delimiter) {
+          const rawEvent = buffer.slice(0, delimiter.index);
+          buffer = buffer.slice(delimiter.index + delimiter.length);
+          processEvent(rawEvent.replace(/\r\n/g, '\n'));
+          if (streamCompleted) {
+            break;
+          }
+          delimiter = findEventDelimiter();
+        }
+
+        if (done) {
           break;
         }
-        delimiter = findEventDelimiter();
-      }
-
-      if (done) {
-        break;
+      } finally {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+        }
       }
     }
 
@@ -1818,110 +1809,12 @@ class BasjooWidget {
   /**
    * 发送消息
    */
-  private async ensureTurnstileReady(): Promise<void> {
-    if (!this.turnstileSiteKey) {
-      return;
-    }
-
-    if ((window as WindowWithTurnstile).turnstile && this.turnstileWidgetId) {
-      return;
-    }
-
-    if (!this.turnstileScriptPromise) {
-      this.turnstileScriptPromise = new Promise<void>((resolve, reject) => {
-        const existingScript = document.querySelector('script[src^="https://challenges.cloudflare.com/turnstile/v0/api.js"]') as HTMLScriptElement | null;
-        if (existingScript) {
-          if ((window as WindowWithTurnstile).turnstile) {
-            resolve();
-            return;
-          }
-          existingScript.addEventListener('load', () => resolve(), { once: true });
-          existingScript.addEventListener('error', () => reject(new Error('Failed to load Turnstile')), { once: true });
-          return;
-        }
-
-        const script = document.createElement('script');
-        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-        script.async = true;
-        script.defer = true;
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error('Failed to load Turnstile'));
-        document.head.appendChild(script);
-      });
-    }
-
-    await this.turnstileScriptPromise;
-
-    if (!(window as WindowWithTurnstile).turnstile) {
-      throw new Error('Turnstile unavailable');
-    }
-
-    if (!this.turnstileContainer) {
-      this.turnstileContainer = document.createElement('div');
-      this.turnstileContainer.style.display = 'none';
-      document.body.appendChild(this.turnstileContainer);
-    }
-
-    const turnstile = (window as WindowWithTurnstile).turnstile;
-    if (!turnstile) {
-      throw new Error('Turnstile unavailable');
-    }
-
-    if (!this.turnstileWidgetId) {
-      this.turnstileWidgetId = turnstile.render(this.turnstileContainer, {
-        sitekey: this.turnstileSiteKey,
-        execution: 'execute',
-        appearance: 'execute',
-      });
-    }
-  }
-
-  private async getTurnstileToken(): Promise<string | undefined> {
-    if (!this.turnstileSiteKey) {
-      return undefined;
-    }
-
-    await this.ensureTurnstileReady();
-
-    if (!(window as WindowWithTurnstile).turnstile || !this.turnstileWidgetId) {
-      throw new Error('Turnstile unavailable');
-    }
-
-    return await new Promise<string>((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => reject(new Error('Turnstile timeout')), 10000);
-      const widgetId = this.turnstileWidgetId as string;
-      const container = this.turnstileContainer as HTMLElement;
-
-      (window as WindowWithTurnstile).turnstile!.remove(widgetId);
-      this.turnstileWidgetId = (window as WindowWithTurnstile).turnstile!.render(container, {
-        sitekey: this.turnstileSiteKey,
-        execution: 'execute',
-        appearance: 'execute',
-        callback: (token: string) => {
-          window.clearTimeout(timeoutId);
-          resolve(token);
-        },
-        'error-callback': () => {
-          window.clearTimeout(timeoutId);
-          reject(new Error('Turnstile failed'));
-        },
-        'expired-callback': () => {
-          window.clearTimeout(timeoutId);
-          reject(new Error('Turnstile expired'));
-        },
-      });
-
-      (window as WindowWithTurnstile).turnstile!.execute(this.turnstileWidgetId);
-    });
-  }
-
   private async sendMessageWithRetry(message: string): Promise<void> {
     let lastError: unknown = null;
 
     for (let attempt = 0; attempt <= 1; attempt++) {
       try {
         const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const turnstileToken = await this.getTurnstileToken();
 
         const response = await fetch(`${this.config.apiBase}/api/v1/chat/stream`, {
           method: 'POST',
@@ -1936,7 +1829,6 @@ class BasjooWidget {
             session_id: this.sessionId || undefined,
             visitor_id: this.visitorId,
             timezone: userTimezone,
-            turnstile_token: turnstileToken,
           }),
         });
 
@@ -1957,10 +1849,13 @@ class BasjooWidget {
       } catch (error: any) {
         lastError = error;
         const errorText = String(error?.message || '');
-        const isRetryable = error instanceof TypeError
+        const hasPartialContent = this.currentStreamContent.trim().length > 0;
+        const isRetryable = !hasPartialContent && (
+          error instanceof TypeError
           || errorText.includes('fetch')
           || errorText.includes('Failed to fetch')
-          || errorText.includes('Stream ended unexpectedly');
+          || errorText.includes('Stream ended unexpectedly')
+        );
 
         if (!isRetryable || attempt >= 1) {
           throw error;
@@ -2013,9 +1908,9 @@ class BasjooWidget {
         consoleHint = `Request may be blocked by CORS, network connectivity, or an incorrect apiBase. Current apiBase: ${this.config.apiBase || '(not set)'}`;
       } else if (errorText.includes('429') || errorText.toLowerCase().includes('quota')) {
         errorMessage = this.getText('quotaExceeded');
-      } else if (errorText.toLowerCase().includes('turnstile') || errorText.toLowerCase().includes('bot verification') || errorText.includes('403')) {
+      } else if (error?.name === 'ORIGIN_NOT_ALLOWED' || errorText.toLowerCase().includes('widget origin not allowed')) {
         errorMessage = this.getText('sendFailed');
-        consoleHint = 'Bot protection verification failed. Check Turnstile site key, secret key, and allowed hostnames.';
+        consoleHint = 'Widget request was blocked because the current page origin is not on the allowed domain list.';
       } else if (errorText.includes('401')) {
         consoleHint = 'Authentication failed. Please check the agent configuration and public API access.';
       }
@@ -2043,14 +1938,6 @@ class BasjooWidget {
     this.stopTitleBlink();
     this.hideThinkingIndicator();
     this.removeStreamingMessage();
-
-    const turnstile = (window as WindowWithTurnstile).turnstile;
-    if (turnstile && this.turnstileWidgetId) {
-      turnstile.remove(this.turnstileWidgetId);
-    }
-    this.turnstileContainer?.remove();
-    this.turnstileContainer = null;
-    this.turnstileWidgetId = null;
 
     this.container?.remove();
     const styles = document.getElementById('basjoo-widget-styles');
@@ -2144,11 +2031,6 @@ function getAutoInitConfig(script: HTMLScriptElement): WidgetConfig | null {
   const theme = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.theme)
   if (theme === 'light' || theme === 'dark' || theme === 'auto') {
     config.theme = theme
-  }
-
-  const turnstileSiteKey = getSearchParamValue(url.searchParams, AUTO_INIT_SCRIPT_PARAM_MAP.turnstileSiteKey)
-  if (turnstileSiteKey) {
-    config.turnstileSiteKey = turnstileSiteKey
   }
 
   return config

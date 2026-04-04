@@ -54,7 +54,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Chat, RAG, and indexing
 
-- Main chat APIs live in `backend/api/v1/endpoints.py`. They handle admin config APIs, public chat APIs, SSE streaming, session creation, quota checks, Turnstile checks, and source normalization.
+- Main chat APIs live in `backend/api/v1/endpoints.py`. They handle admin config APIs, public chat APIs, SSE streaming, session creation, quota checks, widget origin whitelist checks, and source normalization.
 - URL and Q&A ingestion lives in `backend/api/v1/url_endpoints.py`. URL creation queues async fetch jobs; refetch/crawl/import operations feed the same knowledge-source tables.
 - Full index rebuilds live in `backend/api/v1/index_endpoints.py`. Rebuild jobs chunk URL/QA content, persist `DocumentChunk` rows, and replace the agent’s Qdrant collection.
 - Retrieval/storage logic is split across `backend/services/qdrant_store.py`, `backend/services/rag_qdrant.py`, `backend/services/scraper.py`, `backend/services/crawler.py`, and `backend/services/llm_service.py`.
@@ -71,7 +71,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Widget structure
 
 - `widget/src/BasjooWidget.tsx` is a self-contained embeddable widget implementation bundled with esbuild.
-- The widget auto-detects `apiBase`, streams chat via SSE, persists visitor/session IDs in `localStorage`, polls for human-takeover replies, and optionally loads Cloudflare Turnstile before sending messages.
+- The widget auto-detects `apiBase`, streams chat via SSE, persists visitor/session IDs in `localStorage`, and polls for human-takeover replies.
 - Backend `/sdk.js`, `/basjoo-logo.png`, and widget demo routes are served directly from `backend/main.py`.
 
 ### Deployment notes

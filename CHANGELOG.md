@@ -11,7 +11,7 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 ### Added
 
 - Next.js admin/dashboard frontend in `frontend-nextjs/` with auth, dashboard, sessions, URLs, Q&A, playground, and system settings flows.
-- Embeddable widget package in `widget/` with browser-side session persistence, SSE chat streaming, source rendering, and optional Cloudflare Turnstile support.
+- Embeddable widget package in `widget/` with browser-side session persistence, SSE chat streaming, source rendering, and per-agent origin whitelist support.
 - Widget copy auto-translation by visitor locale.
 - Offline agent fallback replies plus admin-side error alerts for unavailable upstream model responses.
 - FastAPI v1 APIs for chat, streaming chat, agent configuration, URL ingestion, Q&A management, index rebuilds, task status, and admin session access.

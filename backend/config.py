@@ -166,10 +166,6 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 1000
     rate_limit_burst_size: int = 200
 
-    # Cloudflare Turnstile
-    turnstile_site_key: str = ""
-    turnstile_secret_key: str = ""
-
     # 日志
     log_level: str = "info"
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import AdminLayout from '../components/AdminLayout'
@@ -30,7 +30,7 @@ export default function SystemSettings() {
   const [agentIdCopied, setAgentIdCopied] = useState(false)
   const [agent, setAgent] = useState<Agent | null>(null)
   const [serverApiBase, setServerApiBase] = useState<string>('')
-  const turnstileSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const widgetOriginsSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [settings, setSettings] = useState({
     agent_id: '',
@@ -40,10 +40,7 @@ export default function SystemSettings() {
     history_days: 30,
     rate_limit_per_hour: 100,
     restricted_reply: '',
-    enable_turnstile: false,
-    turnstile_site_key: '',
-    turnstile_secret_key: '',
-    turnstile_secret_key_set: false,
+    allowed_widget_origins_text: '',
   })
 
   useEffect(() => {
@@ -77,6 +74,43 @@ export default function SystemSettings() {
     }
   }, [saveStatus])
 
+  const parseAllowedWidgetOriginsText = useCallback((value: string) => {
+    return value
+      .split(/[\n,]/)
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  }, [])
+
+  const validateAllowedWidgetOriginsText = useCallback((value: string) => {
+    const normalizedOrigins: string[] = []
+    const invalidOrigins: string[] = []
+    const seenOrigins = new Set<string>()
+
+    for (const origin of parseAllowedWidgetOriginsText(value)) {
+      try {
+        const url = new URL(origin)
+        const protocol = url.protocol.toLowerCase()
+        if ((protocol !== 'http:' && protocol !== 'https:') || !url.host || url.username || url.password) {
+          invalidOrigins.push(origin)
+          continue
+        }
+
+        const normalizedOrigin = `${protocol}//${url.host.toLowerCase()}`
+        if (!seenOrigins.has(normalizedOrigin)) {
+          seenOrigins.add(normalizedOrigin)
+          normalizedOrigins.push(normalizedOrigin)
+        }
+      } catch {
+        invalidOrigins.push(origin)
+      }
+    }
+
+    return {
+      normalizedOrigins,
+      invalidOrigins,
+    }
+  }, [parseAllowedWidgetOriginsText])
+
   const fetchSettings = async () => {
     try {
       setLoading(true)
@@ -92,10 +126,7 @@ export default function SystemSettings() {
         history_days: agentData.history_days || 30,
         rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
         restricted_reply: agentData.restricted_reply || '',
-        enable_turnstile: agentData.enable_turnstile ?? false,
-        turnstile_site_key: agentData.turnstile_site_key || '',
-        turnstile_secret_key: '',
-        turnstile_secret_key_set: agentData.turnstile_secret_key_set ?? false,
+        allowed_widget_origins_text: (agentData.allowed_widget_origins || []).join('\n'),
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : t('errors.loadFailed'))
@@ -104,7 +135,10 @@ export default function SystemSettings() {
     }
   }
 
-  const handleAutoSave = useCallback(async (newSettings: typeof settings) => {
+  const handleAutoSave = useCallback(async (
+    newSettings: typeof settings,
+    allowedWidgetOriginsValidation = validateAllowedWidgetOriginsText(newSettings.allowed_widget_origins_text)
+  ) => {
     if (!agent) return
     setSaveStatus('saving')
     setError(null)
@@ -116,24 +150,25 @@ export default function SystemSettings() {
         history_days: newSettings.history_days,
         rate_limit_per_hour: newSettings.rate_limit_per_hour,
         restricted_reply: newSettings.restricted_reply,
-        enable_turnstile: newSettings.enable_turnstile,
-        turnstile_site_key: newSettings.turnstile_site_key || null,
-        turnstile_secret_key: newSettings.turnstile_secret_key || null,
+        ...(allowedWidgetOriginsValidation.invalidOrigins.length === 0
+          ? { allowed_widget_origins: allowedWidgetOriginsValidation.normalizedOrigins }
+          : {}),
       }
 
       const updatedAgent = await api.updateAgent(agent.id, updateData)
       setAgent(updatedAgent)
       setSettings(prev => ({
         ...prev,
-        turnstile_secret_key: '',
-        turnstile_secret_key_set: updatedAgent.turnstile_secret_key_set ?? prev.turnstile_secret_key_set,
+        ...(allowedWidgetOriginsValidation.invalidOrigins.length === 0
+          ? { allowed_widget_origins_text: (updatedAgent.allowed_widget_origins || []).join('\n') }
+          : {}),
       }))
       setSaveStatus('saved')
     } catch (err) {
       setError(err instanceof Error ? err.message : t('errors.saveFailed'))
       setSaveStatus('error')
     }
-  }, [agent, t])
+  }, [agent, t, validateAllowedWidgetOriginsText])
 
   const updateSetting = useCallback(<K extends keyof typeof settings>(
     key: K,
@@ -152,26 +187,36 @@ export default function SystemSettings() {
     handleAutoSave(newSettings)
   }, [updateSetting, handleAutoSave])
 
-  const handleTurnstileChange = useCallback(<K extends 'enable_turnstile' | 'turnstile_site_key' | 'turnstile_secret_key'>(
-    key: K,
-    value: typeof settings[K]
-  ) => {
-    const newSettings = updateSetting(key, value)
-    if (turnstileSaveTimeoutRef.current) {
-      clearTimeout(turnstileSaveTimeoutRef.current)
+  const handleWidgetOriginsChange = useCallback((value: string) => {
+    const newSettings = updateSetting('allowed_widget_origins_text', value)
+    const validation = validateAllowedWidgetOriginsText(value)
+    if (widgetOriginsSaveTimeoutRef.current) {
+      clearTimeout(widgetOriginsSaveTimeoutRef.current)
     }
-    turnstileSaveTimeoutRef.current = setTimeout(() => {
-      handleAutoSave(newSettings)
+
+    if (validation.invalidOrigins.length > 0) {
+      setSaveStatus('idle')
+      return
+    }
+
+    widgetOriginsSaveTimeoutRef.current = setTimeout(() => {
+      handleAutoSave(newSettings, validation)
     }, 500)
-  }, [updateSetting, handleAutoSave])
+  }, [updateSetting, handleAutoSave, validateAllowedWidgetOriginsText])
 
   useEffect(() => {
     return () => {
-      if (turnstileSaveTimeoutRef.current) {
-        clearTimeout(turnstileSaveTimeoutRef.current)
+      if (widgetOriginsSaveTimeoutRef.current) {
+        clearTimeout(widgetOriginsSaveTimeoutRef.current)
       }
     }
   }, [])
+
+  const allowedWidgetOriginsValidation = useMemo(
+    () => validateAllowedWidgetOriginsText(settings.allowed_widget_origins_text),
+    [settings.allowed_widget_origins_text, validateAllowedWidgetOriginsText]
+  )
+  const hasAllowedWidgetOriginsError = allowedWidgetOriginsValidation.invalidOrigins.length > 0
 
   const getEmbedApiBase = () => {
     const rawApiBase = serverApiBase || API_BASE_URL || 'http://localhost:8000'
@@ -190,9 +235,6 @@ export default function SystemSettings() {
   const getEmbedCode = () => {
     const apiBase = getEmbedApiBase()
     const sdkVersion = '2.1.0'
-    const turnstileComment = agent?.enable_turnstile
-      ? `\n<!-- Bot protection enabled for this agent -->`
-      : ''
     const sdkUrl = new URL(`${apiBase}/sdk.js`)
     sdkUrl.searchParams.set('v', sdkVersion)
     if (settings.agent_id) {
@@ -204,7 +246,7 @@ export default function SystemSettings() {
     }
 
     return `<!-- ${t('appName')} Widget -->
-<script async src="${sdkUrl.toString()}"></script>${turnstileComment}`
+<script async src="${sdkUrl.toString()}"></script>`
   }
 
   const handleCopyEmbedCode = async () => {
@@ -975,178 +1017,6 @@ export default function SystemSettings() {
             <div style={{
               width: '40px',
               height: '40px',
-              background: 'linear-gradient(135deg, #F97316, #EA580C)',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
-                <path d="M12 6a6 6 0 1 0 6 6 6 6 0 0 0-6-6z"/>
-                <path d="M12 10a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/>
-              </svg>
-            </div>
-            <div>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-2)',
-              }}>
-                <h2 style={{
-                  fontSize: 'var(--text-lg)',
-                  fontWeight: 600,
-                  color: 'var(--color-text-primary)',
-                }}>
-                  {t('labels.botProtection')}
-                </h2>
-                <HelpTooltip
-                  title={t('labels.botProtection')}
-                  content={[
-                    t('labels.botProtectionDesc'),
-                    t('labels.enableTurnstile'),
-                    t('labels.turnstileSiteKeyDesc'),
-                    t('labels.turnstileSecretKeyDesc'),
-                  ]}
-                  position="top"
-                  size="sm"
-                />
-              </div>
-              <p style={{
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-muted)',
-              }}>
-                {t('labels.botProtectionShort')}
-              </p>
-            </div>
-          </div>
-
-          <div style={{
-            padding: 'var(--space-3)',
-            background: 'var(--color-bg-tertiary)',
-            borderRadius: 'var(--radius-md)',
-            marginBottom: 'var(--space-4)',
-          }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
-              <div>
-                <div style={{
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 500,
-                  color: 'var(--color-text-primary)',
-                }}>
-                  {t('labels.enableTurnstile')}
-                </div>
-                <div style={{
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-muted)',
-                }}>
-                  {t('labels.enableTurnstileDesc')}
-                </div>
-              </div>
-              <button
-                onClick={() => handleTurnstileChange('enable_turnstile', !settings.enable_turnstile)}
-                style={{
-                  width: '44px',
-                  height: '24px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  background: settings.enable_turnstile ? 'var(--color-accent-primary)' : 'var(--color-bg-secondary)',
-                  cursor: 'pointer',
-                  position: 'relative',
-                  transition: 'background 0.2s',
-                }}
-              >
-                <span style={{
-                  position: 'absolute',
-                  top: '2px',
-                  left: settings.enable_turnstile ? '22px' : '2px',
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '10px',
-                  background: 'white',
-                  transition: 'left 0.2s',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                }} />
-              </button>
-            </div>
-          </div>
-
-          {settings.enable_turnstile && (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
-              gap: 'var(--space-4)',
-            }}>
-              <div>
-                <label style={{
-                  display: 'block',
-                  marginBottom: 'var(--space-2)',
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 500,
-                  color: 'var(--color-text-secondary)',
-                }}>
-                  {t('labels.turnstileSiteKey')}
-                </label>
-                <input
-                  type="text"
-                  value={settings.turnstile_site_key}
-                  onChange={(e) => handleTurnstileChange('turnstile_site_key', e.target.value)}
-                  placeholder={t('placeholders.turnstileSiteKey')}
-                />
-                <p style={{
-                  marginTop: 'var(--space-2)',
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-muted)',
-                }}>
-                  {t('labels.turnstileSiteKeyDesc')}
-                </p>
-              </div>
-              <div>
-                <label style={{
-                  display: 'block',
-                  marginBottom: 'var(--space-2)',
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 500,
-                  color: 'var(--color-text-secondary)',
-                }}>
-                  {t('labels.turnstileSecretKey')}
-                </label>
-                <input
-                  type="password"
-                  value={settings.turnstile_secret_key}
-                  onChange={(e) => handleTurnstileChange('turnstile_secret_key', e.target.value)}
-                  placeholder={settings.turnstile_secret_key_set ? t('labels.turnstileSecretConfigured') : t('placeholders.turnstileSecretKey')}
-                />
-                <p style={{
-                  marginTop: 'var(--space-2)',
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-muted)',
-                }}>
-                  {t('labels.turnstileSecretKeyDesc')}
-                  {settings.turnstile_secret_key_set ? ` · ${t('labels.turnstileSecretConfigured')}` : ''}
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="glass-card" style={{
-          padding: 'var(--space-6)',
-          marginBottom: 'var(--space-6)',
-        }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-3)',
-            marginBottom: 'var(--space-4)',
-          }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
               background: 'linear-gradient(135deg, #10B981, #059669)',
               borderRadius: 'var(--radius-md)',
               display: 'flex',
@@ -1193,6 +1063,99 @@ export default function SystemSettings() {
             </div>
           </div>
 
+          <div style={{
+            marginBottom: 'var(--space-4)',
+            padding: 'var(--space-4)',
+            background: 'var(--color-bg-tertiary)',
+            borderRadius: 'var(--radius-md)',
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-2)',
+              marginBottom: 'var(--space-2)',
+            }}>
+              <div style={{
+                fontSize: 'var(--text-sm)',
+                fontWeight: 600,
+                color: 'var(--color-text-primary)',
+              }}>
+                {t('labels.embedWhitelist')}
+              </div>
+              <HelpTooltip
+                title={t('labels.embedWhitelist')}
+                content={[
+                  t('labels.embedWhitelistDesc'),
+                  t('labels.embedWhitelistTip1'),
+                  t('labels.embedWhitelistTip2'),
+                  t('labels.embedWhitelistTip3'),
+                ]}
+                position="top"
+                size="sm"
+              />
+            </div>
+            <p style={{
+              marginTop: 0,
+              marginBottom: 'var(--space-3)',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--color-text-muted)',
+            }}>
+              {t('labels.embedWhitelistShort')}
+            </p>
+            <label style={{
+              display: 'block',
+              marginBottom: 'var(--space-2)',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 500,
+              color: 'var(--color-text-secondary)',
+            }}>
+              {t('labels.embedWhitelistInput')}
+            </label>
+            <textarea
+              value={settings.allowed_widget_origins_text}
+              onChange={(e) => handleWidgetOriginsChange(e.target.value)}
+              rows={4}
+              placeholder={t('placeholders.embedWhitelist')}
+              aria-invalid={hasAllowedWidgetOriginsError}
+              style={{
+                width: '100%',
+                resize: 'vertical',
+                borderColor: hasAllowedWidgetOriginsError ? 'rgba(239, 68, 68, 0.45)' : undefined,
+              }}
+            />
+            <div style={{
+              marginTop: 'var(--space-2)',
+              display: 'grid',
+              gap: '4px',
+            }}>
+              <p style={{
+                margin: 0,
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+              }}>
+                {t('labels.embedWhitelistInputDesc')}
+              </p>
+              <p style={{
+                margin: 0,
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+              }}>
+                {t('labels.embedWhitelistFormatHint')}
+              </p>
+              {hasAllowedWidgetOriginsError && (
+                <p style={{
+                  margin: 0,
+                  fontSize: 'var(--text-xs)',
+                  color: '#ef4444',
+                }}>
+                  {t('labels.embedWhitelistInvalid', {
+                    origins: allowedWidgetOriginsValidation.invalidOrigins.join(', '),
+                  })}
+                </p>
+              )}
+            </div>
+          </div>
+
           {settings.agent_id && (
             <button
               onClick={handleCopyAgentId}
@@ -1212,7 +1175,7 @@ export default function SystemSettings() {
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                  Agent ID
+                  {t('labels.agentId')}
                 </span>
                 <code style={{
                   fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',

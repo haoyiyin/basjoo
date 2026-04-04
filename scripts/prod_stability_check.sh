@@ -186,7 +186,6 @@ print(json.dumps({
   "jina_api_key": os.environ["JINA_API_KEY"],
   "model": os.environ.get("AUTORESEARCH_MODEL", "deepseek-chat"),
   "embedding_model": os.environ.get("AUTORESEARCH_EMBEDDING_MODEL", "jina-embeddings-v3"),
-  "enable_turnstile": False,
   "enable_context": True,
   "temperature": 0.2,
   "max_tokens": 512,

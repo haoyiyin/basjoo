@@ -140,9 +140,7 @@ class Agent(Base):
     last_error_code = Column(String(50), nullable=True)
     last_error_message = Column(Text, nullable=True)
     last_error_at = Column(DateTime(timezone=True), nullable=True)
-    enable_turnstile = Column(Boolean, nullable=False, default=False)
-    turnstile_site_key = Column(String(255), nullable=True, default=None)
-    turnstile_secret_key = Column(String(255), nullable=True, default=None)
+    allowed_widget_origins = Column(JSON, nullable=True, default=None)
 
     # 人设类型
     persona_type = Column(

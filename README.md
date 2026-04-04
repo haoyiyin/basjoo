@@ -27,7 +27,7 @@ The stack also uses **SQLite** for application data, **Redis** for rate limiting
 - Streaming chat responses over Server-Sent Events
 - Embeddable website widget with session persistence
 - Widget copy auto-translation by visitor locale
-- Optional Cloudflare Turnstile verification for public chat
+- Per-agent widget domain whitelist for public chat embeds
 - Offline agent fallback replies and admin-side error alerts
 - Admin authentication and dashboard management flows
 - Dockerized development and production-style deployment paths
@@ -167,8 +167,6 @@ Important runtime settings used in the current codebase include:
 - `DEFAULT_AGENT_ID`
 - `JINA_API_KEY`
 - `DEEPSEEK_API_KEY`
-- `TURNSTILE_SITE_KEY`
-- `TURNSTILE_SECRET_KEY`
 - `ALLOWED_ORIGINS`
 - `ALLOWED_METHODS`
 - `ALLOWED_HEADERS`
@@ -251,7 +249,7 @@ The active UI is the Next.js app in `frontend-nextjs/`.
 - stores visitor/session IDs in `localStorage`
 - streams chat replies from `/api/v1/chat/stream`
 - polls for assistant replies after human takeover scenarios
-- optionally loads and executes Cloudflare Turnstile before sending messages
+- relies on server-side widget origin whitelist checks when configured
 
 The backend serves widget-related assets directly, including `/sdk.js`.
 

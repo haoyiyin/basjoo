@@ -92,9 +92,7 @@ export interface Agent {
   welcome_message?: string;
   welcome_message_i18n?: Record<string, string> | null;
   history_days?: number;
-  enable_turnstile?: boolean;
-  turnstile_site_key?: string | null;
-  turnstile_secret_key_set?: boolean;
+  allowed_widget_origins?: string[] | null;
   is_active: boolean;
   created_at: string;
   updated_at?: string;

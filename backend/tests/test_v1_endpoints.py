@@ -382,7 +382,7 @@ async def test_taken_over_session_skips_rate_limit_reply(client, default_agent_i
 
     await client.put(
         f"/api/v1/agent?agent_id={agent_id}",
-        json={"rate_limit_per_hour": 1, "restricted_reply": "Limited", "enable_turnstile": False},
+        json={"rate_limit_per_hour": 1, "restricted_reply": "Limited"},
     )
 
     first_response = await client.post(
@@ -441,3 +441,97 @@ async def test_admin_sessions_web_payload_keeps_public_session_id(client, defaul
     matched_session = next(item for item in sessions if item["session_id"] == business_session_id)
     assert matched_session["id"]
     assert matched_session["session_id"] == business_session_id
+
+
+@pytest.mark.asyncio
+async def test_public_chat_blocks_unlisted_widget_origin(client, public_client, default_agent_id):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    update_response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"allowed_widget_origins": ["https://allowed.example"]},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["allowed_widget_origins"] == ["https://allowed.example"]
+
+    blocked_response = await public_client.post(
+        "/api/v1/chat",
+        headers={"Origin": "https://blocked.example"},
+        json={
+            "agent_id": default_agent_id,
+            "message": "Blocked origin",
+        },
+    )
+    assert blocked_response.status_code == 403
+    assert blocked_response.json()["detail"] == "Widget origin not allowed"
+
+
+@pytest.mark.asyncio
+async def test_public_chat_allows_listed_widget_origin(client, public_client, default_agent_id):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"allowed_widget_origins": ["https://allowed.example"]},
+    )
+
+    allowed_response = await public_client.post(
+        "/api/v1/chat",
+        headers={"Origin": "https://allowed.example"},
+        json={
+            "agent_id": default_agent_id,
+            "message": "Allowed origin",
+        },
+    )
+    assert allowed_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_public_polling_blocks_unlisted_widget_origin(client, public_client, default_agent_id):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"allowed_widget_origins": ["https://allowed.example"]},
+    )
+
+    chat_response = await public_client.post(
+        "/api/v1/chat",
+        headers={"Origin": "https://allowed.example"},
+        json={
+            "agent_id": default_agent_id,
+            "message": "Allowed origin",
+        },
+    )
+    assert chat_response.status_code == 200
+    session_id = chat_response.json()["session_id"]
+
+    blocked_poll_response = await public_client.get(
+        f"/api/v1/chat/messages?session_id={session_id}",
+        headers={"Referer": "https://blocked.example/page"},
+    )
+    assert blocked_poll_response.status_code == 403
+    assert blocked_poll_response.json()["detail"] == "Widget origin not allowed"
+
+
+@pytest.mark.asyncio
+async def test_admin_chat_bypasses_widget_origin_whitelist(client, default_agent_id):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"allowed_widget_origins": ["https://allowed.example"]},
+    )
+
+    response = await client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "Admin bypass",
+        },
+    )
+    assert response.status_code == 200

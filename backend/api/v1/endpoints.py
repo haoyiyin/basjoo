@@ -54,12 +54,12 @@ from api.v1.schemas import (
     SourcesQASummary,
     SessionListItem,
     SessionListResponse,
+    normalize_widget_origin,
 )
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
 from services.llm_service import get_llm_service
-from services.turnstile_service import verify_turnstile_token
 from services.auth_service import AuthService
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
@@ -253,11 +253,9 @@ def build_agent_config(agent: Agent) -> dict:
         "rate_limit_per_hour": agent.rate_limit_per_hour,
         "restricted_reply": agent.restricted_reply,
         "restricted_reply_i18n": agent.restricted_reply_i18n,
-        "enable_turnstile": agent.enable_turnstile,
-        "turnstile_site_key": agent.turnstile_site_key,
-        "turnstile_secret_key_set": bool(agent.turnstile_secret_key),
         "persona_type": agent.persona_type,
         "widget_title": agent.widget_title,
+        "allowed_widget_origins": agent.allowed_widget_origins or [],
         "widget_title_i18n": agent.widget_title_i18n,
         "widget_color": agent.widget_color,
         "welcome_message": agent.welcome_message,
@@ -459,6 +457,64 @@ def build_chat_usage(
     }
 
 
+WIDGET_ORIGIN_NOT_ALLOWED_DETAIL = "Widget origin not allowed"
+WIDGET_ORIGIN_NOT_ALLOWED_CODE = "ORIGIN_NOT_ALLOWED"
+
+
+def normalize_request_origin(value: str) -> Optional[str]:
+    raw_value = value.strip()
+    if not raw_value:
+        return None
+
+    try:
+        return normalize_widget_origin(raw_value)
+    except ValueError:
+        return None
+
+
+def get_request_origin(request: Request) -> Optional[str]:
+    origin = normalize_request_origin(request.headers.get("Origin", ""))
+    if origin:
+        return origin
+
+    referer = request.headers.get("Referer", "")
+    return normalize_request_origin(referer)
+
+
+def enforce_widget_origin_whitelist(
+    agent: Agent,
+    request: Request,
+    admin_user: Optional[AdminUser] = None,
+) -> None:
+    if admin_user:
+        return
+
+    configured_origins = agent.allowed_widget_origins or []
+    if not configured_origins:
+        return
+
+    allowed_origins = {
+        origin for origin in configured_origins if isinstance(origin, str) and origin
+    }
+    if not allowed_origins:
+        return
+
+    request_origin = get_request_origin(request)
+    if request_origin in allowed_origins:
+        return
+
+    logger.warning(
+        "Blocked widget request from origin %r for agent %s. Allowed origins: %s",
+        request_origin,
+        agent.id,
+        sorted(allowed_origins),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
+    )
+
+
 def get_stream_error_code(error: HTTPException) -> str:
     """Map HTTP errors to stream-friendly error codes."""
     detail = str(error.detail)
@@ -470,10 +526,10 @@ def get_stream_error_code(error: HTTPException) -> str:
             return "QUOTA_EXCEEDED"
         return "RATE_LIMITED"
     if error.status_code == status.HTTP_403_FORBIDDEN:
-        return "BOT_PROTECTION_FAILED"
+        if detail == WIDGET_ORIGIN_NOT_ALLOWED_DETAIL:
+            return WIDGET_ORIGIN_NOT_ALLOWED_CODE
+        return "FORBIDDEN"
     if error.status_code == status.HTTP_400_BAD_REQUEST:
-        if "Turnstile verification required" in detail:
-            return "BOT_PROTECTION_REQUIRED"
         return "BAD_REQUEST"
     return "CHAT_ERROR"
 
@@ -484,8 +540,8 @@ def get_safe_stream_error_message(code: str) -> str:
         "NOT_FOUND": "Requested resource was not found",
         "QUOTA_EXCEEDED": "Daily message quota exceeded",
         "RATE_LIMITED": "Rate limit exceeded",
-        "BOT_PROTECTION_REQUIRED": "Bot verification is required",
-        "BOT_PROTECTION_FAILED": "Bot verification failed",
+        WIDGET_ORIGIN_NOT_ALLOWED_CODE: WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
+        "FORBIDDEN": "Request was denied",
         "BAD_REQUEST": "Invalid chat request",
         "PERSISTENCE_ERROR": "Failed to save streamed chat response",
         "CHAT_ERROR": "Chat stream failed",
@@ -595,29 +651,7 @@ async def prepare_chat_request(
         if token:
             admin_user = await AuthService(db).get_current_admin(token)
 
-    if agent.enable_turnstile and not admin_user:
-        # Use agent-specific keys if configured, otherwise fallback to global settings
-        turnstile_site_key = agent.turnstile_site_key or settings.turnstile_site_key
-        turnstile_secret_key = agent.turnstile_secret_key or settings.turnstile_secret_key
-        if not turnstile_site_key or not turnstile_secret_key:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Turnstile is enabled but not configured",
-            )
-        if not request.turnstile_token:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Turnstile verification required",
-            )
-        client_ip = get_request_client_ip(http_request)
-        verified = await verify_turnstile_token(
-            request.turnstile_token, client_ip, turnstile_secret_key
-        )
-        if not verified:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Turnstile verification failed",
-            )
+    enforce_widget_origin_whitelist(agent, http_request, admin_user)
 
     quota = await check_quota(agent, db)
     if quota.used_messages_today >= quota.max_messages_per_day:
@@ -1353,6 +1387,7 @@ async def chat_stream(
 @router.get("/chat/messages")
 async def get_chat_messages(
     session_id: str,
+    request: Request,
     after_id: int = 0,
     role: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
@@ -1371,6 +1406,13 @@ async def get_chat_messages(
     # 已关闭的会话返回空数组，SDK 收到空数组会清除 sessionId 并开启新会话
     if session.status == "closed":
         return []
+
+    agent_result = await db.execute(select(Agent).where(Agent.id == session.agent_id))
+    agent = agent_result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    enforce_widget_origin_whitelist(agent, request)
 
     # 构建查询条件
     conditions = [
@@ -1965,16 +2007,6 @@ async def get_public_config(
     result = await db.execute(query)
     agent = result.scalar_one_or_none()
 
-    turnstile_site_key = (
-        (agent.turnstile_site_key or settings.turnstile_site_key) if agent else None
-    )
-    turnstile_secret_key = (
-        (agent.turnstile_secret_key or settings.turnstile_secret_key) if agent else None
-    )
-    turnstile_ready = bool(
-        agent and agent.enable_turnstile and turnstile_site_key and turnstile_secret_key
-    )
-
     return {
         "api_base": f"{scheme}://{host}",
         "ws_base": f"wss://{host}" if scheme == "https" else f"ws://{host}",
@@ -1984,8 +2016,6 @@ async def get_public_config(
         "widget_color": agent.widget_color if agent else None,
         "welcome_message": agent.welcome_message if agent else None,
         "welcome_message_i18n": agent.welcome_message_i18n if agent else None,
-        "turnstile_enabled": turnstile_ready,
-        "turnstile_site_key": turnstile_site_key if turnstile_ready else None,
     }
 
 

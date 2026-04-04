@@ -213,16 +213,8 @@ def migrate_sqlite_schema():
                 "DATETIME",
             ),
             (
-                "enable_turnstile",
-                "BOOLEAN NOT NULL DEFAULT 0",
-            ),
-            (
-                "turnstile_site_key",
-                "VARCHAR(255)",
-            ),
-            (
-                "turnstile_secret_key",
-                "VARCHAR(255)",
+                "allowed_widget_origins",
+                "TEXT",
             ),
             (
                 "widget_title_i18n",

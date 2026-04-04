@@ -3,7 +3,23 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
+from urllib.parse import urlsplit
 import re
+
+
+def normalize_widget_origin(origin: str) -> str:
+    raw_origin = origin.strip()
+    if not raw_origin:
+        raise ValueError("Widget origin cannot be empty")
+
+    parsed = urlsplit(raw_origin)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Widget origins must start with http:// or https://")
+
+    if parsed.username or parsed.password:
+        raise ValueError("Widget origins cannot include credentials")
+
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
 
 
 # ========== Chat & Context Schemas ==========
@@ -30,9 +46,6 @@ class ChatRequest(BaseModel):
     timezone: Optional[str] = Field(None, description="客户端时区")
     params: Optional[Dict[str, Any]] = Field(
         None, description="推理参数（temperature, max_tokens等）"
-    )
-    turnstile_token: Optional[str] = Field(
-        None, description="Cloudflare Turnstile verification token"
     )
 
 
@@ -318,15 +331,6 @@ class AgentConfig(BaseModel):
     last_error_code: Optional[str] = None
     last_error_message: Optional[str] = None
     last_error_at: Optional[str] = None
-    enable_turnstile: bool = Field(
-        default=False, description="Enable Cloudflare Turnstile verification"
-    )
-    turnstile_site_key: Optional[str] = Field(
-        default=None, description="Cloudflare Turnstile site key"
-    )
-    turnstile_secret_key_set: bool = Field(
-        default=False, description="Whether Cloudflare Turnstile secret key is configured"
-    )
     persona_type: Optional[str] = Field(
         default="general", description="Persona type: general, customer-service, sales, custom"
     )
@@ -336,6 +340,9 @@ class AgentConfig(BaseModel):
     )
     widget_color: Optional[str] = Field(
         default="#06B6D4", description="Widget theme color"
+    )
+    allowed_widget_origins: List[str] = Field(
+        default_factory=list, description="Allowed widget embed origins"
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     welcome_message_i18n: Optional[Dict[str, str]] = Field(
@@ -396,15 +403,6 @@ class AgentUpdateRequest(BaseModel):
     restricted_reply: Optional[str] = Field(
         None, description="Fallback reply when service is restricted"
     )
-    enable_turnstile: Optional[bool] = Field(
-        None, description="Enable Cloudflare Turnstile verification"
-    )
-    turnstile_site_key: Optional[str] = Field(
-        None, description="Cloudflare Turnstile site key"
-    )
-    turnstile_secret_key: Optional[str] = Field(
-        None, description="Cloudflare Turnstile secret key"
-    )
     persona_type: Optional[str] = Field(
         None, description="Persona type: general, customer-service, sales, custom"
     )
@@ -417,6 +415,9 @@ class AgentUpdateRequest(BaseModel):
     widget_color: Optional[str] = Field(
         None, max_length=20, description="Widget theme color"
     )
+    allowed_widget_origins: Optional[List[str]] = Field(
+        None, description="Allowed widget embed origins"
+    )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     welcome_message_i18n: Optional[Dict[str, str]] = Field(
         None, description="Localized widget welcome messages"
@@ -427,6 +428,25 @@ class AgentUpdateRequest(BaseModel):
     history_days: Optional[int] = Field(
         None, ge=1, le=365, description="Chat history retention days"
     )
+
+    @field_validator("allowed_widget_origins")
+    @classmethod
+    def validate_allowed_widget_origins(
+        cls, origins: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        if origins is None:
+            return None
+
+        normalized_origins: List[str] = []
+        seen_origins = set()
+        for origin in origins:
+            normalized_origin = normalize_widget_origin(origin)
+            if normalized_origin in seen_origins:
+                continue
+            seen_origins.add(normalized_origin)
+            normalized_origins.append(normalized_origin)
+
+        return normalized_origins
 
 
 # ========== Index Management Schemas ==========
