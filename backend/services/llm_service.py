@@ -155,6 +155,28 @@ async def run_with_timeout(awaitable: Awaitable[T], timeout_seconds: int) -> T:
     return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
 
 
+def get_google_visible_text_parts(response_or_chunk: object) -> List[str]:
+    candidates = getattr(response_or_chunk, "candidates", None)
+    if candidates is not None:
+        if not candidates:
+            return []
+
+        content = getattr(candidates[0], "content", None)
+        parts = getattr(content, "parts", None) if content else None
+        if parts is None:
+            return []
+
+        visible_parts = []
+        for part in parts:
+            text = getattr(part, "text", None)
+            if text and not getattr(part, "thought", False):
+                visible_parts.append(text)
+        return visible_parts
+
+    text = getattr(response_or_chunk, "text", None)
+    return [text] if text else []
+
+
 # ========== 抽象基类 ==========
 
 
@@ -672,15 +694,16 @@ class GoogleProvider(BaseLLMService):
                     create_stream_response,
                 )
                 async for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
+                    for text in get_google_visible_text_parts(chunk):
+                        yield text
                         await asyncio.sleep(0)
             else:
                 response = await retry_llm_operation(
                     "google chat request",
                     create_response,
                 )
-                yield response.text
+                for text in get_google_visible_text_parts(response):
+                    yield text
 
         except LLMError:
             raise
