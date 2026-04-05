@@ -8,7 +8,6 @@ from sqlalchemy import select, func, case
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import Any, Dict, List, Optional
 import asyncio
-import json
 import logging
 import re
 import time
@@ -19,7 +18,6 @@ import database
 from database import get_db
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
 from api.endpoints.auth import get_current_admin
-from i18n.core import build_locale_fallbacks, normalize_locale
 from models import (
     Agent,
     URLSource,
@@ -114,110 +112,11 @@ def mask_api_key(api_key: Optional[str]) -> Optional[str]:
     return f"{api_key[:3]}***{api_key[-4:]}"
 
 
-AUTO_TRANSLATED_WIDGET_LOCALES = (
-    "zh-CN",
-    "en-US",
-    "fr-FR",
-    "ja-JP",
-    "de-DE",
-    "es-ES",
-)
-
-
-def resolve_i18n_text(
-    i18n_map: Optional[Dict[str, str]],
-    fallback: Optional[str],
-    locale: Optional[str],
-) -> Optional[str]:
-    if not i18n_map:
-        return fallback
-
-    normalized_map: Dict[str, str] = {}
-    ordered_values: list[str] = []
-    for key, value in i18n_map.items():
-        if not isinstance(value, str):
-            continue
-        cleaned = value.strip()
-        if not cleaned:
-            continue
-        normalized_key = normalize_locale(key) or key
-        normalized_map[normalized_key] = cleaned
-        ordered_values.append(cleaned)
-
-    for candidate in build_locale_fallbacks(locale):
-        if candidate in normalized_map:
-            return normalized_map[candidate]
-
-    for candidate in ("en-US", "zh-CN"):
-        if candidate in normalized_map:
-            return normalized_map[candidate]
-
-    if ordered_values:
-        return ordered_values[0]
-
-    return fallback
-
-
-def detect_text_locale(text: str) -> str:
-    return "zh-CN" if any("\u4e00" <= char <= "\u9fff" for char in text) else "en-US"
-
-
-async def build_auto_translated_i18n_map(
-    agent: Agent,
-    text: Optional[str],
-) -> Optional[Dict[str, str]]:
-    if not text:
-        return None
-
-    normalized_text = text.strip()
-    if not normalized_text:
-        return None
-
-    source_locale = detect_text_locale(normalized_text)
-    target_locales = [locale for locale in AUTO_TRANSLATED_WIDGET_LOCALES if locale != source_locale]
-    translations = {source_locale: normalized_text}
-
-    if not agent.api_key or not target_locales:
-        return translations
-
-    try:
-        llm = get_llm_service(agent, use_mock=False)
-        response_chunks = []
-        async for chunk in llm.chat_completion(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Translate the following UI copy into these locales: "
-                        f"{', '.join(target_locales)}. "
-                        "Preserve tone, intent, and brevity. "
-                        f"Return JSON only with exactly these keys: {', '.join(target_locales)}. "
-                        f"Source locale: {source_locale}. Source text: {normalized_text}"
-                    ),
-                }
-            ],
-            system_prompt=(
-                "You are a professional product localization assistant. "
-                "Return valid JSON only. Do not wrap in markdown."
-            ),
-            stream=False,
-            temperature=0,
-        ):
-            response_chunks.append(chunk)
-
-        response_text = "".join(response_chunks).strip()
-        translated = json.loads(response_text)
-        if not isinstance(translated, dict):
-            return translations
-
-        for locale_key in target_locales:
-            translated_text = translated.get(locale_key)
-            if isinstance(translated_text, str) and translated_text.strip():
-                translations[locale_key] = translated_text.strip()
-    except Exception as exc:
-        logger.warning("Failed to auto-translate widget copy: %s", exc)
-
-    return translations
+def get_restricted_reply(
+    restricted_reply: Optional[str],
+    default: str,
+) -> str:
+    return restricted_reply or default
 
 
 def build_agent_config(agent: Agent) -> dict:
@@ -252,14 +151,11 @@ def build_agent_config(agent: Agent) -> dict:
         "url_fetch_interval_days": agent.url_fetch_interval_days,
         "rate_limit_per_hour": agent.rate_limit_per_hour,
         "restricted_reply": agent.restricted_reply,
-        "restricted_reply_i18n": agent.restricted_reply_i18n,
         "persona_type": agent.persona_type,
         "widget_title": agent.widget_title,
         "allowed_widget_origins": agent.allowed_widget_origins or [],
-        "widget_title_i18n": agent.widget_title_i18n,
         "widget_color": agent.widget_color,
         "welcome_message": agent.welcome_message,
-        "welcome_message_i18n": agent.welcome_message_i18n,
         "history_days": agent.history_days,
         "is_active": agent.is_active,
         "created_at": agent.created_at,
@@ -672,7 +568,6 @@ async def prepare_chat_request(
     agent_embedding_model = agent.embedding_model
     agent_rate_limit_per_hour = agent.rate_limit_per_hour
     agent_restricted_reply = agent.restricted_reply
-    agent_restricted_reply_i18n = agent.restricted_reply_i18n
     use_mock_llm = not agent.api_key
     if use_mock_llm:
         logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
@@ -706,10 +601,9 @@ async def prepare_chat_request(
         )
 
         if messages_last_hour >= agent_rate_limit_per_hour:
-            limit_reply = resolve_i18n_text(
-                agent_restricted_reply_i18n,
-                agent_restricted_reply or "抱歉，当前服务受限，请稍后再试。",
-                request.locale,
+            limit_reply = get_restricted_reply(
+                agent_restricted_reply,
+                "抱歉，当前服务受限，请稍后再试。",
             )
             logger.info(f"Session {request.session_id} exceeded rate limit, returning auto reply")
             return {
@@ -1062,7 +956,6 @@ async def chat(
         # Restricted reply config for graceful LLM failure fallback
         _agent = chat_context["agent"]
         _restricted_reply = _agent.restricted_reply
-        _restricted_reply_i18n = _agent.restricted_reply_i18n
 
     # Phase 2: LLM call without DB connection
     try:
@@ -1077,11 +970,7 @@ async def chat(
             reply_parts.append(chunk)
     except Exception:
         logger.exception("LLM call failed in non-streaming chat")
-        fallback = resolve_i18n_text(
-            _restricted_reply_i18n,
-            _restricted_reply or "抱歉，当前服务繁忙，请稍后再试。",
-            request.locale,
-        )
+        fallback = get_restricted_reply(_restricted_reply, "抱歉，当前服务繁忙，请稍后再试。")
         return ChatResponse(
             reply=fallback,
             sources=sources,
@@ -1194,7 +1083,6 @@ async def chat_stream(
                 # Restricted reply config for graceful LLM failure fallback
                 _agent = chat_context["agent"]
                 _restricted_reply = _agent.restricted_reply
-                _restricted_reply_i18n = _agent.restricted_reply_i18n
 
                 logger.info(
                     "chat_stream prepare done agent_id=%s session_id=%s prepare_ms=%.1f",
@@ -1244,11 +1132,7 @@ async def chat_stream(
                 elapsed = time.monotonic() - stream_start
                 if elapsed > max_stream_duration:
                     logger.warning("Stream timeout after %.0fs", elapsed)
-                    fallback = resolve_i18n_text(
-                        _restricted_reply_i18n,
-                        _restricted_reply or "抱歉，当前服务繁忙，请稍后再试。",
-                        request.locale,
-                    )
+                    fallback = get_restricted_reply(_restricted_reply, "抱歉，当前服务繁忙，请稍后再试。")
                     yield sse_event("content", {"content": fallback})
                     yield sse_event(
                         "done",
@@ -1290,11 +1174,7 @@ async def chat_stream(
         except Exception:
             logger.exception("LLM streaming failed")
             # Graceful fallback: return agent's restricted reply instead of a technical error
-            fallback = resolve_i18n_text(
-                _restricted_reply_i18n,
-                _restricted_reply or "抱歉，当前服务繁忙，请稍后再试。",
-                request.locale,
-            )
+            fallback = get_restricted_reply(_restricted_reply, "抱歉，当前服务繁忙，请稍后再试。")
             yield sse_event("content", {"content": fallback})
             yield sse_event(
                 "done",
@@ -1560,18 +1440,6 @@ async def update_agent(
     persona_type = update_data.get("persona_type")
     if persona_type and persona_type in PERSONA_PRESETS:
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
-
-    auto_translate_fields = {
-        "widget_title": "widget_title_i18n",
-        "welcome_message": "welcome_message_i18n",
-        "restricted_reply": "restricted_reply_i18n",
-    }
-    for source_field, i18n_field in auto_translate_fields.items():
-        if source_field in update_data:
-            update_data[i18n_field] = await build_auto_translated_i18n_map(
-                agent,
-                update_data.get(source_field),
-            )
 
     for field, value in update_data.items():
         setattr(agent, field, value)
@@ -2012,10 +1880,8 @@ async def get_public_config(
         "ws_base": f"wss://{host}" if scheme == "https" else f"ws://{host}",
         "default_agent_id": agent.id if agent else None,
         "widget_title": agent.widget_title if agent else None,
-        "widget_title_i18n": agent.widget_title_i18n if agent else None,
         "widget_color": agent.widget_color if agent else None,
         "welcome_message": agent.welcome_message if agent else None,
-        "welcome_message_i18n": agent.welcome_message_i18n if agent else None,
     }
 
 

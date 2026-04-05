@@ -17,9 +17,7 @@ interface WidgetConfig {
 
 interface PublicWidgetConfig {
   widget_title?: string | null;
-  widget_title_i18n?: Record<string, string> | null;
   welcome_message?: string | null;
-  welcome_message_i18n?: Record<string, string> | null;
   widget_color?: string | null;
   default_agent_id?: string | null;
 }
@@ -128,23 +126,6 @@ const AUTO_INIT_SCRIPT_PARAM_MAP = {
   position: ['position'],
   theme: ['theme'],
 } as const
-
-const LOCALE_ALIAS_MAP: Record<string, string> = {
-  en: 'en-US',
-  fr: 'fr-FR',
-  ja: 'ja-JP',
-  de: 'de-DE',
-  es: 'es-ES',
-  'zh-hans': 'zh-CN',
-  'zh-cn': 'zh-CN',
-  'zh-sg': 'zh-CN',
-  'zh-hant': 'zh-Hant',
-  'zh-tw': 'zh-TW',
-  'zh-hk': 'zh-HK',
-  'zh-mo': 'zh-HK',
-}
-
-const WIDGET_LOCALE_DEFAULTS = ['en-US', 'zh-CN'] as const
 
 function buildDefaultLogoUrl(apiBase: string): string {
   if (!apiBase) {
@@ -286,139 +267,6 @@ class BasjooWidget {
     return 'light';
   }
 
-  private normalizeLocale(locale?: string | null): string | null {
-    if (!locale) {
-      return null
-    }
-
-    const cleaned = locale.trim().replace(/_/g, '-')
-    if (!cleaned) {
-      return null
-    }
-
-    const parts = cleaned.split('-').filter(Boolean)
-    if (parts.length === 0) {
-      return null
-    }
-
-    const normalizedParts = [parts[0].toLowerCase()]
-    for (const part of parts.slice(1)) {
-      if (/^[A-Za-z]{4}$/.test(part)) {
-        normalizedParts.push(part[0].toUpperCase() + part.slice(1).toLowerCase())
-      } else if (/^[A-Za-z]{2,3}$/.test(part)) {
-        normalizedParts.push(part.toUpperCase())
-      } else {
-        normalizedParts.push(part)
-      }
-    }
-
-    const normalized = normalizedParts.join('-')
-    return LOCALE_ALIAS_MAP[normalized.toLowerCase()] || normalized
-  }
-
-  private getPreferredLocales(): string[] {
-    const locales = new Set<string>()
-
-    const explicitLocale = this.config.language !== 'auto'
-      ? this.normalizeLocale(this.config.language)
-      : null
-    if (explicitLocale) {
-      locales.add(explicitLocale)
-    } else {
-      const browserLocales = Array.isArray(navigator.languages) && navigator.languages.length > 0
-        ? navigator.languages
-        : [navigator.language]
-      for (const locale of browserLocales) {
-        const normalized = this.normalizeLocale(locale)
-        if (normalized) {
-          locales.add(normalized)
-        }
-      }
-    }
-
-    for (const locale of WIDGET_LOCALE_DEFAULTS) {
-      locales.add(locale)
-    }
-    return Array.from(locales)
-  }
-
-  private buildLocaleFallbacks(locale?: string | null): string[] {
-    const normalized = this.normalizeLocale(locale)
-    if (!normalized) {
-      return [...WIDGET_LOCALE_DEFAULTS]
-    }
-
-    const fallbacks = [normalized]
-    const language = normalized.split('-', 1)[0]
-    const lowerNormalized = normalized.toLowerCase()
-
-    if (language === 'zh') {
-      if (normalized.includes('Hant') || ['zh-tw', 'zh-hk', 'zh-mo'].includes(lowerNormalized)) {
-        fallbacks.push('zh-Hant', 'zh-TW', 'zh-HK', 'zh-CN', 'zh')
-      } else {
-        fallbacks.push('zh-Hans', 'zh-CN', 'zh')
-      }
-    } else {
-      const preferredMap: Record<string, string> = {
-        en: 'en-US',
-        fr: 'fr-FR',
-        ja: 'ja-JP',
-        de: 'de-DE',
-        es: 'es-ES',
-      }
-      if (preferredMap[language]) {
-        fallbacks.push(preferredMap[language])
-      }
-      fallbacks.push(language)
-    }
-
-    fallbacks.push(...WIDGET_LOCALE_DEFAULTS)
-    return Array.from(new Set(fallbacks.map(item => this.normalizeLocale(item)).filter((item): item is string => Boolean(item))))
-  }
-
-  private getEffectiveLocale(): string {
-    return this.getPreferredLocales()[0] || 'en-US'
-  }
-
-  private resolveI18nText(
-    i18nMap: Record<string, string> | null | undefined,
-    fallback: string,
-  ): string {
-    if (!i18nMap) {
-      return fallback
-    }
-
-    const normalizedEntries = new Map<string, string>()
-    const orderedValues: string[] = []
-    for (const [key, value] of Object.entries(i18nMap)) {
-      if (typeof value !== 'string') {
-        continue
-      }
-      const cleaned = value.trim()
-      if (!cleaned) {
-        continue
-      }
-      const normalizedKey = this.normalizeLocale(key) || key
-      normalizedEntries.set(normalizedKey, cleaned)
-      orderedValues.push(cleaned)
-    }
-
-    for (const locale of this.getPreferredLocales()) {
-      for (const candidate of this.buildLocaleFallbacks(locale)) {
-        const matched = normalizedEntries.get(candidate)
-        if (matched) {
-          return matched
-        }
-      }
-    }
-
-    if (orderedValues.length > 0) {
-      return orderedValues[0]
-    }
-
-    return fallback
-  }
-
   private async loadPublicConfig() {
     if (!this.config.apiBase) {
       console.warn('[Basjoo Widget] Skipping public config fetch because apiBase could not be determined.');
@@ -441,10 +289,10 @@ class BasjooWidget {
       }
       this.config.themeColor = this.config.themeColor || data.widget_color || '#3B82F6'
       if (!this.hasTitleOverride) {
-        this.config.title = this.resolveI18nText(data.widget_title_i18n, data.widget_title || 'AI助手')
+        this.config.title = data.widget_title || 'AI助手'
       }
       if (!this.hasWelcomeMessageOverride) {
-        this.config.welcomeMessage = this.resolveI18nText(data.welcome_message_i18n, data.welcome_message || '你好！有什么可以帮助您的吗？')
+        this.config.welcomeMessage = data.welcome_message || '你好！有什么可以帮助您的吗？'
       }
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
@@ -1250,6 +1098,14 @@ class BasjooWidget {
     this.chatWindow?.classList.add('closing');
   }
 
+  private getRequestLocale(): string {
+    if (this.config.language && this.config.language !== 'auto') {
+      return this.config.language
+    }
+
+    return navigator.language || 'en-US'
+  }
+
   /**
    * Get localized text based on language setting
    */
@@ -1267,7 +1123,10 @@ class BasjooWidget {
       references: { 'en-US': 'References', 'zh-CN': '参考来源' },
     };
 
-    return this.resolveI18nText(texts[key], texts[key]['en-US'] || texts[key]['zh-CN'] || key)
+    const locale = this.getRequestLocale().toLowerCase()
+    return locale.startsWith('zh')
+      ? texts[key]['zh-CN'] || texts[key]['en-US'] || key
+      : texts[key]['en-US'] || texts[key]['zh-CN'] || key
   }
 
   /**
@@ -1825,7 +1684,7 @@ class BasjooWidget {
           body: JSON.stringify({
             agent_id: this.config.agentId,
             message,
-            locale: this.getEffectiveLocale(),
+            locale: this.getRequestLocale(),
             session_id: this.sessionId || undefined,
             visitor_id: this.visitorId,
             timezone: userTimezone,

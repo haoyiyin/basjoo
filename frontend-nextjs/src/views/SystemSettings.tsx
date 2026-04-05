@@ -30,6 +30,7 @@ export default function SystemSettings() {
   const [agentIdCopied, setAgentIdCopied] = useState(false)
   const [agent, setAgent] = useState<Agent | null>(null)
   const [serverApiBase, setServerApiBase] = useState<string>('')
+  const textFieldSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const widgetOriginsSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [settings, setSettings] = useState({
@@ -136,31 +137,19 @@ export default function SystemSettings() {
   }
 
   const handleAutoSave = useCallback(async (
-    newSettings: typeof settings,
-    allowedWidgetOriginsValidation = validateAllowedWidgetOriginsText(newSettings.allowed_widget_origins_text)
+    updateData: Partial<Agent>,
+    options?: { normalizedAllowedWidgetOriginsText?: string }
   ) => {
     if (!agent) return
     setSaveStatus('saving')
     setError(null)
     try {
-      const updateData = {
-        widget_title: newSettings.widget_title,
-        widget_color: newSettings.widget_color,
-        welcome_message: newSettings.welcome_message,
-        history_days: newSettings.history_days,
-        rate_limit_per_hour: newSettings.rate_limit_per_hour,
-        restricted_reply: newSettings.restricted_reply,
-        ...(allowedWidgetOriginsValidation.invalidOrigins.length === 0
-          ? { allowed_widget_origins: allowedWidgetOriginsValidation.normalizedOrigins }
-          : {}),
-      }
-
       const updatedAgent = await api.updateAgent(agent.id, updateData)
       setAgent(updatedAgent)
       setSettings(prev => ({
         ...prev,
-        ...(allowedWidgetOriginsValidation.invalidOrigins.length === 0
-          ? { allowed_widget_origins_text: (updatedAgent.allowed_widget_origins || []).join('\n') }
+        ...(options?.normalizedAllowedWidgetOriginsText !== undefined
+          ? { allowed_widget_origins_text: options.normalizedAllowedWidgetOriginsText }
           : {}),
       }))
       setSaveStatus('saved')
@@ -168,7 +157,7 @@ export default function SystemSettings() {
       setError(err instanceof Error ? err.message : t('errors.saveFailed'))
       setSaveStatus('error')
     }
-  }, [agent, t, validateAllowedWidgetOriginsText])
+  }, [agent, t])
 
   const updateSetting = useCallback(<K extends keyof typeof settings>(
     key: K,
@@ -179,16 +168,30 @@ export default function SystemSettings() {
     return newSettings
   }, [settings])
 
+  const handleTextFieldChange = useCallback((
+    key: 'widget_title' | 'welcome_message' | 'restricted_reply',
+    value: string
+  ) => {
+    updateSetting(key, value)
+    if (textFieldSaveTimeoutRef.current) {
+      clearTimeout(textFieldSaveTimeoutRef.current)
+    }
+
+    textFieldSaveTimeoutRef.current = setTimeout(() => {
+      handleAutoSave({ [key]: value })
+    }, 500)
+  }, [updateSetting, handleAutoSave])
+
   const handleChangeWithAutoSave = useCallback(<K extends keyof typeof settings>(
     key: K,
     value: typeof settings[K]
   ) => {
-    const newSettings = updateSetting(key, value)
-    handleAutoSave(newSettings)
+    updateSetting(key, value)
+    handleAutoSave({ [key]: value })
   }, [updateSetting, handleAutoSave])
 
   const handleWidgetOriginsChange = useCallback((value: string) => {
-    const newSettings = updateSetting('allowed_widget_origins_text', value)
+    updateSetting('allowed_widget_origins_text', value)
     const validation = validateAllowedWidgetOriginsText(value)
     if (widgetOriginsSaveTimeoutRef.current) {
       clearTimeout(widgetOriginsSaveTimeoutRef.current)
@@ -199,13 +202,20 @@ export default function SystemSettings() {
       return
     }
 
+    const normalizedAllowedWidgetOriginsText = validation.normalizedOrigins.join('\n')
     widgetOriginsSaveTimeoutRef.current = setTimeout(() => {
-      handleAutoSave(newSettings, validation)
+      handleAutoSave(
+        { allowed_widget_origins: validation.normalizedOrigins },
+        { normalizedAllowedWidgetOriginsText },
+      )
     }, 500)
   }, [updateSetting, handleAutoSave, validateAllowedWidgetOriginsText])
 
   useEffect(() => {
     return () => {
+      if (textFieldSaveTimeoutRef.current) {
+        clearTimeout(textFieldSaveTimeoutRef.current)
+      }
       if (widgetOriginsSaveTimeoutRef.current) {
         clearTimeout(widgetOriginsSaveTimeoutRef.current)
       }
@@ -652,7 +662,7 @@ export default function SystemSettings() {
               <input
                 type="text"
                 value={settings.widget_title}
-                onChange={(e) => handleChangeWithAutoSave('widget_title', e.target.value)}
+                onChange={(e) => handleTextFieldChange('widget_title', e.target.value)}
                 placeholder={t('labels.welcomeMessage')}
               />
             </div>
@@ -782,7 +792,7 @@ export default function SystemSettings() {
           
           <textarea
             value={settings.welcome_message}
-            onChange={(e) => handleChangeWithAutoSave('welcome_message', e.target.value)}
+            onChange={(e) => handleTextFieldChange('welcome_message', e.target.value)}
             rows={3}
             placeholder={t('labels.welcomeMessage')}
             style={{
@@ -986,7 +996,7 @@ export default function SystemSettings() {
             </label>
             <textarea
               value={settings.restricted_reply}
-              onChange={(e) => handleChangeWithAutoSave('restricted_reply', e.target.value)}
+              onChange={(e) => handleTextFieldChange('restricted_reply', e.target.value)}
               rows={3}
               placeholder={t('labels.restrictedReplyPlaceholder')}
               style={{
