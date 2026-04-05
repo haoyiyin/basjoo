@@ -49,7 +49,7 @@ export const Setup = () => {
                     system_prompt: systemPrompt,
                     provider_type: 'openai',
                     enable_context: false,
-                    rate_limit_per_hour: 100,
+                    rate_limit_per_minute: 20,
                     restricted_reply: t('settings.defaultReply')
                 })
             });

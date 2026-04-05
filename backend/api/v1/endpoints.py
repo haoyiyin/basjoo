@@ -149,7 +149,7 @@ def build_agent_config(agent: Agent) -> dict:
         "enable_context": agent.enable_context,
         "enable_auto_fetch": agent.enable_auto_fetch,
         "url_fetch_interval_days": agent.url_fetch_interval_days,
-        "rate_limit_per_hour": agent.rate_limit_per_hour,
+        "rate_limit_per_minute": agent.rate_limit_per_minute,
         "restricted_reply": agent.restricted_reply,
         "persona_type": agent.persona_type,
         "widget_title": agent.widget_title,
@@ -566,7 +566,7 @@ async def prepare_chat_request(
     agent_enable_context = agent.enable_context
     agent_jina_api_key = agent.jina_api_key
     agent_embedding_model = agent.embedding_model
-    agent_rate_limit_per_hour = agent.rate_limit_per_hour
+    agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
     use_mock_llm = not agent.api_key
     if use_mock_llm:
@@ -582,25 +582,25 @@ async def prepare_chat_request(
             "quota_id": quota.id,
         }
 
-    if agent_rate_limit_per_hour > 0 and request.session_id and not admin_user:
+    if agent_rate_limit_per_minute > 0 and request.session_id and not admin_user:
         from datetime import timedelta
 
-        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-        hour_count_result = await db.execute(
+        one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+        minute_count_result = await db.execute(
             select(func.count(ChatMessage.id)).where(
                 ChatMessage.session_id == session.id,
                 ChatMessage.role == "user",
-                ChatMessage.created_at >= one_hour_ago,
+                ChatMessage.created_at >= one_minute_ago,
             )
         )
-        messages_last_hour = hour_count_result.scalar() or 0
+        messages_last_minute = minute_count_result.scalar() or 0
 
         logger.info(
-            f"Session {request.session_id} has {messages_last_hour} messages in the last hour "
-            f"(limit: {agent_rate_limit_per_hour})"
+            f"Session {request.session_id} has {messages_last_minute} messages in the last minute "
+            f"(limit: {agent_rate_limit_per_minute})"
         )
 
-        if messages_last_hour >= agent_rate_limit_per_hour:
+        if messages_last_minute >= agent_rate_limit_per_minute:
             limit_reply = get_restricted_reply(
                 agent_restricted_reply,
                 "抱歉，当前服务受限，请稍后再试。",

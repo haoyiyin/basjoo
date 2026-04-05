@@ -131,9 +131,9 @@ class Agent(Base):
     enable_context = Column(Boolean, nullable=False, default=False)
 
     # AI对话限制配置
-    rate_limit_per_hour = Column(
-        Integer, nullable=False, default=100
-    )  # 每小时对话限制（0表示不限制）
+    rate_limit_per_minute = Column(
+        Integer, nullable=False, default=20
+    )  # 每分钟对话限制（0表示不限制）
     restricted_reply = Column(
         Text, nullable=True, default="抱歉，当前服务受限，请稍后再试。"
     )  # 自动回复（速率限制、AI 服务异常等场景）

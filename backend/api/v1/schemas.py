@@ -1,6 +1,6 @@
 """API v1 Pydantic schemas"""
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from urllib.parse import urlsplit
@@ -321,8 +321,8 @@ class AgentConfig(BaseModel):
     url_fetch_interval_days: int = Field(
         default=7, ge=1, le=30, description="URL fetch interval in days"
     )
-    rate_limit_per_hour: int = Field(
-        default=100, ge=0, description="Rate limit per hour (0 = unlimited)"
+    rate_limit_per_minute: int = Field(
+        default=20, ge=0, description="Rate limit per minute (0 = unlimited)"
     )
     restricted_reply: Optional[str] = Field(
         default="抱歉，当前服务受限，请稍后再试。",
@@ -388,8 +388,11 @@ class AgentUpdateRequest(BaseModel):
     url_fetch_interval_days: Optional[int] = Field(
         None, ge=1, le=30, description="URL fetch interval in days"
     )
-    rate_limit_per_hour: Optional[int] = Field(
-        None, ge=0, description="Rate limit per hour (0 = unlimited)"
+    rate_limit_per_minute: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Rate limit per minute (0 = unlimited)",
+        validation_alias=AliasChoices("rate_limit_per_minute", "rate_limit_per_hour"),
     )
     restricted_reply: Optional[str] = Field(
         None, description="Fallback reply when service is restricted"

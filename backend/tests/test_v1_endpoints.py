@@ -376,13 +376,27 @@ async def test_takeover_admin_reply_visible_via_public_polling(client, default_a
 
 
 @pytest.mark.asyncio
+async def test_update_agent_accepts_legacy_rate_limit_field(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    update_response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"rate_limit_per_hour": 3},
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["rate_limit_per_minute"] == 3
+
+
+@pytest.mark.asyncio
 async def test_taken_over_session_skips_rate_limit_reply(client, default_agent_id):
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
 
     await client.put(
         f"/api/v1/agent?agent_id={agent_id}",
-        json={"rate_limit_per_hour": 1, "restricted_reply": "Limited"},
+        json={"rate_limit_per_minute": 1, "restricted_reply": "Limited"},
     )
 
     first_response = await client.post(
