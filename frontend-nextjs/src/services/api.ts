@@ -81,16 +81,13 @@ export interface Agent {
   url_fetch_interval_days?: number;
   rate_limit_per_hour: number;
   restricted_reply?: string;
-  restricted_reply_i18n?: Record<string, string> | null;
   last_error_code?: string | null;
   last_error_message?: string | null;
   last_error_at?: string | null;
   persona_type?: string;
   widget_title?: string;
-  widget_title_i18n?: Record<string, string> | null;
   widget_color?: string;
   welcome_message?: string;
-  welcome_message_i18n?: Record<string, string> | null;
   history_days?: number;
   allowed_widget_origins?: string[] | null;
   is_active: boolean;

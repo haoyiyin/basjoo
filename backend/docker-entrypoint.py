@@ -216,18 +216,6 @@ def migrate_sqlite_schema():
                 "allowed_widget_origins",
                 "TEXT",
             ),
-            (
-                "widget_title_i18n",
-                "TEXT",
-            ),
-            (
-                "welcome_message_i18n",
-                "TEXT",
-            ),
-            (
-                "restricted_reply_i18n",
-                "TEXT",
-            ),
         ],
     }
 
