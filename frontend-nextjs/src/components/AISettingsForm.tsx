@@ -49,7 +49,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     api_format: 'openai' as ApiFormatType,
     top_k: 5,
     enable_context: false,
-    rate_limit_per_hour: 100,
+    rate_limit_per_minute: 20,
     restricted_reply: '',
   })
   const [personaError, setPersonaError] = useState(false)
@@ -101,7 +101,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
         top_k: agentData.top_k ?? 5,
         enable_context: agentData.enable_context ?? false,
-        rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
+        rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
         restricted_reply: agentData.restricted_reply ?? t('labels.restrictedReplyPlaceholder'),
       })
     } catch (err) {
@@ -190,7 +190,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         api_format: formData.api_format,
         top_k: formData.top_k,
         enable_context: formData.enable_context,
-        rate_limit_per_hour: formData.rate_limit_per_hour,
+        rate_limit_per_minute: formData.rate_limit_per_minute,
         restricted_reply: formData.restricted_reply,
         persona_type: selectedPersona,
       }
@@ -294,7 +294,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.api_format,
     formData.top_k,
     formData.enable_context,
-    formData.rate_limit_per_hour,
+    formData.rate_limit_per_minute,
     formData.restricted_reply,
     formData.api_key,
     formData.jina_api_key,

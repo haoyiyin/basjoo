@@ -236,6 +236,16 @@ def migrate_sqlite_schema():
             cursor.execute(f"PRAGMA table_info({table_name})")
             existing_columns = {row[1] for row in cursor.fetchall()}
 
+            if table_name == "agents" and "rate_limit_per_hour" in existing_columns and "rate_limit_per_minute" not in existing_columns:
+                alter_sql = (
+                    f"ALTER TABLE {table_name} "
+                    "RENAME COLUMN rate_limit_per_hour TO rate_limit_per_minute"
+                )
+                print(f"Applying migration: {alter_sql}")
+                cursor.execute(alter_sql)
+                existing_columns.remove("rate_limit_per_hour")
+                existing_columns.add("rate_limit_per_minute")
+
             for column_name, column_type in columns:
                 if column_name in existing_columns:
                     continue

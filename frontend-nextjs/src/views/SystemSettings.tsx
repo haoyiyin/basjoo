@@ -39,7 +39,7 @@ export default function SystemSettings() {
     widget_color: '#06B6D4',
     welcome_message: '',
     history_days: 30,
-    rate_limit_per_hour: 100,
+    rate_limit_per_minute: 20,
     restricted_reply: '',
     allowed_widget_origins_text: '',
   })
@@ -125,7 +125,7 @@ export default function SystemSettings() {
         widget_color: agentData.widget_color || '#06B6D4',
         welcome_message: agentData.welcome_message || '',
         history_days: agentData.history_days || 30,
-        rate_limit_per_hour: agentData.rate_limit_per_hour ?? 100,
+        rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
         restricted_reply: agentData.restricted_reply || '',
         allowed_widget_origins_text: (agentData.allowed_widget_origins || []).join('\n'),
       })
@@ -964,12 +964,12 @@ export default function SystemSettings() {
                 fontWeight: 500,
                 color: 'var(--color-text-secondary)',
               }}>
-                {t('labels.hourlyLimit')}
+                {t('labels.perMinuteLimit')}
               </label>
               <input
                 type="number"
-                value={settings.rate_limit_per_hour}
-                onChange={(e) => handleChangeWithAutoSave('rate_limit_per_hour', Math.max(0, parseInt(e.target.value, 10) || 0))}
+                value={settings.rate_limit_per_minute}
+                onChange={(e) => handleChangeWithAutoSave('rate_limit_per_minute', Math.max(0, parseInt(e.target.value, 10) || 0))}
                 min={0}
                 max={1000}
               />
