@@ -400,10 +400,10 @@ class URLNormalizer:
         elif url.startswith("http://www."):
             url = url.replace("http://www.", "http://", 1)
 
-        from urllib.parse import urlparse, parse_qs, urlunparse
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
         parsed = urlparse(url)
-        query_params = parse_qs(parsed.query)
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
 
         tracking_params = {
             "utm_source",
@@ -418,14 +418,10 @@ class URLNormalizer:
             "_gid",
         }
 
-        filtered_params = {
-            k: v for k, v in query_params.items() if k not in tracking_params
-        }
+        filtered_params = [(k, v) for k, v in query_params if k not in tracking_params]
 
         if filtered_params:
-            query_string = "&".join(
-                f"{k}={'&'.join(v)}" for k, v in filtered_params.items()
-            )
+            query_string = urlencode(filtered_params, doseq=True)
             new_parsed = parsed._replace(query=query_string)
         else:
             new_parsed = parsed._replace(query="")
