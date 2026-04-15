@@ -48,6 +48,7 @@ export default function URLManagement() {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
+  const wasRetrainingRef = useRef(false);
   const jinaKeyCheckInFlightRef = useRef(false);
   const redirectedForJinaKeyRef = useRef(false);
   const stopPollingRequestedRef = useRef(false);
@@ -129,7 +130,7 @@ export default function URLManagement() {
       const hasPendingOrFetching = data.urls.some(
         (url) => url.status === 'pending' || url.status === 'fetching'
       );
-      if (hasPendingOrFetching && !crawlPolling && !stopPollingRequestedRef.current) {
+      if (hasPendingOrFetching && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
         setCrawlStartCount(data.total);
         setCrawlPolling(true);
       }
@@ -138,13 +139,11 @@ export default function URLManagement() {
     } finally {
       setLoading(false);
     }
-  }, [agentId, jinaKeyReady, crawlPolling, t]);
+  }, [agentId, jinaKeyReady, t]);
 
   // Stable refs for functions used inside interval callbacks.
   const agentIdRef = useRef(agentId);
   agentIdRef.current = agentId;
-  const jinaKeyReadyRef = useRef(jinaKeyReady);
-  jinaKeyReadyRef.current = jinaKeyReady;
   const crawlPollingRef = useRef(crawlPolling);
   crawlPollingRef.current = crawlPolling;
   const loadURLsRef = useRef(loadURLs);
@@ -176,15 +175,15 @@ export default function URLManagement() {
             setCrawlPolling(true);
           }
           if (status.is_rebuilding) {
+            wasRetrainingRef.current = true;
             setIsRetraining(true);
           } else {
-            setIsRetraining(prev => {
-              if (prev && !status.is_rebuilding) {
-                setRefreshTrigger(t => t + 1);
-                void loadURLsRef.current();
-              }
-              return false;
-            });
+            setIsRetraining(false);
+            if (wasRetrainingRef.current) {
+              wasRetrainingRef.current = false;
+              setRefreshTrigger(t => t + 1);
+              void loadURLsRef.current();
+            }
           }
         } catch (error) {
           console.error('Failed to poll task status:', error);

@@ -177,7 +177,8 @@ class Settings(BaseSettings):
         object.__setattr__(self, "agent_id_file", agent_id_file)
 
         if not self.allowed_origins.strip():
-            object.__setattr__(self, "allowed_origins", "*")
+            # No wildcard by default — deployments must explicitly set ALLOWED_ORIGINS.
+            object.__setattr__(self, "allowed_origins", "")
 
         if not self.allowed_methods.strip():
             object.__setattr__(self, "allowed_methods", "GET,POST,PUT,DELETE,OPTIONS")
@@ -213,8 +214,7 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         """将逗号分隔的字符串转换为列表"""
-        origins = [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
-        return origins or ["*"]
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
 
     @property
     def cors_methods_list(self) -> list[str]:

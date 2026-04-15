@@ -24,6 +24,12 @@ export default function Chat() {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectAttemptRef = useRef(0)
   const isMountedRef = useRef(true)
+  const isConnectingRef = useRef(false)
+
+  const NORMAL_CLOSE_CODE = 1000
+  const GOING_AWAY_CLOSE_CODE = 1001
+  const MAX_RECONNECT_DELAY_MS = 30000
+  const MAX_RECONNECT_ATTEMPT = 5
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -50,13 +56,19 @@ export default function Chat() {
 
   const connectWebSocket = useCallback(() => {
     if (!token) return
+    if (isConnectingRef.current) return
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return
+    }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/admin?token=${token}`
 
+    isConnectingRef.current = true
     wsRef.current = new WebSocket(wsUrl)
 
     wsRef.current.onopen = () => {
+      isConnectingRef.current = false
       reconnectAttemptRef.current = 0
       console.log('WebSocket connected')
     }
@@ -82,17 +94,20 @@ export default function Chat() {
     }
 
     wsRef.current.onerror = (error) => {
+      isConnectingRef.current = false
       console.error('WebSocket error:', error)
     }
 
     wsRef.current.onclose = (event) => {
+      isConnectingRef.current = false
       console.log('WebSocket disconnected (code: %d)', event.code)
       if (!isMountedRef.current) return
-      // Normal closure (1000) or policy close (1001) should not trigger reconnect.
-      if (event.code === 1000 || event.code === 1001) return
+      // Normal closure or policy close should not trigger reconnect.
+      if (event.code === NORMAL_CLOSE_CODE || event.code === GOING_AWAY_CLOSE_CODE) return
 
-      const delay = Math.min(30000, 1000 * (2 ** reconnectAttemptRef.current))
-      reconnectAttemptRef.current += 1
+      const clampedAttempt = Math.min(reconnectAttemptRef.current, MAX_RECONNECT_ATTEMPT)
+      const delay = Math.min(MAX_RECONNECT_DELAY_MS, 1000 * (2 ** clampedAttempt))
+      reconnectAttemptRef.current = Math.min(reconnectAttemptRef.current + 1, MAX_RECONNECT_ATTEMPT)
       reconnectTimeoutRef.current = setTimeout(() => {
         console.log('Reconnecting...')
         connectWebSocket()
@@ -107,6 +122,7 @@ export default function Chat() {
 
     return () => {
       isMountedRef.current = false
+      isConnectingRef.current = false
       if (wsRef.current) {
         wsRef.current.close()
         wsRef.current = null

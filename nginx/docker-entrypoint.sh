@@ -21,13 +21,12 @@ server {
     server_name $1;
     client_max_body_size 12m;
 
-    include $LOCATIONS_CONF;
+    # Baseline security headers for HTTP mode (HSTS only applies to HTTPS)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-    location = /health {
-        access_log off;
-        default_type text/plain;
-        return 200 'ok';
-    }
+    include $LOCATIONS_CONF;
 }
 EOF
 }
@@ -57,6 +56,11 @@ server {
     ssl_session_timeout 1d;
     ssl_session_cache shared:SSL:50m;
 
+    # Baseline security headers (applied in addition to HSTS)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     include $LOCATIONS_CONF;
@@ -79,6 +83,10 @@ server {
     location / {
         return 444;
     }
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 EOF
 }
@@ -97,6 +105,10 @@ server {
     ssl_prefer_server_ciphers off;
     ssl_session_timeout 1d;
     ssl_session_cache shared:SSL:50m;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     location = /health {
         access_log off;
