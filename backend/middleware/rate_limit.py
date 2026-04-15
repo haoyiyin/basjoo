@@ -6,10 +6,10 @@ API级速率限制中间件
 2. 内存限流（开发/测试环境）
 """
 
-from collections import defaultdict
+from collections import defaultdict, deque
 import logging
 import time
-from typing import Dict, Optional, Tuple
+from typing import Deque, Dict, Optional, Tuple
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -92,6 +92,36 @@ def should_apply_rate_limit(request: Request) -> bool:
     return path.startswith(PUBLIC_RATE_LIMIT_PATH_PREFIXES)
 
 
+def check_memory_sliding_window(
+    history_map: Dict[str, Deque[float]],
+    key: str,
+    *,
+    max_requests: int,
+    window_seconds: int,
+) -> Tuple[bool, int]:
+    """Shared in-memory sliding-window limiter.
+
+    Keeps only timestamps inside the window and evicts empty keys so fallback
+    limiters do not grow without bound for one-off clients.
+    """
+    now = time.time()
+    history = history_map[key]
+
+    while history and now - history[0] >= window_seconds:
+        history.popleft()
+
+    if len(history) >= max_requests:
+        return False, 0
+
+    history.append(now)
+    remaining = max(0, max_requests - len(history))
+
+    if not history:
+        history_map.pop(key, None)
+
+    return True, remaining
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     速率限制中间件
@@ -121,7 +151,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.use_redis = use_redis
 
         # 内存限流的备用存储
-        self.request_history: Dict[str, list] = defaultdict(list)
+        self.request_history: Dict[str, Deque[float]] = defaultdict(deque)
         self.burst_counters: Dict[str, int] = defaultdict(int)
         self.last_burst_reset: float = time.time()
 
@@ -225,16 +255,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         current_time = time.time()
 
-        # 清理旧记录（超过1分钟的）
-        self.request_history[ip] = [
-            (timestamp, count)
-            for timestamp, count in self.request_history[ip]
-            if current_time - timestamp < 60
-        ]
-
-        # 计算当前时间窗口内的总请求数
-        total_requests = sum(count for _, count in self.request_history[ip])
-
         # 检查突发限制
         if current_time - self.last_burst_reset > 1:  # 每秒重置突发计数
             self.burst_counters.clear()
@@ -244,14 +264,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.debug(f"Burst rate limit exceeded for IP: {ip}")
             return False, 0
 
-        # 检查每分钟限制
-        if total_requests >= self.requests_per_minute:
+        allowed, remaining = check_memory_sliding_window(
+            self.request_history,
+            ip,
+            max_requests=self.requests_per_minute,
+            window_seconds=60,
+        )
+        if not allowed:
             logger.debug(f"Minute rate limit exceeded for IP: {ip}")
             return False, 0
 
-        # 记录本次请求
-        self.request_history[ip].append((current_time, 1))
         self.burst_counters[ip] += 1
-
-        remaining = max(0, self.requests_per_minute - total_requests - 1)
         return True, remaining

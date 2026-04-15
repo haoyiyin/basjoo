@@ -10,9 +10,18 @@ from database import get_db
 from models import AdminUser
 from services.auth_service import AuthService
 from i18n.core import get_locale_from_request, _
+from middleware.rate_limit import check_memory_sliding_window
+
+from collections import defaultdict, deque
+from typing import Deque
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+
+# In-memory login rate limiter (fallback when Redis is unavailable)
+_login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 300  # 5 minutes
 
 
 class LoginRequest(BaseModel):
@@ -108,12 +117,41 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     locale = get_locale_from_request(request)
 
     # Rate-limit login attempts per client IP to prevent brute-force attacks.
+    # Redis-first with in-memory fallback so protection never disappears.
     ip = get_request_client_ip(request)
     redis_svc = await get_redis()
     if redis_svc is not None:
-        login_key = f"login:ip:{ip}"
-        allowed, _remaining = await redis_svc.check_rate_limit(
-            login_key, max_requests=5, window_seconds=300
+        try:
+            login_key = f"login:ip:{ip}"
+            allowed, _remaining = await redis_svc.check_rate_limit(
+                login_key, max_requests=5, window_seconds=300
+            )
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=_("Too many login attempts. Please try again later.", locale=locale),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # Redis error — fall through to in-memory limiter.
+            allowed, _remaining = check_memory_sliding_window(
+                _login_attempt_history,
+                ip,
+                max_requests=_LOGIN_MAX_ATTEMPTS,
+                window_seconds=_LOGIN_WINDOW_SECONDS,
+            )
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=_("Too many login attempts. Please try again later.", locale=locale),
+                )
+    else:
+        allowed, _remaining = check_memory_sliding_window(
+            _login_attempt_history,
+            ip,
+            max_requests=_LOGIN_MAX_ATTEMPTS,
+            window_seconds=_LOGIN_WINDOW_SECONDS,
         )
         if not allowed:
             raise HTTPException(
