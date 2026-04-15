@@ -67,7 +67,12 @@ async def lifespan(app: FastAPI):
         logger.info("URL抓取调度器已停止")
 
         logger.info("停止历史记录清理调度器...")
+        history_cleanup_scheduler.stop()
         logger.info("历史记录清理调度器已停止")
+
+        logger.info("停止会话自动关闭调度器...")
+        session_auto_close_scheduler.stop()
+        logger.info("会话自动关闭调度器已停止")
 
         # 关闭 Redis 连接
         logger.info("关闭 Redis 连接...")

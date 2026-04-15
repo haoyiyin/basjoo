@@ -101,8 +101,7 @@ def check_memory_sliding_window(
 ) -> Tuple[bool, int]:
     """Shared in-memory sliding-window limiter.
 
-    Keeps only timestamps inside the window and evicts empty keys so fallback
-    limiters do not grow without bound for one-off clients.
+    Keeps only timestamps inside the window and returns remaining capacity.
     """
     now = time.time()
     history = history_map[key]
@@ -115,10 +114,6 @@ def check_memory_sliding_window(
 
     history.append(now)
     remaining = max(0, max_requests - len(history))
-
-    if not history:
-        history_map.pop(key, None)
-
     return True, remaining
 
 

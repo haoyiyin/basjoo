@@ -11,6 +11,7 @@ from sqlalchemy import select, and_, or_
 from database import AsyncSessionLocal
 from models import Agent, URLSource
 from services.crawler import SiteCrawler
+from core.encryption import decrypt_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class URLFetchScheduler:
                 f"(interval: {interval_days} days)"
             )
 
-            crawler = SiteCrawler(jina_api_key=agent.jina_api_key or "")
+            crawler = SiteCrawler(jina_api_key=decrypt_api_key(agent.jina_api_key) or "")
 
             for url_source in url_sources:
                 await self.fetch_single_url(crawler, url_source.id, str(agent.id))
@@ -231,6 +232,13 @@ class HistoryCleanupScheduler:
         else:
             logger.warning("History cleanup scheduler already running")
 
+    def stop(self):
+        """停止调度器"""
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("History cleanup scheduler stopped")
+
     async def cleanup_expired_sessions(self):
         """
         清理过期的聊天会话
@@ -309,6 +317,12 @@ class SessionAutoCloseScheduler:
             )
             self.running = True
             logger.info("Session auto-close scheduler started")
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("Session auto-close scheduler stopped")
 
     async def close_inactive_sessions(self):
         """关闭长时间无活动的会话"""
