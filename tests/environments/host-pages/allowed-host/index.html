@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Allowed Host - Widget E2E Test</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
+    h1 { color: #333; }
+    .info { background: #f0f9ff; padding: 16px; border-radius: 8px; margin: 20px 0; }
+    .status { color: #16a34a; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Allowed Host - E2E Test Page</h1>
+  <div class="info">
+    <p>This page is an <span class="status">ALLOWED</span> origin for the Basjoo widget.</p>
+    <p>If the widget appears as a chat button in the bottom-right corner, the cross-origin embed is working correctly.</p>
+  </div>
+  <p>Use this page for Playwright E2E tests that verify widget loading from an allowed origin.</p>
+
+  <!-- Widget SDK - apiBase and agentId should be overridden by Playwright or environment -->
+  <script src="/sdk.js?agentId=PLACEHOLDER_AGENT_ID&apiBase=PLACEHOLDER API_BASE&themeColor=%233B82F6"></script>
+</body>
+</html>
