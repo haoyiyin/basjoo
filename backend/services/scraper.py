@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timezone
 import re
 
+from services.url_safety import validate_url_safe
+
 logger = logging.getLogger(__name__)
 
 JINA_READER_BASE = "https://r.jina.ai/"
@@ -147,6 +149,10 @@ class URLScraper:
 
     async def _fetch_direct(self, url: str) -> Dict[str, Any]:
         """直接抓取（降级方案）"""
+        safe, reason = validate_url_safe(url)
+        if not safe:
+            logger.warning(f"Blocked unsafe direct fetch of {url}: {reason}")
+            return {"success": False, "error": f"Unsafe URL: {reason}"}
         try:
             logger.info(f"Fetching URL directly: {url}")
 
@@ -282,6 +288,12 @@ class URLScraper:
             base_path = base_path[:-1]
         base_path_with_slash = "/" if base_path == "/" else f"{base_path}/"
 
+        # Validate seed URL before crawling
+        safe, reason = validate_url_safe(url)
+        if not safe:
+            logger.warning(f"Blocked unsafe crawl seed URL {url}: {reason}")
+            return discovered
+
         while to_visit and len(discovered) < max_pages:
             current_url, depth = to_visit.pop(0)
 
@@ -339,8 +351,10 @@ class URLScraper:
                             and normalized not in discovered_urls
                             and normalized not in queued
                         ):
-                            to_visit.append((normalized, depth + 1))
-                            queued.add(normalized)
+                            safe, reason = validate_url_safe(normalized)
+                            if safe:
+                                to_visit.append((normalized, depth + 1))
+                                queued.add(normalized)
 
             except Exception as e:
                 logger.warning(f"Error discovering links from {current_url}: {e}")

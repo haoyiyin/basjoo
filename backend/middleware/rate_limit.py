@@ -40,12 +40,18 @@ def _append_vary_header(response: Response, value: str) -> None:
 
 def apply_cors_headers(request: Request, response: Response) -> Response:
     """Apply CORS headers for early middleware responses that bypass CORSMiddleware."""
-    origin = request.headers.get("origin", "")
+    origin = request.headers.get("origin")
 
-    if origin == "null" or not origin:
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = settings.allowed_methods
-        response.headers["Access-Control-Allow-Headers"] = settings.allowed_headers
+    # No Origin header -> no CORS needed (non-browser/server-to-server requests)
+    if origin is None or origin == "":
+        return response
+
+    # Handle Origin: null (e.g., file:// protocol) only if explicitly allowed
+    if origin == "null":
+        if settings.cors_allow_null_origin:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = settings.allowed_methods
+            response.headers["Access-Control-Allow-Headers"] = settings.allowed_headers
         return response
 
     allowed_origins = settings.cors_origins_list
@@ -104,10 +110,18 @@ def check_memory_sliding_window(
     Keeps only timestamps inside the window and returns remaining capacity.
     """
     now = time.time()
-    history = history_map[key]
+    history = history_map.get(key)
+    if history is None:
+        history = deque()
+        history_map[key] = history
 
     while history and now - history[0] >= window_seconds:
         history.popleft()
+
+    if not history:
+        history_map.pop(key, None)
+        history = deque()
+        history_map[key] = history
 
     if len(history) >= max_requests:
         return False, 0

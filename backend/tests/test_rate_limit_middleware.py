@@ -93,6 +93,7 @@ def test_get_client_ip_prefers_first_forwarded_ip():
 
 def test_apply_cors_headers_echoes_allowed_origin(monkeypatch):
     monkeypatch.setattr("middleware.rate_limit.settings.allowed_origins", "https://client.example")
+    monkeypatch.setattr("middleware.rate_limit.settings.cors_allow_null_origin", False)
     response = JSONResponse(status_code=429, content={"detail": "rate limited"})
 
     app = FastAPI()
@@ -114,6 +115,28 @@ def test_apply_cors_headers_echoes_allowed_origin(monkeypatch):
     assert response.headers["Access-Control-Allow-Methods"]
     assert response.headers["Access-Control-Allow-Headers"]
     assert response.headers["Vary"] == "Origin"
+
+
+def test_apply_cors_headers_no_origin(monkeypatch):
+    """Missing Origin header should not get wildcard CORS."""
+    monkeypatch.setattr("middleware.rate_limit.settings.cors_allow_null_origin", False)
+    response = JSONResponse(status_code=429, content={"detail": "rate limited"})
+
+    app = FastAPI()
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    apply_cors_headers(request, response)
+    assert "Access-Control-Allow-Origin" not in response.headers
 
 
 def test_should_apply_rate_limit_only_for_public_client_endpoints():
@@ -214,6 +237,7 @@ async def test_options_requests_bypass_rate_limit():
 @pytest.mark.asyncio
 async def test_rate_limited_response_keeps_cors_headers(monkeypatch):
     monkeypatch.setattr("middleware.rate_limit.settings.allowed_origins", "*")
+    monkeypatch.setattr("middleware.rate_limit.settings.cors_allow_null_origin", False)
     app = FastAPI()
 
     @app.get("/api/v1/chat")

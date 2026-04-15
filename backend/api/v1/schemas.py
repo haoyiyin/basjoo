@@ -4,7 +4,8 @@ from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from urllib.parse import urlsplit
-import re
+
+from services.url_safety import validate_url_safe
 
 
 def normalize_widget_origin(origin: str) -> str:
@@ -108,6 +109,14 @@ class ContextResponse(BaseModel):
 # ========== URL Management Schemas ==========
 
 
+def _validate_safe_ingest_url(url: str) -> str:
+    normalized = (url or "").strip()
+    safe, reason = validate_url_safe(normalized)
+    if not safe:
+        raise ValueError(f"Invalid URL format: {normalized} ({reason})")
+    return normalized
+
+
 class URLCreateRequest(BaseModel):
     """创建URL知识源请求"""
 
@@ -116,26 +125,7 @@ class URLCreateRequest(BaseModel):
     @field_validator("urls")
     @classmethod
     def validate_urls(cls, urls: List[str]) -> List[str]:
-        """Validate that all URLs are properly formatted"""
-        url_pattern = re.compile(
-            r"^https?://"  # http:// or https://
-            r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"  # domain
-            r"localhost|"  # localhost
-            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # IP address
-            r"(?::\d+)?"  # optional port
-            r"(?:/?|[/?]\S+)$",
-            re.IGNORECASE,
-        )
-
-        invalid_urls = []
-        for url in urls:
-            if not url_pattern.match(url):
-                invalid_urls.append(url)
-
-        if invalid_urls:
-            raise ValueError(f"Invalid URL format: {', '.join(invalid_urls[:3])}")
-
-        return urls
+        return [_validate_safe_ingest_url(url) for url in urls]
 
 
 class URLItem(BaseModel):
@@ -189,19 +179,7 @@ class SiteCrawlRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, url: str) -> str:
-        """Validate URL format"""
-        url_pattern = re.compile(
-            r"^https?://"
-            r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"
-            r"localhost|"
-            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
-            r"(?::\d+)?"
-            r"(?:/?|[/?]\S+)$",
-            re.IGNORECASE,
-        )
-        if not url_pattern.match(url):
-            raise ValueError(f"Invalid URL format: {url}")
-        return url
+        return _validate_safe_ingest_url(url)
 
 
 class SiteCrawlResponse(BaseModel):
