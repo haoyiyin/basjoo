@@ -39,6 +39,7 @@ export default function QAManagement() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
+  const wasRetrainingRef = useRef(false);
   const jinaKeyCheckInFlightRef = useRef(false);
   const redirectedForJinaKeyRef = useRef(false);
 
@@ -133,15 +134,15 @@ export default function QAManagement() {
             return status;
           });
           if (status.is_rebuilding) {
+            wasRetrainingRef.current = true;
             setIsRetraining(true);
           } else {
-            setIsRetraining(prev => {
-              if (prev && !status.is_rebuilding) {
-                setRefreshTrigger(t => t + 1);
-                void loadItemsRef.current(false);
-              }
-              return false;
-            });
+            setIsRetraining(false);
+            if (wasRetrainingRef.current) {
+              wasRetrainingRef.current = false;
+              setRefreshTrigger(t => t + 1);
+              void loadItemsRef.current(false);
+            }
           }
         } catch (error) {
           console.error('Failed to poll task status:', error);

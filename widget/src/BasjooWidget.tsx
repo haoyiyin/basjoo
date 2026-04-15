@@ -1813,7 +1813,6 @@ class BasjooWidget {
     try {
       await this.sendMessageWithRetry(message);
     } catch (error: any) {
-      this.cleanupAfterStreamError();
       console.error('[Basjoo Widget] Error sending message:', error);
 
       let errorMessage = this.getText('sendFailed');

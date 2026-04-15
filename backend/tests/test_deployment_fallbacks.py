@@ -133,13 +133,13 @@ def test_settings_ignores_invalid_default_agent_id(monkeypatch, tmp_path):
 
 
 
-def test_settings_defaults_cors_to_wildcard_when_env_missing(monkeypatch, tmp_path):
+def test_settings_does_not_default_cors_to_wildcard_when_env_missing(monkeypatch, tmp_path):
     config, _ = _reload_config_module(monkeypatch, tmp_path)
 
     settings = config.Settings()
 
-    assert settings.allowed_origins == "*"
-    assert settings.cors_origins_list == ["*"]
+    assert settings.allowed_origins == ""
+    assert settings.cors_origins_list == []
     assert settings.cors_methods_list == ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     assert settings.cors_headers_list == ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
 
