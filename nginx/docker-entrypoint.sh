@@ -145,10 +145,10 @@ if [ -e "$SSL_KEY" ]; then
     KEY_EXISTS=true
 fi
 
-if [ -r "$SSL_CERT" ]; then
-    CERT_PATH="$SSL_CERT"
-elif [ -r "$SSL_FULLCHAIN" ]; then
+if [ -r "$SSL_FULLCHAIN" ]; then
     CERT_PATH="$SSL_FULLCHAIN"
+elif [ -r "$SSL_CERT" ]; then
+    CERT_PATH="$SSL_CERT"
 fi
 
 if [ -n "$CERT_PATH" ] && [ -r "$SSL_KEY" ]; then

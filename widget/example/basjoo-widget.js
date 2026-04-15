@@ -382,6 +382,17 @@ var BasjooWidget = (() => {
       this.chatWindow?.classList.toggle("open", this.isOpen);
     }
     /**
+     * 将纯文本安全转义为HTML
+     */
+    escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    /**
      * 添加消息到界面
      */
     addMessage(message) {
@@ -389,18 +400,21 @@ var BasjooWidget = (() => {
       const messagesContainer = this.chatWindow?.querySelector(".basjoo-messages");
       const messageDiv = document.createElement("div");
       messageDiv.className = `basjoo-message basjoo-message-${message.role}`;
-      messageDiv.innerHTML = message.content.replace(/\n/g, "<br>");
+      // Escape HTML to prevent XSS — user/server content must not be injected raw.
+      const safeContent = this.escapeHtml(message.content).replace(/\n/g, "<br>");
+      messageDiv.innerHTML = safeContent;
       if (message.sources && message.sources.length > 0) {
         const sourcesDiv = document.createElement("details");
         sourcesDiv.className = "basjoo-sources";
-        sourcesDiv.innerHTML = `
-        <summary>\u5F15\u7528\u6765\u6E90 (${message.sources.length})</summary>
-        ${message.sources.map((source) => `
-          <div class="basjoo-source-item">
-            ${source.type === "url" ? `\u{1F4C4} ${source.title || source.url || "\u6587\u6863"}` : `\u2753 ${source.question}`}
-          </div>
-        `).join("")}
-      `;
+        const safeSources = message.sources.map((source) => {
+          const safeTitle = this.escapeHtml(source.title || source.url || "\u6587\u6863");
+          const safeQuestion = this.escapeHtml(source.question || "");
+          const safeUrl = this.escapeHtml(source.url || "");
+          return source.type === "url"
+            ? `<div class="basjoo-source-item">\u{1F4C4} <a href="${safeUrl}" target="_blank" rel="noopener">${safeTitle}</a></div>`
+            : `<div class="basjoo-source-item">\u2753 ${safeQuestion}</div>`;
+        }).join("");
+        sourcesDiv.innerHTML = `<summary>\u5F15\u7528\u6765\u6E90 (${message.sources.length})</summary>${safeSources}`;
         messageDiv.appendChild(sourcesDiv);
       }
       messagesContainer.appendChild(messageDiv);
