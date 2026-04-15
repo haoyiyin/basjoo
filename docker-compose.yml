@@ -143,7 +143,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: basjoo-backend-dev
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
@@ -203,7 +203,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: basjoo-frontend-dev
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - NEXT_PUBLIC_API_BASE_URL=
       - NEXT_PUBLIC_WS_BASE_URL=

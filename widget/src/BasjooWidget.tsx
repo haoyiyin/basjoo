@@ -160,6 +160,7 @@ class BasjooWidget {
   private pollIntervalId: number | null = null;
   private lastMessageId: number = 0;
   private isSending = false;
+  private streamAbortController: AbortController | null = null;
   private streamingMessage: HTMLDivElement | null = null;
   private streamingMessageContent: HTMLDivElement | null = null;
   private thinkingIndicator: HTMLDivElement | null = null;
@@ -168,6 +169,11 @@ class BasjooWidget {
   private thinkingTimerId: number | null = null;
   private currentStreamContent = '';
   private currentStreamSources: Source[] = [];
+  // Track imperative event listeners for cleanup
+  private _buttonClickListener: (() => void) | null = null;
+  private _closeBtnClickListener: (() => void) | null = null;
+  private _sendBtnClickListener: (() => void) | null = null;
+  private _inputKeypressListener: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(config: WidgetConfig) {
     const apiBase = this.detectApiBase(config.apiBase);
@@ -1004,7 +1010,8 @@ class BasjooWidget {
         <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
       </svg>
     `;
-    this.button.addEventListener('click', () => this.toggle());
+    this._buttonClickListener = () => this.toggle();
+    this.button.addEventListener('click', this._buttonClickListener);
     this.container!.appendChild(this.button);
     this.updateUnreadBadge();
   }
@@ -1015,11 +1022,16 @@ class BasjooWidget {
   private createChatWindow() {
     this.chatWindow = document.createElement('div');
     this.chatWindow.id = 'basjoo-chat-window';
+
+    const safeLogoUrl = this.config.logoUrl ? this.sanitizeUrlAttribute(this.config.logoUrl) : '';
+    const safeTitle = this.escapeHtml(this.config.title);
+    const safePlaceholder = this.escapeHtml(this.getText('inputPlaceholder'));
+
     this.chatWindow.innerHTML = `
       <div class="basjoo-header">
         <div class="basjoo-header-title">
-          ${this.config.logoUrl ? `<img src="${this.config.logoUrl}" class="basjoo-header-logo" alt="">` : ''}
-          <span>${this.config.title}</span>
+          ${safeLogoUrl ? `<img src="${safeLogoUrl}" class="basjoo-header-logo" alt="">` : ''}
+          <span>${safeTitle}</span>
         </div>
         <button class="basjoo-close">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1030,7 +1042,7 @@ class BasjooWidget {
       </div>
       <div class="basjoo-messages"></div>
       <div class="basjoo-input-area">
-        <input type="text" class="basjoo-input" placeholder="${this.getText('inputPlaceholder')}" maxlength="2000">
+        <input type="text" class="basjoo-input" placeholder="${safePlaceholder}" maxlength="2000">
         <button class="basjoo-send">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -1041,12 +1053,13 @@ class BasjooWidget {
     `;
 
     const closeBtn = this.chatWindow.querySelector('.basjoo-close') as HTMLElement;
-    closeBtn.addEventListener('click', () => this.close());
+    this._closeBtnClickListener = () => this.close();
+    closeBtn.addEventListener('click', this._closeBtnClickListener);
 
     const input = this.chatWindow.querySelector('.basjoo-input') as HTMLInputElement;
     const sendBtn = this.chatWindow.querySelector('.basjoo-send') as HTMLButtonElement;
 
-    const send = () => {
+    this._sendBtnClickListener = () => {
       if (this.isSending) {
         return;
       }
@@ -1061,10 +1074,11 @@ class BasjooWidget {
       }
     };
 
-    sendBtn.addEventListener('click', send);
-    input.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') send();
-    });
+    sendBtn.addEventListener('click', this._sendBtnClickListener);
+    this._inputKeypressListener = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') this._sendBtnClickListener?.();
+    };
+    input.addEventListener('keypress', this._inputKeypressListener);
 
     this.container!.appendChild(this.chatWindow);
   }
@@ -1139,6 +1153,20 @@ class BasjooWidget {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Sanitise a URL to be safe for use in an HTML attribute (e.g. src/href).
+   * Only allows http/https URLs and strips anything else.
+   */
+  private sanitizeUrlAttribute(url: string): string {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return this.escapeHtml(url);
+      }
+    } catch { /* invalid URL */ }
+    return '';
   }
 
   /**
@@ -1624,6 +1652,12 @@ class BasjooWidget {
     const streamReadTimeout = 90_000;
 
     while (!streamCompleted) {
+      // Check if the stream was aborted externally (e.g. new message, widget destroy).
+      if (this.streamAbortController?.signal.aborted) {
+        reader.cancel();
+        return;
+      }
+
       let timeoutId: number | null = null;
       try {
         const { done, value } = await Promise.race([
@@ -1666,12 +1700,24 @@ class BasjooWidget {
   }
 
   /**
+   * Abort the active stream and release the reader lock.
+   */
+  private abortStream() {
+    this.streamAbortController?.abort();
+    this.streamAbortController = null;
+  }
+
+  /**
    * 发送消息
    */
   private async sendMessageWithRetry(message: string): Promise<void> {
     let lastError: unknown = null;
 
     for (let attempt = 0; attempt <= 1; attempt++) {
+      // Abort any prior stream before starting a new attempt.
+      this.abortStream();
+      this.streamAbortController = new AbortController();
+
       try {
         const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -1681,6 +1727,7 @@ class BasjooWidget {
             'Content-Type': 'application/json',
             'Accept': 'text/event-stream',
           },
+          signal: this.streamAbortController.signal,
           body: JSON.stringify({
             agent_id: this.config.agentId,
             message,
@@ -1797,6 +1844,26 @@ class BasjooWidget {
     this.stopTitleBlink();
     this.hideThinkingIndicator();
     this.removeStreamingMessage();
+
+    // Abort any active stream request.
+    this.abortStream();
+
+    // Remove tracked event listeners.
+    if (this.button && this._buttonClickListener) {
+      this.button.removeEventListener('click', this._buttonClickListener);
+    }
+    const closeBtn = this.chatWindow?.querySelector('.basjoo-close') as HTMLElement | null;
+    if (closeBtn && this._closeBtnClickListener) {
+      closeBtn.removeEventListener('click', this._closeBtnClickListener);
+    }
+    const sendBtn = this.chatWindow?.querySelector('.basjoo-send') as HTMLButtonElement | null;
+    if (sendBtn && this._sendBtnClickListener) {
+      sendBtn.removeEventListener('click', this._sendBtnClickListener);
+    }
+    const input = this.chatWindow?.querySelector('.basjoo-input') as HTMLInputElement | null;
+    if (input && this._inputKeypressListener) {
+      input.removeEventListener('keypress', this._inputKeypressListener);
+    }
 
     this.container?.remove();
     const styles = document.getElementById('basjoo-widget-styles');
