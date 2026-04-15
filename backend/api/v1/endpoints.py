@@ -56,6 +56,7 @@ from api.v1.schemas import (
 )
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from core.encryption import encrypt_api_key, decrypt_api_key
+from services.qdrant_store import clear_disabled_key, clear_client_cache
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
 from services.llm_service import get_llm_service
@@ -1493,6 +1494,13 @@ async def update_jina_key(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Jina API key is required"
         )
+
+    # Clear any previous disabled state and cache for this key so the new
+    # value takes effect without requiring a process restart.
+    old_key = decrypt_api_key(agent.jina_api_key)
+    if old_key:
+        clear_disabled_key(old_key)
+        clear_client_cache(old_key)
 
     agent.jina_api_key = encrypt_api_key(request.jina_api_key)
     await db.commit()

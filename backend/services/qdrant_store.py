@@ -24,6 +24,16 @@ _cache_by_client: Dict[tuple[str, str], Dict[str, List[float]]] = {}
 _semaphores_by_client: Dict[tuple[str, str], Any] = {}
 
 
+def clear_disabled_key(api_key: str) -> None:
+    """Remove a key from the disabled set after an operator has fixed it."""
+    _disabled_keys.discard(api_key)
+
+
+def clear_client_cache(api_key: str, model: str = "jina-embeddings-v3") -> None:
+    """Clear embedding cache entries for a specific (api_key, model) pair."""
+    _cache_by_client.pop((api_key, model), None)
+
+
 class JinaEmbeddingClient:
     """Jina v3 embedding client with query caching and rate limiting."""
 
@@ -33,6 +43,15 @@ class JinaEmbeddingClient:
         self.base_url = settings.jina_embedding_api_base
         self._disabled = api_key in _disabled_keys
         self._client_key = (api_key, model)
+        self._embedding_cache = _cache_by_client.setdefault(self._client_key, {})
+
+    def update_api_key(self, new_key: str) -> None:
+        """Update the API key and clear any previous disabled state."""
+        clear_disabled_key(self.api_key)
+        clear_client_cache(self.api_key, self.model)
+        self.api_key = new_key
+        self._disabled = False
+        self._client_key = (new_key, self.model)
         self._embedding_cache = _cache_by_client.setdefault(self._client_key, {})
 
     def _get_semaphore(self):
