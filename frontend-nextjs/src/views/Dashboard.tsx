@@ -3,7 +3,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '../services/api'
 import { useTranslation } from 'react-i18next'
 import { useIsMobile } from '../hooks/useMediaQuery'
@@ -60,6 +60,7 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const { admin } = useAuth()
   const isMobile = useIsMobile()
+  const agentIdCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [quota, setQuota] = useState<{
     used_urls: number
     max_urls: number
@@ -115,7 +116,8 @@ export default function Dashboard() {
       document.body.removeChild(textArea)
     }
     setAgentIdCopied(true)
-    setTimeout(() => setAgentIdCopied(false), 2000)
+    if (agentIdCopiedTimerRef.current) clearTimeout(agentIdCopiedTimerRef.current)
+    agentIdCopiedTimerRef.current = setTimeout(() => setAgentIdCopied(false), 2000)
   }
 
   return (

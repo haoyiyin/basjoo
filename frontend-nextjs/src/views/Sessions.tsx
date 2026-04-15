@@ -139,12 +139,15 @@ export default function Sessions() {
         console.log('WebSocket connection error')
       }
 
-      wsRef.current.onclose = () => {
-        if (isMountedRef.current) {
-          const delay = Math.min(30000, 1000 * (2 ** reconnectAttemptRef.current))
-          reconnectAttemptRef.current += 1
-          reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay)
-        }
+      wsRef.current.onclose = (event) => {
+        // Do not reconnect after intentional close (logout, unmount cleanup).
+        if (!isMountedRef.current) return
+        // Normal closure (1000) or policy close (1001) should not trigger reconnect.
+        if (event.code === 1000 || event.code === 1001) return
+
+        const delay = Math.min(30000, 1000 * (2 ** reconnectAttemptRef.current))
+        reconnectAttemptRef.current += 1
+        reconnectTimeoutRef.current = setTimeout(connectWebSocket, delay)
       }
     } catch {
       console.log('WebSocket not available')
