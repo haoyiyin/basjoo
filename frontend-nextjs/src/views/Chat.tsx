@@ -22,6 +22,7 @@ export default function Chat() {
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectAttemptRef = useRef(0)
   const isMountedRef = useRef(true)
 
   const scrollToBottom = useCallback(() => {
@@ -56,6 +57,7 @@ export default function Chat() {
     wsRef.current = new WebSocket(wsUrl)
 
     wsRef.current.onopen = () => {
+      reconnectAttemptRef.current = 0
       console.log('WebSocket connected')
     }
 
@@ -86,13 +88,15 @@ export default function Chat() {
     wsRef.current.onclose = (event) => {
       console.log('WebSocket disconnected (code: %d)', event.code)
       if (!isMountedRef.current) return
-      // Do not reconnect after intentional close (cleanup in useEffect return).
+      // Normal closure (1000) or policy close (1001) should not trigger reconnect.
       if (event.code === 1000 || event.code === 1001) return
 
+      const delay = Math.min(30000, 1000 * (2 ** reconnectAttemptRef.current))
+      reconnectAttemptRef.current += 1
       reconnectTimeoutRef.current = setTimeout(() => {
         console.log('Reconnecting...')
         connectWebSocket()
-      }, 5000)
+      }, delay)
     }
   }, [sessionId, token])
 

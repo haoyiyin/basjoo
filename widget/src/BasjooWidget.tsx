@@ -1191,8 +1191,12 @@ class BasjooWidget {
       html = html.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
       html = html.replace(/(^|[^_])_([^_]+)_(?!_)/g, '$1<em>$2</em>');
       html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => {
-        const safeUrl = this.escapeHtml(url);
-        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+        const safeLabel = this.escapeHtml(label);
+        const safeUrl = this.sanitizeUrlAttribute(url);
+        if (!safeUrl) {
+          return safeLabel;
+        }
+        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>`;
       });
       return html;
     };
@@ -1541,6 +1545,16 @@ class BasjooWidget {
     }
   }
 
+  /**
+   * Unified cleanup after any stream termination path.
+   * Hides transient UI states and removes incomplete streaming content.
+   */
+  private cleanupAfterStreamError() {
+    this.hideLoading();
+    this.hideThinkingIndicator();
+    this.removeStreamingMessage();
+  }
+
   private async consumeStream(response: Response): Promise<void> {
     if (!response.body) {
       throw new Error('Streaming response body is unavailable');
@@ -1764,12 +1778,11 @@ class BasjooWidget {
         );
 
         if (!isRetryable || attempt >= 1) {
+          this.cleanupAfterStreamError();
           throw error;
         }
 
-        this.hideLoading();
-        this.hideThinkingIndicator();
-        this.removeStreamingMessage();
+        this.cleanupAfterStreamError();
         console.warn(`[Basjoo Widget] Stream attempt ${attempt + 1} failed, retrying...`);
         await new Promise(resolve => window.setTimeout(resolve, 1000));
         this.showLoading();
@@ -1800,9 +1813,7 @@ class BasjooWidget {
     try {
       await this.sendMessageWithRetry(message);
     } catch (error: any) {
-      this.hideLoading();
-      this.hideThinkingIndicator();
-      this.removeStreamingMessage();
+      this.cleanupAfterStreamError();
       console.error('[Basjoo Widget] Error sending message:', error);
 
       let errorMessage = this.getText('sendFailed');
