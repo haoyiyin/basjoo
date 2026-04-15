@@ -157,6 +157,10 @@ class Settings(BaseSettings):
     allowed_methods: str = "GET,POST,PUT,DELETE,OPTIONS"
     allowed_headers: str = "Content-Type,Authorization,X-Requested-With,Accept"
 
+    # Whether to allow wildcard CORS for Origin: null (e.g., file:// widget preview).
+    # Off by default; enable explicitly in dev environments.
+    cors_allow_null_origin: bool = False
+
     # 应用
     app_name: str = "Basjoo"
     app_port: int = 8000

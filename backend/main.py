@@ -15,6 +15,7 @@ from api.v1 import index_endpoints as v1_index_endpoints
 from services.scheduler import url_fetch_scheduler, history_cleanup_scheduler, session_auto_close_scheduler
 from services.redis_service import get_redis, close_redis
 from middleware import RateLimitMiddleware, apply_cors_headers, get_request_client_ip
+from middleware.rate_limit import apply_cors_headers as apply_early_cors_headers
 from i18n.core import I18nMiddleware
 
 logging.basicConfig(
@@ -99,15 +100,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def cors_for_file_protocol(request, call_next):
-    """Handle CORS for file:// protocol (origin is 'null')."""
+    """Apply the shared early-response CORS policy to normal responses too."""
     response = await call_next(request)
-    origin = request.headers.get("origin", "")
-    # Allow file:// protocol (origin is "null") and missing origin
-    if origin == "null" or not origin:
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = settings.allowed_methods
-        response.headers["Access-Control-Allow-Headers"] = settings.allowed_headers
-    return response
+    return apply_early_cors_headers(request, response)
 
 app.add_middleware(I18nMiddleware)
 

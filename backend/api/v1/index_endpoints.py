@@ -8,6 +8,7 @@ import logging
 
 import database
 from database import get_db
+from api.endpoints.auth import get_current_admin
 from models import (
     Agent,
     URLSource,
@@ -20,7 +21,7 @@ from services import QdrantVectorStore, TextChunker, TaskType, task_lock
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(get_current_admin)])
 
 # 全局服务实例
 qdrant_store = None
