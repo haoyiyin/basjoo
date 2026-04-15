@@ -76,8 +76,9 @@ server {
 
     location = /health {
         access_log off;
-        default_type text/plain;
-        return 200 'ok';
+        proxy_pass http://backend-prod:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
     }
 
     location / {
@@ -112,8 +113,9 @@ server {
 
     location = /health {
         access_log off;
-        default_type text/plain;
-        return 200 'ok';
+        proxy_pass http://backend-prod:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
     }
 
     location / {
