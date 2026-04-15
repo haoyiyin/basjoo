@@ -14,15 +14,12 @@ from services.crawler import SiteCrawler
 
 logger = logging.getLogger(__name__)
 
-# 全局调度器实例
-scheduler = AsyncIOScheduler()
-
 
 class URLFetchScheduler:
     """URL自动抓取调度器"""
 
     def __init__(self):
-        self.scheduler = scheduler
+        self.scheduler = AsyncIOScheduler()
         self.running = False
 
     def start(self):
@@ -212,7 +209,7 @@ class HistoryCleanupScheduler:
     """历史记录清理调度器"""
 
     def __init__(self):
-        self.scheduler = scheduler
+        self.scheduler = AsyncIOScheduler()
         self.running = False
 
     def start(self):
@@ -293,7 +290,7 @@ class SessionAutoCloseScheduler:
     """会话自动关闭调度器"""
 
     def __init__(self):
-        self.scheduler = scheduler
+        self.scheduler = AsyncIOScheduler()
         self.running = False
         self.inactivity_timeout_minutes = 30  # 30分钟无活动自动关闭
 
