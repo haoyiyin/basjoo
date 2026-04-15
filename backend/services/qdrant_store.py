@@ -16,25 +16,33 @@ from config import settings, DEFAULT_AGENT_SIMILARITY_THRESHOLD
 logger = logging.getLogger(__name__)
 
 
-class JinaEmbeddingClient:
-    """Jina v3 embedding client with query caching and rate limiting"""
+# Module-level tracking of API keys that have been observed to be invalid.
+# This is intentionally process-wide so that once a key is flagged, all
+# instances stop wasting requests against it.
+_disabled_keys: set[str] = set()
+_cache_by_client: Dict[tuple[str, str], Dict[str, List[float]]] = {}
+_semaphores_by_client: Dict[tuple[str, str], Any] = {}
 
-    _disabled_keys: set[str] = set()
-    _embedding_cache: Dict[str, List[float]] = {}  # Simple in-memory cache
-    _semaphore: Optional[Any] = None  # Rate limiting semaphore
+
+class JinaEmbeddingClient:
+    """Jina v3 embedding client with query caching and rate limiting."""
 
     def __init__(self, api_key: str, model: str = "jina-embeddings-v3"):
         self.api_key = api_key
         self.model = model
         self.base_url = settings.jina_embedding_api_base
-        self._disabled = api_key in self._disabled_keys
+        self._disabled = api_key in _disabled_keys
+        self._client_key = (api_key, model)
+        self._embedding_cache = _cache_by_client.setdefault(self._client_key, {})
 
     def _get_semaphore(self):
-        """Get or create the rate limiting semaphore (max 3 concurrent requests)."""
+        """Get or create a per-client semaphore (max 3 concurrent requests)."""
         import asyncio
-        if JinaEmbeddingClient._semaphore is None:
-            JinaEmbeddingClient._semaphore = asyncio.Semaphore(3)
-        return JinaEmbeddingClient._semaphore
+        semaphore = _semaphores_by_client.get(self._client_key)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(3)
+            _semaphores_by_client[self._client_key] = semaphore
+        return semaphore
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Synchronous embedding for index building (batch operations)."""
@@ -65,7 +73,7 @@ class JinaEmbeddingClient:
         except httpx.HTTPStatusError as exc:
             if exc.response is not None and exc.response.status_code == 401:
                 self._disabled = True
-                self._disabled_keys.add(self.api_key)
+                _disabled_keys.add(self.api_key)
                 raise ValueError("Jina API key is invalid (401 Unauthorized). Please check your API key at https://jina.ai/api-dashboard/key-manager")
             raise
 
@@ -82,7 +90,7 @@ class JinaEmbeddingClient:
         if len(texts) == 1:
             cache_key = texts[0]
             if cache_key in self._embedding_cache:
-                logger.info(f"Using cached embedding for query: {cache_key[:50]}...")
+                logger.info("Using cached embedding for query: %s...", cache_key[:50])
                 return [self._embedding_cache[cache_key]]
 
         # Use semaphore to limit concurrent API calls and avoid rate limiting
@@ -116,7 +124,7 @@ class JinaEmbeddingClient:
             except httpx.HTTPStatusError as exc:
                 if exc.response is not None and exc.response.status_code == 401:
                     self._disabled = True
-                    self._disabled_keys.add(self.api_key)
+                    _disabled_keys.add(self.api_key)
                     raise ValueError("Jina API key is invalid (401 Unauthorized). Please check your API key at https://jina.ai/api-dashboard/key-manager")
                 raise
 

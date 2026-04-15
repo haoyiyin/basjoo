@@ -315,7 +315,7 @@ class SessionAutoCloseScheduler:
 
         try:
             async with AsyncSessionLocal() as db:
-                cutoff = datetime.utcnow() - timedelta(minutes=self.inactivity_timeout_minutes)
+                cutoff = datetime.now(timezone.utc) - timedelta(minutes=self.inactivity_timeout_minutes)
 
                 result = await db.execute(
                     select(ChatSession).where(ChatSession.status.in_(["active", "taken_over"]))
@@ -332,12 +332,16 @@ class SessionAutoCloseScheduler:
                     )
                     last_time = last_msg.scalar_one_or_none()
 
+                    if last_time and last_time.tzinfo is None:
+                        last_time = last_time.replace(tzinfo=timezone.utc)
+
                     if last_time:
-                        check_time = last_time.replace(tzinfo=None) if last_time.tzinfo else last_time
-                        should_close = check_time < cutoff
+                        should_close = last_time < cutoff
                     elif session.created_at:
-                        check_time = session.created_at.replace(tzinfo=None) if session.created_at.tzinfo else session.created_at
-                        should_close = check_time < cutoff
+                        created = session.created_at
+                        if created.tzinfo is None:
+                            created = created.replace(tzinfo=timezone.utc)
+                        should_close = created < cutoff
                     else:
                         should_close = True
 

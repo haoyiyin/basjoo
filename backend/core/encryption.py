@@ -6,6 +6,7 @@ This module handles encryption/decryption of API keys with support for:
 """
 import os
 import base64
+import hashlib
 import logging
 import stat
 from functools import lru_cache
@@ -57,6 +58,27 @@ def _generate_and_save_key(key_file: str) -> str:
 
     logger.info(f"Generated new encryption key and saved to {key_file}")
     return key
+
+
+# Per-installation stable salt, derived from the encryption key source.
+# This avoids the old fixed salt without making encrypted values unreadable
+# after a process restart.
+_per_install_salt: Optional[bytes] = None
+
+
+def _get_per_install_salt() -> bytes:
+    global _per_install_salt
+    if _per_install_salt is not None:
+        return _per_install_salt
+
+    key = _get_or_create_encryption_key() or ""
+    if key:
+        _per_install_salt = hashlib.sha256(key.encode()).digest()[:16]
+        return _per_install_salt
+
+    # Last-resort fallback for plaintext mode; encryption is unavailable anyway.
+    _per_install_salt = b"basjoo_plaintext!"
+    return _per_install_salt
 
 
 def _load_key_from_file(key_file: str) -> Optional[str]:
@@ -147,11 +169,11 @@ class ApiKeyEncryption:
             except Exception:
                 pass
 
-        # Derive key from password using PBKDF2
+        # Derive key from password using PBKDF2 with per-installation salt
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=b"basjoo_fixed_salt_v1",  # Fixed salt for deterministic encryption
+            salt=_get_per_install_salt(),
             iterations=100000,
         )
         derived_key = base64.urlsafe_b64encode(kdf.derive(key.encode()))
@@ -175,7 +197,11 @@ class ApiKeyEncryption:
             return plaintext
 
         if self._fernet is None:
-            # Encryption not available, store as-is (backwards compatible)
+            # Encryption not available — warn so operators know keys are stored in plaintext.
+            logger.warning(
+                "Storing API key in plaintext because encryption is not configured. "
+                "Set ENCRYPTION_KEY or ensure the key file exists."
+            )
             return plaintext
 
         try:

@@ -46,6 +46,10 @@ msgstr "Q&A 条目更新成功"
 msgid "Q&A item deleted successfully"
 msgstr "Q&A 条目删除成功"
 
+# 认证相关
+msgid "Too many login attempts. Please try again later."
+msgstr "登录尝试次数过多，请稍后再试"
+
 # 系统消息
 msgid "Request body too large"
 msgstr "请求体过大"

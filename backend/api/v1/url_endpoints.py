@@ -183,37 +183,38 @@ async def create_urls(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    # 获取配额
+    # 获取配额并加锁
     quota_result = await db.execute(
-        select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
+        select(WorkspaceQuota)
+        .where(WorkspaceQuota.workspace_id == agent.workspace_id)
+        .with_for_update()
     )
     quota = quota_result.scalar_one_or_none()
 
     if not quota:
         quota = WorkspaceQuota(workspace_id=agent.workspace_id)
         db.add(quota)
-        await db.commit()
+        await db.flush()
 
-    # 检查配额
+    # 检查配额（在锁保护下）
     if quota.used_urls + len(request.urls) > quota.max_urls:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"URL quota exceeded. Max: {quota.max_urls}, Used: {quota.used_urls}",
         )
 
-    # 创建URL记录
+    # 创建URL记录并同步更新配额
     created_urls = []
     for url in request.urls:
         normalized = URLNormalizer.normalize(url)
 
-        # 先检查是否已存在（优化：避免不必要的数据库冲突）
         existing = await db.execute(
             select(URLSource).where(
                 URLSource.agent_id == agent_id, URLSource.normalized_url == normalized
             )
         )
         if existing.scalar_one_or_none():
-            continue  # 跳过已存在的URL
+            continue
 
         url_source = URLSource(
             agent_id=agent_id,
@@ -221,25 +222,17 @@ async def create_urls(
             normalized_url=normalized,
             status="pending",
         )
-        db.add(url_source)
 
         try:
-            # 尝试立即提交以检测唯一约束冲突
-            await db.flush()
-
-            # 成功创建，添加到列表
-            created_urls.append(url_source)
-
+            async with db.begin_nested():
+                db.add(url_source)
+                await db.flush()
+                created_urls.append(url_source)
+                quota.used_urls += 1
         except IntegrityError:
-            # 并发冲突：URL已被其他请求创建
-            await db.rollback()
             logger.info(f"URL {url} already exists (concurrent creation), skipping")
             continue
 
-    await db.commit()
-
-    # 更新配额
-    quota.used_urls += len(created_urls)
     await db.commit()
 
     # 异步抓取

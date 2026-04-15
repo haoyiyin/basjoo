@@ -46,6 +46,10 @@ msgstr "Q&A item updated successfully"
 msgid "Q&A item deleted successfully"
 msgstr "Q&A item deleted successfully"
 
+# Authentication
+msgid "Too many login attempts. Please try again later."
+msgstr "Too many login attempts. Please try again later."
+
 # System Messages
 msgid "Request body too large"
 msgstr "Request body too large"
