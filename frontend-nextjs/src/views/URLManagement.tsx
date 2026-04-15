@@ -103,47 +103,6 @@ export default function URLManagement() {
     checkJinaKey();
   }, [agentId, jinaKeyReady, navigate]);
 
-  useEffect(() => {
-    if (agentId && jinaKeyReady) {
-      loadURLs();
-      // Start task status polling
-      pollTaskStatus();
-      taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
-    }
-    return () => {
-      if (taskStatusIntervalRef.current) {
-        clearInterval(taskStatusIntervalRef.current);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId, jinaKeyReady]);
-
-  const pollTaskStatus = async () => {
-    if (!agentId) return;
-    try {
-      const status = await api.getTasksStatus(agentId);
-      setTaskStatus(status);
-      // If backend reports crawling, enable polling unless the user explicitly stopped live updates
-      if (status.is_crawling && !crawlPolling && !stopPollingRequestedRef.current) {
-        setCrawlPolling(true);
-      }
-      // Sync isRetraining with backend status using functional update to avoid stale closure
-      if (status.is_rebuilding) {
-        setIsRetraining(true);
-      } else {
-        setIsRetraining(prev => {
-          if (prev && !status.is_rebuilding) {
-            setRefreshTrigger(t => t + 1);
-            loadURLs();
-          }
-          return false;
-        });
-      }
-    } catch (error) {
-      console.error('Failed to poll task status:', error);
-    }
-  };
-
   const loadDefaultAgent = async () => {
     try {
       const data = await api.getDefaultAgent();
@@ -179,6 +138,50 @@ export default function URLManagement() {
       setLoading(false);
     }
   }, [agentId, jinaKeyReady, crawlPolling, t]);
+
+  // Stable refs for functions used inside interval callbacks.
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+  const jinaKeyReadyRef = useRef(jinaKeyReady);
+  jinaKeyReadyRef.current = jinaKeyReady;
+  const loadURLsRef = useRef(loadURLs);
+  loadURLsRef.current = loadURLs;
+
+  useEffect(() => {
+    if (agentId && jinaKeyReady) {
+      void loadURLs();
+      const pollTaskStatus = async () => {
+        if (!agentIdRef.current) return;
+        try {
+          const status = await api.getTasksStatus(agentIdRef.current);
+          setTaskStatus(status);
+          if (status.is_crawling && !crawlPolling && !stopPollingRequestedRef.current) {
+            setCrawlPolling(true);
+          }
+          if (status.is_rebuilding) {
+            setIsRetraining(true);
+          } else {
+            setIsRetraining(prev => {
+              if (prev && !status.is_rebuilding) {
+                setRefreshTrigger(t => t + 1);
+                void loadURLsRef.current();
+              }
+              return false;
+            });
+          }
+        } catch (error) {
+          console.error('Failed to poll task status:', error);
+        }
+      };
+      void pollTaskStatus();
+      taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
+    }
+    return () => {
+      if (taskStatusIntervalRef.current) {
+        clearInterval(taskStatusIntervalRef.current);
+      }
+    };
+  }, [agentId, jinaKeyReady, crawlPolling, loadURLs]);
 
   const handleAddURL = async () => {
     if (!agentId) return;

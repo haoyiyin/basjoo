@@ -83,14 +83,16 @@ export default function Chat() {
       console.error('WebSocket error:', error)
     }
 
-    wsRef.current.onclose = () => {
-      console.log('WebSocket disconnected')
-      if (isMountedRef.current) {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('Reconnecting...')
-          connectWebSocket()
-        }, 5000)
-      }
+    wsRef.current.onclose = (event) => {
+      console.log('WebSocket disconnected (code: %d)', event.code)
+      if (!isMountedRef.current) return
+      // Do not reconnect after intentional close (cleanup in useEffect return).
+      if (event.code === 1000 || event.code === 1001) return
+
+      reconnectTimeoutRef.current = setTimeout(() => {
+        console.log('Reconnecting...')
+        connectWebSocket()
+      }, 5000)
     }
   }, [sessionId, token])
 

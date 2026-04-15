@@ -349,12 +349,14 @@ class APIService {
 
     try {
       while (!streamEnded) {
+        let timeoutId: number | NodeJS.Timeout | null = null;
         const { done, value } = await Promise.race([
           reader.read(),
           new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
-            window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
+            timeoutId = window.setTimeout(() => reject(new Error('Stream read timeout')), streamReadTimeout);
           }),
         ]);
+        if (timeoutId !== null) clearTimeout(timeoutId as number);
 
         buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 

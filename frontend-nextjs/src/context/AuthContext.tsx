@@ -22,7 +22,14 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const TOKEN_STORAGE_KEY = 'token'
 const ADMIN_STORAGE_KEY = 'admin'
 
-function parseJwtPayload(token: string): { exp?: number } | null {
+/** All expected JWT claims plus room for extras from the backend. */
+export interface JwtPayload {
+  exp?: number
+  sub?: string
+  [key: string]: unknown
+}
+
+export function parseJwtPayload(token: string): JwtPayload | null {
   try {
     const parts = token.split('.')
     if (parts.length < 2) {
@@ -30,7 +37,7 @@ function parseJwtPayload(token: string): { exp?: number } | null {
     }
     const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
-    return JSON.parse(window.atob(padded))
+    return JSON.parse(window.atob(padded)) as JwtPayload
   } catch {
     return null
   }

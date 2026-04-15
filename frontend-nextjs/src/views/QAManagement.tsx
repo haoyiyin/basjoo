@@ -77,45 +77,6 @@ export default function QAManagement() {
     checkJinaKey();
   }, [agentId, jinaKeyReady, navigate]);
 
-  useEffect(() => {
-    if (agentId && jinaKeyReady) {
-      loadItems();
-      pollTaskStatus();
-      taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
-    }
-    return () => {
-      if (taskStatusIntervalRef.current) {
-        clearInterval(taskStatusIntervalRef.current);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId, jinaKeyReady]);
-
-  const pollTaskStatus = async () => {
-    if (!agentId) return;
-    try {
-      const status = await api.getTasksStatus(agentId);
-      setTaskStatus(status);
-      // Sync isRetraining with backend status using functional update to avoid stale closure
-      if (status.is_rebuilding) {
-        setIsRetraining(true);
-      } else {
-        setIsRetraining(prev => {
-          if (prev && !status.is_rebuilding) {
-            setRefreshTrigger(t => t + 1);
-            void loadItems();
-            window.setTimeout(() => {
-              void loadItems();
-            }, 500);
-          }
-          return false;
-        });
-      }
-    } catch (error) {
-      console.error('Failed to poll task status:', error);
-    }
-  };
-
   const loadDefaultAgent = async () => {
     try {
       const data = await api.getDefaultAgent();
@@ -125,18 +86,61 @@ export default function QAManagement() {
     }
   };
 
-  const loadItems = async () => {
+  const loadItems = async (showAlert = true) => {
     if (!agentId || !jinaKeyReady) return;
     setLoading(true);
     try {
-      const data = await api.listQA(agentId);
+      const data = await api.listQA(agentId, 0, 1000);
       setItems(data.items);
     } catch (error) {
-      alert(`${t('errors.loadFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      if (showAlert) {
+        alert(`${t('errors.loadFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      } else {
+        console.error('Failed to load QA items:', error);
+      }
     } finally {
       setLoading(false);
     }
   };
+
+  // Stable refs for functions used inside interval callbacks.
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+  const loadItemsRef = useRef(loadItems);
+  loadItemsRef.current = loadItems;
+
+  useEffect(() => {
+    if (agentId && jinaKeyReady) {
+      void loadItems(false);
+      const pollTaskStatus = async () => {
+        if (!agentIdRef.current) return;
+        try {
+          const status = await api.getTasksStatus(agentIdRef.current);
+          setTaskStatus(status);
+          if (status.is_rebuilding) {
+            setIsRetraining(true);
+          } else {
+            setIsRetraining(prev => {
+              if (prev && !status.is_rebuilding) {
+                setRefreshTrigger(t => t + 1);
+                void loadItemsRef.current(false);
+              }
+              return false;
+            });
+          }
+        } catch (error) {
+          console.error('Failed to poll task status:', error);
+        }
+      };
+      void pollTaskStatus();
+      taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
+    }
+    return () => {
+      if (taskStatusIntervalRef.current) {
+        clearInterval(taskStatusIntervalRef.current);
+      }
+    };
+  }, [agentId, jinaKeyReady]);
 
   // 解析导入内容为Q&A项目
   const parseImportContent = (text: string, format: 'json' | 'csv'): ParsedQAItem[] => {
@@ -515,7 +519,7 @@ export default function QAManagement() {
                 {t('labels.qaList')}
               </h2>
               <button
-                onClick={loadItems}
+                onClick={() => { void loadItems(); }}
                 disabled={loading}
                 className="btn-ghost"
                 style={{
