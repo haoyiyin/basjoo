@@ -1191,7 +1191,7 @@ class BasjooWidget {
       html = html.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
       html = html.replace(/(^|[^_])_([^_]+)_(?!_)/g, '$1<em>$2</em>');
       html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => {
-        const safeLabel = this.escapeHtml(label);
+        const safeLabel = label;
         const safeUrl = this.sanitizeUrlAttribute(url);
         if (!safeUrl) {
           return safeLabel;

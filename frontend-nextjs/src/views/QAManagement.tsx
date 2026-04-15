@@ -119,7 +119,19 @@ export default function QAManagement() {
         try {
           const status = await api.getTasksStatus(agentIdRef.current);
           if (!isMountedRef.current) return;
-          setTaskStatus(status);
+          setTaskStatus(prev => {
+            if (
+              prev &&
+              prev.is_crawling === status.is_crawling &&
+              prev.is_rebuilding === status.is_rebuilding &&
+              prev.can_modify_index === status.can_modify_index &&
+              prev.active_tasks.length === status.active_tasks.length &&
+              prev.active_tasks.every((task, index) => task === status.active_tasks[index])
+            ) {
+              return prev;
+            }
+            return status;
+          });
           if (status.is_rebuilding) {
             setIsRetraining(true);
           } else {

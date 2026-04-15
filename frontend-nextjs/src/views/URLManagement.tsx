@@ -145,6 +145,8 @@ export default function URLManagement() {
   agentIdRef.current = agentId;
   const jinaKeyReadyRef = useRef(jinaKeyReady);
   jinaKeyReadyRef.current = jinaKeyReady;
+  const crawlPollingRef = useRef(crawlPolling);
+  crawlPollingRef.current = crawlPolling;
   const loadURLsRef = useRef(loadURLs);
   loadURLsRef.current = loadURLs;
 
@@ -157,8 +159,20 @@ export default function URLManagement() {
         try {
           const status = await api.getTasksStatus(agentIdRef.current);
           if (!isMountedRef.current) return;
-          setTaskStatus(status);
-          if (status.is_crawling && !crawlPolling && !stopPollingRequestedRef.current) {
+          setTaskStatus(prev => {
+            if (
+              prev &&
+              prev.is_crawling === status.is_crawling &&
+              prev.is_rebuilding === status.is_rebuilding &&
+              prev.can_modify_index === status.can_modify_index &&
+              prev.active_tasks.length === status.active_tasks.length &&
+              prev.active_tasks.every((task, index) => task === status.active_tasks[index])
+            ) {
+              return prev;
+            }
+            return status;
+          });
+          if (status.is_crawling && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
             setCrawlPolling(true);
           }
           if (status.is_rebuilding) {
@@ -185,7 +199,7 @@ export default function URLManagement() {
         clearInterval(taskStatusIntervalRef.current);
       }
     };
-  }, [agentId, jinaKeyReady, crawlPolling, loadURLs]);
+  }, [agentId, jinaKeyReady, loadURLs]);
 
   const handleAddURL = async () => {
     if (!agentId) return;

@@ -215,6 +215,8 @@ class HistoryCleanupScheduler:
     def start(self):
         """启动调度器"""
         if not self.running:
+            self.scheduler.start()
+            self.running = True
             # 添加每日清理任务（凌晨3点执行）
             self.scheduler.add_job(
                 self.cleanup_expired_sessions,
@@ -296,6 +298,8 @@ class SessionAutoCloseScheduler:
 
     def start(self):
         if not self.running:
+            self.scheduler.start()
+            self.running = True
             self.scheduler.add_job(
                 self.close_inactive_sessions,
                 trigger='interval',
