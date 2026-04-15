@@ -47,6 +47,7 @@ export default function URLManagement() {
   const [deletingUrlId, setDeletingUrlId] = useState<number | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(false);
   const jinaKeyCheckInFlightRef = useRef(false);
   const redirectedForJinaKeyRef = useRef(false);
   const stopPollingRequestedRef = useRef(false);
@@ -148,12 +149,14 @@ export default function URLManagement() {
   loadURLsRef.current = loadURLs;
 
   useEffect(() => {
+    isMountedRef.current = true;
     if (agentId && jinaKeyReady) {
       void loadURLs();
       const pollTaskStatus = async () => {
-        if (!agentIdRef.current) return;
+        if (!isMountedRef.current || !agentIdRef.current) return;
         try {
           const status = await api.getTasksStatus(agentIdRef.current);
+          if (!isMountedRef.current) return;
           setTaskStatus(status);
           if (status.is_crawling && !crawlPolling && !stopPollingRequestedRef.current) {
             setCrawlPolling(true);
@@ -177,6 +180,7 @@ export default function URLManagement() {
       taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
     }
     return () => {
+      isMountedRef.current = false;
       if (taskStatusIntervalRef.current) {
         clearInterval(taskStatusIntervalRef.current);
       }

@@ -38,6 +38,7 @@ export default function QAManagement() {
   const [isRetraining, setIsRetraining] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(false);
   const jinaKeyCheckInFlightRef = useRef(false);
   const redirectedForJinaKeyRef = useRef(false);
 
@@ -110,12 +111,14 @@ export default function QAManagement() {
   loadItemsRef.current = loadItems;
 
   useEffect(() => {
+    isMountedRef.current = true;
     if (agentId && jinaKeyReady) {
       void loadItems(false);
       const pollTaskStatus = async () => {
-        if (!agentIdRef.current) return;
+        if (!isMountedRef.current || !agentIdRef.current) return;
         try {
           const status = await api.getTasksStatus(agentIdRef.current);
+          if (!isMountedRef.current) return;
           setTaskStatus(status);
           if (status.is_rebuilding) {
             setIsRetraining(true);
@@ -136,6 +139,7 @@ export default function QAManagement() {
       taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
     }
     return () => {
+      isMountedRef.current = false;
       if (taskStatusIntervalRef.current) {
         clearInterval(taskStatusIntervalRef.current);
       }
