@@ -102,7 +102,25 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
 
 @router.post("/login", response_model=LoginResponse)
 async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)):
+    from middleware.rate_limit import get_request_client_ip
+    from services.redis_service import get_redis
+
     locale = get_locale_from_request(request)
+
+    # Rate-limit login attempts per client IP to prevent brute-force attacks.
+    ip = get_request_client_ip(request)
+    redis_svc = await get_redis()
+    if redis_svc is not None:
+        login_key = f"login:ip:{ip}"
+        allowed, _remaining = await redis_svc.check_rate_limit(
+            login_key, max_requests=5, window_seconds=300
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=_("Too many login attempts. Please try again later.", locale=locale),
+            )
+
     auth_service = AuthService(db)
 
     admin = await auth_service.authenticate_admin(

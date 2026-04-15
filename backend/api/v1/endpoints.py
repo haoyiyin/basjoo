@@ -178,7 +178,12 @@ def ensure_vector_services(
     jina_api_key: Optional[str] = None,
     embedding_model: Optional[str] = None,
 ) -> QdrantRAGService:
-    global qdrant_store, rag_service
+    """Create a fresh per-request vector service instance.
+
+    Do NOT store the result in module-level globals; each caller should
+    keep the returned service in local scope so concurrent requests with
+    different Jina keys do not interfere with each other.
+    """
 
     resolved_jina_api_key = jina_api_key if jina_api_key is not None else agent.jina_api_key if agent else None
     resolved_embedding_model = embedding_model if embedding_model is not None else agent.embedding_model if agent else None
@@ -186,12 +191,12 @@ def ensure_vector_services(
     if not resolved_jina_api_key:
         raise ValueError("Jina API key is required")
 
-    qdrant_store = QdrantVectorStore(
+    local_qdrant_store = QdrantVectorStore(
         jina_api_key=resolved_jina_api_key,
         embedding_model=resolved_embedding_model or "jina-embeddings-v3",
     )
-    rag_service = QdrantRAGService(qdrant_store)
-    return rag_service
+    local_rag_service = QdrantRAGService(local_qdrant_store)
+    return local_rag_service
 
 
 # ========== 依赖注入 ==========
@@ -219,8 +224,9 @@ async def check_quota(
 ) -> WorkspaceQuota:
     """检查配额（带并发安全）
 
-    Uses a fast read path without locking when quota is clearly available,
-    falling back to locked mode only when quota needs reset or is near limit.
+    Always acquires a row-level lock when checking the message counter so
+    that concurrent requests cannot both pass the quota check before either
+    one increments the counter.
     """
     from datetime import datetime, timezone
     from sqlalchemy import select
@@ -228,15 +234,15 @@ async def check_quota(
 
     now = datetime.now(timezone.utc)
 
-    # Fast path: try a non-locking read first
+    # Always use locked read so concurrent requests serialize on the row.
     result = await db.execute(
         select(WorkspaceQuota)
         .where(WorkspaceQuota.workspace_id == agent.workspace_id)
+        .with_for_update()
     )
     quota = result.scalar_one_or_none()
 
     if not quota:
-        # Need to create quota row - use locked mode
         insert_stmt = sqlite_insert(WorkspaceQuota).values(
             workspace_id=agent.workspace_id,
             used_messages_today=0,
@@ -252,26 +258,17 @@ async def check_quota(
         result = await db.execute(
             select(WorkspaceQuota)
             .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-        )
-        quota = result.scalar_one_or_none()
-
-    # Check if quota needs daily reset - this requires locking
-    if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
-        # Re-acquire with lock for reset operation
-        result = await db.execute(
-            select(WorkspaceQuota)
-            .where(WorkspaceQuota.workspace_id == agent.workspace_id)
             .with_for_update()
         )
         quota = result.scalar_one_or_none()
 
-        # Double-check after acquiring lock (another request may have reset it)
-        if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
-            logger.info(f"Resetting daily message quota for workspace {agent.workspace_id}")
-            quota.used_messages_today = 0
-            quota.last_message_reset = now
-            quota.updated_at = now
-            await db.flush()
+    # Reset daily quota if needed (still holding the lock).
+    if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
+        logger.info(f"Resetting daily message quota for workspace {agent.workspace_id}")
+        quota.used_messages_today = 0
+        quota.last_message_reset = now
+        quota.updated_at = now
+        await db.flush()
 
     return quota
 

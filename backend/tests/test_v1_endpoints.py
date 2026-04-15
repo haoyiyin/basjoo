@@ -192,7 +192,7 @@ async def test_chat_stream_hides_internal_errors(public_client, default_agent_id
     assert "provider secret exploded" not in body
     assert "event: content" in body
     assert "event: done" in body
-    assert "Sorry, the service is currently limited." in body
+    assert "抱歉，当前服务受限" in body
 
 
 @pytest.mark.asyncio
