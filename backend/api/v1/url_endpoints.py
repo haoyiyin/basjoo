@@ -423,8 +423,11 @@ async def discover_subpages(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
+    # Acquire quota lock upfront
     quota_result = await db.execute(
-        select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
+        select(WorkspaceQuota)
+        .where(WorkspaceQuota.workspace_id == agent.workspace_id)
+        .with_for_update()
     )
     quota = quota_result.scalar_one_or_none()
 
@@ -433,21 +436,32 @@ async def discover_subpages(
         url, max_depth=max_depth, max_pages=max_pages
     )
 
-    created_urls = []
+    # Deduplicate and filter out already-existing URLs in one pass
+    normalized_candidates = []
     for discovered_url, _depth in discovered_urls:
-        if quota and quota.used_urls >= quota.max_urls:
-            break
-
         normalized = URLNormalizer.normalize(discovered_url)
+        normalized_candidates.append((discovered_url, normalized))
 
-        existing = await db.execute(
-            select(URLSource).where(
-                URLSource.agent_id == agent_id, URLSource.normalized_url == normalized
-            )
-        )
-        if existing.scalar_one_or_none():
-            continue
+    existing_normalized = {
+        row.normalized_url
+        for row in (await db.execute(
+            select(URLSource.normalized_url).where(URLSource.agent_id == agent_id)
+        )).scalars().all()
+    }
 
+    to_insert = [
+        (url, norm) for url, norm in normalized_candidates
+        if norm not in existing_normalized
+    ]
+
+    # Apply quota cap
+    if quota:
+        remaining = max(0, quota.max_urls - quota.used_urls)
+        to_insert = to_insert[:remaining]
+
+    # Insert only new rows
+    created_urls = []
+    for discovered_url, normalized in to_insert:
         url_source = URLSource(
             agent_id=agent_id,
             url=discovered_url,
@@ -457,8 +471,8 @@ async def discover_subpages(
         db.add(url_source)
         created_urls.append(url_source)
 
-        if quota:
-            quota.used_urls += 1
+    if quota:
+        quota.used_urls += len(created_urls)
 
     await db.commit()
 
@@ -516,40 +530,45 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
         async with database.AsyncSessionLocal() as db:
             try:
                 quota_result = await db.execute(
-                    select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
+                    select(WorkspaceQuota)
+                    .where(WorkspaceQuota.workspace_id == workspace_id)
+                    .with_for_update()
                 )
                 quota = quota_result.scalar_one_or_none()
                 logger.info(f"[site_crawl_task] Quota: {quota.used_urls if quota else 'N/A'}/{quota.max_urls if quota else 'N/A'}")
 
-                created_count = 0
+                # Collect candidates, deduplicate by normalized URL
                 seen_normalized_urls = set()
-
+                candidates = []
                 for page_result in results:
-                    if task_lock.is_cancelled(agent_id, task_id):
-                        logger.info(f"[site_crawl_task] Task {task_id} cancelled during result persistence")
-                        await db.rollback()
-                        return
                     if not page_result.success:
                         continue
-
-                    if quota and quota.used_urls >= quota.max_urls:
-                        logger.warning(f"URL quota exceeded for agent {agent_id}")
-                        break
-
                     normalized = URLNormalizer.normalize(page_result.url)
                     if normalized in seen_normalized_urls:
                         continue
                     seen_normalized_urls.add(normalized)
+                    candidates.append((page_result, normalized))
 
-                    existing = await db.execute(
-                        select(URLSource).where(
-                            URLSource.agent_id == agent_id,
-                            URLSource.normalized_url == normalized
-                        )
-                    )
-                    if existing.scalar_one_or_none():
-                        continue
+                # Fetch already-existing URLs in one query
+                existing_normalized = {
+                    row.normalized_url
+                    for row in (await db.execute(
+                        select(URLSource.normalized_url).where(URLSource.agent_id == agent_id)
+                    )).scalars().all()
+                }
 
+                to_insert = [
+                    (pr, norm) for pr, norm in candidates
+                    if norm not in existing_normalized
+                ]
+
+                # Apply quota cap
+                if quota:
+                    remaining = max(0, quota.max_urls - quota.used_urls)
+                    to_insert = to_insert[:remaining]
+
+                # Insert only new rows
+                for page_result, normalized in to_insert:
                     url_source = URLSource(
                         agent_id=agent_id,
                         url=page_result.url,
@@ -562,22 +581,11 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                     )
                     db.add(url_source)
 
-                    try:
-                        await db.flush()
-                        created_count += 1
-                        if quota:
-                            quota.used_urls += 1
-                    except IntegrityError:
-                        await db.rollback()
-                        quota_result = await db.execute(
-                            select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
-                        )
-                        quota = quota_result.scalar_one_or_none()
-                        logger.info(f"Skipping duplicate URL: {normalized}")
-                        continue
+                if quota:
+                    quota.used_urls += len(to_insert)
 
                 await db.commit()
-                logger.info(f"Site crawl completed for {url}: {created_count} pages added")
+                logger.info(f"Site crawl completed for {url}: {len(to_insert)} pages added")
 
             except asyncio.CancelledError:
                 logger.info(f"[site_crawl_task] Task {task_id} cancelled")
