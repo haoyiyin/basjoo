@@ -1,5 +1,12 @@
 {
   "scripts": {
-    "sync-widget": "./scripts/sync-widget.sh"
+    "sync-widget": "./scripts/sync-widget.sh",
+    "test:e2e": "playwright test --config=tests/e2e/playwright.config.ts --project=smoke",
+    "test:e2e:all": "playwright test --config=tests/e2e/playwright.config.ts",
+    "test:e2e:prod": "E2E_ENV=prod playwright test --config=tests/e2e/playwright.config.ts --project=prod-like",
+    "test:e2e:widget": "playwright test --config=tests/e2e/playwright.config.ts --project=widget-cross-origin"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
   }
 }
