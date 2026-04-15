@@ -9,6 +9,7 @@ from sqlalchemy import event
 import os
 
 from config import settings, DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
+from core.encryption import encrypt_api_key
 
 
 def _to_async_database_url(database_url: str) -> str:
@@ -56,6 +57,9 @@ AsyncSessionLocal = _create_sessionmaker(engine)
 def _build_default_agent(workspace_id: int):
     from models import Agent
 
+    raw_api_key = settings.deepseek_api_key
+    raw_jina_key = os.getenv("JINA_API_KEY", "")
+
     return Agent(
         id=settings.default_agent_id,
         workspace_id=workspace_id,
@@ -65,9 +69,9 @@ def _build_default_agent(workspace_id: int):
         model="deepseek-chat",
         temperature=0.7,
         max_tokens=DEFAULT_AGENT_MAX_TOKENS,
-        api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+        api_key=encrypt_api_key(raw_api_key) if raw_api_key else "",
         api_base="https://api.deepseek.com/v1",
-        jina_api_key=os.getenv("JINA_API_KEY", ""),
+        jina_api_key=encrypt_api_key(raw_jina_key) if raw_jina_key else "",
         embedding_model="jina-embeddings-v3",
         top_k=5,
         similarity_threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,

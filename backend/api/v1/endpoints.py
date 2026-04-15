@@ -55,6 +55,7 @@ from api.v1.schemas import (
     normalize_widget_origin,
 )
 from services import URLNormalizer, TextChunker, TaskType, task_lock
+from core.encryption import encrypt_api_key, decrypt_api_key
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
 from services.llm_service import get_llm_service
@@ -119,7 +120,13 @@ def get_restricted_reply(
     return restricted_reply or default
 
 
+def get_agent_plaintext_keys(agent: Agent) -> tuple[Optional[str], Optional[str]]:
+    """Return decrypted agent API credentials once per request path."""
+    return decrypt_api_key(agent.api_key), decrypt_api_key(agent.jina_api_key)
+
+
 def build_agent_config(agent: Agent) -> dict:
+    api_key, jina_key = get_agent_plaintext_keys(agent)
     return {
         "id": agent.id,
         "name": agent.name,
@@ -128,11 +135,11 @@ def build_agent_config(agent: Agent) -> dict:
         "model": agent.model,
         "temperature": agent.temperature,
         "max_tokens": DEFAULT_AGENT_MAX_TOKENS,
-        "api_key_set": bool(agent.api_key),
-        "api_key_masked": mask_api_key(agent.api_key),
+        "api_key_set": bool(api_key),
+        "api_key_masked": mask_api_key(api_key),
         "api_base": agent.api_base,
-        "jina_api_key_set": bool(agent.jina_api_key),
-        "jina_api_key_masked": mask_api_key(agent.jina_api_key),
+        "jina_api_key_set": bool(jina_key),
+        "jina_api_key_masked": mask_api_key(jina_key),
         "provider_type": agent.provider_type,
         "azure_endpoint": agent.azure_endpoint,
         "azure_deployment_name": agent.azure_deployment_name,
@@ -561,11 +568,11 @@ async def prepare_chat_request(
     agent_max_tokens = DEFAULT_AGENT_MAX_TOKENS
     agent_system_prompt = agent.system_prompt
     agent_enable_context = agent.enable_context
-    agent_jina_api_key = agent.jina_api_key
+    agent_api_key, agent_jina_api_key = get_agent_plaintext_keys(agent)
     agent_embedding_model = agent.embedding_model
     agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
-    use_mock_llm = not agent.api_key
+    use_mock_llm = not agent_api_key
     if use_mock_llm:
         logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
 
@@ -1339,7 +1346,7 @@ async def get_contexts(
         )
 
     agent_id = agent.id
-    agent_jina_api_key = agent.jina_api_key
+    _agent_api_key, agent_jina_api_key = get_agent_plaintext_keys(agent)
 
     # 注意：enable_context仅控制对话历史，不影响知识库检索
     # /contexts 端点始终返回检索结果
@@ -1487,7 +1494,7 @@ async def update_jina_key(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Jina API key is required"
         )
 
-    agent.jina_api_key = request.jina_api_key
+    agent.jina_api_key = encrypt_api_key(request.jina_api_key)
     await db.commit()
     await db.refresh(agent)
 
@@ -1659,8 +1666,8 @@ async def test_ai_api(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    agent_api_key = payload.api_key if payload and payload.api_key is not None else agent.api_key
-    if not agent_api_key:
+    raw_api_key = payload.api_key if payload and payload.api_key is not None else agent.api_key
+    if not raw_api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="API key not configured"
         )
@@ -1669,7 +1676,7 @@ async def test_ai_api(
         llm = get_llm_service(
             agent,
             use_mock=False,
-            api_key=agent_api_key,
+            api_key=decrypt_api_key(raw_api_key),
             api_base=payload.api_base if payload and payload.api_base is not None else agent.api_base,
             model=payload.model if payload and payload.model is not None else agent.model,
             provider_type=payload.provider_type if payload and payload.provider_type is not None else agent.provider_type,
@@ -1715,7 +1722,8 @@ async def test_jina_api(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    agent_jina_api_key = payload.jina_api_key if payload and payload.jina_api_key is not None else agent.jina_api_key
+    raw_jina_key = payload.jina_api_key if payload and payload.jina_api_key is not None else agent.jina_api_key
+    agent_jina_api_key = decrypt_api_key(raw_jina_key)
     if not agent_jina_api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Jina API key not configured"

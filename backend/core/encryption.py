@@ -243,8 +243,7 @@ class ApiKeyEncryption:
             return decrypted.decode()
         except Exception as e:
             logger.error(f"Decryption failed: {e}")
-            # Return ciphertext without marker on failure
-            return ciphertext[len(ENCRYPTION_MARKER):]
+            return None
 
     def is_encrypted(self, value: Optional[str]) -> bool:
         """Check if a value is encrypted."""
