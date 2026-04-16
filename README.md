@@ -124,6 +124,44 @@ docker compose --profile dev up -d --build backend-dev frontend-dev
 bash scripts/prod_stability_check.sh
 ```
 
+### Option 1.5: One-command production install (Ubuntu / Debian)
+
+SSH into a blank Ubuntu or Debian server and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+
+The script will automatically:
+
+- install `git`, `python3`, Docker Engine, and Docker Compose
+- clone the repository if the target directory does not exist yet
+- force-sync the existing clone to the latest remote branch state
+- deploy the production profile with the existing `deploy.sh` flow
+
+If you already have the repository checked out, you can also run it locally:
+
+```bash
+sudo sh install-deploy.sh
+```
+
+Optional environment variables:
+
+```bash
+BASJOO_DIR=/opt/basjoo
+BASJOO_BRANCH=main
+BASJOO_REPO_URL=https://github.com/haoyiyin/basjoo
+BASJOO_FORCE_CLEAN=1
+sh install-deploy.sh
+```
+
+Notes:
+
+- Supported systems: Ubuntu and Debian.
+- The script intentionally resets the repository to the remote branch state and can remove untracked files when `BASJOO_FORCE_CLEAN=1`.
+- Persistent Docker volumes are preserved; the script does not remove `backend-data`, `redis-data`, or `qdrant-data`.
+- If `apt-get` / `apt` is missing on the server, the script exits with a clear error because Docker installation cannot be bootstrapped reliably on a broken Debian/Ubuntu base image.
+
 Default dev ports:
 
 - Frontend: `http://localhost:3000`
@@ -369,6 +407,7 @@ pytest tests/test_api.py::test_name
 ## Deployment notes
 
 - `docker-compose.yml` is the main orchestration entrypoint.
+- `install-deploy.sh` is the one-command production installer/deployer for Ubuntu and Debian. It can auto-install Docker/Compose, clone the repo, and force-sync an existing clone to the chosen remote branch before deploying.
 - The active frontend service is `frontend-nextjs`, not the legacy `frontend/` directory.
 - nginx is configured with `client_max_body_size 12m` so oversized requests can reach the backend and return JSON errors instead of nginx HTML errors.
 - Optional HTTPS is enabled only when readable certificate and key files exist in `./ssl`.
@@ -379,6 +418,7 @@ pytest tests/test_api.py::test_name
 - The backend persists the default widget agent ID to `/app/data/.agent_id`. As long as the backend data volume is preserved, existing widget embed codes keep working after redeployments.
 - If you know an older widget agent ID that must keep working, set `DEFAULT_AGENT_ID=agt_xxxxxxxxxxxx` before first boot of the new deployment.
 - Avoid `docker compose down -v` or deleting the backend data volume unless you are intentionally rotating widget/embed identity.
+- The one-command installer only force-resets repository files; it does not delete Docker named volumes, so `/app/data` persistence remains intact across redeployments.
 
 ### Preserving existing widget embeds across redeployments
 
