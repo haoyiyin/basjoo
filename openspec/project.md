@@ -112,8 +112,12 @@ const { t } = useTranslation('common')
 - `llm_service.py`: LLM API abstraction (supports multiple providers and mock mode)
 - `rag_qdrant.py`: RAG retrieval and response generation against Qdrant
 - `qdrant_store.py`: Qdrant collection and vector management
-- `scraper.py`: URL content extraction via Jina Reader API
-- `scheduler.py`: Background tasks with APScheduler
+- `scraper.py`: URL content extraction via Jina Reader API with direct fetch fallback
+- `crawler.py`: Site-wide crawling built on top of `URLScraper`
+- `scheduler.py`: Background tasks with APScheduler (URL fetch, history cleanup, session auto-close)
+- `url_safety.py`: SSRF protection — validates URLs, blocks localhost/private IPs/DNS rebinding
+- `task_lock.py`: Task concurrency control to prevent conflicting operations on the same agent
+- `core/encryption.py`: Fernet-based API key encryption for stored provider credentials
 
 ### Testing Strategy
 
@@ -184,8 +188,12 @@ pytest --cov=. --cov-report=html
 - SQL injection protection (via SQLAlchemy ORM)
 - XSS attack prevention
 - Input validation on all endpoints
-- Rate limiting via slowapi
-- CORS whitelist configuration
+- Rate limiting (Redis-first with in-memory fallback)
+- CORS with shared helper for early responses; `Origin: null` only when explicitly enabled
+- SSRF protection for URL ingestion: blocks localhost, direct IPs, private/resolved-private IPs
+- Widget embed origin whitelist enforcement per agent
+- API key encryption at rest via Fernet key (`core/encryption.py`)
+- Secret key auto-generation and persistence with `REQUIRE_SECRET_KEY` enforcement in production
 
 ### Performance Targets
 | Metric | Target | Achieved |
@@ -216,6 +224,7 @@ pytest --cov=. --cov-report=html
 # Required or zero-config persisted on first startup
 SECRET_KEY=
 DEFAULT_AGENT_ID=
+REQUIRE_SECRET_KEY=false          # set true in production
 
 # LLM (choose provider-specific keys as needed)
 DEEPSEEK_API_KEY=
@@ -230,6 +239,7 @@ DATABASE_URL=sqlite:////app/data/basjoo.db
 ALLOWED_ORIGINS=http://localhost:3000
 SECRET_KEY_FILE=/app/data/.secret_key
 ENCRYPTION_KEY_FILE=/app/data/.encryption_key
+cors_allow_null_origin=false       # enable for file:// widget preview in dev only
 ```
 
 ## File Locations Quick Reference
