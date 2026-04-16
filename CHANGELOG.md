@@ -8,6 +8,8 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ### Added
 
+- One-command production installer/deployer (`install-deploy.sh`): auto-installs Docker/Compose, clones/syncs repository, deploys production profile via `deploy.sh`, and verifies container health checks.
+- `deploy.sh` now supports `BASJOO_DOCKER_BIN` environment variable for custom Docker binary invocation (e.g., `sudo docker`).
 - SSRF protection for URL ingestion (`backend/services/url_safety.py`): blocks localhost, direct IP literals, embedded credentials, and hostnames resolving to private/special-use IPs.
 - Admin authentication at the router level for URL/Q&A management (`url_endpoints.py`) and index rebuild (`index_endpoints.py`) endpoints.
 - `cors_allow_null_origin` config flag (default `false`) for explicit `file://` widget preview support in dev environments.
@@ -38,6 +40,8 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 - Updated README.md / README.zh-CN.md with current commands, env vars, architecture, and security model.
 - Rewrote tests/README.md around actual test execution entry points, correcting stale directory claims.
 - Patched openspec/project.md with missing services and security requirements.
+- Added one-command production install documentation to README.md, README.zh-CN.md, and CLAUDE.md.
+- Clarified README.md / README.zh-CN.md deployment onboarding by separating automatic deployment from manual deployment.
 
 ---
 
