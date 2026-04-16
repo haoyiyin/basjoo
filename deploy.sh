@@ -4,10 +4,23 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 DOCKER_BIN=${BASJOO_DOCKER_BIN:-docker}
 
+SUDO=
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+  SUDO=sudo
+fi
+
 if ! swapon --noheadings --show 2>/dev/null | grep -q '[^[:space:]]'; then
-  printf '%s\n' '==> Warning: no swap detected. Next.js builds may fail on 1GB servers.'
-  printf '%s\n' '    Add swap first if deploys disconnect SSH:'
-  printf '%s\n' '    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile'
+  printf '%s\n' '==> No swap detected. Creating 2GB swap file for Next.js build...'
+  if [ -f /swapfile ]; then
+    printf '%s\n' '==> Existing /swapfile found but not active, re-enabling...'
+    ${SUDO} swapon /swapfile 2>/dev/null || true
+  else
+    ${SUDO} fallocate -l 2G /swapfile 2>/dev/null || ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048
+    ${SUDO} chmod 600 /swapfile
+    ${SUDO} mkswap /swapfile
+    ${SUDO} swapon /swapfile
+  fi
+  printf '%s\n' '==> Swap enabled. Next.js build should now have enough memory.'
 fi
 
 printf '%s\n' '==> Preparing .env for zero-config deployment'

@@ -4,7 +4,7 @@ WORKDIR /app
 
 ARG BACKEND_PROXY_TARGET=http://localhost:8000
 ENV BACKEND_PROXY_TARGET=$BACKEND_PROXY_TARGET
-ENV NODE_OPTIONS=--max-old-space-size=768
+ENV NODE_OPTIONS=--max-old-space-size=1024
 
 COPY package*.json ./
 RUN npm ci --prefer-offline --no-audit
