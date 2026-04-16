@@ -10,6 +10,20 @@ Basjoo is an AI customer-support platform with three main parts:
 
 The stack also uses **SQLite** for application data, **Redis** for rate limiting/cache-related services, **Qdrant** for vector search, and **nginx** for Docker-based reverse proxying.
 
+## Automatic deployment
+
+For a blank Ubuntu or Debian server, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+
+If you already have this repository checked out locally, you can also run:
+
+```bash
+sudo sh install-deploy.sh
+```
+
 ## Repository structure
 
 - `backend/` — FastAPI app, data models, chat APIs, auth, ingestion, indexing, tests
@@ -100,7 +114,7 @@ The widget provides the visitor-facing chat window with persisted sessions, mult
 - esbuild
 - Browser-native fetch + SSE handling
 
-## Quick start
+## Manual deployment
 
 ### Option 1: Docker Compose
 
@@ -123,44 +137,6 @@ docker compose logs -f backend-dev frontend-dev nginx
 docker compose --profile dev up -d --build backend-dev frontend-dev
 bash scripts/prod_stability_check.sh
 ```
-
-### Option 1.5: One-command production install (Ubuntu / Debian)
-
-SSH into a blank Ubuntu or Debian server and run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
-```
-
-The script will automatically:
-
-- install `git`, `python3`, Docker Engine, and Docker Compose
-- clone the repository if the target directory does not exist yet
-- force-sync the existing clone to the latest remote branch state
-- deploy the production profile with the existing `deploy.sh` flow
-
-If you already have the repository checked out, you can also run it locally:
-
-```bash
-sudo sh install-deploy.sh
-```
-
-Optional environment variables:
-
-```bash
-BASJOO_DIR=/opt/basjoo
-BASJOO_BRANCH=main
-BASJOO_REPO_URL=https://github.com/haoyiyin/basjoo
-BASJOO_FORCE_CLEAN=1
-sh install-deploy.sh
-```
-
-Notes:
-
-- Supported systems: Ubuntu and Debian.
-- The script intentionally resets the repository to the remote branch state and can remove untracked files when `BASJOO_FORCE_CLEAN=1`.
-- Persistent Docker volumes are preserved; the script does not remove `backend-data`, `redis-data`, or `qdrant-data`.
-- If `apt-get` / `apt` is missing on the server, the script exits with a clear error because Docker installation cannot be bootstrapped reliably on a broken Debian/Ubuntu base image.
 
 Default dev ports:
 
