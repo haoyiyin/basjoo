@@ -173,17 +173,22 @@ npm run dev
 npm install
 npm run dev
 npm run build
+npm run start        # production build locally
 npm run lint
 npm run typecheck
+npm run test         # vitest
 ```
 
 ### Widget (`widget/`)
 
 ```bash
 npm install
-npm run dev
-npm run build
+npm run dev          # dev bundle + example server
+npm run build        # full build (typecheck + dev + prod bundles)
+npm run build:dev    # unminified ESM bundle (dist/basjoo-widget.js)
+npm run build:prod   # minified IIFE bundle (dist/basjoo-widget.min.js)
 npm run typecheck
+npm run test         # vitest
 ```
 
 ### Backend (`backend/`)
@@ -194,6 +199,22 @@ python3 main.py
 pytest
 pytest tests/test_api.py
 pytest tests/test_api.py::test_name
+```
+
+### Root-level E2E tests
+
+```bash
+npm run test:e2e        # smoke tests (dev environment)
+npm run test:e2e:all    # all Playwright test projects
+npm run test:e2e:prod   # production-like E2E tests
+npm run test:e2e:widget # widget cross-origin embed tests
+npm run sync-widget     # sync widget bundle to backend
+```
+
+### Docker Compose watch mode (dev)
+
+```bash
+docker compose --profile dev up --watch
 ```
 
 ## Environment and configuration
@@ -218,11 +239,16 @@ Important runtime settings used in the current codebase include:
 - `RATE_LIMIT_BURST_SIZE`
 - `LOG_LEVEL`
 - `SERVER_DOMAIN`
+- `ENCRYPTION_KEY` (optional; auto-generated and persisted if missing)
+- `ENCRYPTION_KEY_FILE` (default `/app/data/.encryption_key`)
+- `REQUIRE_SECRET_KEY` (set `true` in production to reject insecure secret keys)
 
 Notes:
 
 - If `SECRET_KEY` is missing or insecure, the backend generates one and persists it to `SECRET_KEY_FILE`.
 - `DEFAULT_AGENT_ID` can be used to restore or pin a known widget agent ID during migrations; see the deployment section below for the preservation workflow.
+- If `ENCRYPTION_KEY` is not set, the backend auto-generates a Fernet key and persists it to `ENCRYPTION_KEY_FILE`; stored provider API keys are encrypted with this key.
+- `cors_allow_null_origin` (boolean, default `false`) controls whether `Origin: null` (e.g., `file://` widget preview) receives wildcard CORS headers. Off by default for security.
 - `SERVER_DOMAIN` is consumed by the nginx service in the production compose profile to enforce a canonical host and block direct IP/other-host access.
 - The dev compose profile sets permissive CORS and local API URLs by default.
 - The production compose profile expects mounted persistent backend data under `/app/data`.
@@ -234,20 +260,24 @@ Notes:
 `backend/main.py` builds the FastAPI app and wires together:
 
 - auth routes under `/api/admin`
-- v1 APIs under `/api/v1`
-- CORS middleware
+- v1 APIs under `/api/v1` (chat, agent config, sessions, quotas, task status)
+- admin-only routers: `url_endpoints.py` (URL ingestion, Q&A management, crawling) and `index_endpoints.py` (index rebuild jobs) are protected at the router level via `Depends(get_current_admin)`
+- public v1 routes: `/api/v1/chat`, `/api/v1/chat/stream`, `/api/v1/contexts`, `/api/v1/config:public`
+- CORS middleware with a shared `apply_cors_headers()` helper for early responses (rate limit 429, body size 413)
 - i18n middleware
 - rate limiting middleware
 - Redis and scheduler startup in non-test mode
 - static routes for widget assets like `/sdk.js`
+- a 10MB request body guard that returns JSON 413 errors before the request reaches downstream handlers
 
 The main backend domains are:
 
 - **Agent config**: provider/model/system-prompt/widget settings
-- **Knowledge sources**: URLs and Q&A items
-- **Indexing**: chunking content and rebuilding Qdrant collections
+- **Knowledge sources**: URLs and Q&A items, with SSRF protection via `backend/services/url_safety.py`
+- **Indexing**: chunking content and rebuilding Qdrant collections; rebuilds replace the entire collection (clear + add)
 - **Chat**: session creation, streaming replies, source citations, quota checks
 - **Admin auth**: dashboard login and registration
+- **Scheduling**: URL fetch scheduler, history cleanup, session auto-close (30-min inactivity timeout)
 
 The main persistent entities in `backend/models.py` are:
 
@@ -289,19 +319,22 @@ The active UI is the Next.js app in `frontend-nextjs/`.
 
 `widget/src/BasjooWidget.tsx` is a self-contained embeddable widget that:
 
-- detects or accepts an `apiBase`
+- auto-detects `apiBase` from the script source URL, infers from dev port 3000 → backend 8000, or falls back to `window.location.origin`
+- fetches `/api/v1/config:public` on init to resolve `default_agent_id`, widget title/color, and welcome message
 - stores visitor/session IDs in `localStorage`
-- streams chat replies from `/api/v1/chat/stream`
-- polls for assistant replies after human takeover scenarios
+- streams chat replies from `/api/v1/chat/stream` via SSE with a 90-second read timeout and one automatic retry on network errors
+- polls `/api/v1/chat/messages?role=assistant` at 3-second intervals during human takeover scenarios
 - relies on server-side widget origin whitelist checks when configured
 
 The backend serves widget-related assets directly, including `/sdk.js`.
 
-Recent widget and admin behavior highlights:
+### Security model
 
-- widget titles, welcome copy, and restricted/offline reply copy can be localized and auto-translated by visitor locale
-- admins can configure offline fallback replies and see backend-side error alerts in the dashboard
-- URL fetch/rebuild flows include improved cancellation, polling, and status-sync behavior
+- **SSRF protection**: `backend/services/url_safety.py` validates all user-provided URLs. It blocks `localhost`, direct IP literals, URLs with embedded credentials, and hostnames that resolve to private/special-use IPs (loopback, RFC1918, link-local, cloud metadata). DNS resolution results are cached (512-entry LRU) to avoid repeated lookups during crawls.
+- **Widget origin whitelist**: Public chat routes enforce a per-agent origin whitelist configured in the admin dashboard. Admin users bypass the whitelist for testing.
+- **CORS policy**: Early responses (rate limit 429, body size 413) apply CORS headers through a shared helper in `backend/middleware/rate_limit.py`. `Origin: null` only receives wildcard CORS when `cors_allow_null_origin` is explicitly enabled. Requests without an `Origin` header do not receive CORS headers.
+- **Secret persistence**: `SECRET_KEY`, `DEFAULT_AGENT_ID`, and `ENCRYPTION_KEY` are auto-generated and persisted on first boot if not provided via environment variables, ensuring stable widget embed behavior and encrypted API key storage across redeployments.
+- **Task concurrency**: A shared `TaskLock` service prevents conflicting operations (e.g., rebuild blocks fetch, fetch blocks rebuild) on the same agent.
 
 ## Testing
 

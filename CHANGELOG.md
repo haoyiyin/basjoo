@@ -2,43 +2,42 @@
 
 All notable changes to this project should be documented in this file.
 
-This file currently starts from the repository state available in this working copy. Earlier historical releases are not reconstructed here because no prior changelog exists in the repository and this directory is not currently operating as a git repository from Claude Code's perspective.
-
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
 ### Added
 
-- Next.js admin/dashboard frontend in `frontend-nextjs/` with auth, dashboard, sessions, URLs, Q&A, playground, and system settings flows.
-- Embeddable widget package in `widget/` with browser-side session persistence, SSE chat streaming, source rendering, and per-agent origin whitelist support.
-- Widget copy auto-translation by visitor locale.
-- Offline agent fallback replies plus admin-side error alerts for unavailable upstream model responses.
-- FastAPI v1 APIs for chat, streaming chat, agent configuration, URL ingestion, Q&A management, index rebuilds, task status, and admin session access.
-- SQLAlchemy models for workspaces, agents, URL sources, Q&A items, document chunks, chat sessions/messages, quotas, index jobs, and admin users.
-- Async indexing pipeline that chunks URL and Q&A content and stores vector data in Qdrant.
-- Provider abstraction layer supporting OpenAI-compatible providers plus dedicated OpenAI Native and Google integrations.
-- Docker Compose dev/prod profiles with Redis, Qdrant, backend, frontend, and nginx services.
-- Production stability validation script in `scripts/prod_stability_check.sh`.
-- Backend test suite covering API behavior, auth, rate limiting, deployment fallbacks, observability, robustness, and stress scenarios.
+- SSRF protection for URL ingestion (`backend/services/url_safety.py`): blocks localhost, direct IP literals, embedded credentials, and hostnames resolving to private/special-use IPs.
+- Admin authentication at the router level for URL/Q&A management (`url_endpoints.py`) and index rebuild (`index_endpoints.py`) endpoints.
+- `cors_allow_null_origin` config flag (default `false`) for explicit `file://` widget preview support in dev environments.
+- `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` for Fernet-based API key encryption at rest (`core/encryption.py`).
+- `REQUIRE_SECRET_KEY` environment variable to reject insecure secret keys in production.
+- Key rotation support for Jina embedding client.
+- E2E test workflow with Playwright: smoke, prod-like, and widget cross-origin test projects.
 
 ### Changed
 
-- Active frontend is `frontend-nextjs/`; the older `frontend/` directory is legacy/reference only.
-- nginx request body limit is configured larger than the backend guard so oversized requests can be handled by FastAPI with JSON responses.
-- HTTPS enablement in nginx is conditional on readable certificate files mounted under `./ssl`, and HTTP now redirects to HTTPS automatically when certificates are present.
-- nginx can now enforce a canonical host via `SERVER_DOMAIN`, dropping direct IP or other-host access with nginx 444 while keeping `/health` available for probes.
-- Backend startup persists generated secret keys when configured values are missing or insecure.
-- Backend startup now persists the default widget agent ID to `/app/data/.agent_id` so existing widget embeds keep working across normal redeployments.
-- Docker Compose dev/prod backend services now accept `DEFAULT_AGENT_ID` so operators can restore or pin a known widget agent ID during migrations.
-- System auto-reply settings are merged into a single field in the admin experience.
-- URL management feedback, cancellation, crawl polling, and training-state synchronization behavior have been tightened across admin flows.
+- CORS policy tightened: missing `Origin` headers no longer receive wildcard CORS; `Origin: null` only allowed when `cors_allow_null_origin` is explicitly enabled.
+- Early-response CORS handling unified through a single shared helper (`apply_cors_headers` in `backend/middleware/rate_limit.py`).
+- URL validation in schemas replaced with the shared SSRF safety check, removing localhost and direct IP acceptance.
+- Scheduler shutdown lifecycle made symmetric; secret handling and login fallback limiter tightened.
+- Health endpoint behavior unified across request paths.
+- Chat rate limits operate on per-minute sliding windows.
+- URL normalization improved for repeated query parameters.
+- URL fetch/crawl quota paths and training-state synchronization tightened.
 
 ### Fixed
 
-- Early backend responses that bypass normal CORS middleware apply explicit CORS headers so embedded widget requests continue to work.
-- Docker backend startup ensures writable app data ownership for persisted SQLite volumes.
-- Client IP extraction is normalized through shared middleware utilities for consistent rate limiting and session creation behavior.
+- In-memory sliding window rate limiter now evicts stale keys to prevent unbounded map growth.
+- Widget XSS gap in source rendering and frontend polling/reconnect stability improved.
+- Widget embed security model replaced Turnstile dependency with per-agent origin whitelist enforcement.
+
+### Documentation
+
+- Updated README.md / README.zh-CN.md with current commands, env vars, architecture, and security model.
+- Rewrote tests/README.md around actual test execution entry points, correcting stale directory claims.
+- Patched openspec/project.md with missing services and security requirements.
 
 ---
 

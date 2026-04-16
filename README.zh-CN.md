@@ -176,17 +176,22 @@ npm run dev
 npm install
 npm run dev
 npm run build
+npm run start        # 本地运行生产构建
 npm run lint
 npm run typecheck
+npm run test         # vitest
 ```
 
 ### Widget（`widget/`）
 
 ```bash
 npm install
-npm run dev
-npm run build
+npm run dev          # 开发打包 + 示例服务
+npm run build        # 完整构建（类型检查 + 开发 + 生产打包）
+npm run build:dev    # 未压缩 ESM 打包 (dist/basjoo-widget.js)
+npm run build:prod   # 压缩 IIFE 打包 (dist/basjoo-widget.min.js)
 npm run typecheck
+npm run test         # vitest
 ```
 
 ### 后端（`backend/`）
@@ -197,6 +202,22 @@ python3 main.py
 pytest
 pytest tests/test_api.py
 pytest tests/test_api.py::test_name
+```
+
+### 根目录 E2E 测试
+
+```bash
+npm run test:e2e        # smoke 测试（开发环境）
+npm run test:e2e:all    # 所有 Playwright 测试项目
+npm run test:e2e:prod   # 生产近似 E2E 测试
+npm run test:e2e:widget # Widget 跨域嵌入测试
+npm run sync-widget     # 同步 widget 打包产物到后端
+```
+
+### Docker Compose watch 模式（开发）
+
+```bash
+docker compose --profile dev up --watch
 ```
 
 ## 环境变量与配置
@@ -221,11 +242,16 @@ pytest tests/test_api.py::test_name
 - `RATE_LIMIT_BURST_SIZE`
 - `LOG_LEVEL`
 - `SERVER_DOMAIN`
+- `ENCRYPTION_KEY`（可选；缺失时自动生成并持久化）
+- `ENCRYPTION_KEY_FILE`（默认 `/app/data/.encryption_key`）
+- `REQUIRE_SECRET_KEY`（生产环境设为 `true`，拒绝不安全的密钥）
 
 说明：
 
 - 如果 `SECRET_KEY` 缺失或被判定为不安全，后端会自动生成并写入 `SECRET_KEY_FILE`。
 - `DEFAULT_AGENT_ID` 可用于迁移时恢复或固定已知的 widget agent ID；保留旧嵌入代码的完整流程见下方部署章节。
+- 如果未设置 `ENCRYPTION_KEY`，后端会自动生成 Fernet 密钥并持久化到 `ENCRYPTION_KEY_FILE`；存储在数据库中的服务商 API 密钥会使用该密钥加密。
+- `cors_allow_null_origin`（布尔值，默认 `false`）控制是否允许 `Origin: null`（如 `file://` widget 预览）获取通配符 CORS 头。出于安全考虑默认关闭。
 - `SERVER_DOMAIN` 由生产环境中的 nginx 服务使用，用于限制规范域名并阻止直接 IP/其他 Host 访问。
 - Docker Compose 的开发环境默认启用宽松的 CORS 和本地 API 地址。
 - 生产风格环境默认依赖挂载到 `/app/data` 的持久化数据目录。
@@ -237,20 +263,24 @@ pytest tests/test_api.py::test_name
 `backend/main.py` 负责创建 FastAPI 应用，并接入：
 
 - `/api/admin` 下的认证路由
-- `/api/v1` 下的业务 API
-- CORS 中间件
+- `/api/v1` 下的业务 API（聊天、智能体配置、会话、配额、任务状态）
+- admin-only 路由：`url_endpoints.py`（URL 导入、Q&A 管理、抓取）和 `index_endpoints.py`（索引重建任务）在 router 级别通过 `Depends(get_current_admin)` 进行管理员鉴权保护
+- public v1 路由：`/api/v1/chat`、`/api/v1/chat/stream`、`/api/v1/contexts`、`/api/v1/config:public`
+- CORS 中间件，早返回响应（限流 429、请求体 413）通过共享 `apply_cors_headers()` 处理
 - i18n 中间件
 - 限流中间件
 - 非测试模式下的 Redis 和调度器启动逻辑
 - `/sdk.js` 等 widget 静态资源路由
+- 10MB 请求体保护：超过限制时直接返回 JSON 413，不再进入下游处理
 
 后端的主要业务域包括：
 
 - **智能体配置**：服务商、模型、系统提示词、Widget 设置
-- **知识源**：URL 与 Q&A 条目
-- **索引**：内容切块与 Qdrant 重建
+- **知识源**：URL 与 Q&A 条目，URL 导入经过 `backend/services/url_safety.py` 的 SSRF 防护校验
+- **索引**：内容切块与 Qdrant 重建；重建会替换整个集合（清空 + 重新添加）
 - **聊天**：会话创建、流式回复、来源引用、配额校验
 - **管理认证**：后台登录与注册
+- **定时任务**：URL 抓取调度、历史清理、会话自动关闭（30 分钟无活动超时）
 
 `backend/models.py` 中的主要持久化实体包括：
 
@@ -292,19 +322,22 @@ pytest tests/test_api.py::test_name
 
 `widget/src/BasjooWidget.tsx` 是一个自包含的可嵌入聊天组件，支持：
 
-- 自动检测或手动指定 `apiBase`
+- 从脚本 src URL 自动检测 `apiBase`，开发环境下 3000 端口自动推断后端 8000，或回退到 `window.location.origin`
+- 初始化时请求 `/api/v1/config:public` 获取 `default_agent_id`、widget 标题/颜色和欢迎语
 - 将访客 ID / 会话 ID 保存在 `localStorage`
-- 从 `/api/v1/chat/stream` 流式接收回复
-- 在人工接管场景后轮询新的助手消息
+- 从 `/api/v1/chat/stream` 通过 SSE 流式接收回复，90 秒读取超时，网络错误时自动重试一次
+- 人工接管场景下以 3 秒间隔轮询 `/api/v1/chat/messages?role=assistant`
 - 在配置时依赖服务端的 Widget 来源白名单校验
 
 后端会直接提供与 widget 相关的资源，包括 `/sdk.js`。
 
-近期 widget 与后台行为补充：
+### 安全模型
 
-- widget 标题、欢迎语、受限/离线回复文案支持按访客语言自动本地化
-- 管理员可以配置离线兜底回复，并在后台看到服务端错误告警
-- URL 抓取与训练流程的取消、轮询和状态同步体验已增强
+- **SSRF 防护**：`backend/services/url_safety.py` 校验所有用户提供的 URL。阻止 `localhost`、直接 IP 字面量、含嵌入凭据的 URL，以及解析到私有/特殊用途 IP 的主机名（环回、RFC1918、链路本地、云元数据）。DNS 解析结果缓存 512 条 LRU，避免抓取时重复查询。
+- **Widget 来源白名单**：公开聊天路由强制执行按 agent 配置的来源白名单。管理员用户可绕过白名单用于测试。
+- **CORS 策略**：早返回响应（限流 429、请求体 413）通过 `backend/middleware/rate_limit.py` 中的共享 helper 处理 CORS 头。`Origin: null` 仅在显式启用 `cors_allow_null_origin` 时获得通配符 CORS。缺少 `Origin` 头的请求不会获得 CORS 头。
+- **密钥持久化**：`SECRET_KEY`、`DEFAULT_AGENT_ID` 和 `ENCRYPTION_KEY` 在首次启动时自动生成并持久化，确保 widget 嵌入行为稳定以及 API 密钥加密存储在重新部署后保持一致。
+- **任务并发控制**：共享 `TaskLock` 服务防止同一 agent 上的冲突操作（如重建阻塞抓取、抓取阻塞重建）。
 
 ## 测试
 
