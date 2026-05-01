@@ -1,4 +1,4 @@
-"""URL抓取和内容提取服务 - 使用 Jina Reader API"""
+"""URL抓取和内容提取服务"""
 
 import httpx
 from bs4 import BeautifulSoup
@@ -17,34 +17,43 @@ JINA_READER_BASE = "https://r.jina.ai/"
 
 
 class URLScraper:
-    """URL抓取器 - 使用 Jina Reader API 进行网页抓取"""
+    """URL抓取器"""
 
-    def __init__(self, timeout: int = 60, user_agent: str = "", jina_api_key: str = ""):
+    def __init__(self, timeout: int = 60, user_agent: str = "", jina_api_key: str = "", fetcher_provider: str = "jina_reader"):
         self.timeout = timeout
         self.user_agent = user_agent or (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         self.jina_api_key = jina_api_key
+        self.fetcher_provider = fetcher_provider
         self.headers = {
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
-    async def fetch(self, url: str, use_jina: bool = True) -> Dict[str, Any]:
+    async def fetch(self, url: str, use_jina: Optional[bool] = None) -> Dict[str, Any]:
         """
         抓取URL并提取主要内容
 
         Args:
             url: 要抓取的URL
-            use_jina: 是否使用 Jina Reader API（默认启用）
+            use_jina: 是否使用 Jina Reader API（默认根据 fetcher_provider 决定）
 
         Returns:
             包含title, content, metadata的字典
         """
+        use_jina = self.fetcher_provider == "jina_reader" if use_jina is None else use_jina
         if use_jina:
-            # 先尝试无key的Jina API，失败则尝试有key的
             return await self._fetch_with_jina_fallback(url)
+
+        if self.fetcher_provider == "trafilatura":
+            result = await self._fetch_with_trafilatura(url)
+            if result.get("success"):
+                return result
+            logger.info(f"Falling back to direct fetch for {url}")
+            return await self._fetch_direct(url)
+
         return await self._fetch_direct(url)
 
     async def _fetch_with_jina_fallback(self, url: str) -> Dict[str, Any]:
@@ -146,6 +155,95 @@ class URLScraper:
         except Exception as e:
             logger.warning(f"Jina failed for {url}: {e}")
             return {"success": False, "error": str(e), "retry_with_key": True}
+
+    async def _fetch_with_trafilatura(self, url: str) -> Dict[str, Any]:
+        """使用 trafilatura 抓取并提取正文"""
+        safe, reason = validate_url_safe(url)
+        if not safe:
+            logger.warning(f"Blocked unsafe trafilatura fetch of {url}: {reason}")
+            return {"success": False, "error": f"Unsafe URL: {reason}"}
+
+        try:
+            import trafilatura
+
+            logger.info(f"Fetching URL via trafilatura: {url}")
+
+            async with httpx.AsyncClient(
+                timeout=self.timeout, headers=self.headers, follow_redirects=True
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+
+            content_type = response.headers.get("content-type", "")
+            if "text/html" not in content_type.lower():
+                raise ValueError(f"Unsupported content type: {content_type}")
+
+            html = response.text
+            extracted = None
+            title = None
+            metadata_result = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=True,
+                deduplicate=True,
+                output_format="json",
+                url=url,
+            )
+
+            if metadata_result:
+                try:
+                    import json
+                    metadata_dict = json.loads(metadata_result) if isinstance(metadata_result, str) else metadata_result
+                    if isinstance(metadata_dict, dict):
+                        extracted = metadata_dict.get("text")
+                        title = metadata_dict.get("title")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if not title:
+                soup = BeautifulSoup(html, "html.parser")
+                if soup.title and soup.title.string:
+                    title = soup.title.string.strip()
+                elif soup.h1:
+                    title = soup.h1.get_text().strip()
+
+            content_text = (extracted or "").strip()
+            if not content_text or len(content_text) < 10:
+                raise ValueError("Extracted content is too short or empty")
+
+            content_text = self._clean_content(content_text)
+            content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+
+            result = {
+                "title": title or self._extract_title_from_url(url),
+                "content": content_text,
+                "content_hash": content_hash,
+                "metadata": {
+                    "url": url,
+                    "final_url": str(response.url),
+                    "status_code": response.status_code,
+                    "content_type": content_type,
+                    "content_length": len(response.content),
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "fetcher": "trafilatura",
+                },
+                "success": True,
+            }
+
+            logger.info(f"Successfully fetched {url} via trafilatura: {len(content_text)} chars")
+            return result
+
+        except httpx.TimeoutException:
+            logger.error(f"Timeout fetching {url} via trafilatura ({self.timeout}s)")
+            return {"success": False, "error": f"Timeout after {self.timeout} seconds"}
+        except httpx.RequestError as exc:
+            logger.error(f"Request error fetching {url} via trafilatura: {exc}")
+            return {"success": False, "error": str(exc)}
+        except ValueError as exc:
+            logger.warning(f"Content validation error for {url} via trafilatura: {exc}")
+            return {"success": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error(f"Unexpected error fetching {url} via trafilatura: {exc}")
+            return {"success": False, "error": str(exc)}
 
     async def _fetch_direct(self, url: str) -> Dict[str, Any]:
         """直接抓取（降级方案）"""

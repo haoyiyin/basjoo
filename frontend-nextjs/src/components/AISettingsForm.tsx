@@ -47,6 +47,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     jina_api_key: '',
     provider_type: 'openai' as ProviderType,
     api_format: 'openai' as ApiFormatType,
+    embedding_model: 'jina-embeddings-v3',
     top_k: 5,
     enable_context: false,
     rate_limit_per_minute: 20,
@@ -99,6 +100,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         jina_api_key: '',
         provider_type: agentData.provider_type || 'openai',
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
+        embedding_model: agentData.embedding_model || 'jina-embeddings-v3',
         top_k: agentData.top_k ?? 5,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
@@ -188,6 +190,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         api_base: formData.api_base,
         provider_type: formData.provider_type,
         api_format: formData.api_format,
+        embedding_model: formData.embedding_model,
         top_k: formData.top_k,
         enable_context: formData.enable_context,
         rate_limit_per_minute: formData.rate_limit_per_minute,
@@ -209,9 +212,17 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
           aiKeyTestFailed = true
           throw new Error(t('errors.aiApiTestFailed'))
         }
+
+        if (formData.provider_type === 'siliconflow') {
+          const embeddingTestResult = await api.testEmbeddingApi(agent.id, updateData)
+          if (!embeddingTestResult.success) {
+            aiKeyTestFailed = true
+            throw new Error(t('errors.jinaApiTestFailed'))
+          }
+        }
       }
 
-      if (formData.jina_api_key.trim()) {
+      if (formData.provider_type !== 'siliconflow' && formData.jina_api_key.trim()) {
         const jinaTestResult = await api.testJinaApi(agent.id, updateData)
         if (!jinaTestResult.success) {
           jinaKeyTestFailed = true
@@ -298,6 +309,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.restricted_reply,
     formData.api_key,
     formData.jina_api_key,
+    formData.embedding_model,
     handleSave,
   ])
 
@@ -324,6 +336,8 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         return 'https://api.moonshot.cn/v1'
       case 'aliyun_bailian':
         return 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+      case 'siliconflow':
+        return 'https://api.siliconflow.cn/v1'
       case 'openai':
       default:
         return 'https://api.openai.com/v1'
@@ -353,6 +367,8 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         return 'moonshot-v1-8k'
       case 'aliyun_bailian':
         return 'qwen-plus'
+      case 'siliconflow':
+        return 'deepseek-ai/DeepSeek-V3'
       case 'openai':
       default:
         return 'gpt-4o'
@@ -366,6 +382,9 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
       provider_type: provider,
       api_base: getDefaultApiBase(provider),
       model: getDefaultModel(provider),
+      ...(provider === 'siliconflow' && prev.embedding_model === 'jina-embeddings-v3'
+        ? { embedding_model: 'BAAI/bge-m3' }
+        : {}),
     }))
   }
 
@@ -560,6 +579,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
             <option value="volcengine">{t('labels.volcengine')}</option>
             <option value="moonshot">{t('labels.moonshot')}</option>
             <option value="aliyun_bailian">{t('labels.aliyun_bailian')}</option>
+            <option value="siliconflow">{t('labels.siliconflow', { defaultValue: 'SiliconFlow' })}</option>
             <option value="openai">{t('labels.openaiCompatible')}</option>
           </select>
         </div>
@@ -792,9 +812,9 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
               setJinaKeyError(false)
             }}
             placeholder={agent?.jina_api_key_set ? t('placeholders.enterJinaKey') : "jina_..."}
-            style={(highlightJinaKey || jinaKeyError) ? { border: '2px solid #ef4444' } : undefined}
+            style={(formData.provider_type !== 'siliconflow' && (highlightJinaKey || jinaKeyError)) ? { border: '2px solid #ef4444' } : undefined}
           />
-          {(highlightJinaKey || jinaKeyError) && (
+          {(formData.provider_type !== 'siliconflow' && (highlightJinaKey || jinaKeyError)) && (
             <div style={{
               marginTop: 'var(--space-2)',
               color: '#ef4444',

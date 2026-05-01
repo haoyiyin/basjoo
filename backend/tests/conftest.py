@@ -54,7 +54,17 @@ def mock_qdrant_store(monkeypatch, request):
     store_data = {}
 
     class FakeQdrantVectorStore:
-        def __init__(self, jina_api_key: str, embedding_model: str = "jina-embeddings-v3", collection_prefix: str = "basjoo"):
+        def __init__(
+            self,
+            jina_api_key: str = "",
+            embedding_model: str = "jina-embeddings-v3",
+            collection_prefix: str = "basjoo",
+            *,
+            embedding_provider: str = "jina",
+            embedding_api_key: str | None = None,
+            embedding_api_base: str | None = None,
+            embedding_dimension: int = 1024,
+        ):
             self.embedding_model = embedding_model
             self.collection_prefix = collection_prefix
 
@@ -99,7 +109,7 @@ def mock_qdrant_store(monkeypatch, request):
     monkeypatch.setattr("services.qdrant_store.QdrantVectorStore", FakeQdrantVectorStore)
     monkeypatch.setattr("services.rag_qdrant.QdrantVectorStore", FakeQdrantVectorStore)
     monkeypatch.setattr("api.v1.endpoints.QdrantVectorStore", FakeQdrantVectorStore)
-    monkeypatch.setattr("api.v1.index_endpoints.QdrantVectorStore", FakeQdrantVectorStore)
+    monkeypatch.setattr("api.v1.provider_helpers.QdrantVectorStore", FakeQdrantVectorStore)
 
 
 @pytest.fixture(autouse=True)

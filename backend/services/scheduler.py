@@ -102,7 +102,8 @@ class URLFetchScheduler:
                 f"(interval: {interval_days} days)"
             )
 
-            crawler = SiteCrawler(jina_api_key=decrypt_api_key(agent.jina_api_key) or "")
+            fetcher_provider = "trafilatura" if agent.provider_type == "siliconflow" else "jina_reader"
+            crawler = SiteCrawler(jina_api_key=decrypt_api_key(agent.jina_api_key) or "", fetcher_provider=fetcher_provider)
 
             for url_source in url_sources:
                 await self.fetch_single_url(crawler, url_source.id, str(agent.id))

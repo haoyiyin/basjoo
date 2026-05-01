@@ -32,6 +32,7 @@ requests==2.31.0
 beautifulsoup4==4.12.3
 readability-lxml==0.8.1
 lxml>=5.3.0
+trafilatura>=1.8.0
 
 # Redis - 缓存、限流、任务队列
 redis==5.2.1

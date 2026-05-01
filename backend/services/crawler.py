@@ -30,11 +30,13 @@ class SiteCrawler:
         timeout: int = 60,
         user_agent: str = "",
         jina_api_key: str = "",
+        fetcher_provider: str = "jina_reader",
     ):
         self.scraper = URLScraper(
             timeout=timeout,
             user_agent=user_agent,
             jina_api_key=jina_api_key,
+            fetcher_provider=fetcher_provider,
         )
 
     def _build_page_result(

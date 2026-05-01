@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # This is intentionally process-wide so that once a key is flagged, all
 # instances stop wasting requests against it.
 _disabled_keys: set[str] = set()
-_cache_by_client: Dict[tuple[str, str], Dict[str, List[float]]] = {}
-_semaphores_by_client: Dict[tuple[str, str], Any] = {}
+_cache_by_client: Dict[tuple, Dict[str, List[float]]] = {}
+_semaphores_by_client: Dict[tuple, Any] = {}
 
 
 def clear_disabled_key(api_key: str) -> None:
@@ -29,9 +29,118 @@ def clear_disabled_key(api_key: str) -> None:
     _disabled_keys.discard(api_key)
 
 
-def clear_client_cache(api_key: str, model: str = "jina-embeddings-v3") -> None:
-    """Clear embedding cache entries for a specific (api_key, model) pair."""
-    _cache_by_client.pop((api_key, model), None)
+def clear_client_cache(api_key: str, model: str = "jina-embeddings-v3", base_url: Optional[str] = None) -> None:
+    """Clear embedding cache entries for a specific client."""
+    if base_url is not None:
+        _cache_by_client.pop((api_key, model, base_url), None)
+    else:
+        # Clear all entries matching (api_key, model, ...) or (api_key, model)
+        keys_to_remove = [k for k in _cache_by_client if len(k) >= 2 and k[0] == api_key and k[1] == model]
+        for key in keys_to_remove:
+            _cache_by_client.pop(key, None)
+
+
+class SiliconFlowEmbeddingClient:
+    """SiliconFlow OpenAI-compatible embedding client."""
+
+    def __init__(self, api_key: str, model: str = "BAAI/bge-m3", base_url: str = "https://api.siliconflow.cn/v1"):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._disabled = api_key in _disabled_keys
+        self._client_key = (api_key, model, self.base_url)
+        self._embedding_cache = _cache_by_client.setdefault(self._client_key, {})
+
+    def update_api_key(self, new_key: str) -> None:
+        clear_disabled_key(self.api_key)
+        clear_client_cache(self.api_key, self.model, self.base_url)
+        self.api_key = new_key
+        self._disabled = False
+        self._client_key = (new_key, self.model, self.base_url)
+        self._embedding_cache = _cache_by_client.setdefault(self._client_key, {})
+
+    def _get_semaphore(self):
+        import asyncio
+
+        semaphore = _semaphores_by_client.get(self._client_key)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(3)
+            _semaphores_by_client[self._client_key] = semaphore
+        return semaphore
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        if not self.api_key:
+            raise ValueError("SiliconFlow API key is required")
+        if not texts:
+            return []
+        if self._disabled:
+            raise ValueError("SiliconFlow API key is invalid (401 Unauthorized). Please check your API key.")
+
+        try:
+            response = httpx.post(
+                f"{self.base_url}/embeddings",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={"model": self.model, "input": texts},
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            embeddings = [item["embedding"] for item in payload.get("data", [])]
+            if len(embeddings) != len(texts):
+                raise ValueError("SiliconFlow embeddings response size mismatch")
+            for i, emb in enumerate(embeddings):
+                if all(v == 0.0 for v in emb):
+                    raise ValueError(f"Embedding {i} is a zero vector - API may have returned invalid data")
+            return embeddings
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 401:
+                self._disabled = True
+                _disabled_keys.add(self.api_key)
+                raise ValueError("SiliconFlow API key is invalid (401 Unauthorized). Please check your API key.")
+            raise
+
+    async def embed_async(self, texts: List[str]) -> List[List[float]]:
+        if not self.api_key:
+            raise ValueError("SiliconFlow API key is required")
+        if not texts:
+            return []
+        if self._disabled:
+            raise ValueError("SiliconFlow API key is invalid (401 Unauthorized). Please check your API key.")
+
+        if len(texts) == 1 and texts[0] in self._embedding_cache:
+            return [self._embedding_cache[texts[0]]]
+
+        async with self._get_semaphore():
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.post(
+                        f"{self.base_url}/embeddings",
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        json={"model": self.model, "input": texts},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    embeddings = [item["embedding"] for item in payload.get("data", [])]
+                    if len(embeddings) != len(texts):
+                        raise ValueError("SiliconFlow embeddings response size mismatch")
+                    for i, emb in enumerate(embeddings):
+                        if all(v == 0.0 for v in emb):
+                            raise ValueError(f"Embedding {i} is a zero vector - API may have returned invalid data")
+
+                    if len(texts) == 1:
+                        self._embedding_cache[texts[0]] = embeddings[0]
+                        if len(self._embedding_cache) > settings.embedding_cache_max_entries:
+                            keys_to_remove = list(self._embedding_cache.keys())[: settings.embedding_cache_trim_count]
+                            for key in keys_to_remove:
+                                del self._embedding_cache[key]
+
+                    return embeddings
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 401:
+                    self._disabled = True
+                    _disabled_keys.add(self.api_key)
+                    raise ValueError("SiliconFlow API key is invalid (401 Unauthorized). Please check your API key.")
+                raise
 
 
 class JinaEmbeddingClient:
@@ -153,18 +262,15 @@ class QdrantVectorStore:
 
     def __init__(
         self,
-        jina_api_key: str,
+        jina_api_key: str = "",
         embedding_model: str = "jina-embeddings-v3",
         collection_prefix: str = "basjoo",
+        *,
+        embedding_provider: str = "jina",
+        embedding_api_key: Optional[str] = None,
+        embedding_api_base: Optional[str] = None,
+        embedding_dimension: int = 1024,
     ):
-        """
-        初始化 Qdrant 向量存储
-
-        Args:
-            jina_api_key: Jina API Key
-            embedding_model: 嵌入模型名称或路径
-            collection_prefix: 集合名称前缀
-        """
         from qdrant_client import QdrantClient
         from qdrant_client.http import models
 
@@ -186,13 +292,27 @@ class QdrantVectorStore:
                 prefer_grpc=False,
             )
 
-        self.embedding_client = JinaEmbeddingClient(api_key=jina_api_key, model=embedding_model)
-        self.dimension = 1024
+        resolved_api_key = embedding_api_key if embedding_api_key is not None else jina_api_key
+        resolved_provider = embedding_provider
 
-        if not jina_api_key:
-            raise ValueError("Jina API key is required")
+        if resolved_provider == "siliconflow":
+            base_url = (embedding_api_base or "https://api.siliconflow.cn/v1").rstrip("/")
+            self.embedding_client = SiliconFlowEmbeddingClient(
+                api_key=resolved_api_key or "",
+                model=embedding_model,
+                base_url=base_url,
+            )
+            if not resolved_api_key:
+                raise ValueError("SiliconFlow API key is required")
+        else:
+            resolved_provider = "jina"
+            self.embedding_client = JinaEmbeddingClient(api_key=resolved_api_key or "", model=embedding_model)
+            if not resolved_api_key:
+                raise ValueError("Jina API key is required")
 
-        logger.info(f"QdrantVectorStore initialized with dimension={self.dimension}")
+        self.dimension = embedding_dimension
+
+        logger.info(f"QdrantVectorStore initialized with provider={resolved_provider}, model={embedding_model}, dimension={self.dimension}")
 
     def _get_collection_name(self, agent_id: str) -> str:
         """获取 Agent 对应的集合名称"""

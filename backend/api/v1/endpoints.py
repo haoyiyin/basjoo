@@ -56,6 +56,7 @@ from api.v1.schemas import (
 )
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from core.encryption import encrypt_api_key, decrypt_api_key
+from api.v1.provider_helpers import get_agent_embedding_config
 from services.qdrant_store import clear_disabled_key, clear_client_cache
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
@@ -181,27 +182,23 @@ text_chunker = TextChunker()
 
 
 def ensure_vector_services(
-    agent: Optional[Agent] = None,
     *,
-    jina_api_key: Optional[str] = None,
-    embedding_model: Optional[str] = None,
+    embedding_provider: str,
+    embedding_api_key: Optional[str],
+    embedding_api_base: Optional[str],
+    embedding_model: str,
+    embedding_dimension: int,
 ) -> QdrantRAGService:
-    """Create a fresh per-request vector service instance.
-
-    Do NOT store the result in module-level globals; each caller should
-    keep the returned service in local scope so concurrent requests with
-    different Jina keys do not interfere with each other.
-    """
-
-    resolved_jina_api_key = jina_api_key if jina_api_key is not None else agent.jina_api_key if agent else None
-    resolved_embedding_model = embedding_model if embedding_model is not None else agent.embedding_model if agent else None
-
-    if not resolved_jina_api_key:
-        raise ValueError("Jina API key is required")
+    """Create a fresh per-request vector service instance."""
+    if not embedding_api_key:
+        raise ValueError("Embedding API key is required")
 
     local_qdrant_store = QdrantVectorStore(
-        jina_api_key=resolved_jina_api_key,
-        embedding_model=resolved_embedding_model or "jina-embeddings-v3",
+        embedding_provider=embedding_provider,
+        embedding_api_key=embedding_api_key,
+        embedding_api_base=embedding_api_base,
+        embedding_model=embedding_model,
+        embedding_dimension=embedding_dimension,
     )
     local_rag_service = QdrantRAGService(local_qdrant_store)
     return local_rag_service
@@ -569,8 +566,7 @@ async def prepare_chat_request(
     agent_max_tokens = DEFAULT_AGENT_MAX_TOKENS
     agent_system_prompt = agent.system_prompt
     agent_enable_context = agent.enable_context
-    agent_api_key, agent_jina_api_key = get_agent_plaintext_keys(agent)
-    agent_embedding_model = agent.embedding_model
+    agent_api_key, _ = get_agent_plaintext_keys(agent)
     agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
     use_mock_llm = not agent_api_key
@@ -688,12 +684,16 @@ async def prepare_chat_request(
 
     current_rag_service = None
     retrieval_results: List[Dict[str, Any]] = []
-    should_retrieve_context = bool(agent_jina_api_key)
+    agent_embedding_config = get_agent_embedding_config(agent)
+    should_retrieve_context = bool(agent_embedding_config["embedding_api_key"])
     if should_retrieve_context:
         try:
             current_rag_service = ensure_vector_services(
-                jina_api_key=agent_jina_api_key,
-                embedding_model=agent_embedding_model,
+                embedding_provider=agent_embedding_config["embedding_provider"],
+                embedding_api_key=agent_embedding_config["embedding_api_key"],
+                embedding_api_base=agent_embedding_config["embedding_api_base"],
+                embedding_model=agent_embedding_config["embedding_model"],
+                embedding_dimension=agent_embedding_config["embedding_dimension"],
             )
             retrieval_results = await current_rag_service.retrieve_async(
                 agent_id=agent_id,
@@ -738,7 +738,7 @@ async def prepare_chat_request(
 
     llm = get_llm_service(
         use_mock=use_mock_llm,
-        api_key=agent.api_key,
+        api_key=agent_api_key,
         api_base=agent.api_base,
         model=agent.model,
         provider_type=agent.provider_type,
@@ -1347,7 +1347,7 @@ async def get_contexts(
         )
 
     agent_id = agent.id
-    _agent_api_key, agent_jina_api_key = get_agent_plaintext_keys(agent)
+    embedding_config = get_agent_embedding_config(agent)
 
     # 注意：enable_context仅控制对话历史，不影响知识库检索
     # /contexts 端点始终返回检索结果
@@ -1364,13 +1364,19 @@ async def get_contexts(
     ]
 
     # 检索
-    if not agent_jina_api_key:
+    if not embedding_config["embedding_api_key"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jina API key is required",
+            detail="Embedding API key is required",
         )
 
-    rag_service = ensure_vector_services(agent)
+    rag_service = ensure_vector_services(
+        embedding_provider=embedding_config["embedding_provider"],
+        embedding_api_key=embedding_config["embedding_api_key"],
+        embedding_api_base=embedding_config["embedding_api_base"],
+        embedding_model=embedding_config["embedding_model"],
+        embedding_dimension=embedding_config["embedding_dimension"],
+    )
     results = rag_service.retrieve(
         agent_id=agent_id,
         query=request.query,
@@ -1447,6 +1453,8 @@ async def update_agent(
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
     for field, value in update_data.items():
+        if field in ("api_key", "jina_api_key") and value:
+            value = encrypt_api_key(value)
         setattr(agent, field, value)
 
     await db.commit()
@@ -1604,7 +1612,7 @@ async def list_available_models(
         result = await db.execute(select(Agent).where(Agent.id == request.agent_id))
         agent = result.scalar_one_or_none()
         if agent and agent.api_key:
-            api_key = agent.api_key
+            api_key = decrypt_api_key(agent.api_key)
     
     if not api_key:
         raise HTTPException(
@@ -1712,6 +1720,60 @@ async def test_ai_api(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"AI API test failed: {str(e)}"
         )
+
+
+@router.post("/agent:test-embedding-api")
+async def test_embedding_api(
+    agent_id: str,
+    payload: Optional[AgentUpdateRequest] = None,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """测试当前 Embedding 配置是否可用"""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
+        )
+
+    # Build provider config from payload overrides without mutating ORM object
+    provider_type = (payload.provider_type if payload and payload.provider_type is not None else agent.provider_type)
+    api_key_raw = (payload.api_key if payload and payload.api_key is not None else agent.api_key)
+    api_base = (payload.api_base if payload and payload.api_base is not None else agent.api_base)
+    embedding_model = (payload.embedding_model if payload and payload.embedding_model is not None else agent.embedding_model)
+
+    if provider_type == "siliconflow":
+        test_key = decrypt_api_key(api_key_raw)
+        if not test_key:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SiliconFlow API key not configured")
+        test_base = (api_base or "https://api.siliconflow.cn/v1").rstrip("/")
+        test_model = "BAAI/bge-m3" if embedding_model == "jina-embeddings-v3" else (embedding_model or "BAAI/bge-m3")
+        try:
+            import httpx
+            response = httpx.post(
+                f"{test_base}/embeddings",
+                headers={"Authorization": f"Bearer {test_key}"},
+                json={"model": test_model, "input": ["test"]},
+                timeout=30,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "data" not in data or len(data["data"]) == 0:
+                raise ValueError("SiliconFlow API returned empty embedding data")
+            embedding = data["data"][0].get("embedding")
+            if not embedding or all(v == 0.0 for v in embedding):
+                raise ValueError("SiliconFlow API returned zero vector")
+            return {"success": True, "message": "SiliconFlow embedding API connection successful"}
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SiliconFlow API key is invalid")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"SiliconFlow embedding API test failed: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"SiliconFlow embedding API test failed: {str(e)}")
+
+    return await test_jina_api(agent_id=agent_id, payload=payload, current_user=current_user, db=db)
 
 
 @router.post("/agent:test-jina-api")

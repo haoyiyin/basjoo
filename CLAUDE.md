@@ -19,6 +19,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Rebuild a service: `docker compose --profile dev up -d --build backend-dev frontend-dev`
 - Follow logs: `docker compose logs -f backend-dev frontend-dev nginx`
 
+### One-command production install (Ubuntu/Debian)
+
+- Blank server deploy: `curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh`
+- Local repo deploy: `sudo sh install-deploy.sh`
+- Supported systems: Ubuntu and Debian. The script auto-installs Docker/Compose, clones/syncs the repo, and deploys the production profile.
+- Persistent volumes are preserved; `install-deploy.sh` does not remove `backend-data`, `redis-data`, or `qdrant-data`.
+
 ### Frontend (`frontend-nextjs/`)
 
 - Install deps: `npm install`
@@ -84,6 +91,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Deployment notes
 
 - `docker-compose.yml` defines shared Redis/Qdrant plus separate dev/prod backend/frontend services.
+- `install-deploy.sh` is the one-command production installer for Ubuntu/Debian. It wraps `deploy.sh` and handles Docker/Compose installation, repo clone/sync, and post-deploy health checks.
 - The active frontend container is `frontend-nextjs`; compose and nginx configs route traffic to that app, not the legacy frontend.
 - Nginx should allow bodies larger than the backend guard: `nginx/conf.d/default.conf` sets `client_max_body_size 12m` so oversized requests reach FastAPI and return JSON 413 responses.
 - Optional HTTPS is enabled by `nginx/docker-entrypoint.sh` only when readable cert/key files exist in `./ssl`; otherwise the stack stays in HTTP-only mode.

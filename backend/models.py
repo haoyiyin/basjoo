@@ -90,7 +90,7 @@ class Agent(Base):
 
     # AI服务商配置
     provider_type = Column(
-        SQLEnum("openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", name="llm_provider"),
+        SQLEnum("openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow", name="llm_provider"),
         nullable=True,
         default="openai"
     )

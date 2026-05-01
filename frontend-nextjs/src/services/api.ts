@@ -45,7 +45,7 @@ export interface Source {
   id?: string;
 }
 
-export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian';
+export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian' | 'siliconflow';
 
 export interface Agent {
   id: string;
@@ -613,6 +613,13 @@ class APIService {
 
   async testJinaApi(agentId: string, overrides?: Partial<Agent>): Promise<{ success: boolean; message: string }> {
     return this.request(`/api/v1/agent:test-jina-api?agent_id=${agentId}`, {
+      method: 'POST',
+      body: JSON.stringify(overrides ?? {}),
+    });
+  }
+
+  async testEmbeddingApi(agentId: string, overrides?: Partial<Agent>): Promise<{ success: boolean; message: string }> {
+    return this.request(`/api/v1/agent:test-embedding-api?agent_id=${agentId}`, {
       method: 'POST',
       body: JSON.stringify(overrides ?? {}),
     });

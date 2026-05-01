@@ -31,12 +31,15 @@ from api.v1.schemas import (
     QAUpdateRequest,
     QABatchImportResponse,
 )
-from services import URLNormalizer, QdrantVectorStore, TextChunker, SiteCrawler, TaskType, task_lock
+from services import URLNormalizer, TextChunker, SiteCrawler, TaskType, task_lock
 from services.scraper import URLScraper
+from core.encryption import decrypt_api_key
+from api.v1.provider_helpers import get_agent_vector_store, get_agent_fetcher_provider
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(get_current_admin)])
+
 
 # 全局服务实例
 qdrant_store = None
@@ -74,7 +77,8 @@ async def fetch_url_task(url_source_id: int):
 
             agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
             agent = agent_result.scalar_one_or_none()
-            jina_api_key = agent.jina_api_key if agent else ""
+            jina_api_key = decrypt_api_key(agent.jina_api_key) if agent else ""
+            fetcher_provider = get_agent_fetcher_provider(agent) if agent else "jina_reader"
 
         success, error = await task_lock.acquire_task(agent_id, TaskType.URL_FETCH, task_id)
         if not success:
@@ -108,7 +112,7 @@ async def fetch_url_task(url_source_id: int):
                         await db.commit()
                 return
 
-            agent_scraper = URLScraper(jina_api_key=jina_api_key or "")
+            agent_scraper = URLScraper(jina_api_key=jina_api_key or "", fetcher_provider=fetcher_provider)
             fetch_result = await agent_scraper.fetch(url)
 
             async with database.AsyncSessionLocal() as db:
@@ -395,11 +399,12 @@ async def delete_url(
 
     # 同步删除 Qdrant 向量索引中的数据
     try:
-        if agent and agent.jina_api_key:
-            qdrant_store = QdrantVectorStore(
-                jina_api_key=agent.jina_api_key,
-                embedding_model=agent.embedding_model,
-            )
+        has_embedding_key = agent and (
+            (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
+            or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
+        )
+        if has_embedding_key:
+            qdrant_store = get_agent_vector_store(agent)
             qdrant_store.delete_by_source(agent_id, "url", str(url_id))
     except Exception as e:
         logger.warning(f"Failed to delete vectors for URL {url_id}: {e}")
@@ -432,7 +437,7 @@ async def discover_subpages(
     )
     quota = quota_result.scalar_one_or_none()
 
-    agent_scraper = URLScraper(jina_api_key=agent.jina_api_key or "")
+    agent_scraper = URLScraper(jina_api_key=decrypt_api_key(agent.jina_api_key) or "", fetcher_provider=get_agent_fetcher_provider(agent))
     discovered_urls = await agent_scraper.discover_subpages(
         url, max_depth=max_depth, max_pages=max_pages
     )
@@ -511,11 +516,12 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
             if not agent:
                 logger.error(f"[site_crawl_task] Agent {agent_id} not found for site crawl")
                 return
-            jina_api_key = agent.jina_api_key or ""
+            jina_api_key = decrypt_api_key(agent.jina_api_key) or ""
             workspace_id = agent.workspace_id
+            fetcher_provider = get_agent_fetcher_provider(agent)
 
         logger.info(f"[site_crawl_task] Initializing SiteCrawler...")
-        crawler = SiteCrawler(jina_api_key=jina_api_key)
+        crawler = SiteCrawler(jina_api_key=jina_api_key, fetcher_provider=fetcher_provider)
         logger.info(f"[site_crawl_task] Starting crawl_site({url}, depth={max_depth}, pages={max_pages})")
         results = await crawler.crawl_site(
             url=url,
@@ -946,11 +952,12 @@ async def delete_qa(
 
     # 同步删除 Qdrant 向量索引中的数据
     try:
-        if agent and agent.jina_api_key:
-            qdrant_store = QdrantVectorStore(
-                jina_api_key=agent.jina_api_key,
-                embedding_model=agent.embedding_model,
-            )
+        has_embedding_key = agent and (
+            (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
+            or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
+        )
+        if has_embedding_key:
+            qdrant_store = get_agent_vector_store(agent)
             qdrant_store.delete_by_source(agent_id_for_vectors, "qa", qa_id)
     except Exception as e:
         logger.warning(f"Failed to delete vectors for QA {qa_id}: {e}")
@@ -1001,11 +1008,12 @@ async def clear_all_urls(
 
     # 同步清空 Qdrant 向量索引
     try:
-        if agent.jina_api_key:
-            qdrant_store = QdrantVectorStore(
-                jina_api_key=agent.jina_api_key,
-                embedding_model=agent.embedding_model,
-            )
+        has_embedding_key = (
+            (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
+            or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
+        )
+        if has_embedding_key:
+            qdrant_store = get_agent_vector_store(agent)
             qdrant_store.delete_collection(agent_id)
     except Exception as e:
         logger.warning(f"Failed to delete collection for agent {agent_id}: {e}")

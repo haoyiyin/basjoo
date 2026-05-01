@@ -50,6 +50,13 @@
 - **Redis**: Rate limiting, cache fallback, task coordination
 - **Qdrant**: Vector storage and retrieval
 
+### Deployment
+- `install-deploy.sh`: One-command production installer for Ubuntu/Debian. Auto-installs Docker/Compose, clones/syncs repo, deploys via `deploy.sh`, and verifies health.
+- `deploy.sh`: Low-level production deploy entrypoint. Prepares `.env` via `env_bootstrap.py` and runs `docker compose --profile prod up -d --build`.
+- `bootstrap-env.sh`: Simple `.env` bootstrap helper.
+- `docker-compose.yml`: Main orchestration with `prod` and `dev` profiles. Production uses `backend-prod`, `frontend-prod`, `nginx`, `redis`, `qdrant`.
+- Persistent data is stored in Docker named volumes (`backend-data`, `redis-data`, `qdrant-data`). Do not use `docker compose down -v` unless intentionally resetting widget identity.
+
 ## Project Conventions
 
 ### Code Style

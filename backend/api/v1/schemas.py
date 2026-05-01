@@ -268,7 +268,7 @@ class AgentConfig(BaseModel):
         None, description="Masked Jina API key"
     )
     provider_type: Optional[
-        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian"]
+        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
     ] = Field("openai", description="AI provider type")
     azure_endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
     azure_deployment_name: Optional[str] = Field(
@@ -340,7 +340,7 @@ class AgentUpdateRequest(BaseModel):
     api_base: Optional[str] = Field(None, min_length=1)
     jina_api_key: Optional[str] = Field(None, min_length=0)
     provider_type: Optional[
-        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian"]
+        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
     ] = Field(None, description="AI provider type")
     azure_endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
     azure_deployment_name: Optional[str] = Field(
