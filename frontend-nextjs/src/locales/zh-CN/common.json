@@ -269,6 +269,8 @@
     "moonshot": "Moonshot (Kimi)",
     "aliyun_bailian": "阿里云百炼",
     "siliconflow": "硅基流动 SiliconFlow",
+    "siliconflowOfficialSite": "官网",
+    "jinaEmbeddingApiKeyPrefix": "Embedding API Key",
     "apiKey": "API 密钥",
     "configured": "已配置",
     "apiBase": "API 基础地址",

@@ -269,6 +269,8 @@
     "moonshot": "Moonshot (Kimi)",
     "aliyun_bailian": "Alibaba Cloud Bailian",
     "siliconflow": "SiliconFlow",
+    "siliconflowOfficialSite": "Official site",
+    "jinaEmbeddingApiKeyPrefix": "Embedding API Key",
     "apiKey": "API Key",
     "configured": "Configured",
     "apiBase": "API Base URL",

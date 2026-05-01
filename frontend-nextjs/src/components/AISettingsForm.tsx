@@ -10,6 +10,8 @@ type PersonaType = 'general' | 'customer-service' | 'sales' | 'custom';
 type ApiFormatType = 'openai' | 'openai_compatible' | 'anthropic' | 'google';
 
 const PERSONA_TYPES: PersonaType[] = ['general', 'customer-service', 'sales', 'custom'];
+const JINA_OFFICIAL_URL = 'https://jina.ai/'
+const SILICONFLOW_OFFICIAL_URL = 'https://siliconflow.cn/'
 
 interface ChatParamOverrides {
   temperature: number;
@@ -582,6 +584,12 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
             <option value="siliconflow">{t('labels.siliconflow', { defaultValue: 'SiliconFlow' })}</option>
             <option value="openai">{t('labels.openaiCompatible')}</option>
           </select>
+          {formData.provider_type === 'siliconflow' && (
+            <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+              {t('labels.siliconflowOfficialSite')}{' '}
+              <a href={SILICONFLOW_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>SiliconFlow</a>
+            </div>
+          )}
         </div>
 
         {/* API格式选择 - 仅在自定义模式下显示 */}
@@ -774,7 +782,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
             color: 'var(--color-text-secondary)',
           }}>
             <span>
-              {t('labels.jinaEmbeddingApiKey')}
+              {t('labels.jinaEmbeddingApiKeyPrefix')} (<a href={JINA_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>Jina</a>)
               {agent?.jina_api_key_set && (
                 <span style={{
                   marginLeft: 'var(--space-2)',
