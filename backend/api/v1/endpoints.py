@@ -56,7 +56,7 @@ from api.v1.schemas import (
 )
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from core.encryption import encrypt_api_key, decrypt_api_key
-from api.v1.provider_helpers import get_agent_embedding_config
+from api.v1.provider_helpers import get_agent_embedding_config, resolve_agent_embedding_provider
 from services.qdrant_store import clear_disabled_key, clear_client_cache
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
@@ -122,13 +122,13 @@ def get_restricted_reply(
     return restricted_reply or default
 
 
-def get_agent_plaintext_keys(agent: Agent) -> tuple[Optional[str], Optional[str]]:
+def get_agent_plaintext_keys(agent: Agent) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Return decrypted agent API credentials once per request path."""
-    return decrypt_api_key(agent.api_key), decrypt_api_key(agent.jina_api_key)
+    return decrypt_api_key(agent.api_key), decrypt_api_key(agent.jina_api_key), decrypt_api_key(getattr(agent, 'siliconflow_api_key', '') or '')
 
 
 def build_agent_config(agent: Agent) -> dict:
-    api_key, jina_key = get_agent_plaintext_keys(agent)
+    api_key, jina_key, siliconflow_key = get_agent_plaintext_keys(agent)
     return {
         "id": agent.id,
         "name": agent.name,
@@ -142,6 +142,8 @@ def build_agent_config(agent: Agent) -> dict:
         "api_base": agent.api_base,
         "jina_api_key_set": bool(jina_key),
         "jina_api_key_masked": mask_api_key(jina_key),
+        "siliconflow_api_key_set": bool(siliconflow_key),
+        "siliconflow_api_key_masked": mask_api_key(siliconflow_key),
         "provider_type": agent.provider_type,
         "azure_endpoint": agent.azure_endpoint,
         "azure_deployment_name": agent.azure_deployment_name,
@@ -150,6 +152,7 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
+        "embedding_provider": resolve_agent_embedding_provider(agent),
         "embedding_model": agent.embedding_model,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
@@ -566,7 +569,7 @@ async def prepare_chat_request(
     agent_max_tokens = DEFAULT_AGENT_MAX_TOKENS
     agent_system_prompt = agent.system_prompt
     agent_enable_context = agent.enable_context
-    agent_api_key, _ = get_agent_plaintext_keys(agent)
+    agent_api_key, _, _ = get_agent_plaintext_keys(agent)
     agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
     use_mock_llm = not agent_api_key
@@ -1453,7 +1456,7 @@ async def update_agent(
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
     for field, value in update_data.items():
-        if field in ("api_key", "jina_api_key") and value:
+        if field in ("api_key", "jina_api_key", "siliconflow_api_key") and value:
             value = encrypt_api_key(value)
         setattr(agent, field, value)
 
@@ -1739,16 +1742,29 @@ async def test_embedding_api(
         )
 
     # Build provider config from payload overrides without mutating ORM object
-    provider_type = (payload.provider_type if payload and payload.provider_type is not None else agent.provider_type)
+    embedding_provider_raw = (payload.embedding_provider if payload and payload.embedding_provider is not None else getattr(agent, "embedding_provider", None))
+    if embedding_provider_raw in {"jina", "siliconflow"}:
+        embedding_provider = embedding_provider_raw
+    else:
+        embedding_provider = "siliconflow" if (payload.provider_type if payload and payload.provider_type is not None else agent.provider_type) == "siliconflow" else "jina"
+    resolved_provider_type = (payload.provider_type if payload and payload.provider_type is not None else agent.provider_type)
     api_key_raw = (payload.api_key if payload and payload.api_key is not None else agent.api_key)
     api_base = (payload.api_base if payload and payload.api_base is not None else agent.api_base)
     embedding_model = (payload.embedding_model if payload and payload.embedding_model is not None else agent.embedding_model)
+    # Use dedicated siliconflow_api_key for embedding; fallback to main key only when provider_type is also siliconflow
+    sf_key_raw = (payload.siliconflow_api_key if payload and payload.siliconflow_api_key is not None else getattr(agent, "siliconflow_api_key", None) or None)
+    if sf_key_raw:
+        api_key_raw = sf_key_raw
+    elif resolved_provider_type == "siliconflow":
+        pass  # allow fallback to main api_key for legacy siliconflow provider
+    else:
+        api_key_raw = None  # no dedicated key, will fail validation below
 
-    if provider_type == "siliconflow":
+    if embedding_provider == "siliconflow":
         test_key = decrypt_api_key(api_key_raw)
         if not test_key:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SiliconFlow API key not configured")
-        test_base = (api_base or "https://api.siliconflow.cn/v1").rstrip("/")
+        test_base = (api_base if resolved_provider_type == "siliconflow" and api_base else "https://api.siliconflow.cn/v1").rstrip("/")
         test_model = "BAAI/bge-m3" if embedding_model == "jina-embeddings-v3" else (embedding_model or "BAAI/bge-m3")
         try:
             import httpx

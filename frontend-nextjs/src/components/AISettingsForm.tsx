@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import HelpTooltip from './HelpTooltip'
 import { api } from '../services/api'
-import type { Agent, ProviderType } from '../services/api'
+import type { Agent, ProviderType, EmbeddingProvider } from '../services/api'
 
 type PersonaType = 'general' | 'customer-service' | 'sales' | 'custom';
 type ApiFormatType = 'openai' | 'openai_compatible' | 'anthropic' | 'google';
@@ -35,6 +35,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
   const [error, setError] = useState<string | null>(null)
   const [apiKeyError, setApiKeyError] = useState(false)
   const [jinaKeyError, setJinaKeyError] = useState(false)
+  const [siliconflowKeyError, setSiliconflowKeyError] = useState(false)
   const [selectedPersona, setSelectedPersona] = useState<PersonaType>('custom')
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suppressAutoSaveRef = useRef(true)
@@ -47,8 +48,10 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     api_key: '',
     api_base: '',
     jina_api_key: '',
+    siliconflow_api_key: '',
     provider_type: 'openai' as ProviderType,
     api_format: 'openai' as ApiFormatType,
+    embedding_provider: 'jina' as EmbeddingProvider,
     embedding_model: 'jina-embeddings-v3',
     top_k: 5,
     enable_context: false,
@@ -100,9 +103,11 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         api_key: '',
         api_base: agentData.api_base || 'https://api.deepseek.com/v1',
         jina_api_key: '',
+        siliconflow_api_key: '',
         provider_type: agentData.provider_type || 'openai',
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
-        embedding_model: agentData.embedding_model || 'jina-embeddings-v3',
+        embedding_provider: agentData.embedding_provider || (agentData.provider_type === 'siliconflow' ? 'siliconflow' : 'jina') as EmbeddingProvider,
+        embedding_model: agentData.embedding_model || (agentData.embedding_provider === 'siliconflow' || agentData.provider_type === 'siliconflow' ? 'BAAI/bge-m3' : 'jina-embeddings-v3'),
         top_k: agentData.top_k ?? 5,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
@@ -167,6 +172,25 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     }
   }
 
+  // 清除 SiliconFlow Embedding API Key
+  const handleClearSiliconflowKey = async () => {
+    if (!agent) return
+    if (!confirm(t('labels.confirmClearSiliconflowKey'))) return
+
+    setSaving(true)
+    try {
+      const updatedAgent = await api.updateAgent(agent.id, { siliconflow_api_key: '' })
+      suppressAutoSaveRef.current = true
+      setFormData({ ...formData, siliconflow_api_key: '' })
+      setAgent(updatedAgent)
+      onSave?.(updatedAgent)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('errors.saveFailed'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleSave = useCallback(async () => {
     if (!agent) return
 
@@ -179,9 +203,11 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     setError(null)
     setApiKeyError(false)
     setJinaKeyError(false)
+    setSiliconflowKeyError(false)
 
     let aiKeyTestFailed = false
     let jinaKeyTestFailed = false
+    let siliconflowKeyTestFailed = false
 
     try {
       const updateData: Partial<Agent> = {
@@ -192,7 +218,10 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         api_base: formData.api_base,
         provider_type: formData.provider_type,
         api_format: formData.api_format,
-        embedding_model: formData.embedding_model,
+        embedding_provider: formData.embedding_provider,
+        embedding_model: formData.embedding_provider === 'siliconflow'
+          ? (formData.embedding_model === 'jina-embeddings-v3' || !formData.embedding_model ? 'BAAI/bge-m3' : formData.embedding_model)
+          : (formData.embedding_model === 'BAAI/bge-m3' || !formData.embedding_model ? 'jina-embeddings-v3' : formData.embedding_model),
         top_k: formData.top_k,
         enable_context: formData.enable_context,
         rate_limit_per_minute: formData.rate_limit_per_minute,
@@ -208,23 +237,27 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         updateData.jina_api_key = formData.jina_api_key
       }
 
+      if (formData.siliconflow_api_key.trim()) {
+        updateData.siliconflow_api_key = formData.siliconflow_api_key
+      }
+
       if (formData.api_key.trim()) {
         const aiTestResult = await api.testAIApi(agent.id, updateData)
         if (!aiTestResult.success) {
           aiKeyTestFailed = true
           throw new Error(t('errors.aiApiTestFailed'))
         }
+      }
 
-        if (formData.provider_type === 'siliconflow') {
-          const embeddingTestResult = await api.testEmbeddingApi(agent.id, updateData)
-          if (!embeddingTestResult.success) {
-            aiKeyTestFailed = true
-            throw new Error(t('errors.jinaApiTestFailed'))
-          }
+      if (formData.embedding_provider === 'siliconflow' && formData.siliconflow_api_key.trim()) {
+        const embeddingTestResult = await api.testEmbeddingApi(agent.id, updateData)
+        if (!embeddingTestResult.success) {
+          siliconflowKeyTestFailed = true
+          throw new Error(t('errors.siliconflowEmbeddingApiTestFailed'))
         }
       }
 
-      if (formData.provider_type !== 'siliconflow' && formData.jina_api_key.trim()) {
+      if (formData.embedding_provider !== 'siliconflow' && formData.jina_api_key.trim()) {
         const jinaTestResult = await api.testJinaApi(agent.id, updateData)
         if (!jinaTestResult.success) {
           jinaKeyTestFailed = true
@@ -239,6 +272,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         ...prev,
         api_key: '',
         jina_api_key: '',
+        siliconflow_api_key: '',
       }))
       onSave?.(updatedAgent)
     } catch (err) {
@@ -264,6 +298,9 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
       }
       if (jinaKeyTestFailed) {
         setJinaKeyError(true)
+      }
+      if (siliconflowKeyTestFailed) {
+        setSiliconflowKeyError(true)
       }
       setError(errorMessage)
     } finally {
@@ -311,6 +348,8 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.restricted_reply,
     formData.api_key,
     formData.jina_api_key,
+    formData.siliconflow_api_key,
+    formData.embedding_provider,
     formData.embedding_model,
     handleSave,
   ])
@@ -384,9 +423,15 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
       provider_type: provider,
       api_base: getDefaultApiBase(provider),
       model: getDefaultModel(provider),
-      ...(provider === 'siliconflow' && prev.embedding_model === 'jina-embeddings-v3'
-        ? { embedding_model: 'BAAI/bge-m3' }
-        : {}),
+    }))
+  }
+
+  // 切换 embedding provider 时设置默认 embedding model
+  const handleEmbeddingProviderChange = (provider: EmbeddingProvider) => {
+    setFormData(prev => ({
+      ...prev,
+      embedding_provider: provider,
+      embedding_model: provider === 'siliconflow' ? 'BAAI/bge-m3' : 'jina-embeddings-v3',
     }))
   }
 
@@ -773,65 +818,166 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
 
         <div>
           <label style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
+            display: 'block',
             marginBottom: 'var(--space-2)',
             fontSize: 'var(--text-sm)',
             fontWeight: 500,
             color: 'var(--color-text-secondary)',
           }}>
-            <span>
-              {t('labels.jinaEmbeddingApiKeyPrefix')} (<a href={JINA_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>Jina</a>)
-              {agent?.jina_api_key_set && (
-                <span style={{
-                  marginLeft: 'var(--space-2)',
-                  color: 'var(--color-success)',
-                  fontSize: 'var(--text-xs)',
-                }}>
-                  ✓ {t('labels.configured')}
-                </span>
-              )}
-            </span>
-            {agent?.jina_api_key_set && (
-              <button
-                onClick={handleClearJinaKey}
-                disabled={saving}
-                style={{
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-error)',
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: saving ? 'not-allowed' : 'pointer',
-                  opacity: saving ? 0.5 : 1,
-                  padding: '0',
-                  textDecoration: 'underline',
-                }}
-              >
-                {t('buttons.clear')}
-              </button>
-            )}
+            {t('labels.embeddingProvider')}
           </label>
-          <input
-            type="password"
-            value={formData.jina_api_key}
-            onChange={(e) => {
-              setFormData({ ...formData, jina_api_key: e.target.value })
-              setJinaKeyError(false)
+          <select
+            value={formData.embedding_provider}
+            onChange={(e) => handleEmbeddingProviderChange(e.target.value as EmbeddingProvider)}
+            style={{
+              width: '100%',
+              padding: 'var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-bg-primary)',
+              color: 'var(--color-text-primary)',
+              fontSize: 'var(--text-sm)',
+              cursor: 'pointer',
             }}
-            placeholder={agent?.jina_api_key_set ? t('placeholders.enterJinaKey') : "jina_..."}
-            style={(formData.provider_type !== 'siliconflow' && (highlightJinaKey || jinaKeyError)) ? { border: '2px solid #ef4444' } : undefined}
-          />
-          {(formData.provider_type !== 'siliconflow' && (highlightJinaKey || jinaKeyError)) && (
-            <div style={{
-              marginTop: 'var(--space-2)',
-              color: '#ef4444',
-              fontSize: 'var(--text-xs)',
-            }}>
-              {jinaKeyError ? t('errors.jinaApiKeyInvalid') : t('labels.jinaKeyRequired')}
-            </div>
-          )}
+          >
+            <option value="jina">{t('labels.embeddingProviderJina')}</option>
+            <option value="siliconflow">{t('labels.embeddingProviderSiliconFlow')}</option>
+          </select>
+          <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+            {formData.embedding_provider === 'siliconflow'
+              ? t('labels.siliconflowEmbeddingUsesAiKey')
+              : t('labels.jinaEmbeddingDescription')}
+          </div>
         </div>
+
+        {formData.embedding_provider === 'siliconflow' ? (
+          <div>
+            <label style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 'var(--space-2)',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 500,
+              color: 'var(--color-text-secondary)',
+            }}>
+              <span>
+                {t('labels.siliconflowEmbeddingApi')} (<a href={SILICONFLOW_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>SiliconFlow</a>)
+                {agent?.siliconflow_api_key_set && (
+                  <span style={{
+                    marginLeft: 'var(--space-2)',
+                    color: 'var(--color-success)',
+                    fontSize: 'var(--text-xs)',
+                  }}>
+                    ✓ {t('labels.configured')}
+                  </span>
+                )}
+              </span>
+              {agent?.siliconflow_api_key_set && (
+                <button
+                  onClick={handleClearSiliconflowKey}
+                  disabled={saving}
+                  style={{
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--color-error)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    opacity: saving ? 0.5 : 1,
+                    padding: '0',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {t('buttons.clear')}
+                </button>
+              )}
+            </label>
+            <input
+              type="password"
+              value={formData.siliconflow_api_key}
+              onChange={(e) => {
+                setFormData({ ...formData, siliconflow_api_key: e.target.value })
+                setSiliconflowKeyError(false)
+              }}
+              placeholder={agent?.siliconflow_api_key_set ? t('placeholders.enterNewApiKey') : "sk-..."}
+              style={(highlightJinaKey || siliconflowKeyError) ? { border: '2px solid #ef4444' } : undefined}
+            />
+            {(highlightJinaKey || siliconflowKeyError) && (
+              <div style={{
+                marginTop: 'var(--space-2)',
+                color: '#ef4444',
+                fontSize: 'var(--text-xs)',
+              }}>
+                {siliconflowKeyError ? t('errors.siliconflowEmbeddingApiTestFailed') : t('labels.jinaKeyRequired')}
+              </div>
+            )}
+            <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+              {t('labels.embeddingModel')}: <code style={{ fontSize: 'var(--text-xs)' }}>BAAI/bge-m3</code>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 'var(--space-2)',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 500,
+              color: 'var(--color-text-secondary)',
+            }}>
+              <span>
+                {t('labels.jinaEmbeddingApiKeyPrefix')} (<a href={JINA_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>Jina</a>)
+                {agent?.jina_api_key_set && (
+                  <span style={{
+                    marginLeft: 'var(--space-2)',
+                    color: 'var(--color-success)',
+                    fontSize: 'var(--text-xs)',
+                  }}>
+                    ✓ {t('labels.configured')}
+                  </span>
+                )}
+              </span>
+              {agent?.jina_api_key_set && (
+                <button
+                  onClick={handleClearJinaKey}
+                  disabled={saving}
+                  style={{
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--color-error)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    opacity: saving ? 0.5 : 1,
+                    padding: '0',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {t('buttons.clear')}
+                </button>
+              )}
+            </label>
+            <input
+              type="password"
+              value={formData.jina_api_key}
+              onChange={(e) => {
+                setFormData({ ...formData, jina_api_key: e.target.value })
+                setJinaKeyError(false)
+              }}
+              placeholder={agent?.jina_api_key_set ? t('placeholders.enterJinaKey') : "jina_..."}
+              style={(highlightJinaKey || jinaKeyError) ? { border: '2px solid #ef4444' } : undefined}
+            />
+            {(highlightJinaKey || jinaKeyError) && (
+              <div style={{
+                marginTop: 'var(--space-2)',
+                color: '#ef4444',
+                fontSize: 'var(--text-xs)',
+              }}>
+                {jinaKeyError ? t('errors.jinaApiKeyInvalid') : t('labels.jinaKeyRequired')}
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{
           display: 'flex',

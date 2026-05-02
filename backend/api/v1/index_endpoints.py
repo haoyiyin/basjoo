@@ -18,8 +18,7 @@ from models import (
 )
 from api.v1.schemas import IndexRebuildRequest, IndexRebuildResponse
 from services import TextChunker, TaskType, task_lock
-from core.encryption import decrypt_api_key
-from api.v1.provider_helpers import get_agent_vector_store
+from api.v1.provider_helpers import get_agent_embedding_config, get_agent_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +143,9 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
 
                 # 使用 Qdrant 索引
                 if chunks_to_index:
-                    if agent.provider_type != "siliconflow" and not decrypt_api_key(agent.jina_api_key):
-                        raise ValueError("Jina API key is required")
+                    embedding_config = get_agent_embedding_config(agent)
+                    if not embedding_config["embedding_api_key"]:
+                        raise ValueError(f"{embedding_config['embedding_provider'].title()} API key is required")
 
                     # 为chunks添加必要的元数据
                     for chunk in chunks_to_index:
@@ -169,10 +169,7 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
                     logger.info(f"Updated is_indexed status for {len(url_sources)} URLs and {len(qa_items)} QA items")
                 else:
                     # 没有内容，清空索引
-                    has_embedding_key = (
-                        (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
-                        or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
-                    )
+                    has_embedding_key = bool(get_agent_embedding_config(agent)["embedding_api_key"])
                     if has_embedding_key:
                         qdrant_store = get_agent_vector_store(agent)
                         qdrant_store.delete_collection(agent_id)
@@ -230,16 +227,11 @@ async def rebuild_index(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    if agent.provider_type == "siliconflow":
-        if not decrypt_api_key(agent.api_key):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SiliconFlow API key is required",
-            )
-    elif not decrypt_api_key(agent.jina_api_key):
+    embedding_config = get_agent_embedding_config(agent)
+    if not embedding_config["embedding_api_key"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jina API key is required",
+            detail=f"{embedding_config['embedding_provider'].title()} API key is required",
         )
 
     # 创建索引任务
@@ -308,10 +300,7 @@ async def get_index_info(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    has_embedding_key = (
-        (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
-        or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
-    )
+    has_embedding_key = bool(get_agent_embedding_config(agent)["embedding_api_key"])
 
     if has_embedding_key:
         qdrant_store = get_agent_vector_store(agent)

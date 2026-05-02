@@ -34,7 +34,7 @@ from api.v1.schemas import (
 from services import URLNormalizer, TextChunker, SiteCrawler, TaskType, task_lock
 from services.scraper import URLScraper
 from core.encryption import decrypt_api_key
-from api.v1.provider_helpers import get_agent_vector_store, get_agent_fetcher_provider
+from api.v1.provider_helpers import get_agent_embedding_config, get_agent_vector_store, get_agent_fetcher_provider
 
 logger = logging.getLogger(__name__)
 
@@ -399,10 +399,7 @@ async def delete_url(
 
     # 同步删除 Qdrant 向量索引中的数据
     try:
-        has_embedding_key = agent and (
-            (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
-            or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
-        )
+        has_embedding_key = agent and bool(get_agent_embedding_config(agent)["embedding_api_key"])
         if has_embedding_key:
             qdrant_store = get_agent_vector_store(agent)
             qdrant_store.delete_by_source(agent_id, "url", str(url_id))
@@ -952,10 +949,7 @@ async def delete_qa(
 
     # 同步删除 Qdrant 向量索引中的数据
     try:
-        has_embedding_key = agent and (
-            (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
-            or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
-        )
+        has_embedding_key = agent and bool(get_agent_embedding_config(agent)["embedding_api_key"])
         if has_embedding_key:
             qdrant_store = get_agent_vector_store(agent)
             qdrant_store.delete_by_source(agent_id_for_vectors, "qa", qa_id)
@@ -1008,10 +1002,7 @@ async def clear_all_urls(
 
     # 同步清空 Qdrant 向量索引
     try:
-        has_embedding_key = (
-            (agent.provider_type == "siliconflow" and decrypt_api_key(agent.api_key))
-            or (agent.provider_type != "siliconflow" and decrypt_api_key(agent.jina_api_key))
-        )
+        has_embedding_key = bool(get_agent_embedding_config(agent)["embedding_api_key"])
         if has_embedding_key:
             qdrant_store = get_agent_vector_store(agent)
             qdrant_store.delete_collection(agent_id)

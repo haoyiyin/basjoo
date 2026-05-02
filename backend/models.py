@@ -88,6 +88,9 @@ class Agent(Base):
     # Jina Embedding API Key
     jina_api_key = Column(String(500), nullable=True)
 
+    # SiliconFlow Embedding API Key
+    siliconflow_api_key = Column(String(500), nullable=True)
+
     # AI服务商配置
     provider_type = Column(
         SQLEnum("openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow", name="llm_provider"),
@@ -111,6 +114,7 @@ class Agent(Base):
     provider_config = Column(JSON, nullable=True)
 
     # 嵌入配置
+    embedding_provider = Column(String(20), nullable=False, default="jina")
     embedding_model = Column(
         String(100), nullable=False, default="jina-embeddings-v3"
     )

@@ -47,6 +47,8 @@ export interface Source {
 
 export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian' | 'siliconflow';
 
+export type EmbeddingProvider = 'jina' | 'siliconflow';
+
 export interface Agent {
   id: string;
   name: string;
@@ -63,6 +65,9 @@ export interface Agent {
   jina_api_key?: string;
   jina_api_key_set?: boolean;
   jina_api_key_masked?: string;
+  siliconflow_api_key?: string;
+  siliconflow_api_key_set?: boolean;
+  siliconflow_api_key_masked?: string;
   provider_type?: ProviderType;
   azure_endpoint?: string;
   azure_deployment_name?: string;
@@ -71,6 +76,7 @@ export interface Agent {
   google_project_id?: string;
   google_region?: string;
   provider_config?: Record<string, string | number | boolean>;
+  embedding_provider?: EmbeddingProvider;
   embedding_model: string;
   crawl_max_depth?: number;
   crawl_max_pages?: number;

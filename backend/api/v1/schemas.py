@@ -267,6 +267,12 @@ class AgentConfig(BaseModel):
     jina_api_key_masked: Optional[str] = Field(
         None, description="Masked Jina API key"
     )
+    siliconflow_api_key_set: bool = Field(
+        default=False, description="Whether SiliconFlow embedding API key is configured"
+    )
+    siliconflow_api_key_masked: Optional[str] = Field(
+        None, description="Masked SiliconFlow embedding API key"
+    )
     provider_type: Optional[
         Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
     ] = Field("openai", description="AI provider type")
@@ -285,6 +291,7 @@ class AgentConfig(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
+    embedding_provider: Literal["jina", "siliconflow"] = Field("jina", description="Embedding provider: jina or siliconflow")
     embedding_model: str
     crawl_max_depth: int = Field(default=2, ge=0, le=5, description="Crawl depth for site crawling")
     crawl_max_pages: int = Field(default=20, ge=1, le=100, description="Max pages for site crawling")
@@ -339,6 +346,7 @@ class AgentUpdateRequest(BaseModel):
     api_key: Optional[str] = Field(None, min_length=0)
     api_base: Optional[str] = Field(None, min_length=1)
     jina_api_key: Optional[str] = Field(None, min_length=0)
+    siliconflow_api_key: Optional[str] = Field(None, min_length=0)
     provider_type: Optional[
         Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
     ] = Field(None, description="AI provider type")
@@ -353,6 +361,7 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
+    embedding_provider: Optional[Literal["jina", "siliconflow"]] = Field(None, description="Embedding provider: jina or siliconflow")
     embedding_model: Optional[str] = Field(None, min_length=1)
     crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
     crawl_max_pages: Optional[int] = Field(None, ge=1, le=100, description="Max pages for site crawling")
