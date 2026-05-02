@@ -212,3 +212,207 @@ def test_get_collection_info_prefers_points_count_when_index_not_reported():
     assert info["points_count"] == 3
     assert info["vectors_count"] == 3
     assert info["status"] == "green"
+
+
+@pytest.mark.asyncio
+async def test_jina_key_status_jina_with_key(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"embedding_provider": "jina", "jina_api_key": "test_jina_key"},
+    )
+
+    response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["configured"] is True
+    assert data["embedding_provider"] == "jina"
+
+
+@pytest.mark.asyncio
+async def test_jina_key_status_siliconflow_with_dedicated_key(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"embedding_provider": "siliconflow", "siliconflow_api_key": "sf-test-key"},
+    )
+
+    response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["configured"] is True
+    assert data["embedding_provider"] == "siliconflow"
+
+
+@pytest.mark.asyncio
+async def test_jina_key_status_siliconflow_legacy_fallback(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "siliconflow",
+            "api_key": "sf-legacy-key",
+        },
+    )
+
+    response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["configured"] is True
+    assert data["embedding_provider"] == "siliconflow"
+
+
+@pytest.mark.asyncio
+async def test_jina_key_status_siliconflow_without_key(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "openai",
+            "siliconflow_api_key": "",
+            "api_key": "",
+        },
+    )
+
+    response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["configured"] is False
+    assert data["embedding_provider"] == "siliconflow"
+
+
+@pytest.mark.asyncio
+async def test_agent_config_reports_effective_siliconflow_embedding_key(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "openai",
+            "siliconflow_api_key": "sf-test-key",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["embedding_provider"] == "siliconflow"
+    assert data["siliconflow_api_key_set"] is True
+    assert data["embedding_api_key_set"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_config_reports_siliconflow_legacy_embedding_key(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "siliconflow",
+            "api_key": "sf-legacy-key",
+            "siliconflow_api_key": "",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["embedding_provider"] == "siliconflow"
+    assert data["api_key_set"] is True
+    assert data["siliconflow_api_key_set"] is False
+    assert data["embedding_api_key_set"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_config_does_not_use_unrelated_api_key_for_siliconflow_embedding(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "openai",
+            "api_key": "openai-key",
+            "siliconflow_api_key": "",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["api_key_set"] is True
+    assert data["siliconflow_api_key_set"] is False
+    assert data["embedding_api_key_set"] is False
+
+    status_response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert status_response.status_code == 200
+    assert status_response.json()["configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_siliconflow_embedding_key_whitespace_is_not_configured(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "openai",
+            "siliconflow_api_key": "   ",
+            "api_key": "",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["siliconflow_api_key_set"] is False
+    assert data["embedding_api_key_set"] is False
+
+    status_response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert status_response.status_code == 200
+    assert status_response.json()["configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_clearing_siliconflow_embedding_key_updates_effective_status(client):
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    configured_response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={
+            "embedding_provider": "siliconflow",
+            "provider_type": "openai",
+            "siliconflow_api_key": "sf-test-key",
+            "api_key": "",
+        },
+    )
+    assert configured_response.status_code == 200
+    assert configured_response.json()["embedding_api_key_set"] is True
+
+    cleared_response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"siliconflow_api_key": ""},
+    )
+
+    assert cleared_response.status_code == 200
+    data = cleared_response.json()
+    assert data["siliconflow_api_key_set"] is False
+    assert data["embedding_api_key_set"] is False
+
+    status_response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
+    assert status_response.status_code == 200
+    assert status_response.json()["configured"] is False

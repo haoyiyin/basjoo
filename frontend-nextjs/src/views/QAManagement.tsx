@@ -31,7 +31,8 @@ export default function QAManagement() {
   const [items, setItems] = useState<QAItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [jinaKeyReady, setJinaKeyReady] = useState<boolean | null>(null);
+  const [embeddingKeyReady, setEmbeddingKeyReady] = useState<boolean | null>(null);
+  const [embeddingKeyStatusError, setEmbeddingKeyStatusError] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
   const [importFormat, setImportFormat] = useState<'json' | 'csv'>('json');
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
@@ -40,8 +41,8 @@ export default function QAManagement() {
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
   const wasRetrainingRef = useRef(false);
-  const jinaKeyCheckInFlightRef = useRef(false);
-  const redirectedForJinaKeyRef = useRef(false);
+  const embeddingKeyCheckInFlightRef = useRef(false);
+  const redirectedForEmbeddingKeyRef = useRef(false);
 
   useEffect(() => {
     loadDefaultAgent();
@@ -49,35 +50,33 @@ export default function QAManagement() {
   }, []);
 
   useEffect(() => {
-    if (!agentId || jinaKeyCheckInFlightRef.current || jinaKeyReady !== null) return;
+    if (!agentId || embeddingKeyCheckInFlightRef.current || embeddingKeyReady !== null) return;
     // 检查开始时设为 null，表示检查中，不显示警告
-    setJinaKeyReady(null);
-    jinaKeyCheckInFlightRef.current = true;
-    const checkJinaKey = async () => {
+    setEmbeddingKeyReady(null);
+    embeddingKeyCheckInFlightRef.current = true;
+    const checkEmbeddingKey = async () => {
       try {
         const status = await api.getJinaKeyStatus(agentId);
+        setEmbeddingKeyStatusError(null);
         if (!status.configured) {
-          setJinaKeyReady(false);
-          if (!redirectedForJinaKeyRef.current) {
-            redirectedForJinaKeyRef.current = true;
+          setEmbeddingKeyReady(false);
+          if (!redirectedForEmbeddingKeyRef.current) {
+            redirectedForEmbeddingKeyRef.current = true;
             navigate('/playground?highlightJinaKey=true');
           }
         } else {
-          redirectedForJinaKeyRef.current = false;
-          setJinaKeyReady(true);
+          redirectedForEmbeddingKeyRef.current = false;
+          setEmbeddingKeyReady(true);
         }
-      } catch {
-        setJinaKeyReady(false);
-        if (!redirectedForJinaKeyRef.current) {
-          redirectedForJinaKeyRef.current = true;
-          navigate('/playground?highlightJinaKey=true');
-        }
+      } catch (error) {
+        setEmbeddingKeyReady(null);
+        setEmbeddingKeyStatusError(error instanceof Error ? error.message : t('errors.unknown'));
       } finally {
-        jinaKeyCheckInFlightRef.current = false;
+        embeddingKeyCheckInFlightRef.current = false;
       }
     };
-    checkJinaKey();
-  }, [agentId, jinaKeyReady, navigate]);
+    checkEmbeddingKey();
+  }, [agentId, embeddingKeyReady, navigate, t]);
 
   const loadDefaultAgent = async () => {
     try {
@@ -89,7 +88,7 @@ export default function QAManagement() {
   };
 
   const loadItems = async (showAlert = true) => {
-    if (!agentId || !jinaKeyReady) return;
+    if (!agentId || !embeddingKeyReady) return;
     setLoading(true);
     try {
       const data = await api.listQA(agentId, 0, 1000);
@@ -113,7 +112,7 @@ export default function QAManagement() {
 
   useEffect(() => {
     isMountedRef.current = true;
-    if (agentId && jinaKeyReady) {
+    if (agentId && embeddingKeyReady) {
       void loadItems(false);
       const pollTaskStatus = async () => {
         if (!isMountedRef.current || !agentIdRef.current) return;
@@ -157,7 +156,7 @@ export default function QAManagement() {
         clearInterval(taskStatusIntervalRef.current);
       }
     };
-  }, [agentId, jinaKeyReady]);
+  }, [agentId, embeddingKeyReady]);
 
   // 解析导入内容为Q&A项目
   const parseImportContent = (text: string, format: 'json' | 'csv'): ParsedQAItem[] => {
@@ -200,7 +199,7 @@ export default function QAManagement() {
 
   // 直接导入到数据库
   const handleImportToDatabase = async () => {
-    if (!agentId || !jinaKeyReady) return;
+    if (!agentId || !embeddingKeyReady) return;
     if (!importText.trim()) {
       alert(t('errors.qaContentRequired'));
       return;
@@ -246,7 +245,7 @@ export default function QAManagement() {
 
   // 重新训练智能体
   const handleRetrain = async () => {
-    if (!agentId || !jinaKeyReady) return;
+    if (!agentId || !embeddingKeyReady) return;
     
     if (taskStatus?.is_crawling) {
       alert(t('labels.qa.crawlInProgress'));
@@ -268,7 +267,7 @@ export default function QAManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!jinaKeyReady) return;
+    if (!embeddingKeyReady) return;
     if (!confirm(t('labels.confirmDelete'))) return;
 
     try {
@@ -333,7 +332,7 @@ export default function QAManagement() {
           gridTemplateColumns: isMobile ? '1fr' : '1fr 300px',
           gap: 'var(--space-6)',
         }}>
-          {jinaKeyReady === false && (
+          {(embeddingKeyReady === false || embeddingKeyStatusError) && (
             <div style={{
               gridColumn: isMobile ? 'auto' : '1 / -1',
               padding: 'var(--space-3)',
@@ -344,7 +343,7 @@ export default function QAManagement() {
               color: '#ef4444',
               fontSize: 'var(--text-sm)',
             }}>
-              {t('labels.jinaKeyRequired')}
+              {embeddingKeyStatusError ? `${t('labels.embeddingKeyStatusUnavailable')} ${embeddingKeyStatusError}` : t('labels.jinaKeyRequired')}
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
@@ -452,7 +451,7 @@ export default function QAManagement() {
               <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
                 <button
                   onClick={handleImportToDatabase}
-                  disabled={!importText.trim() || saving || !jinaKeyReady}
+                  disabled={!importText.trim() || saving || !embeddingKeyReady}
                   style={{
                     flex: 1,
                     padding: 'var(--space-3)',
@@ -651,13 +650,13 @@ export default function QAManagement() {
                       </div>
                       <button
                         onClick={() => handleDelete(item.id)}
-                        disabled={!jinaKeyReady}
+                        disabled={!embeddingKeyReady}
                         className="btn-ghost"
                         style={{
                           color: 'var(--color-error)',
                           padding: 'var(--space-2)',
-                          opacity: !jinaKeyReady ? 0.5 : 1,
-                          cursor: !jinaKeyReady ? 'not-allowed' : 'pointer',
+                          opacity: !embeddingKeyReady ? 0.5 : 1,
+                          cursor: !embeddingKeyReady ? 'not-allowed' : 'pointer',
                         }}
                       >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

@@ -25,9 +25,10 @@ interface AISettingsFormProps {
   onSave?: (updatedAgent?: Agent) => void;
   onChatParamsChange?: (params: ChatParamOverrides) => void;
   onSaveBusyChange?: (busy: boolean) => void;
+  onSaveError?: () => void;
 }
 
-export default function AISettingsForm({ compact = false, highlightJinaKey = false, refreshSignal, onSave, onChatParamsChange, onSaveBusyChange }: AISettingsFormProps) {
+export default function AISettingsForm({ compact = false, highlightJinaKey = false, refreshSignal, onSave, onChatParamsChange, onSaveBusyChange, onSaveError }: AISettingsFormProps) {
   const { t } = useTranslation('common')
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
@@ -59,6 +60,9 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     restricted_reply: '',
   })
   const [personaError, setPersonaError] = useState(false)
+  const hasEffectiveEmbeddingKey = Boolean(agent?.embedding_api_key_set)
+  const shouldHighlightSiliconflowKey = highlightJinaKey && formData.embedding_provider === 'siliconflow' && !hasEffectiveEmbeddingKey
+  const shouldHighlightJinaKey = highlightJinaKey && formData.embedding_provider === 'jina' && !hasEffectiveEmbeddingKey
 
   useEffect(() => {
     fetchAgent()
@@ -208,6 +212,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     let aiKeyTestFailed = false
     let jinaKeyTestFailed = false
     let siliconflowKeyTestFailed = false
+    let embeddingKeyValidationFailed = false
 
     try {
       const updateData: Partial<Agent> = {
@@ -249,19 +254,46 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         }
       }
 
-      if (formData.embedding_provider === 'siliconflow' && formData.siliconflow_api_key.trim()) {
-        const embeddingTestResult = await api.testEmbeddingApi(agent.id, updateData)
-        if (!embeddingTestResult.success) {
+      const embeddingProviderChanged = formData.embedding_provider !== agent.embedding_provider
+
+      if (formData.embedding_provider === 'siliconflow') {
+        const hasTypedSiliconflowKey = Boolean(formData.siliconflow_api_key.trim())
+        const hasSavedSiliconflowKey = Boolean(agent.siliconflow_api_key_set || (formData.provider_type === 'siliconflow' && (agent.api_key_set || formData.api_key.trim())))
+        if (hasTypedSiliconflowKey) {
+          try {
+            const embeddingTestResult = await api.testEmbeddingApi(agent.id, updateData)
+            if (!embeddingTestResult.success) {
+              throw new Error(t('errors.siliconflowApiKeyInvalid'))
+            }
+          } catch {
+            siliconflowKeyTestFailed = true
+            embeddingKeyValidationFailed = true
+            throw new Error(t('errors.siliconflowApiKeyInvalid'))
+          }
+        } else if ((embeddingProviderChanged || shouldHighlightSiliconflowKey) && !hasSavedSiliconflowKey) {
           siliconflowKeyTestFailed = true
-          throw new Error(t('errors.siliconflowEmbeddingApiTestFailed'))
+          embeddingKeyValidationFailed = true
+          throw new Error(t('labels.siliconflowKeyRequired'))
         }
       }
 
-      if (formData.embedding_provider !== 'siliconflow' && formData.jina_api_key.trim()) {
-        const jinaTestResult = await api.testJinaApi(agent.id, updateData)
-        if (!jinaTestResult.success) {
+      if (formData.embedding_provider !== 'siliconflow') {
+        const hasTypedJinaKey = Boolean(formData.jina_api_key.trim())
+        if (hasTypedJinaKey) {
+          try {
+            const jinaTestResult = await api.testJinaApi(agent.id, updateData)
+            if (!jinaTestResult.success) {
+              throw new Error(t('errors.jinaApiKeyInvalid'))
+            }
+          } catch {
+            jinaKeyTestFailed = true
+            embeddingKeyValidationFailed = true
+            throw new Error(t('errors.jinaApiKeyInvalid'))
+          }
+        } else if ((embeddingProviderChanged || shouldHighlightJinaKey) && !agent.jina_api_key_set) {
           jinaKeyTestFailed = true
-          throw new Error(t('errors.jinaApiTestFailed'))
+          embeddingKeyValidationFailed = true
+          throw new Error(t('labels.jinaKeyRequired'))
         }
       }
 
@@ -302,11 +334,14 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
       if (siliconflowKeyTestFailed) {
         setSiliconflowKeyError(true)
       }
-      setError(errorMessage)
+      if (!embeddingKeyValidationFailed) {
+        setError(errorMessage)
+      }
+      onSaveError?.()
     } finally {
       setSaving(false)
     }
-  }, [agent, formData, onSave, selectedPersona, t])
+  }, [agent, formData, onSave, onSaveError, selectedPersona, shouldHighlightJinaKey, shouldHighlightSiliconflowKey, t])
 
   useEffect(() => {
     if (loading || !agent) {
@@ -900,15 +935,15 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
                 setSiliconflowKeyError(false)
               }}
               placeholder={agent?.siliconflow_api_key_set ? t('placeholders.enterNewApiKey') : "sk-..."}
-              style={(highlightJinaKey || siliconflowKeyError) ? { border: '2px solid #ef4444' } : undefined}
+              style={(shouldHighlightSiliconflowKey || siliconflowKeyError) ? { border: '2px solid #ef4444' } : undefined}
             />
-            {(highlightJinaKey || siliconflowKeyError) && (
+            {(shouldHighlightSiliconflowKey || siliconflowKeyError) && (
               <div style={{
                 marginTop: 'var(--space-2)',
                 color: '#ef4444',
                 fontSize: 'var(--text-xs)',
               }}>
-                {siliconflowKeyError ? t('errors.siliconflowEmbeddingApiTestFailed') : t('labels.jinaKeyRequired')}
+                {siliconflowKeyError ? t('errors.siliconflowApiKeyInvalid') : t('labels.siliconflowKeyRequired')}
               </div>
             )}
             <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
@@ -965,9 +1000,9 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
                 setJinaKeyError(false)
               }}
               placeholder={agent?.jina_api_key_set ? t('placeholders.enterJinaKey') : "jina_..."}
-              style={(highlightJinaKey || jinaKeyError) ? { border: '2px solid #ef4444' } : undefined}
+              style={(shouldHighlightJinaKey || jinaKeyError) ? { border: '2px solid #ef4444' } : undefined}
             />
-            {(highlightJinaKey || jinaKeyError) && (
+            {(shouldHighlightJinaKey || jinaKeyError) && (
               <div style={{
                 marginTop: 'var(--space-2)',
                 color: '#ef4444',

@@ -77,6 +77,7 @@ export interface Agent {
   google_region?: string;
   provider_config?: Record<string, string | number | boolean>;
   embedding_provider?: EmbeddingProvider;
+  embedding_api_key_set?: boolean;
   embedding_model: string;
   crawl_max_depth?: number;
   crawl_max_pages?: number;
@@ -417,7 +418,7 @@ class APIService {
     });
   }
 
-  async getJinaKeyStatus(agentId: string): Promise<{ agent_id: string; configured: boolean }> {
+  async getJinaKeyStatus(agentId: string): Promise<{ agent_id: string; configured: boolean; embedding_provider?: EmbeddingProvider }> {
     return this.request(`/api/v1/agent:jina-key-status?agent_id=${agentId}`);
   }
 

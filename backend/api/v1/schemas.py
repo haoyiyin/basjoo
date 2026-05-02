@@ -292,6 +292,9 @@ class AgentConfig(BaseModel):
         None, description="Provider-specific configuration"
     )
     embedding_provider: Literal["jina", "siliconflow"] = Field("jina", description="Embedding provider: jina or siliconflow")
+    embedding_api_key_set: bool = Field(
+        default=False, description="Whether the selected embedding provider has an effective API key configured"
+    )
     embedding_model: str
     crawl_max_depth: int = Field(default=2, ge=0, le=5, description="Crawl depth for site crawling")
     crawl_max_pages: int = Field(default=20, ge=1, le=100, description="Max pages for site crawling")

@@ -56,7 +56,7 @@ from api.v1.schemas import (
 )
 from services import URLNormalizer, TextChunker, TaskType, task_lock
 from core.encryption import encrypt_api_key, decrypt_api_key
-from api.v1.provider_helpers import get_agent_embedding_config, resolve_agent_embedding_provider
+from api.v1.provider_helpers import get_agent_embedding_config
 from services.qdrant_store import clear_disabled_key, clear_client_cache
 from services.rag_qdrant import QdrantRAGService
 from services.qdrant_store import QdrantVectorStore
@@ -129,6 +129,7 @@ def get_agent_plaintext_keys(agent: Agent) -> tuple[Optional[str], Optional[str]
 
 def build_agent_config(agent: Agent) -> dict:
     api_key, jina_key, siliconflow_key = get_agent_plaintext_keys(agent)
+    embedding_config = get_agent_embedding_config(agent)
     return {
         "id": agent.id,
         "name": agent.name,
@@ -152,7 +153,8 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": resolve_agent_embedding_provider(agent),
+        "embedding_provider": embedding_config["embedding_provider"],
+        "embedding_api_key_set": bool(embedding_config["embedding_api_key"]),
         "embedding_model": agent.embedding_model,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
@@ -1456,8 +1458,10 @@ async def update_agent(
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
     for field, value in update_data.items():
-        if field in ("api_key", "jina_api_key", "siliconflow_api_key") and value:
-            value = encrypt_api_key(value)
+        if field in ("api_key", "jina_api_key", "siliconflow_api_key") and isinstance(value, str):
+            value = value.strip()
+            if value:
+                value = encrypt_api_key(value)
         setattr(agent, field, value)
 
     await db.commit()
@@ -1480,9 +1484,11 @@ async def get_jina_key_status(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
+    embedding_config = get_agent_embedding_config(agent)
     return {
         "agent_id": agent_id,
-        "configured": bool(agent.jina_api_key),
+        "configured": bool(embedding_config["embedding_api_key"]),
+        "embedding_provider": embedding_config["embedding_provider"],
     }
 
 

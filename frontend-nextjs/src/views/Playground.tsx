@@ -348,14 +348,23 @@ export default function Playground() {
     }, 2000);
   }, []);
 
+  const handleSettingsSaveError = useCallback(() => {
+    setShowSaved(false);
+    setSaveStatus('error');
+    if (savedTimerRef.current) {
+      clearTimeout(savedTimerRef.current);
+    }
+    savedTimerRef.current = setTimeout(() => {
+      setSaveStatus('idle');
+    }, 2000);
+  }, []);
+
   const handleSaveBusyChange = useCallback((busy: boolean) => {
     setIsSettingsSaving(busy);
     if (busy) {
       setSaveStatus('saving');
-    } else if (saveStatus === 'saving') {
-      // Saving finished, status will be set to 'saved' by handleSettingsSave
     }
-  }, [saveStatus]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -408,7 +417,7 @@ export default function Playground() {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {activeTab === 'settings' ? (
               <div style={{ height: '100%', overflow: 'auto' }}>
-                <AISettingsForm compact highlightJinaKey={highlightJinaKey} onSave={handleSettingsSave} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+                <AISettingsForm compact highlightJinaKey={highlightJinaKey} onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
               </div>
             ) : (
               <ChatPanel
@@ -495,7 +504,7 @@ export default function Playground() {
             </div>
           </div>
           <div style={{ flex: 1, overflow: 'auto' }}>
-            <AISettingsForm compact highlightJinaKey={highlightJinaKey} onSave={handleSettingsSave} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+            <AISettingsForm compact highlightJinaKey={highlightJinaKey} onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
           </div>
         </div>
 

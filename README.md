@@ -36,6 +36,7 @@ sudo sh install-deploy.sh
 ## Core features
 
 - Configurable AI agents with multiple provider settings
+- Independent Embedding API selection for knowledge retrieval: Jina or SiliconFlow
 - URL ingestion and Q&A knowledge management
 - Qdrant-backed retrieval and index rebuild jobs
 - Streaming chat responses over Server-Sent Events
@@ -144,6 +145,8 @@ Default dev ports:
 - Backend API: `http://localhost:8000`
 - Qdrant: `http://localhost:6333`
 - Redis: `127.0.0.1:6379`
+
+The dev frontend and backend ports are bound as `3000:3000` and `8000:8000`, so they are reachable from other devices that can access the host.
 
 ### Option 2: Run services locally
 
@@ -318,6 +321,8 @@ The retrieval/indexing pipeline spans:
 - `backend/services/crawler.py`
 
 The LLM abstraction is in `backend/services/llm_service.py`. Provider selection is driven by `Agent.provider_type`. The current code supports OpenAI-compatible providers plus dedicated paths for OpenAI Native and Google.
+
+Embedding settings are independent from the chat model provider. Admins can choose Jina or SiliconFlow for knowledge-base indexing/retrieval in Playground; the Websites and Q&A pages only require the API key for the currently selected embedding provider. SiliconFlow can use a dedicated SiliconFlow Embedding API key, with legacy fallback to the main SiliconFlow AI key when the AI provider is also SiliconFlow.
 
 ### Frontend
 

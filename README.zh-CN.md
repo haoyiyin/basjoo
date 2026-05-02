@@ -39,6 +39,7 @@ sudo sh install-deploy.sh
 ## 核心功能
 
 - 支持多种模型服务商配置的 AI 智能体
+- 支持独立选择知识检索 Embedding API：Jina 或 SiliconFlow
 - URL 抓取与 Q&A 知识管理
 - 基于 Qdrant 的检索与索引重建任务
 - 基于 Server-Sent Events 的流式聊天回复
@@ -147,6 +148,8 @@ bash scripts/prod_stability_check.sh
 - Backend API: `http://localhost:8000`
 - Qdrant: `http://localhost:6333`
 - Redis: `127.0.0.1:6379`
+
+开发环境前端和后端端口以 `3000:3000`、`8000:8000` 方式绑定，因此同一网络中可访问宿主机的其它设备也可以访问。
 
 ### 方式二：本地分别运行服务
 
@@ -321,6 +324,8 @@ docker compose --profile dev up --watch
 - `backend/services/crawler.py`
 
 模型服务抽象位于 `backend/services/llm_service.py`。服务商选择由 `Agent.provider_type` 决定。当前代码支持多种 OpenAI 兼容服务商，以及专门的 OpenAI Native 和 Google 路径。
+
+Embedding 设置与聊天模型服务商相互独立。管理员可以在 Playground 中为知识库索引/检索选择 Jina 或 SiliconFlow；网站与 Q&A 知识库页面只要求当前已选择的 Embedding API 对应 Key 已配置。SiliconFlow 可以使用独立的 SiliconFlow Embedding API Key；当 AI 服务商也选择 SiliconFlow 时，也兼容使用主 SiliconFlow AI Key 作为历史回退。
 
 ### 前端
 
