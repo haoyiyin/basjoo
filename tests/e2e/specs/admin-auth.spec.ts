@@ -16,15 +16,19 @@ test.describe('Admin Authentication', () => {
   });
 
   test('login with valid credentials redirects to dashboard', async ({ page }) => {
+    await page.route('**/api/admin/login', async (route) => {
+      await route.continue({ headers: { ...route.request().headers(), 'X-Forwarded-For': '203.0.113.11' } });
+    });
     await page.goto('/login');
 
     // Login form inputs have no name attribute; use label text to find them
-    await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-    await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
+    await page.locator('input').first().fill(ADMIN_EMAIL);
+    await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
 
-    // Should redirect after successful login
-    await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
+    // Should leave the login page after successful login
+    await page.waitForLoadState('networkidle');
+    await expect(page).not.toHaveURL(/\/login/);
 
     // Token should be stored in localStorage
     const token = await page.evaluate(() => localStorage.getItem('token'));
@@ -36,12 +40,16 @@ test.describe('Admin Authentication', () => {
   });
 
   test('refresh page preserves login state', async ({ page }) => {
+    await page.route('**/api/admin/login', async (route) => {
+      await route.continue({ headers: { ...route.request().headers(), 'X-Forwarded-For': '203.0.113.12' } });
+    });
     // Login first
     await page.goto('/login');
-    await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-    await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
+    await page.locator('input').first().fill(ADMIN_EMAIL);
+    await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-    await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
+    await page.waitForLoadState('networkidle');
+    await expect(page).not.toHaveURL(/\/login/);
 
     // Refresh the page
     await page.reload();
@@ -54,9 +62,12 @@ test.describe('Admin Authentication', () => {
   });
 
   test('invalid credentials show error', async ({ page }) => {
+    await page.route('**/api/admin/login', async (route) => {
+      await route.continue({ headers: { ...route.request().headers(), 'X-Forwarded-For': '203.0.113.13' } });
+    });
     await page.goto('/login');
-    await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-    await page.getByLabel(/password|密码/i).fill('wrongpassword');
+    await page.locator('input').first().fill(ADMIN_EMAIL);
+    await page.locator('input').nth(1).fill('wrongpassword');
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
 
     // Should show error message

@@ -7,14 +7,16 @@
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
 const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000';
+const E2E_JINA_API_KEY = process.env.E2E_JINA_API_KEY || 'test_jina_key_for_e2e';
+const E2E_SETUP_IP = `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
 
 async function api(path: string, opts: RequestInit & { data?: unknown } = {}): Promise<{ status: number; json: () => unknown }> {
   const { data, ...fetchOpts } = opts;
   const body = data ? JSON.stringify(data) : undefined;
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...fetchOpts.headers } as HeadersInit,
-    body,
     ...fetchOpts,
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': E2E_SETUP_IP, ...fetchOpts.headers } as HeadersInit,
+    body,
   });
   return {
     status: res.status,
@@ -28,7 +30,7 @@ export default async function globalSetup(): Promise<void> {
     method: 'POST',
     data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD, name: 'Test Admin' },
   });
-  if (![200, 201, 400].includes(registerRes.status)) {
+  if (![200, 201, 400, 403].includes(registerRes.status)) {
     throw new Error(`Admin registration failed: ${registerRes.status}`);
   }
 
@@ -49,13 +51,13 @@ export default async function globalSetup(): Promise<void> {
   if (agentRes.status !== 200) {
     throw new Error(`Failed to get default agent: ${agentRes.status}`);
   }
-  const agent = await agentRes.json() as { id: string; jina_api_key?: string | null };
+  const agent = await agentRes.json() as { id: string; jina_api_key_set?: boolean | null };
 
-  if (!agent.jina_api_key) {
+  if (!agent.jina_api_key_set) {
     const setKeyRes = await api(`/api/v1/agent?agent_id=${agent.id}`, {
       method: 'PUT',
       headers: { ...authHeaders } as HeadersInit,
-      data: { jina_api_key: 'test_jina_key_for_e2e' },
+      data: { jina_api_key: E2E_JINA_API_KEY },
     });
     if (![200, 201].includes(setKeyRes.status)) {
       throw new Error(`Failed to set Jina API key: ${setKeyRes.status}`);

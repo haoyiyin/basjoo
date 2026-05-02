@@ -42,7 +42,7 @@ export default defineConfig({
     // Smoke E2E against dev environment - runs core admin/chat specs only
     {
       name: 'smoke',
-      testMatch: ['admin-auth.spec.ts', 'playground-streaming.spec.ts', 'knowledge-indexing.spec.ts', 'sessions-takeover.spec.ts'],
+      testMatch: ['admin-auth.spec.ts', 'playground-streaming.spec.ts', 'knowledge-indexing.spec.ts', 'sessions-takeover.spec.ts', 'recent-commits.spec.ts'],
       use: {
         ...devices['Desktop Chrome'],
         baseURL: process.env.BASE_URL || 'http://localhost:3000',

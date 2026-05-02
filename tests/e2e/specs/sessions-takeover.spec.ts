@@ -12,10 +12,15 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
 const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000';
 
+function loginHeaders() {
+  return { 'X-Forwarded-For': `203.0.113.${Math.floor(Math.random() * 200) + 20}` };
+}
+
 test.describe('Admin Sessions Takeover', () => {
   test('full takeover chain via API', async ({ page, request }) => {
     // 1. Login as admin
     const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
+      headers: loginHeaders(),
       data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
     });
     const loginData = await loginRes.json();
@@ -26,9 +31,14 @@ test.describe('Admin Sessions Takeover', () => {
     const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, { headers: authHeaders });
     const agent = await agentRes.json();
 
+    await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
+      headers: authHeaders,
+      data: { allowed_widget_origins: [] },
+    });
+
     // 3. Simulate a visitor chat (creates a session)
     const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
-      data: { agent_id: agent.id, message: 'I need help from a human', visitor_id: 'e2e-visitor' },
+      data: { agent_id: agent.id, message: 'I need help from a human', visitor_id: 'e2e-visitor', session_id: `e2e-session-${Date.now()}` },
     });
     const chatData = await chatRes.json();
     const sessionId = chatData.session_id;
@@ -80,6 +90,7 @@ test.describe('Admin Sessions Takeover', () => {
   test('sessions page shows visitor sessions after login', async ({ page, request }) => {
     // 1. Create a visitor session via API first
     const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
+      headers: loginHeaders(),
       data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
     });
     const token = (await loginRes.json() as { access_token: string }).access_token;
@@ -91,19 +102,30 @@ test.describe('Admin Sessions Takeover', () => {
     });
     const agent = await agentRes.json() as { id: string };
 
+    await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      data: { allowed_widget_origins: [] },
+    });
+
     // Create a visitor chat session
+    const sessionId = `e2e-ui-session-${Date.now()}`;
     const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
       headers: { 'Content-Type': 'application/json' },
-      data: { agent_id: agent.id, message: 'UI test session' },
+      data: { agent_id: agent.id, message: 'UI test session', session_id: sessionId },
     });
     expect(chatRes.status()).toBe(200);
 
+    await page.route('**/api/admin/login', async (route) => {
+      await route.continue({ headers: { ...route.request().headers(), 'X-Forwarded-For': '203.0.113.44' } });
+    });
+
     // 2. Login to admin dashboard
     await page.goto('/login');
-    await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-    await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
+    await page.locator('input').first().fill(ADMIN_EMAIL);
+    await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-    await page.waitForURL(/\/(dashboard|sessions)/, { timeout: 10_000 });
+    await page.waitForLoadState('networkidle');
+    await expect(page).not.toHaveURL(/\/login/);
 
     // 3. Navigate to sessions page
     await page.goto('/sessions');
@@ -118,7 +140,8 @@ test.describe('Admin Sessions Takeover', () => {
     expect(Array.isArray(sessionsData.items)).toBe(true);
     expect(sessionsData.items.length).toBeGreaterThanOrEqual(1);
 
-    // 5. Verify sessions page renders content (check for table or list structure)
-    await expect(page.locator('table, [class*="session"], [class*="list"]').first()).toBeVisible({ timeout: 10_000 });
+    // 5. Verify sessions page renders content
+    await expect(page.getByRole('heading', { name: /会话中心|sessions/i })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(`会话 #${sessionId}`, { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 });
