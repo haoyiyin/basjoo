@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import {useEffect,useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from 'react-i18next';
@@ -11,9 +11,20 @@ export const Login = () => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [registrationEnabled, setRegistrationEnabled] = useState(false);
     const { login } = useAuth();
     const navigate = useNavigate();
-
+    useEffect(() => {
+        fetch('/api/admin/registration-settings')
+            .then((res) => res.json())
+            .then((data) => {
+                setRegistrationEnabled(
+                    Boolean(data.public_registration_enabled || data.bootstrap_required)
+                );
+            })
+            .catch(() => setRegistrationEnabled(false));
+    }, []);
+    
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -257,25 +268,27 @@ export const Login = () => {
                     </form>
                 </div>
 
-                <p style={{
-                    textAlign: 'center',
-                    marginTop: 'var(--space-6)',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: 'var(--text-sm)',
-                }}>
-                    {t('login.noAccount')}{' '}
-                    <Link
-                        to="/register"
-                        style={{
-                            color: 'var(--color-accent-primary)',
-                            fontWeight: 500,
-                            textDecoration: 'none',
-                            transition: 'color var(--transition-fast)',
-                        }}
-                    >
-                        {t('login.registerLink')}
-                    </Link>
-                </p>
+                {registrationEnabled && (
+                    <p style={{
+                        textAlign: 'center',
+                        marginTop: 'var(--space-6)',
+                        color: 'var(--color-text-secondary)',
+                        fontSize: 'var(--text-sm)',
+                    }}>
+                        {t('login.noAccount')}{' '}
+                        <Link
+                            to="/register"
+                            style={{
+                                color: 'var(--color-accent-primary)',
+                                fontWeight: 500,
+                                textDecoration: 'none',
+                                transition: 'color var(--transition-fast)',
+                            }}
+                        >
+                            {t('login.registerLink')}
+                        </Link>
+                    </p>
+                )}
 
                 <div style={{
                     textAlign: 'center',

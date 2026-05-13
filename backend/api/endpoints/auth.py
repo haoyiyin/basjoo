@@ -1,10 +1,11 @@
-from typing import Optional
+from typing import Deque, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from sqlalchemy import select, func
+from passlib.context import CryptContext
 
 from database import get_db
 from models import AdminUser
@@ -13,10 +14,13 @@ from i18n.core import get_locale_from_request, _
 from middleware.rate_limit import check_memory_sliding_window
 
 from collections import defaultdict, deque
-from typing import Deque
+import json
+import os
+from pathlib import Path
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # In-memory login rate limiter (fallback when Redis is unavailable)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
@@ -34,7 +38,12 @@ class RegisterRequest(BaseModel):
     password: str
     name: str
 
-
+class CreateAdminRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    role: str = "admin"
+    
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -45,8 +54,30 @@ class AdminResponse(BaseModel):
     id: int
     email: str
     name: str
+    role: str
+
+class AdminUserOut(BaseModel):
+    id: int
+    email: str
+    name: str
+    is_active: bool
+    role: str
 
 
+class UpdateAdminRequest(BaseModel):
+    email: Optional[str] = None
+    name: Optional[str] = None
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
+    role: Optional[str] = None
+    
+class RegistrationSettingsResponse(BaseModel):
+    public_registration_enabled: bool
+    bootstrap_required: bool
+
+
+class RegistrationSettingsUpdate(BaseModel):
+    public_registration_enabled: bool
 async def get_current_admin(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -73,7 +104,45 @@ async def get_current_admin(
 
     return admin
 
+VALID_ADMIN_ROLES = {"super_admin", "admin", "support", "readonly"}
 
+
+def require_super_admin(current_admin: AdminUser):
+    if current_admin.role != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super administrators can manage users",
+        )
+
+
+def validate_admin_role(role: str):
+    if role not in VALID_ADMIN_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role",
+        )
+
+REGISTRATION_SETTINGS_FILE = Path(
+    os.getenv("REGISTRATION_SETTINGS_FILE", "/app/data/registration_settings.json")
+)
+
+
+def read_public_registration_enabled() -> bool:
+    try:
+        if REGISTRATION_SETTINGS_FILE.exists():
+            data = json.loads(REGISTRATION_SETTINGS_FILE.read_text())
+            return bool(data.get("public_registration_enabled", False))
+    except Exception:
+        return False
+    return False
+
+
+def write_public_registration_enabled(enabled: bool):
+    REGISTRATION_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REGISTRATION_SETTINGS_FILE.write_text(
+        json.dumps({"public_registration_enabled": enabled})
+    )
+    
 @router.post("/register", response_model=AdminResponse)
 async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     locale = get_locale_from_request(request)
@@ -82,10 +151,10 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
     admin_count_result = await db.execute(select(func.count(AdminUser.id)))
     admin_count = admin_count_result.scalar()
 
-    if admin_count and admin_count > 0:
+    if admin_count and admin_count > 0 and not read_public_registration_enabled():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=_("System already has an administrator", locale=locale),
+            detail="Public registration is disabled",
         )
 
     result = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
@@ -106,7 +175,150 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
         email=req.email, password=req.password, name=req.name
     )
 
-    return AdminResponse(id=admin.id, email=admin.email, name=admin.name)
+    return AdminResponse(id=admin.id, email=admin.email, name=admin.name,role=admin.role)
+
+@router.get("/registration-settings", response_model=RegistrationSettingsResponse)
+async def get_registration_settings(db: AsyncSession = Depends(get_db)):
+    admin_count_result = await db.execute(select(func.count(AdminUser.id)))
+    admin_count = admin_count_result.scalar() or 0
+
+    return RegistrationSettingsResponse(
+        public_registration_enabled=read_public_registration_enabled(),
+        bootstrap_required=admin_count == 0,
+    )
+
+
+@router.patch("/registration-settings", response_model=RegistrationSettingsResponse)
+async def update_registration_settings(
+    req: RegistrationSettingsUpdate,
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    require_super_admin(current_admin)
+    write_public_registration_enabled(req.public_registration_enabled)
+
+    admin_count_result = await db.execute(select(func.count(AdminUser.id)))
+    admin_count = admin_count_result.scalar() or 0
+
+    return RegistrationSettingsResponse(
+        public_registration_enabled=req.public_registration_enabled,
+        bootstrap_required=admin_count == 0,
+    )
+
+@router.post("/users", response_model=AdminResponse)
+async def create_admin_user(
+    request: Request,
+    req: CreateAdminRequest,
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    require_super_admin(current_admin)
+    validate_admin_role(req.role)
+    locale = get_locale_from_request(request)
+    auth_service = AuthService(db)
+
+    result = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
+    existing_admin = result.scalar_one_or_none()
+
+    if existing_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_("Email already registered", locale=locale),
+        )
+
+    if len(req.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_("Password too short", locale=locale),
+        )
+
+    admin = await auth_service.create_admin(
+        email=req.email,
+        password=req.password,
+        name=req.name,
+    )
+    admin.role = req.role
+    await db.commit()
+    await db.refresh(admin)
+
+    return AdminResponse(id=admin.id, email=admin.email, name=admin.name,role=admin.role)
+
+@router.get("/users", response_model=list[AdminUserOut])
+async def list_admin_users(
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    require_super_admin(current_admin)
+    result = await db.execute(select(AdminUser).order_by(AdminUser.id.asc()))
+    return result.scalars().all()
+
+
+@router.patch("/users/{admin_id}", response_model=AdminUserOut)
+async def update_admin_user(
+    admin_id: int,
+    req: UpdateAdminRequest,
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    require_super_admin(current_admin)
+    result = await db.execute(select(AdminUser).where(AdminUser.id == admin_id))
+    admin = result.scalar_one_or_none()
+
+    if not admin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found")
+
+    if req.email and req.email != admin.email:
+        existing = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+        admin.email = req.email
+
+    if req.name is not None:
+        admin.name = req.name
+
+    if req.password:
+        if len(req.password) < 8:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password too short")
+        admin.hashed_password = pwd_context.hash(req.password)
+        
+    if req.role is not None:
+        validate_admin_role(req.role)
+        if admin.id == current_admin.id and req.role != "super_admin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot remove your own super admin role",
+            )
+        admin.role = req.role
+
+    if req.is_active is not None:
+        if admin.id == current_admin.id and req.is_active is False:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot disable yourself")
+        admin.is_active = req.is_active
+
+    await db.commit()
+    await db.refresh(admin)
+    return admin
+
+
+@router.delete("/users/{admin_id}")
+async def delete_admin_user(
+    admin_id: int,
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    require_super_admin(current_admin)
+    if admin_id == current_admin.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete yourself")
+
+    result = await db.execute(select(AdminUser).where(AdminUser.id == admin_id))
+    admin = result.scalar_one_or_none()
+
+    if not admin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found")
+
+    await db.delete(admin)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -176,7 +388,7 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
 
     return LoginResponse(
         access_token=access_token,
-        admin={"id": admin.id, "email": admin.email, "name": admin.name},
+        admin={"id": admin.id, "email": admin.email, "name": admin.name,"role": admin.role},
     )
 
 
@@ -186,4 +398,5 @@ async def get_me(current_admin: AdminUser = Depends(get_current_admin)):
         id=current_admin.id,
         email=current_admin.email,
         name=current_admin.name,
+        role=current_admin.role
     )

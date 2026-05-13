@@ -68,7 +68,8 @@
     "sessions": "会话中心",
     "aiSettings": "AI 设置",
     "systemSettings": "系统设置",
-    "administrator": "管理员"
+    "administrator": "管理员",
+    "users": "用户管理"
   },
   "errors": {
     "required": "此字段为必填项",

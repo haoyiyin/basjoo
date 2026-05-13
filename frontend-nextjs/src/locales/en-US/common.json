@@ -68,7 +68,8 @@
     "sessions": "Sessions",
     "aiSettings": "AI Settings",
     "systemSettings": "System Settings",
-    "administrator": "Administrator"
+    "administrator": "Administrator",
+    "users": "Users"
   },
   "errors": {
     "required": "This field is required",
