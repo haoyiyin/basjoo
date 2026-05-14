@@ -154,3 +154,14 @@ widget/artifacts/
 # 测试数据库（本地开发产生）
 *.db-wal
 *.db-shm
+# Local deployment secrets
+.env
+.env.*
+!.env.example
+
+# SSL certificates and private keys
+ssl/
+*.pem
+*.key
+*.crt
+*.cer
