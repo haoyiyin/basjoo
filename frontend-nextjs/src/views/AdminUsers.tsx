@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import AdminLayout from '../components/AdminLayout';
+
 type AdminRole = 'super_admin' | 'admin' | 'support' | 'readonly';
 type AdminUser = {
   id: number;
@@ -12,14 +14,10 @@ type AdminUser = {
   role: AdminRole;
 };
 
-const roleOptions = [
-  { value: 'super_admin', label: '超级管理员' },
-  { value: 'admin', label: '普通管理员' },
-  { value: 'support', label: '客服人员' },
-  { value: 'readonly', label: '只读账号' },
-] as const;
+const roleKeys: AdminRole[] = ['super_admin', 'admin', 'support', 'readonly'];
 
 export const AdminUsers = () => {
+  const { t } = useTranslation();
   const { token, admin } = useAuth();
   const isSuperAdmin = admin?.role === 'super_admin';
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -46,21 +44,21 @@ export const AdminUsers = () => {
           email: admin.email,
           name: admin.name,
           is_active: true,
-          role: admin.role,
+          role: admin.role as AdminRole,
         }]);
         return;
       }
-    
+
       const res = await fetch('/api/admin/users', { headers: authHeaders });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || '加载用户失败');
+      if (!res.ok) throw new Error(data.detail || t('users.loadUsersFailed'));
       setUsers(data);
     };
-  
+
   const loadRegistrationSettings = async () => {
   const res = await fetch('/api/admin/registration-settings', { headers: authHeaders });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || '加载注册设置失败');
+  if (!res.ok) throw new Error(data.detail || t('users.loadRegistrationFailed'));
   setPublicRegistrationEnabled(Boolean(data.public_registration_enabled));
 };
 useEffect(() => {
@@ -85,11 +83,11 @@ useEffect(() => {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setError(data.detail || '创建失败');
+      setError(data.detail || t('users.createFailed'));
       return;
     }
 
-    setMessage(`已创建管理员：${data.email}`);
+    setMessage(t('users.userCreated', { email: data.email }));
     setEmail('');
     setName('');
     setPassword('');
@@ -125,17 +123,17 @@ useEffect(() => {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setError(data.detail || '保存失败');
+      setError(data.detail || t('users.saveFailed'));
       return;
     }
 
     setEditingId(null);
-    setMessage('用户已更新');
+    setMessage(t('users.userUpdated'));
     await loadUsers();
   };
 
   const deleteUser = async (id: number) => {
-    if (!window.confirm('确定删除这个管理员账号吗？')) return;
+    if (!window.confirm(t('users.confirmDelete'))) return;
 
     const res = await fetch(`/api/admin/users/${id}`, {
       method: 'DELETE',
@@ -144,11 +142,11 @@ useEffect(() => {
 
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError(data.detail || '删除失败');
+      setError(data.detail || t('users.deleteFailed'));
       return;
     }
 
-    setMessage('用户已删除');
+    setMessage(t('users.userDeleted'));
     await loadUsers();
   };
 
@@ -165,19 +163,19 @@ useEffect(() => {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    setError(data.detail || '保存注册设置失败');
+    setError(data.detail || t('users.registrationSaveFailed'));
     return;
   }
 
   setPublicRegistrationEnabled(Boolean(data.public_registration_enabled));
-  setMessage(enabled ? '公开注册已开启' : '公开注册已关闭');
+  setMessage(enabled ? t('users.registrationEnabledToast') : t('users.registrationDisabledToast'));
 };
   return (
   <AdminLayout>
     <div style={{ width: '100%', maxWidth: 1120, margin: '0 auto' }}>
       <div style={{ marginBottom: 'var(--space-8)' }}>
         <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, marginBottom: 'var(--space-2)' }}>
-          用户管理
+          {t('users.title')}
         </h1>
       </div>
 
@@ -192,13 +190,13 @@ useEffect(() => {
           }}>
             <div>
               <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-2)' }}>
-                注册设置
+                {t('users.registrationSettings.title')}
               </h2>
               <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', margin: 0 }}>
-                控制登录页是否显示注册入口，并决定是否允许公开注册管理员账号。
+                {t('users.registrationSettings.description')}
               </p>
             </div>
-        
+
             <button
               type="button"
               onClick={() => updateRegistrationSetting(!publicRegistrationEnabled)}
@@ -215,37 +213,37 @@ useEffect(() => {
                   : 'var(--color-text-muted)',
               }}
             >
-              {publicRegistrationEnabled ? '已开启' : '已关闭'}
+              {publicRegistrationEnabled ? t('users.enabled') : t('users.disabled')}
             </button>
           </div>
         </div>
        )}
       {isSuperAdmin && (<div className="glass-card" style={{ padding: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
-        <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>添加管理员</h2>
+        <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.addAdmin')}</h2>
         <form onSubmit={createUser} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 180px auto', gap: 'var(--space-4)', alignItems: 'end' }}>
-          <label>邮箱<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
-          <label>姓名<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-          <label>密码<input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          <label>角色<select value={role} onChange={(e) => setRole(e.target.value as AdminRole)}>{roleOptions.map((option) => (<option key={option.value} value={option.value}>{option.label}</option>
+          <label>{t('users.email')}<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+          <label>{t('users.name')}<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
+          <label>{t('users.password')}<input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+          <label>{t('users.role')}<select value={role} onChange={(e) => setRole(e.target.value as AdminRole)}>{roleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>
     ))}
   </select>
 </label>
-          <button type="submit">创建</button>
+          <button type="submit">{t('users.create')}</button>
         </form>
       </div>
 	)}
       <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
-        <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>管理员列表</h2>
+        <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.adminList')}</h2>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={{ textAlign: 'left', padding: '12px' }}>ID</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>邮箱</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>姓名</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>角色</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>状态</th>
-               {isSuperAdmin && <th style={{ textAlign: 'right', padding: '12px' }}>操作</th>}
+                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.id')}</th>
+                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.email')}</th>
+                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.name')}</th>
+                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.role')}</th>
+                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.status')}</th>
+               {isSuperAdmin && <th style={{ textAlign: 'right', padding: '12px' }}>{t('users.actions')}</th>}
               </tr>
             </thead>
             <tbody>
@@ -255,28 +253,28 @@ useEffect(() => {
                   <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.email} onChange={(e) => setEditData({ ...editData, email: e.target.value })} /> : user.email}</td>
                   <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.name} onChange={(e) => setEditData({ ...editData, name: e.target.value })} /> : user.name}</td>
                   <td style={{ padding: '12px' }}>{editingId === user.id ? (<select value={editData.role} onChange={(e) => setEditData({ ...editData, role: e.target.value as AdminRole })}>
-                      {roleOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
+                      {roleKeys.map((r) => (
+                        <option key={r} value={r}>
+                          {t(`users.roleLabels.${r}`)}
                         </option>
                       ))}
                     </select>
                   ) : (
-                    roleOptions.find((option) => option.value === user.role)?.label || user.role
+                    t(`users.roleLabels.${user.role}`)
                   )}
                 </td>
-                  <td style={{ padding: '12px' }}>{editingId === user.id ? <label><input type="checkbox" checked={editData.is_active} onChange={(e) => setEditData({ ...editData, is_active: e.target.checked })} /> 启用</label> : user.is_active ? '启用' : '禁用'}</td>
+                  <td style={{ padding: '12px' }}>{editingId === user.id ? <label><input type="checkbox" checked={editData.is_active} onChange={(e) => setEditData({ ...editData, is_active: e.target.checked })} /> {t('users.statusEnabled')}</label> : user.is_active ? t('users.statusEnabled') : t('users.statusDisabled')}</td>
                  {isSuperAdmin && ( <td style={{ padding: '12px', textAlign: 'right' }}>
                     {editingId === user.id ? (
                       <>
-                        <input type="password" placeholder="新密码，留空不改" value={editData.password} onChange={(e) => setEditData({ ...editData, password: e.target.value })} style={{ maxWidth: 180, marginRight: 8 }} />
-                        <button onClick={() => saveEdit(user.id)}>保存</button>
-                        <button onClick={() => setEditingId(null)} style={{ marginLeft: 8 }}>取消</button>
+                        <input type="password" placeholder={t('users.newPasswordPlaceholder')} value={editData.password} onChange={(e) => setEditData({ ...editData, password: e.target.value })} style={{ maxWidth: 180, marginRight: 8 }} />
+                        <button onClick={() => saveEdit(user.id)}>{t('users.save')}</button>
+                        <button onClick={() => setEditingId(null)} style={{ marginLeft: 8 }}>{t('users.cancel')}</button>
                       </>
                     ) : (
                       <>
-                        <button onClick={() => startEdit(user)}>编辑</button>
-                        <button onClick={() => deleteUser(user.id)} style={{ marginLeft: 8 }}>删除</button>
+                        <button onClick={() => startEdit(user)}>{t('users.edit')}</button>
+                        <button onClick={() => deleteUser(user.id)} style={{ marginLeft: 8 }}>{t('users.delete')}</button>
                       </>
                     )}
                   </td>)}

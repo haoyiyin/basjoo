@@ -565,5 +565,49 @@
   },
   "citations": {
     "references": "参考来源"
+  },
+  "users": {
+    "title": "用户管理",
+    "registrationSettings": {
+      "title": "注册设置",
+      "description": "控制登录页是否显示注册入口，并决定是否允许公开注册管理员账号。"
+    },
+    "enabled": "已开启",
+    "disabled": "已关闭",
+    "addAdmin": "添加管理员",
+    "email": "邮箱",
+    "name": "姓名",
+    "password": "密码",
+    "role": "角色",
+    "create": "创建",
+    "adminList": "管理员列表",
+    "id": "ID",
+    "status": "状态",
+    "actions": "操作",
+    "save": "保存",
+    "cancel": "取消",
+    "edit": "编辑",
+    "delete": "删除",
+    "statusEnabled": "启用",
+    "statusDisabled": "禁用",
+    "newPasswordPlaceholder": "新密码，留空不改",
+    "roleLabels": {
+      "super_admin": "超级管理员",
+      "admin": "普通管理员",
+      "support": "客服人员",
+      "readonly": "只读账号"
+    },
+    "confirmDelete": "确定删除这个管理员账号吗？",
+    "userCreated": "已创建管理员：{{email}}",
+    "userUpdated": "用户已更新",
+    "userDeleted": "用户已删除",
+    "registrationEnabledToast": "公开注册已开启",
+    "registrationDisabledToast": "公开注册已关闭",
+    "loadUsersFailed": "加载用户失败",
+    "loadRegistrationFailed": "加载注册设置失败",
+    "createFailed": "创建失败",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败",
+    "registrationSaveFailed": "保存注册设置失败"
   }
 }

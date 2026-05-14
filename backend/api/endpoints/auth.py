@@ -5,8 +5,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from sqlalchemy import select, func
-from passlib.context import CryptContext
-
 from database import get_db
 from models import AdminUser
 from services.auth_service import AuthService
@@ -20,7 +18,6 @@ from pathlib import Path
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # In-memory login rate limiter (fallback when Redis is unavailable)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
@@ -279,7 +276,7 @@ async def update_admin_user(
     if req.password:
         if len(req.password) < 8:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password too short")
-        admin.hashed_password = pwd_context.hash(req.password)
+        admin.hashed_password = AuthService.hash_password(req.password)
         
     if req.role is not None:
         validate_admin_role(req.role)
