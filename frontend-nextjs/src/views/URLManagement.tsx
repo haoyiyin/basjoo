@@ -206,10 +206,11 @@ export default function URLManagement() {
       return;
     }
 
+    const url = normalizeUrl(newUrl);
     stopPollingRequestedRef.current = false;
     setAdding(true);
     try {
-      const result = await api.createURLs(agentId, [newUrl]);
+      const result = await api.createURLs(agentId, [url]);
       alert(t('labels.urlManagement.addedCount', { count: result.created }));
 
       setNewUrl('');
@@ -347,11 +348,12 @@ export default function URLManagement() {
       return;
     }
 
+    const url = normalizeUrl(newUrl);
     stopPollingRequestedRef.current = false;
     setCrawling(true);
     setCrawlStartCount(total);
     try {
-      await api.crawlSite(agentId, newUrl, crawlMaxDepth, crawlMaxPages);
+      await api.crawlSite(agentId, url, crawlMaxDepth, crawlMaxPages);
       setNewUrl('');
       setCrawlPolling(true);
     } catch (error) {

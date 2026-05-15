@@ -111,9 +111,32 @@ class ContextResponse(BaseModel):
 
 def _validate_safe_ingest_url(url: str) -> str:
     normalized = (url or "").strip()
-    safe, reason = validate_url_safe(normalized)
-    if not safe:
-        raise ValueError(f"Invalid URL format: {normalized} ({reason})")
+    from urllib.parse import urlsplit
+    import ipaddress
+
+    try:
+        parsed = urlsplit(normalized)
+    except ValueError as e:
+        raise ValueError(f"Invalid URL format: {normalized} ({e})")
+
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"Invalid URL format: {normalized} (Scheme '{scheme}' is not allowed)")
+
+    if parsed.username or parsed.password:
+        raise ValueError(f"Invalid URL format: {normalized} (URLs with embedded credentials are not allowed)")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"Invalid URL format: {normalized} (URL has no hostname)")
+
+    hostname_lower = hostname.lower()
+    if hostname_lower in ("localhost", ""):
+        raise ValueError(f"Invalid URL format: {normalized} (localhost is not allowed)")
+
+    if hostname_lower.startswith("169.254.") or hostname_lower == "metadata.google.internal":
+        raise ValueError(f"Invalid URL format: {normalized} (cloud metadata endpoints are not allowed)")
+
     return normalized
 
 

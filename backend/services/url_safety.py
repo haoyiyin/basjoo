@@ -18,9 +18,12 @@ def _is_unsafe_ip(host: str) -> bool:
     except ValueError:
         return False
 
-    if addr.is_loopback or addr.is_private or addr.is_reserved:
+    if addr.is_loopback:
         return True
     if addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+        return True
+    # Block cloud metadata endpoint range (169.254.169.254)
+    if addr in ipaddress.ip_network("169.254.169.254/32"):
         return True
     return False
 
