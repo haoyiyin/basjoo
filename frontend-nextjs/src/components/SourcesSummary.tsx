@@ -9,6 +9,8 @@ interface SourcesSummaryProps {
   onRetrain: () => void;
   isRetraining: boolean;
   refreshTrigger?: number;
+  embeddingBatchSize?: number;
+  onEmbeddingBatchSizeChange?: (value: number) => void;
 }
 
 interface SourcesSummaryData {
@@ -31,7 +33,9 @@ export default function SourcesSummary({
   agentId, 
   onRetrain, 
   isRetraining,
-  refreshTrigger = 0
+  refreshTrigger = 0,
+  embeddingBatchSize = 4,
+  onEmbeddingBatchSizeChange,
 }: SourcesSummaryProps) {
   const { t } = useTranslation('common');
   const [data, setData] = useState<SourcesSummaryData | null>(null);
@@ -202,7 +206,46 @@ export default function SourcesSummary({
           {t('sources.hasPendingHint')}
         </div>
       )}
-
+      {onEmbeddingBatchSizeChange && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <label style={{
+            display: 'block',
+            marginBottom: 'var(--space-2)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 500,
+            color: 'var(--color-text-secondary)',
+          }}>
+            Embedding 训练批次
+          </label>
+            <input
+              type="number"
+              value={embeddingBatchSize}
+              onChange={(e) => {
+                const rawValue = e.target.value;
+                if (rawValue === '') {
+                  return;
+                }
+            
+                const nextValue = Number(rawValue);
+                if (!Number.isFinite(nextValue)) {
+                  return;
+                }
+            
+                onEmbeddingBatchSizeChange?.(Math.max(1, Math.min(64, nextValue)));
+              }}
+              min={1}
+              max={64}
+              style={{ width: '100%' }}
+            />
+          <p style={{
+            marginTop: 'var(--space-2)',
+            fontSize: 'var(--text-xs)',
+            color: 'var(--color-text-muted)',
+          }}>
+            推荐 2-8。数值越小越稳定，越大训练越快但更容易请求过大。
+          </p>
+        </div>
+    	)}
       {/* Retrain Button */}
       <button
         onClick={onRetrain}

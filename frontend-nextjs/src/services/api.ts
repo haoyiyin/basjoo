@@ -47,7 +47,7 @@ export interface Source {
 
 export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian' | 'siliconflow';
 
-export type EmbeddingProvider = 'jina' | 'siliconflow';
+export type EmbeddingProvider = 'jina' | 'siliconflow' | 'custom'
 
 export interface Agent {
   id: string;
@@ -77,8 +77,10 @@ export interface Agent {
   google_region?: string;
   provider_config?: Record<string, string | number | boolean>;
   embedding_provider?: EmbeddingProvider;
+  embedding_api_base?: string | null;
   embedding_api_key_set?: boolean;
   embedding_model: string;
+  embedding_batch_size?: number;
   crawl_max_depth?: number;
   crawl_max_pages?: number;
   top_k: number;
@@ -441,7 +443,7 @@ class APIService {
     }).then(result => result as { created: number; message: string });
   }
 
-  async listURLs(agentId: string, skip = 0, limit = 50): Promise<{
+  async listURLs(agentId: string, skip = 0, limit = 500): Promise<{
     urls: URLSource[];
     total: number;
     quota: { used: number; max: number };

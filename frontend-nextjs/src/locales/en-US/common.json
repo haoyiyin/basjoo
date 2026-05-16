@@ -446,7 +446,7 @@
       "crawlDepth": "Crawl Depth",
       "crawlDepthDesc": "Set the maximum depth for site crawling (1-5), 1 means current page and direct links only",
       "crawlMaxPages": "Max Pages",
-      "crawlMaxPagesDesc": "Set the maximum number of pages for site crawling (1-50)",
+      "crawlMaxPagesDesc": "Set the maximum number of pages for site crawling (1-500)",
       "crawlInProgress": "Crawling in progress...",
       "crawlDiscovered": "Discovered {{count}} pages",
       "crawlComplete": "Crawl complete, added {{count}} pages",

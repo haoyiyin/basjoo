@@ -43,10 +43,17 @@ def clear_client_cache(api_key: str, model: str = "jina-embeddings-v3", base_url
 class SiliconFlowEmbeddingClient:
     """SiliconFlow OpenAI-compatible embedding client."""
 
-    def __init__(self, api_key: str, model: str = "BAAI/bge-m3", base_url: str = "https://api.siliconflow.cn/v1"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "BAAI/bge-m3",
+        base_url: str = "https://api.siliconflow.cn/v1",
+        batch_size: int = 4,
+    ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.batch_size = max(1, min(int(batch_size or 4), 64))
         self._disabled = api_key in _disabled_keys
         self._client_key = (api_key, model, self.base_url)
         self._embedding_cache = _cache_by_client.setdefault(self._client_key, {})
@@ -77,21 +84,29 @@ class SiliconFlowEmbeddingClient:
             raise ValueError("SiliconFlow API key is invalid (401 Unauthorized). Please check your API key.")
 
         try:
-            response = httpx.post(
-                f"{self.base_url}/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": texts},
-                timeout=30,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            embeddings = [item["embedding"] for item in payload.get("data", [])]
-            if len(embeddings) != len(texts):
-                raise ValueError("SiliconFlow embeddings response size mismatch")
-            for i, emb in enumerate(embeddings):
-                if all(v == 0.0 for v in emb):
-                    raise ValueError(f"Embedding {i} is a zero vector - API may have returned invalid data")
-            return embeddings
+            all_embeddings: List[List[float]] = []
+            batch_size = self.batch_size
+
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start:start + batch_size]
+                response = httpx.post(
+                    f"{self.base_url}/embeddings",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"model": self.model, "input": batch},
+                    timeout=60,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                embeddings = [item["embedding"] for item in payload.get("data", [])]
+                if len(embeddings) != len(batch):
+                    raise ValueError("SiliconFlow embeddings response size mismatch")
+                for i, emb in enumerate(embeddings):
+                    if all(v == 0.0 for v in emb):
+                        raise ValueError(f"Embedding {start + i} is a zero vector - API may have returned invalid data")
+                all_embeddings.extend(embeddings)
+
+            return all_embeddings
+
         except httpx.HTTPStatusError as exc:
             if exc.response is not None and exc.response.status_code == 401:
                 self._disabled = True
@@ -113,19 +128,28 @@ class SiliconFlowEmbeddingClient:
         async with self._get_semaphore():
             try:
                 async with httpx.AsyncClient(timeout=30) as client:
-                    response = await client.post(
-                        f"{self.base_url}/embeddings",
-                        headers={"Authorization": f"Bearer {self.api_key}"},
-                        json={"model": self.model, "input": texts},
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
-                    embeddings = [item["embedding"] for item in payload.get("data", [])]
-                    if len(embeddings) != len(texts):
-                        raise ValueError("SiliconFlow embeddings response size mismatch")
-                    for i, emb in enumerate(embeddings):
-                        if all(v == 0.0 for v in emb):
-                            raise ValueError(f"Embedding {i} is a zero vector - API may have returned invalid data")
+                    all_embeddings: List[List[float]] = []
+                    batch_size = self.batch_size
+                    logger.info("Embedding batch size: %s, total texts: %s", batch_size, len(texts))
+                    for start in range(0, len(texts), batch_size):
+                        batch = texts[start:start + batch_size]
+                        response = await client.post(
+                            f"{self.base_url}/embeddings",
+                            headers={"Authorization": f"Bearer {self.api_key}"},
+                            json={"model": self.model, "input": batch},
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        embeddings = [item["embedding"] for item in payload.get("data", [])]
+                        if len(embeddings) != len(batch):
+                            raise ValueError("SiliconFlow embeddings response size mismatch")
+                        for i, emb in enumerate(embeddings):
+                            if all(v == 0.0 for v in emb):
+                                raise ValueError(f"Embedding {start + i} is a zero vector - API may have returned invalid data")
+                        all_embeddings.extend(embeddings)
+
+                    embeddings = all_embeddings
+
 
                     if len(texts) == 1:
                         self._embedding_cache[texts[0]] = embeddings[0]
@@ -270,6 +294,7 @@ class QdrantVectorStore:
         embedding_api_key: Optional[str] = None,
         embedding_api_base: Optional[str] = None,
         embedding_dimension: int = 1024,
+        embedding_batch_size: int = 4,
     ):
         from qdrant_client import QdrantClient
         from qdrant_client.http import models
@@ -301,6 +326,7 @@ class QdrantVectorStore:
                 api_key=resolved_api_key or "",
                 model=embedding_model,
                 base_url=base_url,
+                batch_size=embedding_batch_size,
             )
             if not resolved_api_key:
                 raise ValueError("SiliconFlow API key is required")
