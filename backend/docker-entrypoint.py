@@ -216,6 +216,14 @@ def migrate_sqlite_schema():
                 "allowed_widget_origins",
                 "TEXT",
             ),
+            (
+                "embedding_api_base",
+                "VARCHAR(500)",
+            ),
+            (
+                "embedding_batch_size",
+                "INTEGER DEFAULT 4",
+            ),
         ],
     }
 
@@ -256,6 +264,17 @@ def migrate_sqlite_schema():
                 )
                 print(f"Applying migration: {alter_sql}")
                 cursor.execute(alter_sql)
+
+        # Backfill workspace_quotas.max_urls for existing rows still on old default
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_quotas'"
+        )
+        if cursor.fetchone() is not None:
+            cursor.execute(
+                "UPDATE workspace_quotas SET max_urls = 500 WHERE max_urls = 50"
+            )
+            if cursor.rowcount > 0:
+                print(f"Backfilled workspace_quotas.max_urls for {cursor.rowcount} row(s)")
 
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_sessions'"

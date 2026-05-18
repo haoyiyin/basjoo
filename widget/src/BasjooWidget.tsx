@@ -183,7 +183,7 @@ class BasjooWidget {
     this.config = {
       agentId: config.agentId,
       apiBase,
-      themeColor: config.themeColor || '#3B82F6',
+      themeColor: config.themeColor || '',
       logoUrl: config.logoUrl || buildDefaultLogoUrl(apiBase),
       title: config.title || 'AI助手',
       welcomeMessage: config.welcomeMessage || '你好！有什么可以帮助您的吗？',

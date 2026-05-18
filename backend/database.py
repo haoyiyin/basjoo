@@ -134,6 +134,27 @@ def _run_pending_migrations(db_path: str):
         cursor.execute("ALTER TABLE agents ADD COLUMN siliconflow_api_key VARCHAR(500) DEFAULT ''")
         print("✓ Added siliconflow_api_key column")
 
+    # Add embedding_api_base if missing (nullable, no default needed)
+    if "embedding_api_base" not in columns:
+        cursor.execute("ALTER TABLE agents ADD COLUMN embedding_api_base VARCHAR(500)")
+        print("✓ Added embedding_api_base column")
+
+    # Add embedding_batch_size if missing
+    if "embedding_batch_size" not in columns:
+        cursor.execute("ALTER TABLE agents ADD COLUMN embedding_batch_size INTEGER DEFAULT 4")
+        print("✓ Added embedding_batch_size column")
+
+    # Backfill workspace_quotas.max_urls for existing rows still on the old default
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_quotas'"
+    )
+    if cursor.fetchone() is not None:
+        cursor.execute(
+            "UPDATE workspace_quotas SET max_urls = 500 WHERE max_urls = 50"
+        )
+        if cursor.rowcount > 0:
+            print(f"✓ Backfilled max_urls for {cursor.rowcount} existing quota row(s)")
+
     conn.commit()
     conn.close()
 

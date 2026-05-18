@@ -95,6 +95,7 @@
     "aiApiKeyInvalid": "AI API Key无效或已过期",
     "jinaApiKeyInvalid": "Jina API Key无效或已过期",
     "siliconflowApiKeyInvalid": "SiliconFlow API Key无效或已过期",
+    "customEmbeddingApiKeyInvalid": "自定义 Embedding API Key 无效或已过期",
     "aiApiError": "AI API 调用失败，请检查网络或稍后重试",
     "aiApiTimeout": "AI API 响应超时，请稍后重试",
     "aiApiRateLimit": "AI API 请求过于频繁，请稍后重试",
@@ -285,6 +286,11 @@
     "embeddingProviderSiliconFlow": "硅基流动 SiliconFlow",
     "siliconflowEmbeddingUsesAiKey": "SiliconFlow Embedding 使用下方专用的 SiliconFlow Embedding API Key。",
     "jinaEmbeddingDescription": "Jina Embedding 使用下方的 Jina API Key。",
+    "embeddingProviderCustom": "自定义 OpenAI 兼容",
+    "customEmbeddingDescription": "使用自定义 OpenAI-compatible Embedding 接口。",
+    "customEmbeddingApiKey": "自定义 Embedding API Key",
+    "customEmbeddingKeyRequired": "请填写自定义 Embedding API Key",
+    "embeddingApiBase": "Embedding API Base",
     "apiKey": "API 密钥",
     "configured": "已配置",
     "apiBase": "API 基础地址",
@@ -561,7 +567,9 @@
     "pending": "待训练",
     "hasPendingHint": "有内容待训练",
     "retrainStarted": "智能体训练已启动",
-    "retrainFailed": "训练失败"
+    "retrainFailed": "训练失败",
+    "embeddingBatchSize": "Embedding 训练批次",
+    "embeddingBatchSizeHint": "推荐 2-8。数值越小越稳定，越大训练越快但更容易请求过大。"
   },
   "citations": {
     "references": "参考来源"

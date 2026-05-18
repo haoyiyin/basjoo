@@ -95,6 +95,7 @@
     "aiApiKeyInvalid": "AI API Key is invalid or expired",
     "jinaApiKeyInvalid": "Jina API Key is invalid or expired",
     "siliconflowApiKeyInvalid": "SiliconFlow API Key is invalid or expired",
+    "customEmbeddingApiKeyInvalid": "Custom Embedding API Key is invalid or expired",
     "aiApiError": "AI API call failed, please check your network or try again later",
     "aiApiTimeout": "AI API response timeout, please try again later",
     "aiApiRateLimit": "AI API rate limit exceeded, please try again later",
@@ -285,6 +286,11 @@
     "embeddingProviderSiliconFlow": "SiliconFlow",
     "siliconflowEmbeddingUsesAiKey": "SiliconFlow embeddings use the dedicated SiliconFlow Embedding API Key below.",
     "jinaEmbeddingDescription": "Jina embeddings use the Jina API Key below.",
+    "embeddingProviderCustom": "Custom OpenAI Compatible",
+    "customEmbeddingDescription": "Use a custom OpenAI-compatible Embedding endpoint.",
+    "customEmbeddingApiKey": "Custom Embedding API Key",
+    "customEmbeddingKeyRequired": "Please enter your Custom Embedding API Key",
+    "embeddingApiBase": "Embedding API Base",
     "apiKey": "API Key",
     "configured": "Configured",
     "apiBase": "API Base URL",
@@ -561,7 +567,9 @@
     "pending": "Pending",
     "hasPendingHint": "Has pending content",
     "retrainStarted": "Agent training started",
-    "retrainFailed": "Training failed"
+    "retrainFailed": "Training failed",
+    "embeddingBatchSize": "Embedding Batch Size",
+    "embeddingBatchSizeHint": "Recommended 2-8. Smaller values are more stable; larger values are faster but easier to hit request entity too large errors."
   },
   "citations": {
     "references": "References"

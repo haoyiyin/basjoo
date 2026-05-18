@@ -215,7 +215,7 @@ export default function SourcesSummary({
             fontWeight: 500,
             color: 'var(--color-text-secondary)',
           }}>
-            Embedding 训练批次
+            {t('sources.embeddingBatchSize')}
           </label>
             <input
               type="number"
@@ -242,7 +242,7 @@ export default function SourcesSummary({
             fontSize: 'var(--text-xs)',
             color: 'var(--color-text-muted)',
           }}>
-            推荐 2-8。数值越小越稳定，越大训练越快但更容易请求过大。
+            {t('sources.embeddingBatchSizeHint')}
           </p>
         </div>
     	)}

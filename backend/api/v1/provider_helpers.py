@@ -28,11 +28,13 @@ def get_agent_embedding_config(agent: Agent) -> dict:
         siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", "") or "")
         legacy_siliconflow_key = agent_api_key if agent.provider_type == "siliconflow" else ""
 
-        embedding_api_base = (
-            agent.embedding_api_base
-            if embedding_provider == "custom" and agent.embedding_api_base
-            else "https://api.siliconflow.cn/v1"
-        )
+        if embedding_provider == "custom":
+            custom_base = getattr(agent, "embedding_api_base", None)
+            if not custom_base or not str(custom_base).strip().startswith(("http://", "https://")):
+                raise ValueError("Custom embedding provider requires a valid embedding_api_base starting with http:// or https://")
+            embedding_api_base = str(custom_base).strip()
+        else:
+            embedding_api_base = "https://api.siliconflow.cn/v1"
 
         return {
             "embedding_provider": "siliconflow",

@@ -1466,6 +1466,16 @@ async def update_agent(
                 value = encrypt_api_key(value)
         setattr(agent, field, value)
 
+    # Validate custom embedding provider has a valid base URL before persisting
+    effective_provider = getattr(agent, "embedding_provider", None)
+    if effective_provider == "custom":
+        effective_base = getattr(agent, "embedding_api_base", None)
+        if not effective_base or not str(effective_base).strip().startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
+            )
+
     await db.commit()
     await db.refresh(agent)
 
@@ -1781,7 +1791,19 @@ async def test_embedding_api(
             embedding_api_base
             if embedding_provider == "custom" and embedding_api_base
             else (api_base if resolved_provider_type == "siliconflow" and api_base else "https://api.siliconflow.cn/v1")
-        ).rstrip("/")
+        )
+        if embedding_provider == "custom":
+            if not embedding_api_base or not str(embedding_api_base).strip().startswith(("http://", "https://")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
+                )
+            test_base = str(embedding_api_base).strip()
+        elif embedding_provider == "siliconflow":
+            test_base = (api_base if resolved_provider_type == "siliconflow" and api_base else "https://api.siliconflow.cn/v1")
+        else:
+            test_base = ""
+        test_base = test_base.rstrip("/")
         test_model = (
             "text-embedding-v4"
             if embedding_provider == "custom" and (not embedding_model or embedding_model in {"jina-embeddings-v3", "BAAI/bge-m3"})

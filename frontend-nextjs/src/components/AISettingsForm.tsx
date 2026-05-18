@@ -278,7 +278,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
             if (!embeddingTestResult.success) {
               throw new Error(
                   formData.embedding_provider === 'custom'
-                    ? '自定义 Embedding API Key 无效或已过期'
+                    ? t('errors.customEmbeddingApiKeyInvalid')
                     : t('errors.siliconflowApiKeyInvalid')
                 )
             }
@@ -287,7 +287,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
                   embeddingKeyValidationFailed = true
                   throw new Error(
                     formData.embedding_provider === 'custom'
-                      ? '自定义 Embedding API Key 无效或已过期'
+                      ? t('errors.customEmbeddingApiKeyInvalid')
                       : t('errors.siliconflowApiKeyInvalid')
                   )
                 }
@@ -296,7 +296,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
           embeddingKeyValidationFailed = true
           throw new Error(
               formData.embedding_provider === 'custom'
-                ? '请填写自定义 Embedding API Key'
+                ? t('labels.customEmbeddingKeyRequired')
                 : t('labels.siliconflowKeyRequired')
             )
         }
@@ -909,11 +909,11 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
           >
             <option value="jina">{t('labels.embeddingProviderJina')}</option>
             <option value="siliconflow">{t('labels.embeddingProviderSiliconFlow')}</option>
-            <option value="custom">自定义 OpenAI 兼容</option>
+            <option value="custom">{t('labels.embeddingProviderCustom')}</option>
           </select>
           <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
             {formData.embedding_provider === 'custom'
-              ? '使用自定义 OpenAI-compatible Embedding 接口。'
+              ? t('labels.customEmbeddingDescription')
               : formData.embedding_provider === 'siliconflow'
                 ? t('labels.siliconflowEmbeddingUsesAiKey')
                 : t('labels.jinaEmbeddingDescription')}
@@ -932,7 +932,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
               color: 'var(--color-text-secondary)',
             }}>
               <span>
-                {formData.embedding_provider === 'custom' ? '自定义 Embedding API Key' : t('labels.siliconflowEmbeddingApi')}
+                {formData.embedding_provider === 'custom' ? t('labels.customEmbeddingApiKey') : t('labels.siliconflowEmbeddingApi')}
                 {formData.embedding_provider === 'siliconflow' && (
                   <> (<a href={SILICONFLOW_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>SiliconFlow</a>)</>
                 )}
@@ -982,8 +982,8 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
                 fontSize: 'var(--text-xs)',
               }}>
                 {siliconflowKeyError
-                  ? (formData.embedding_provider === 'custom' ? '自定义 Embedding API Key 无效或已过期' : t('errors.siliconflowApiKeyInvalid'))
-                  : (formData.embedding_provider === 'custom' ? '请填写自定义 Embedding API Key' : t('labels.siliconflowKeyRequired'))}
+                  ? (formData.embedding_provider === 'custom' ? t('errors.customEmbeddingApiKeyInvalid') : t('errors.siliconflowApiKeyInvalid'))
+                  : (formData.embedding_provider === 'custom' ? t('labels.customEmbeddingKeyRequired') : t('labels.siliconflowKeyRequired'))}
 
               </div>
             )}
@@ -996,7 +996,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
                   fontWeight: 500,
                   color: 'var(--color-text-secondary)',
                 }}>
-                  Embedding API Base
+                  {t('labels.embeddingApiBase')}
                 </label>
                 <input
                   type="text"
