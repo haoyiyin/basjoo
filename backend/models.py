@@ -115,13 +115,12 @@ class Agent(Base):
 
     # 嵌入配置
     embedding_provider = Column(String(20), nullable=False, default="jina")
-    embedding_model = Column(
-        String(100), nullable=False, default="jina-embeddings-v3"
-    )
-
+    embedding_api_base = Column(String(500), nullable=True)
+    embedding_model = Column(String(100), nullable=False, default="jina-embeddings-v3")
+    embedding_batch_size = Column(Integer, nullable=False, default=4)
     # URL抓取配置
     crawl_max_depth = Column(Integer, nullable=False, default=2)  # 全站爬取深度
-    crawl_max_pages = Column(Integer, nullable=False, default=20)  # 全站爬取最大页面数
+    crawl_max_pages = Column(Integer, nullable=False, default=500)  # 全站爬取最大页面数
     url_fetch_interval_days = Column(
         Integer, nullable=False, default=7
     )  # URL自动抓取间隔（天）
@@ -387,7 +386,7 @@ class WorkspaceQuota(Base):
 
     # 配额限制（MVP限制）
     max_agents = Column(Integer, default=1)
-    max_urls = Column(Integer, default=50)
+    max_urls = Column(Integer, default=500)
     max_qa_items = Column(Integer, default=500)
     max_messages_per_day = Column(Integer, default=1500)
     max_total_text_mb = Column(Integer, default=20)  # 最大文本量MB

@@ -66,7 +66,7 @@ class SiteCrawler:
         self,
         url: str,
         max_depth: int = 2,
-        max_pages: int = 50,
+        max_pages: int = 500,
         include_external: bool = False,
     ) -> List[CrawlPageResult]:
         """

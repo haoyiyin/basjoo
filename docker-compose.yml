@@ -72,6 +72,7 @@ services:
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=INFO
+      - TZ=Asia/Shanghai
     volumes:
       - backend-data:/app/data
     depends_on:

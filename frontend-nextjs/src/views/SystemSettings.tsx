@@ -251,9 +251,6 @@ export default function SystemSettings() {
       sdkUrl.searchParams.set('agentId', settings.agent_id)
     }
     sdkUrl.searchParams.set('apiBase', apiBase)
-    if (settings.widget_color) {
-      sdkUrl.searchParams.set('themeColor', settings.widget_color)
-    }
 
     return `<!-- ${t('appName')} Widget -->
 <script async src="${sdkUrl.toString()}"></script>`

@@ -153,9 +153,11 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": embedding_config["embedding_provider"],
+        "embedding_provider": agent.embedding_provider,
+        "embedding_api_base": agent.embedding_api_base,
         "embedding_api_key_set": bool(embedding_config["embedding_api_key"]),
         "embedding_model": agent.embedding_model,
+        "embedding_batch_size": getattr(agent, "embedding_batch_size", 4) or 4,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
         "top_k": agent.top_k,
@@ -1749,13 +1751,18 @@ async def test_embedding_api(
 
     # Build provider config from payload overrides without mutating ORM object
     embedding_provider_raw = (payload.embedding_provider if payload and payload.embedding_provider is not None else getattr(agent, "embedding_provider", None))
-    if embedding_provider_raw in {"jina", "siliconflow"}:
+    if embedding_provider_raw in {"jina", "siliconflow", "custom"}:
         embedding_provider = embedding_provider_raw
     else:
         embedding_provider = "siliconflow" if (payload.provider_type if payload and payload.provider_type is not None else agent.provider_type) == "siliconflow" else "jina"
     resolved_provider_type = (payload.provider_type if payload and payload.provider_type is not None else agent.provider_type)
     api_key_raw = (payload.api_key if payload and payload.api_key is not None else agent.api_key)
     api_base = (payload.api_base if payload and payload.api_base is not None else agent.api_base)
+    embedding_api_base = (
+    payload.embedding_api_base
+    if payload and payload.embedding_api_base is not None
+    else getattr(agent, "embedding_api_base", None)
+)
     embedding_model = (payload.embedding_model if payload and payload.embedding_model is not None else agent.embedding_model)
     # Use dedicated siliconflow_api_key for embedding; fallback to main key only when provider_type is also siliconflow
     sf_key_raw = (payload.siliconflow_api_key if payload and payload.siliconflow_api_key is not None else getattr(agent, "siliconflow_api_key", None) or None)
@@ -1766,12 +1773,20 @@ async def test_embedding_api(
     else:
         api_key_raw = None  # no dedicated key, will fail validation below
 
-    if embedding_provider == "siliconflow":
+    if embedding_provider in {"siliconflow", "custom"}:
         test_key = decrypt_api_key(api_key_raw)
         if not test_key:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SiliconFlow API key not configured")
-        test_base = (api_base if resolved_provider_type == "siliconflow" and api_base else "https://api.siliconflow.cn/v1").rstrip("/")
-        test_model = "BAAI/bge-m3" if embedding_model == "jina-embeddings-v3" else (embedding_model or "BAAI/bge-m3")
+        test_base = (
+            embedding_api_base
+            if embedding_provider == "custom" and embedding_api_base
+            else (api_base if resolved_provider_type == "siliconflow" and api_base else "https://api.siliconflow.cn/v1")
+        ).rstrip("/")
+        test_model = (
+            "text-embedding-v4"
+            if embedding_provider == "custom" and (not embedding_model or embedding_model in {"jina-embeddings-v3", "BAAI/bge-m3"})
+            else ("BAAI/bge-m3" if embedding_model == "jina-embeddings-v3" else (embedding_model or "BAAI/bge-m3"))
+        )
         try:
             import httpx
             response = httpx.post(

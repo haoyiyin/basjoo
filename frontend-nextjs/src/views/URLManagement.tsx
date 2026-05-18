@@ -53,7 +53,7 @@ export default function URLManagement() {
   const embeddingKeyCheckInFlightRef = useRef(false);
   const redirectedForEmbeddingKeyRef = useRef(false);
   const stopPollingRequestedRef = useRef(false);
-
+  const [embeddingBatchSize, setEmbeddingBatchSize] = useState(4);
   // Auto-complete URL with https:// if missing protocol
   const normalizeUrl = (url: string): string => {
     const trimmed = url.trim();
@@ -113,6 +113,7 @@ export default function URLManagement() {
       setFetchIntervalDays(data.url_fetch_interval_days || 7);
       setCrawlMaxDepth(data.crawl_max_depth ?? 2);
       setCrawlMaxPages(data.crawl_max_pages ?? 20);
+      setEmbeddingBatchSize(data.embedding_batch_size ?? 4);
     } catch (error) {
       alert(`${t('labels.urlManagement.loadAgentFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
     }
@@ -418,6 +419,7 @@ export default function URLManagement() {
         url_fetch_interval_days: fetchIntervalDays,
         crawl_max_depth: crawlMaxDepth,
         crawl_max_pages: crawlMaxPages,
+        embedding_batch_size: embeddingBatchSize,
       });
       alert(t('labels.urlManagement.autoFetchSaved'));
     } catch (error) {
@@ -439,6 +441,9 @@ export default function URLManagement() {
     }
     setIsRetraining(true);
     try {
+        await api.updateAgent(agentId, {
+          embedding_batch_size: embeddingBatchSize,
+        });
       await api.rebuildIndex(agentId, true);
       // 轮询会自动处理训练完成后的状态更新
     } catch (error) {
@@ -766,12 +771,14 @@ export default function URLManagement() {
                   <input
                     type="number"
                     value={crawlMaxPages}
-                    onChange={(e) => setCrawlMaxPages(Math.max(1, Math.min(50, parseInt(e.target.value) || 20)))}
+                    onChange={(e) => setCrawlMaxPages(Math.max(1, Math.min(500, parseInt(e.target.value) || 20)))}
                     min={1}
-                    max={50}
+                    max={500}
                     style={{ width: '100%' }}
                   />
                 </div>
+                
+
               </div>
 
               <div style={{
@@ -1308,6 +1315,8 @@ export default function URLManagement() {
                 onRetrain={handleRetrain}
                 isRetraining={isRetraining}
                 refreshTrigger={refreshTrigger}
+                embeddingBatchSize={embeddingBatchSize}
+  				onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
               />
             </div>
           )}
@@ -1321,6 +1330,8 @@ export default function URLManagement() {
               onRetrain={handleRetrain}
               isRetraining={isRetraining}
               refreshTrigger={refreshTrigger}
+              embeddingBatchSize={embeddingBatchSize}
+  			  onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
             />
           </div>
         )}

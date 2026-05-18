@@ -53,6 +53,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     provider_type: 'openai' as ProviderType,
     api_format: 'openai' as ApiFormatType,
     embedding_provider: 'jina' as EmbeddingProvider,
+    embedding_api_base: '',
     embedding_model: 'jina-embeddings-v3',
     top_k: 5,
     enable_context: false,
@@ -61,7 +62,10 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
   })
   const [personaError, setPersonaError] = useState(false)
   const hasEffectiveEmbeddingKey = Boolean(agent?.embedding_api_key_set)
-  const shouldHighlightSiliconflowKey = highlightJinaKey && formData.embedding_provider === 'siliconflow' && !hasEffectiveEmbeddingKey
+  const shouldHighlightSiliconflowKey =
+      highlightJinaKey &&
+      (formData.embedding_provider === 'siliconflow' || formData.embedding_provider === 'custom') &&
+      !hasEffectiveEmbeddingKey
   const shouldHighlightJinaKey = highlightJinaKey && formData.embedding_provider === 'jina' && !hasEffectiveEmbeddingKey
 
   useEffect(() => {
@@ -111,7 +115,12 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         provider_type: agentData.provider_type || 'openai',
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
         embedding_provider: agentData.embedding_provider || (agentData.provider_type === 'siliconflow' ? 'siliconflow' : 'jina') as EmbeddingProvider,
-        embedding_model: agentData.embedding_model || (agentData.embedding_provider === 'siliconflow' || agentData.provider_type === 'siliconflow' ? 'BAAI/bge-m3' : 'jina-embeddings-v3'),
+        embedding_api_base: agentData.embedding_api_base || '',
+        embedding_model: agentData.embedding_model || (
+          agentData.embedding_provider === 'custom'
+            ? 'text-embedding-v4'
+            : (agentData.embedding_provider === 'siliconflow' || agentData.provider_type === 'siliconflow' ? 'BAAI/bge-m3' : 'jina-embeddings-v3')
+        ),
         top_k: agentData.top_k ?? 5,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
@@ -224,9 +233,13 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
         provider_type: formData.provider_type,
         api_format: formData.api_format,
         embedding_provider: formData.embedding_provider,
-        embedding_model: formData.embedding_provider === 'siliconflow'
-          ? (formData.embedding_model === 'jina-embeddings-v3' || !formData.embedding_model ? 'BAAI/bge-m3' : formData.embedding_model)
-          : (formData.embedding_model === 'BAAI/bge-m3' || !formData.embedding_model ? 'jina-embeddings-v3' : formData.embedding_model),
+        embedding_api_base: formData.embedding_api_base,
+        embedding_model:
+          formData.embedding_provider === 'siliconflow'
+            ? (formData.embedding_model === 'jina-embeddings-v3' || !formData.embedding_model ? 'BAAI/bge-m3' : formData.embedding_model)
+            : formData.embedding_provider === 'custom'
+              ? (!formData.embedding_model || formData.embedding_model === 'jina-embeddings-v3' || formData.embedding_model === 'BAAI/bge-m3' ? 'text-embedding-v4' : formData.embedding_model)
+              : (formData.embedding_model === 'BAAI/bge-m3' || !formData.embedding_model ? 'jina-embeddings-v3' : formData.embedding_model),
         top_k: formData.top_k,
         enable_context: formData.enable_context,
         rate_limit_per_minute: formData.rate_limit_per_minute,
@@ -256,28 +269,40 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
 
       const embeddingProviderChanged = formData.embedding_provider !== agent.embedding_provider
 
-      if (formData.embedding_provider === 'siliconflow') {
+	if (formData.embedding_provider === 'siliconflow' || formData.embedding_provider === 'custom') {
         const hasTypedSiliconflowKey = Boolean(formData.siliconflow_api_key.trim())
-        const hasSavedSiliconflowKey = Boolean(agent.siliconflow_api_key_set || (formData.provider_type === 'siliconflow' && (agent.api_key_set || formData.api_key.trim())))
+        const hasSavedSiliconflowKey = Boolean(agent.siliconflow_api_key_set || (formData.embedding_provider === 'siliconflow' && formData.provider_type === 'siliconflow' && (agent.api_key_set || formData.api_key.trim())))
         if (hasTypedSiliconflowKey) {
           try {
             const embeddingTestResult = await api.testEmbeddingApi(agent.id, updateData)
             if (!embeddingTestResult.success) {
-              throw new Error(t('errors.siliconflowApiKeyInvalid'))
+              throw new Error(
+                  formData.embedding_provider === 'custom'
+                    ? '自定义 Embedding API Key 无效或已过期'
+                    : t('errors.siliconflowApiKeyInvalid')
+                )
             }
           } catch {
-            siliconflowKeyTestFailed = true
-            embeddingKeyValidationFailed = true
-            throw new Error(t('errors.siliconflowApiKeyInvalid'))
-          }
-        } else if ((embeddingProviderChanged || shouldHighlightSiliconflowKey) && !hasSavedSiliconflowKey) {
+                  siliconflowKeyTestFailed = true
+                  embeddingKeyValidationFailed = true
+                  throw new Error(
+                    formData.embedding_provider === 'custom'
+                      ? '自定义 Embedding API Key 无效或已过期'
+                      : t('errors.siliconflowApiKeyInvalid')
+                  )
+                }
+	} else if ((embeddingProviderChanged || shouldHighlightSiliconflowKey || formData.embedding_provider === 'custom') && !hasSavedSiliconflowKey) {
           siliconflowKeyTestFailed = true
           embeddingKeyValidationFailed = true
-          throw new Error(t('labels.siliconflowKeyRequired'))
+          throw new Error(
+              formData.embedding_provider === 'custom'
+                ? '请填写自定义 Embedding API Key'
+                : t('labels.siliconflowKeyRequired')
+            )
         }
       }
 
-      if (formData.embedding_provider !== 'siliconflow') {
+	  if (formData.embedding_provider === 'jina') {
         const hasTypedJinaKey = Boolean(formData.jina_api_key.trim())
         if (hasTypedJinaKey) {
           try {
@@ -385,6 +410,7 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     formData.jina_api_key,
     formData.siliconflow_api_key,
     formData.embedding_provider,
+    formData.embedding_api_base,
     formData.embedding_model,
     handleSave,
   ])
@@ -466,7 +492,13 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
     setFormData(prev => ({
       ...prev,
       embedding_provider: provider,
-      embedding_model: provider === 'siliconflow' ? 'BAAI/bge-m3' : 'jina-embeddings-v3',
+      embedding_api_base: provider === 'custom' ? formData.embedding_api_base : '',
+      embedding_model:
+          provider === 'siliconflow'
+            ? 'BAAI/bge-m3'
+            : provider === 'custom'
+              ? 'text-embedding-v4'
+              : 'jina-embeddings-v3',
     }))
   }
 
@@ -877,15 +909,18 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
           >
             <option value="jina">{t('labels.embeddingProviderJina')}</option>
             <option value="siliconflow">{t('labels.embeddingProviderSiliconFlow')}</option>
+            <option value="custom">自定义 OpenAI 兼容</option>
           </select>
           <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-            {formData.embedding_provider === 'siliconflow'
-              ? t('labels.siliconflowEmbeddingUsesAiKey')
-              : t('labels.jinaEmbeddingDescription')}
+            {formData.embedding_provider === 'custom'
+              ? '使用自定义 OpenAI-compatible Embedding 接口。'
+              : formData.embedding_provider === 'siliconflow'
+                ? t('labels.siliconflowEmbeddingUsesAiKey')
+                : t('labels.jinaEmbeddingDescription')}
           </div>
         </div>
 
-        {formData.embedding_provider === 'siliconflow' ? (
+		{(formData.embedding_provider === 'siliconflow' || formData.embedding_provider === 'custom') ? (
           <div>
             <label style={{
               display: 'flex',
@@ -897,7 +932,10 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
               color: 'var(--color-text-secondary)',
             }}>
               <span>
-                {t('labels.siliconflowEmbeddingApi')} (<a href={SILICONFLOW_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>SiliconFlow</a>)
+                {formData.embedding_provider === 'custom' ? '自定义 Embedding API Key' : t('labels.siliconflowEmbeddingApi')}
+                {formData.embedding_provider === 'siliconflow' && (
+                  <> (<a href={SILICONFLOW_OFFICIAL_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}>SiliconFlow</a>)</>
+                )}
                 {agent?.siliconflow_api_key_set && (
                   <span style={{
                     marginLeft: 'var(--space-2)',
@@ -943,11 +981,48 @@ export default function AISettingsForm({ compact = false, highlightJinaKey = fal
                 color: '#ef4444',
                 fontSize: 'var(--text-xs)',
               }}>
-                {siliconflowKeyError ? t('errors.siliconflowApiKeyInvalid') : t('labels.siliconflowKeyRequired')}
+                {siliconflowKeyError
+                  ? (formData.embedding_provider === 'custom' ? '自定义 Embedding API Key 无效或已过期' : t('errors.siliconflowApiKeyInvalid'))
+                  : (formData.embedding_provider === 'custom' ? '请填写自定义 Embedding API Key' : t('labels.siliconflowKeyRequired'))}
+
               </div>
             )}
-            <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-              {t('labels.embeddingModel')}: <code style={{ fontSize: 'var(--text-xs)' }}>BAAI/bge-m3</code>
+            {formData.embedding_provider === 'custom' && (
+              <div style={{ marginTop: 'var(--space-4)' }}>
+                <label style={{
+                  display: 'block',
+                  marginBottom: 'var(--space-2)',
+                  fontSize: 'var(--text-sm)',
+                  fontWeight: 500,
+                  color: 'var(--color-text-secondary)',
+                }}>
+                  Embedding API Base
+                </label>
+                <input
+                  type="text"
+                  value={formData.embedding_api_base}
+                  onChange={(e) => setFormData({ ...formData, embedding_api_base: e.target.value })}
+                  placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                />
+              </div>
+            )}
+            
+            <div style={{ marginTop: 'var(--space-4)' }}>
+              <label style={{
+                display: 'block',
+                marginBottom: 'var(--space-2)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 500,
+                color: 'var(--color-text-secondary)',
+              }}>
+                {t('labels.embeddingModel')}
+              </label>
+              <input
+                type="text"
+                value={formData.embedding_model}
+                onChange={(e) => setFormData({ ...formData, embedding_model: e.target.value })}
+                placeholder={formData.embedding_provider === 'custom' ? 'text-embedding-v4' : 'BAAI/bge-m3'}
+              />
             </div>
           </div>
         ) : (

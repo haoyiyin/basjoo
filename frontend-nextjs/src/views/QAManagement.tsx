@@ -38,6 +38,7 @@ export default function QAManagement() {
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
   const [isRetraining, setIsRetraining] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [embeddingBatchSize, setEmbeddingBatchSize] = useState(4);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
   const wasRetrainingRef = useRef(false);
@@ -82,6 +83,7 @@ export default function QAManagement() {
     try {
       const data = await api.getDefaultAgent();
       setAgentId(data.id);
+      setEmbeddingBatchSize(data.embedding_batch_size ?? 4);
     } catch (error) {
       alert(`${t('errors.loadAgentFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
     }
@@ -258,6 +260,9 @@ export default function QAManagement() {
     
     setIsRetraining(true);
     try {
+      await api.updateAgent(agentId, {
+        embedding_batch_size: embeddingBatchSize,
+      });
       await api.rebuildIndex(agentId, true);
       // 轮询会自动处理训练完成后的状态更新
     } catch (error) {
@@ -680,6 +685,8 @@ export default function QAManagement() {
                 onRetrain={handleRetrain}
                 isRetraining={isRetraining}
                 refreshTrigger={refreshTrigger}
+                embeddingBatchSize={embeddingBatchSize}
+  				onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
               />
             </div>
           )}
@@ -693,6 +700,8 @@ export default function QAManagement() {
               onRetrain={handleRetrain}
               isRetraining={isRetraining}
               refreshTrigger={refreshTrigger}
+              embeddingBatchSize={embeddingBatchSize}
+  			  onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
             />
           </div>
         )}

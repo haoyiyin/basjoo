@@ -174,7 +174,7 @@ class SiteCrawlRequest(BaseModel):
 
     url: str = Field(..., description="起始URL")
     max_depth: int = Field(2, ge=1, le=5, description="最大爬取深度")
-    max_pages: int = Field(20, ge=1, le=50, description="最大页面数量")
+    max_pages: int = Field(20, ge=1, le=500, description="最大页面数量")
 
     @field_validator("url")
     @classmethod
@@ -291,13 +291,17 @@ class AgentConfig(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Literal["jina", "siliconflow"] = Field("jina", description="Embedding provider: jina or siliconflow")
+    embedding_provider: Literal["jina", "siliconflow", "custom"] = Field(
+        "jina",
+        description="Embedding provider: jina, siliconflow, or custom",
+    )
+    embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
     embedding_api_key_set: bool = Field(
         default=False, description="Whether the selected embedding provider has an effective API key configured"
     )
     embedding_model: str
     crawl_max_depth: int = Field(default=2, ge=0, le=5, description="Crawl depth for site crawling")
-    crawl_max_pages: int = Field(default=20, ge=1, le=100, description="Max pages for site crawling")
+    crawl_max_pages: int = Field(default=20, ge=1, le=500, description="Max pages for site crawling")
     top_k: int = Field(..., ge=1, le=20)
     similarity_threshold: float = Field(..., ge=0, le=1)
     enable_context: bool = Field(
@@ -331,6 +335,7 @@ class AgentConfig(BaseModel):
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: int = Field(default=30, description="Chat history retention days")
+    embedding_batch_size: int = Field(default=4, ge=1, le=64, description="Embedding batch size")
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -364,10 +369,11 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Optional[Literal["jina", "siliconflow"]] = Field(None, description="Embedding provider: jina or siliconflow")
+    embedding_provider: Optional[Literal["jina", "siliconflow","custom"]] = Field(None, description="Embedding provider: jina or siliconflow")
+    embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
     embedding_model: Optional[str] = Field(None, min_length=1)
     crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
-    crawl_max_pages: Optional[int] = Field(None, ge=1, le=100, description="Max pages for site crawling")
+    crawl_max_pages: Optional[int] = Field(None, ge=1, le=500, description="Max pages for site crawling")
     top_k: Optional[int] = Field(None, ge=1, le=20)
     enable_context: Optional[bool] = Field(
         None, description="Enable conversation context"
@@ -400,10 +406,8 @@ class AgentUpdateRequest(BaseModel):
         None, description="Allowed widget embed origins"
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
-    history_days: Optional[int] = Field(
-        None, ge=1, le=365, description="Chat history retention days"
-    )
-
+    history_days: Optional[int] = Field(None, ge=1, le=365, description="Chat history retention days")
+    embedding_batch_size: Optional[int] = Field(None, ge=1, le=64, description="Embedding batch size")
     @field_validator("allowed_widget_origins")
     @classmethod
     def validate_allowed_widget_origins(

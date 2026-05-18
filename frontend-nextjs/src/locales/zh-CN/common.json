@@ -446,7 +446,7 @@
       "crawlDepth": "抓取深度",
       "crawlDepthDesc": "设置全站抓取时的最大深度（1-5），1表示只抓取当前页面及其直接链接",
       "crawlMaxPages": "最大页面数",
-      "crawlMaxPagesDesc": "设置全站抓取时的最大页面数量（1-50）",
+      "crawlMaxPagesDesc": "设置全站抓取时的最大页面数量（1-500）",
       "crawlInProgress": "正在抓取中...",
       "crawlDiscovered": "已发现 {{count}} 个页面",
       "crawlComplete": "抓取完成，共添加 {{count}} 个页面",
