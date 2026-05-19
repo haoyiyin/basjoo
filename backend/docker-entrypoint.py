@@ -5,7 +5,6 @@ Docker entrypoint script that ensures proper permissions and switches to non-roo
 import os
 import pwd
 import secrets
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -168,155 +167,15 @@ def validate_secret_key():
 
 def migrate_sqlite_schema():
     """Apply lightweight SQLite migrations for newly added columns and indexes."""
+    from sqlite_migrations import run_sqlite_migrations
+
     database_url = os.environ.get("DATABASE_URL", "")
-
-    if not database_url.startswith("sqlite:///"):
-        print("Skipping SQLite migration: non-SQLite DATABASE_URL")
-        return
-
-    sqlite_path = database_url[len("sqlite:///"):].split("?", 1)[0]
-    if sqlite_path.startswith("/"):
-        db_path = sqlite_path
-    else:
-        db_path = os.path.abspath(sqlite_path)
-    if not os.path.exists(db_path):
-        print(f"Skipping SQLite migration: database file not found at {db_path}")
-        return
-
-    migrations = {
-        "chat_sessions": [
-            ("visitor_ip", "TEXT"),
-            ("visitor_user_agent", "TEXT"),
-            ("visitor_country", "TEXT"),
-            ("visitor_region", "TEXT"),
-            ("visitor_city", "TEXT"),
-        ],
-        "chat_messages": [
-            ("sender_type", "TEXT"),
-            ("sender_id", "TEXT"),
-        ],
-        "agents": [
-            (
-                "restricted_reply",
-                "TEXT",
-            ),
-            (
-                "last_error_code",
-                "VARCHAR(50)",
-            ),
-            (
-                "last_error_message",
-                "TEXT",
-            ),
-            (
-                "last_error_at",
-                "DATETIME",
-            ),
-            (
-                "allowed_widget_origins",
-                "TEXT",
-            ),
-            (
-                "embedding_api_base",
-                "VARCHAR(500)",
-            ),
-            (
-                "embedding_batch_size",
-                "INTEGER DEFAULT 4",
-            ),
-        ],
-    }
-
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        for table_name, columns in migrations.items():
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table_name,),
-            )
-            table_exists = cursor.fetchone() is not None
-            if not table_exists:
-                print(f"Skipping migration for missing table: {table_name}")
-                continue
-
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            existing_columns = {row[1] for row in cursor.fetchall()}
-
-            if table_name == "agents" and "rate_limit_per_hour" in existing_columns and "rate_limit_per_minute" not in existing_columns:
-                alter_sql = (
-                    f"ALTER TABLE {table_name} "
-                    "RENAME COLUMN rate_limit_per_hour TO rate_limit_per_minute"
-                )
-                print(f"Applying migration: {alter_sql}")
-                cursor.execute(alter_sql)
-                existing_columns.remove("rate_limit_per_hour")
-                existing_columns.add("rate_limit_per_minute")
-
-            for column_name, column_type in columns:
-                if column_name in existing_columns:
-                    continue
-
-                alter_sql = (
-                    f"ALTER TABLE {table_name} "
-                    f"ADD COLUMN {column_name} {column_type}"
-                )
-                print(f"Applying migration: {alter_sql}")
-                cursor.execute(alter_sql)
-
-        # Backfill workspace_quotas.max_urls for existing rows still on old default
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_quotas'"
-        )
-        if cursor.fetchone() is not None:
-            cursor.execute(
-                "UPDATE workspace_quotas SET max_urls = 500 WHERE max_urls = 50"
-            )
-            if cursor.rowcount > 0:
-                print(f"Backfilled workspace_quotas.max_urls for {cursor.rowcount} row(s)")
-
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_sessions'"
-        )
-        chat_sessions_exists = cursor.fetchone() is not None
-        if chat_sessions_exists:
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_chat_sessions_active_session'"
-            )
-            unique_session_index_exists = cursor.fetchone() is not None
-            if not unique_session_index_exists:
-                print("Ensuring unique active session rows per (agent_id, session_id)...")
-                cursor.execute(
-                    """
-                    DELETE FROM chat_sessions
-                    WHERE status != 'closed'
-                      AND id NOT IN (
-                        SELECT id FROM (
-                            SELECT MAX(id) AS id
-                            FROM chat_sessions
-                            WHERE status != 'closed'
-                            GROUP BY agent_id, session_id
-                        )
-                    )
-                    """
-                )
-                cursor.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_sessions_active_session ON chat_sessions (agent_id, session_id) WHERE status != 'closed'"
-                )
-        else:
-            print("Skipping unique active session migration: chat_sessions table not found")
-
-        conn.commit()
+        run_sqlite_migrations(database_url)
         print("SQLite migration check completed")
     except Exception as e:
         print(f"SQLite migration failed: {e}")
         sys.exit(1)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 

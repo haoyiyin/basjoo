@@ -64,6 +64,7 @@ def mock_qdrant_store(monkeypatch, request):
             embedding_api_key: str | None = None,
             embedding_api_base: str | None = None,
             embedding_dimension: int = 1024,
+            embedding_batch_size: int = 4,
         ):
             self.embedding_model = embedding_model
             self.collection_prefix = collection_prefix

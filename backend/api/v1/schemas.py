@@ -300,6 +300,9 @@ class AgentConfig(BaseModel):
         default=False, description="Whether the selected embedding provider has an effective API key configured"
     )
     embedding_model: str
+    configuration_error: Optional[str] = Field(
+        None, description="Non-fatal configuration problem (e.g. invalid custom embedding base); present only when the backend degraded gracefully so the admin can fix it"
+    )
     crawl_max_depth: int = Field(default=2, ge=0, le=5, description="Crawl depth for site crawling")
     crawl_max_pages: int = Field(default=20, ge=1, le=500, description="Max pages for site crawling")
     top_k: int = Field(..., ge=1, le=20)

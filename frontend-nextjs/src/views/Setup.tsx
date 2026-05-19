@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from 'react-i18next';
-import { API_BASE_URL } from '../lib/env';
+import { API_BASE_URL } from '../lib/env'
+import { parseErrorResponse } from '../services/api';
 
 export const Setup = () => {
     const { t } = useTranslation('common');
@@ -30,8 +31,8 @@ export const Setup = () => {
             });
 
             if (!defaultAgentRes.ok) {
-                const data = await defaultAgentRes.json();
-                throw new Error(data.detail || t('settings.setupFailed'));
+                const message = await parseErrorResponse(defaultAgentRes);
+                throw new Error(message || t('settings.setupFailed'));
             }
 
             const defaultAgent = await defaultAgentRes.json();
@@ -55,8 +56,8 @@ export const Setup = () => {
             });
 
             if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.detail || t('settings.setupFailed'));
+                const message = await parseErrorResponse(res);
+                throw new Error(message || t('settings.setupFailed'));
             }
 
             navigate('/');

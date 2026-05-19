@@ -18,6 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Start production-style stack: `docker compose --profile prod up -d`
 - Rebuild a service: `docker compose --profile dev up -d --build backend-dev frontend-dev`
 - Follow logs: `docker compose logs -f backend-dev frontend-dev nginx`
+- Watch mode (auto-rebuild on file changes): `docker compose --profile dev up --watch`
 
 ### One-command production install (Ubuntu/Debian)
 
@@ -40,9 +41,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Install deps: `npm install`
 - Dev bundle/example server: `npm run dev`
-- Build distributables: `npm run build`
+- Build distributables: `npm run build` (typecheck + dev + prod bundles)
+- Dev-only build: `npm run build:dev` (unminified ESM, `dist/basjoo-widget.js`)
+- Prod-only build: `npm run build:prod` (minified IIFE, `dist/basjoo-widget.min.js`)
 - Type-check: `npm run typecheck`
 - Run tests: `npm run test`
+
+### Root-level E2E tests (Playwright)
+
+- Smoke tests (dev env): `npm run test:e2e`
+- All test projects: `npm run test:e2e:all`
+- Production-like E2E: `npm run test:e2e:prod`
+- Widget cross-origin embed: `npm run test:e2e:widget`
+- Sync widget bundle to backend: `npm run sync-widget`
 
 ### Backend (`backend/`)
 
@@ -103,3 +114,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Backend tests use `backend/tests/conftest.py` to force `BASJOO_TEST_MODE=1`, create isolated SQLite DBs under `backend/.pytest_dbs/`, and monkeypatch Qdrant/Jina/LLM integrations for most API tests.
 - Use the existing `client` fixture for authenticated admin API tests and `public_client` for unauthenticated/public-route coverage instead of building ad-hoc `AsyncClient` fixtures in individual test files.
 - If a test depends on real Redis/Qdrant hostnames, the fixtures auto-fallback between container hostnames and localhost.
+
+## Environment and configuration
+
+The backend reads settings from environment variables and `.env` via `pydantic-settings`. Key variables:
+
+- `DATABASE_URL`, `REDIS_URL`, `QDRANT_HOST`, `QDRANT_PORT`
+- `SECRET_KEY` / `SECRET_KEY_FILE` — auto-generated and persisted if missing
+- `DEFAULT_AGENT_ID` — persisted to `/app/data/.agent_id` for widget embed stability
+- `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` — Fernet key for stored provider API keys; auto-generated if missing
+- `JINA_API_KEY`, `DEEPSEEK_API_KEY`
+- `ALLOWED_ORIGINS`, `ALLOWED_METHODS`, `ALLOWED_HEADERS`
+- `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_BURST_SIZE`
+- `LOG_LEVEL`, `SERVER_DOMAIN`
+- `REQUIRE_SECRET_KEY` — set `true` in production to reject insecure secret keys
+- `cors_allow_null_origin` — boolean, default `false`; controls `Origin: null` CORS behavior
+
+Default dev ports: Frontend `3000`, Backend `8000`, Qdrant `6333`, Redis `6379`.
+
+## Security model
+
+- **SSRF protection**: `backend/services/url_safety.py` validates all user-provided URLs, blocking localhost, direct IP literals, embedded credentials, and hostnames resolving to private/special-use IPs. DNS results are cached (512-entry LRU).
+- **Widget origin whitelist**: Public chat routes enforce a per-agent origin whitelist; admin users bypass it for testing.
+- **CORS policy**: Early responses (429, 413) apply CORS through `apply_cors_headers()` in `backend/middleware/rate_limit.py`. `Origin: null` only gets wildcard CORS when `cors_allow_null_origin` is enabled. Missing `Origin` headers get no CORS.
+- **Task concurrency**: Shared `TaskLock` prevents conflicting rebuild/fetch operations on the same agent.

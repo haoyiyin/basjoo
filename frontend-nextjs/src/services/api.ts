@@ -143,6 +143,24 @@ export interface Quota {
   remaining_messages_today: number;
 }
 
+export async function parseErrorResponse(response: Response): Promise<string> {
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+
+  if (contentType.includes('application/json')) {
+    const data = await response.json().catch(() => null);
+    if (data?.detail) return typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+    if (data?.message) return data.message;
+  }
+
+  const text = await response.text().catch(() => '');
+  const statusLabel = `${response.status} ${response.statusText || 'Request failed'}`;
+  if (text.trim()) {
+    return `${statusLabel}: ${text.trim().slice(0, 500)}`;
+  }
+  return statusLabel;
+}
+
+
 class APIService {
   private baseUrl: string;
 
@@ -193,20 +211,25 @@ class APIService {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ 
-        message: response.statusText,
-        detail: `HTTP ${response.status}: ${response.statusText}`
-      }));
-      
-      const errorMessage = error.message || error.detail || 'API request failed';
+      const errorMessage = await parseErrorResponse(response);
       console.error(`API Error: ${errorMessage}`, {
         status: response.status,
         endpoint,
         url,
-        error
       });
-      
       throw new Error(errorMessage);
+    }
+
+    // Handle 204 No Content
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('application/json')) {
+      throw new Error(
+        `Expected JSON response but received ${contentType || 'unknown content type'}`
+      );
     }
 
     return response.json();
@@ -272,11 +295,8 @@ class APIService {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        message: response.statusText,
-        detail: `HTTP ${response.status}: ${response.statusText}`,
-      }));
-      throw new Error(error.message || error.detail || 'Stream request failed');
+      const message = await parseErrorResponse(response);
+      throw new Error(message || 'Stream request failed');
     }
 
     if (!response.body) {

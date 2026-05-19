@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { API_BASE_URL } from '../lib/env'
+import { parseErrorResponse } from '../services/api'
 
 interface Admin {
   id: number
@@ -118,8 +119,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
 
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || '登录失败')
+      const message = await parseErrorResponse(response)
+      throw new Error(message || '登录失败')
     }
 
     const data = await response.json()
@@ -139,8 +140,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
 
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || '注册失败')
+      const message = await parseErrorResponse(response)
+      throw new Error(message || '注册失败')
     }
 
     // 注册后自动登录

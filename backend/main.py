@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -142,6 +142,17 @@ async def log_requests(request, call_next):
     except Exception as e:
         logger.exception(f"ERROR processing {request.method} {request.url.path}: {e}")
         raise
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc):
+    """Return JSON for unhandled exceptions instead of plain-text 500."""
+    logger = logging.getLogger("uvicorn")
+    logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 # Auth API (kept for frontend login/register)

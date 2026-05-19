@@ -72,6 +72,7 @@ def _build_default_agent(workspace_id: int):
         api_key=encrypt_api_key(raw_api_key) if raw_api_key else "",
         api_base="https://api.deepseek.com/v1",
         jina_api_key=encrypt_api_key(raw_jina_key) if raw_jina_key else "",
+        provider_type="deepseek",
         embedding_provider="jina",
         embedding_model="jina-embeddings-v3",
         top_k=5,
@@ -102,69 +103,13 @@ async def get_db():
             await session.close()
 
 
-def _sqlite_db_path(database_url: str) -> str | None:
-    """Extract the file path from a SQLite database URL."""
-    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
-        if database_url.startswith(prefix):
-            return database_url[len(prefix):]
-    return None
-
-
-def _run_pending_migrations(db_path: str):
-    """Idempotent startup migrations for existing SQLite databases."""
-    import sqlite3
-
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Check existing columns
-    cursor.execute("PRAGMA table_info(agents)")
-    columns = {col[1] for col in cursor.fetchall()}
-
-    # Add embedding_provider if missing
-    if "embedding_provider" not in columns:
-        cursor.execute("ALTER TABLE agents ADD COLUMN embedding_provider VARCHAR(20) DEFAULT 'jina'")
-        # After ADD COLUMN DEFAULT 'jina', all existing rows already have 'jina'.
-        # Backfill: provider_type = 'siliconflow' should be 'siliconflow'.
-        cursor.execute("UPDATE agents SET embedding_provider = 'siliconflow' WHERE provider_type = 'siliconflow'")
-        print("✓ Added embedding_provider column")
-
-    # Add siliconflow_api_key if missing
-    if "siliconflow_api_key" not in columns:
-        cursor.execute("ALTER TABLE agents ADD COLUMN siliconflow_api_key VARCHAR(500) DEFAULT ''")
-        print("✓ Added siliconflow_api_key column")
-
-    # Add embedding_api_base if missing (nullable, no default needed)
-    if "embedding_api_base" not in columns:
-        cursor.execute("ALTER TABLE agents ADD COLUMN embedding_api_base VARCHAR(500)")
-        print("✓ Added embedding_api_base column")
-
-    # Add embedding_batch_size if missing
-    if "embedding_batch_size" not in columns:
-        cursor.execute("ALTER TABLE agents ADD COLUMN embedding_batch_size INTEGER DEFAULT 4")
-        print("✓ Added embedding_batch_size column")
-
-    # Backfill workspace_quotas.max_urls for existing rows still on the old default
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_quotas'"
-    )
-    if cursor.fetchone() is not None:
-        cursor.execute(
-            "UPDATE workspace_quotas SET max_urls = 500 WHERE max_urls = 50"
-        )
-        if cursor.rowcount > 0:
-            print(f"✓ Backfilled max_urls for {cursor.rowcount} existing quota row(s)")
-
-    conn.commit()
-    conn.close()
 
 
 async def init_db():
     # Run idempotent startup migrations BEFORE create_all so columns exist
     # before SQLAlchemy introspects the database.
-    db_path = _sqlite_db_path(settings.database_url)
-    if db_path and os.path.exists(db_path):
-        _run_pending_migrations(db_path)
+    from sqlite_migrations import run_sqlite_migrations
+    run_sqlite_migrations(settings.database_url)
 
     async with engine.begin() as conn:
         from models import (

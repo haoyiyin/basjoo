@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import AdminLayout from '../components/AdminLayout';
+import { parseErrorResponse } from '../services/api';
 
 type AdminRole = 'super_admin' | 'admin' | 'support' | 'readonly';
 type AdminUser = {
@@ -47,8 +48,8 @@ export const AdminUsers = () => {
       }
 
       const res = await fetch('/api/admin/users', { headers: authHeaders });
+      if (!res.ok) throw new Error(await parseErrorResponse(res) || t('users.loadUsersFailed'));
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || t('users.loadUsersFailed'));
       setUsers(data);
     };
 

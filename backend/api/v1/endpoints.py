@@ -129,7 +129,22 @@ def get_agent_plaintext_keys(agent: Agent) -> tuple[Optional[str], Optional[str]
 
 def build_agent_config(agent: Agent) -> dict:
     api_key, jina_key, siliconflow_key = get_agent_plaintext_keys(agent)
-    embedding_config = get_agent_embedding_config(agent)
+    # Resolve the provider-normalised embedding_provider so the value always
+    # satisfies the AgentConfig Literal constraint even when the stored DB
+    # value is stale / non-standard.  resolve_agent_embedding_provider never
+    # raises, so we can always get a safe value.
+    from api.v1.provider_helpers import resolve_agent_embedding_provider
+    resolved_embedding_provider = resolve_agent_embedding_provider(agent)
+    try:
+        embedding_config = get_agent_embedding_config(agent)
+        configuration_error = None
+    except ValueError as exc:
+        embedding_config = {}
+        configuration_error = str(exc)
+        logger.warning(
+            "Embedding config error for agent %s (provider=%s): %s",
+            agent.id, getattr(agent, "embedding_provider", None), exc,
+        )
     return {
         "id": agent.id,
         "name": agent.name,
@@ -153,11 +168,12 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": agent.embedding_provider,
+        "embedding_provider": resolved_embedding_provider,
         "embedding_api_base": agent.embedding_api_base,
-        "embedding_api_key_set": bool(embedding_config["embedding_api_key"]),
+        "embedding_api_key_set": bool(embedding_config.get("embedding_api_key")),
         "embedding_model": agent.embedding_model,
         "embedding_batch_size": getattr(agent, "embedding_batch_size", 4) or 4,
+        "configuration_error": configuration_error,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
         "top_k": agent.top_k,
