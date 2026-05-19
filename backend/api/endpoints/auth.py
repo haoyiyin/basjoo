@@ -1,3 +1,4 @@
+import asyncio
 from typing import Deque, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -12,9 +13,6 @@ from i18n.core import get_locale_from_request, _
 from middleware.rate_limit import check_memory_sliding_window
 
 from collections import defaultdict, deque
-import json
-import os
-from pathlib import Path
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -23,6 +21,9 @@ security = HTTPBearer(auto_error=False)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
 _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+# Prevent concurrent first-admin bootstrap from creating multiple super_admin accounts
+_bootstrap_lock = asyncio.Lock()
 
 
 class LoginRequest(BaseModel):
@@ -119,60 +120,43 @@ def validate_admin_role(role: str):
             detail="Invalid role",
         )
 
-REGISTRATION_SETTINGS_FILE = Path(
-    os.getenv("REGISTRATION_SETTINGS_FILE", "/app/data/registration_settings.json")
-)
-
-
-def read_public_registration_enabled() -> bool:
-    try:
-        if REGISTRATION_SETTINGS_FILE.exists():
-            data = json.loads(REGISTRATION_SETTINGS_FILE.read_text())
-            return bool(data.get("public_registration_enabled", False))
-    except Exception:
-        return False
-    return False
-
-
-def write_public_registration_enabled(enabled: bool):
-    REGISTRATION_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    REGISTRATION_SETTINGS_FILE.write_text(
-        json.dumps({"public_registration_enabled": enabled})
-    )
-    
 @router.post("/register", response_model=AdminResponse)
 async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     locale = get_locale_from_request(request)
     auth_service = AuthService(db)
 
-    admin_count_result = await db.execute(select(func.count(AdminUser.id)))
-    admin_count = admin_count_result.scalar()
+    async with _bootstrap_lock:
+        admin_count_result = await db.execute(select(func.count(AdminUser.id)))
+        admin_count = admin_count_result.scalar() or 0
 
-    if admin_count and admin_count > 0 and not read_public_registration_enabled():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Public registration is disabled",
+        # Only allow unauthenticated first-time super-admin bootstrap.
+        # After the first admin exists, all further admin creation must go
+        # through the authenticated /api/admin/users endpoint.
+        if admin_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=_("System already has an administrator", locale=locale),
+            )
+
+        result = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
+        existing_admin = result.scalar_one_or_none()
+
+        if existing_admin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=_("Email already registered", locale=locale)
+            )
+
+        if len(req.password) < 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_("Password too short", locale=locale),
+            )
+
+        admin = await auth_service.create_admin(
+            email=req.email, password=req.password, name=req.name, role="super_admin"
         )
 
-    result = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
-    existing_admin = result.scalar_one_or_none()
-
-    if existing_admin:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_("Email already registered", locale=locale)
-        )
-
-    if len(req.password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_("Password too short", locale=locale),
-        )
-
-    admin = await auth_service.create_admin(
-        email=req.email, password=req.password, name=req.name
-    )
-
-    return AdminResponse(id=admin.id, email=admin.email, name=admin.name,role=admin.role)
+    return AdminResponse(id=admin.id, email=admin.email, name=admin.name, role=admin.role)
 
 @router.get("/registration-settings", response_model=RegistrationSettingsResponse)
 async def get_registration_settings(db: AsyncSession = Depends(get_db)):
@@ -180,7 +164,7 @@ async def get_registration_settings(db: AsyncSession = Depends(get_db)):
     admin_count = admin_count_result.scalar() or 0
 
     return RegistrationSettingsResponse(
-        public_registration_enabled=read_public_registration_enabled(),
+        public_registration_enabled=False,
         bootstrap_required=admin_count == 0,
     )
 
@@ -192,13 +176,12 @@ async def update_registration_settings(
     db: AsyncSession = Depends(get_db),
 ):
     require_super_admin(current_admin)
-    write_public_registration_enabled(req.public_registration_enabled)
 
     admin_count_result = await db.execute(select(func.count(AdminUser.id)))
     admin_count = admin_count_result.scalar() or 0
 
     return RegistrationSettingsResponse(
-        public_registration_enabled=req.public_registration_enabled,
+        public_registration_enabled=False,
         bootstrap_required=admin_count == 0,
     )
 
@@ -233,12 +216,10 @@ async def create_admin_user(
         email=req.email,
         password=req.password,
         name=req.name,
+        role=req.role,
     )
-    admin.role = req.role
-    await db.commit()
-    await db.refresh(admin)
 
-    return AdminResponse(id=admin.id, email=admin.email, name=admin.name,role=admin.role)
+    return AdminResponse(id=admin.id, email=admin.email, name=admin.name, role=admin.role)
 
 @router.get("/users", response_model=list[AdminUserOut])
 async def list_admin_users(

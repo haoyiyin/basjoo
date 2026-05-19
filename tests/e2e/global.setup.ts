@@ -25,7 +25,7 @@ async function api(path: string, opts: RequestInit & { data?: unknown } = {}): P
 }
 
 export default async function globalSetup(): Promise<void> {
-  // 1. Register admin (400 = already exists, which is fine)
+  // 1. Create initial super admin (400 = already exists by email, 403 = admin already configured, which is fine)
   const registerRes = await api('/api/admin/register', {
     method: 'POST',
     data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD, name: 'Test Admin' },

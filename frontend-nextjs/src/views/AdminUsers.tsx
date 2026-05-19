@@ -29,9 +29,6 @@ export const AdminUsers = () => {
   const [editData, setEditData] = useState({email: '',name: '',password: '',is_active: true,role: 'admin' as AdminRole});
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [publicRegistrationEnabled, setPublicRegistrationEnabled] = useState(false);
-
-
   const authHeaders = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -55,19 +52,9 @@ export const AdminUsers = () => {
       setUsers(data);
     };
 
-  const loadRegistrationSettings = async () => {
-  const res = await fetch('/api/admin/registration-settings', { headers: authHeaders });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || t('users.loadRegistrationFailed'));
-  setPublicRegistrationEnabled(Boolean(data.public_registration_enabled));
-};
 useEffect(() => {
   if (!token) return;
   loadUsers().catch((err) => setError(err.message));
-
-  if (isSuperAdmin) {
-    loadRegistrationSettings().catch((err) => setError(err.message));
-  }
 }, [token, isSuperAdmin, admin]);
 
   const createUser = async (e: React.FormEvent) => {
@@ -150,26 +137,6 @@ useEffect(() => {
     await loadUsers();
   };
 
-  const updateRegistrationSetting = async (enabled: boolean) => {
-  setMessage('');
-  setError('');
-
-  const res = await fetch('/api/admin/registration-settings', {
-    method: 'PATCH',
-    headers: authHeaders,
-    body: JSON.stringify({ public_registration_enabled: enabled }),
-  });
-
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    setError(data.detail || t('users.registrationSaveFailed'));
-    return;
-  }
-
-  setPublicRegistrationEnabled(Boolean(data.public_registration_enabled));
-  setMessage(enabled ? t('users.registrationEnabledToast') : t('users.registrationDisabledToast'));
-};
   return (
   <AdminLayout>
     <div style={{ width: '100%', maxWidth: 1120, margin: '0 auto' }}>
@@ -181,43 +148,6 @@ useEffect(() => {
 
       {message && <div style={{ color: 'var(--color-success)', marginBottom: 'var(--space-4)' }}>{message}</div>}
       {error && <div style={{ color: 'var(--color-error)', marginBottom: 'var(--space-4)' }}>{error}</div>}
-       {isSuperAdmin && (<div className="glass-card" style={{ padding: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 'var(--space-6)',
-          }}>
-            <div>
-              <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-2)' }}>
-                {t('users.registrationSettings.title')}
-              </h2>
-              <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', margin: 0 }}>
-                {t('users.registrationSettings.description')}
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => updateRegistrationSetting(!publicRegistrationEnabled)}
-              style={{
-                minWidth: 132,
-                padding: '10px 16px',
-                borderRadius: 'var(--radius-md)',
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: 600,
-                color: 'var(--color-text-inverse)',
-                background: publicRegistrationEnabled
-                  ? 'var(--color-accent-gradient)'
-                  : 'var(--color-text-muted)',
-              }}
-            >
-              {publicRegistrationEnabled ? t('users.enabled') : t('users.disabled')}
-            </button>
-          </div>
-        </div>
-       )}
       {isSuperAdmin && (<div className="glass-card" style={{ padding: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.addAdmin')}</h2>
         <form onSubmit={createUser} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 180px auto', gap: 'var(--space-4)', alignItems: 'end' }}>

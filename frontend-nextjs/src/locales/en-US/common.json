@@ -576,12 +576,6 @@
   },
   "users": {
     "title": "User Management",
-    "registrationSettings": {
-      "title": "Registration Settings",
-      "description": "Control whether the login page shows a registration entry, and whether public admin registration is allowed."
-    },
-    "enabled": "Enabled",
-    "disabled": "Disabled",
     "addAdmin": "Add Admin",
     "email": "Email",
     "name": "Name",
@@ -609,13 +603,9 @@
     "userCreated": "Admin created: {{email}}",
     "userUpdated": "User updated",
     "userDeleted": "User deleted",
-    "registrationEnabledToast": "Public registration enabled",
-    "registrationDisabledToast": "Public registration disabled",
     "loadUsersFailed": "Failed to load users",
-    "loadRegistrationFailed": "Failed to load registration settings",
     "createFailed": "Failed to create",
     "saveFailed": "Failed to save",
-    "deleteFailed": "Failed to delete",
-    "registrationSaveFailed": "Failed to save registration settings"
+    "deleteFailed": "Failed to delete"
   }
 }

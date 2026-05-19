@@ -11,19 +11,22 @@ export const Login = () => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    const [registrationEnabled, setRegistrationEnabled] = useState(false);
+    const [bootstrapRequired, setBootstrapRequired] = useState(false);
     const { login } = useAuth();
     const navigate = useNavigate();
+
     useEffect(() => {
         fetch('/api/admin/registration-settings')
             .then((res) => res.json())
             .then((data) => {
-                setRegistrationEnabled(
-                    Boolean(data.public_registration_enabled || data.bootstrap_required)
-                );
+                const required = Boolean(data.bootstrap_required);
+                setBootstrapRequired(required);
+                if (required) {
+                    navigate('/register');
+                }
             })
-            .catch(() => setRegistrationEnabled(false));
-    }, []);
+            .catch(() => setBootstrapRequired(false));
+    }, [navigate]);
     
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -268,14 +271,14 @@ export const Login = () => {
                     </form>
                 </div>
 
-                {registrationEnabled && (
+                {bootstrapRequired && (
                     <p style={{
                         textAlign: 'center',
                         marginTop: 'var(--space-6)',
                         color: 'var(--color-text-secondary)',
                         fontSize: 'var(--text-sm)',
                     }}>
-                        {t('login.noAccount')}{' '}
+                        {t('login.setupPrompt')}{' '}
                         <Link
                             to="/register"
                             style={{
@@ -285,7 +288,7 @@ export const Login = () => {
                                 transition: 'color var(--transition-fast)',
                             }}
                         >
-                            {t('login.registerLink')}
+                            {t('login.setupLink')}
                         </Link>
                     </p>
                 )}

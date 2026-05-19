@@ -158,6 +158,7 @@ async def ensure_test_admin_token() -> str:
                 email="test@example.com",
                 password="testpassword123",
                 name="Test Admin",
+                role="super_admin",
             )
 
         return auth_service.create_access_token({"sub": str(admin.id)})

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from 'react-i18next';
@@ -13,8 +13,27 @@ export const Register = () => {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [checking, setChecking] = useState(true);
+    const [bootstrapAllowed, setBootstrapAllowed] = useState(false);
     const { register } = useAuth();
     const navigate = useNavigate();
+
+    useEffect(() => {
+        fetch('/api/admin/registration-settings')
+            .then((res) => res.json())
+            .then((data) => {
+                if (!data.bootstrap_required) {
+                    navigate('/login', { replace: true });
+                } else {
+                    setBootstrapAllowed(true);
+                    setChecking(false);
+                }
+            })
+            .catch(() => {
+                setError(t('errors.setupCheckFailed'));
+                setChecking(false);
+            });
+    }, [navigate, t]);
 
     const handleRegister = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -35,12 +54,62 @@ export const Register = () => {
             await register(email, password, name);
             navigate('/');
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : t('errors.registerFailed');
+            const message = err instanceof Error ? err.message : t('errors.setupFailed');
             setError(message);
         } finally {
             setLoading(false);
         }
     };
+
+    if (checking) {
+        return (
+            <div style={{
+                minHeight: '100vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--color-text-secondary)',
+            }}>
+                <div className="spinner" />
+            </div>
+        );
+    }
+
+    if (!bootstrapAllowed) {
+        return (
+            <div style={{
+                minHeight: '100vh',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 'var(--space-6)',
+                gap: 'var(--space-6)',
+            }}>
+                {error && (
+                    <div style={{
+                        background: 'var(--color-error-bg)',
+                        color: 'var(--color-error)',
+                        padding: 'var(--space-4)',
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: 'var(--text-sm)',
+                    }}>
+                        {error}
+                    </div>
+                )}
+                <Link
+                    to="/login"
+                    style={{
+                        color: 'var(--color-accent-primary)',
+                        fontWeight: 500,
+                        textDecoration: 'none',
+                    }}
+                >
+                    {t('initialSetup.loginLink')}
+                </Link>
+            </div>
+        );
+    }
 
     return (
         <div style={{
@@ -116,7 +185,7 @@ export const Register = () => {
                         color: 'var(--color-text-secondary)',
                         fontSize: 'var(--text-base)',
                     }}>
-                        {t('register.subtitle')}
+                        {t('initialSetup.subtitle')}
                     </p>
                 </div>
 
@@ -153,14 +222,14 @@ export const Register = () => {
                                 fontWeight: 500,
                                 color: 'var(--color-text-secondary)',
                             }}>
-                                {t('register.name')}
+                                {t('initialSetup.name')}
                             </label>
                             <div style={{ position: 'relative' }}>
                                 <input
                                     type="text"
                                     value={name}
                                     onChange={(e) => setName(e.target.value)}
-                                    placeholder={t('register.namePlaceholder')}
+                                    placeholder={t('initialSetup.namePlaceholder')}
                                     required
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
@@ -194,14 +263,14 @@ export const Register = () => {
                                 fontWeight: 500,
                                 color: 'var(--color-text-secondary)',
                             }}>
-                                {t('register.email')}
+                                {t('initialSetup.email')}
                             </label>
                             <div style={{ position: 'relative' }}>
                                 <input
                                     type="email"
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
-                                    placeholder={t('register.emailPlaceholder')}
+                                    placeholder={t('initialSetup.emailPlaceholder')}
                                     required
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
@@ -235,14 +304,14 @@ export const Register = () => {
                                 fontWeight: 500,
                                 color: 'var(--color-text-secondary)',
                             }}>
-                                {t('register.password')}
+                                {t('initialSetup.password')}
                             </label>
                             <div style={{ position: 'relative' }}>
                                 <input
                                     type="password"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    placeholder={t('register.passwordPlaceholder')}
+                                    placeholder={t('initialSetup.passwordPlaceholder')}
                                     required
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
@@ -276,14 +345,14 @@ export const Register = () => {
                                 fontWeight: 500,
                                 color: 'var(--color-text-secondary)',
                             }}>
-                                {t('register.confirmPassword')}
+                                {t('initialSetup.confirmPassword')}
                             </label>
                             <div style={{ position: 'relative' }}>
                                 <input
                                     type="password"
                                     value={confirmPassword}
                                     onChange={(e) => setConfirmPassword(e.target.value)}
-                                    placeholder={t('register.confirmPasswordPlaceholder')}
+                                    placeholder={t('initialSetup.confirmPasswordPlaceholder')}
                                     required
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
@@ -332,11 +401,11 @@ export const Register = () => {
                             {loading ? (
                                 <>
                                     <div className="spinner" />
-                                    {t('register.registerInProgress')}
+                                    {t('initialSetup.registerInProgress')}
                                 </>
                             ) : (
                                 <>
-                                    {t('register.registerButton')}
+                                    {t('initialSetup.registerButton')}
                                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <path d="M5 12h14M12 5l7 7-7 7" />
                                     </svg>
@@ -352,7 +421,7 @@ export const Register = () => {
                     color: 'var(--color-text-secondary)',
                     fontSize: 'var(--text-sm)',
                 }}>
-                    {t('register.haveAccount')}{' '}
+                    {t('initialSetup.haveAccount')}{' '}
                     <Link
                         to="/login"
                         style={{
@@ -362,7 +431,7 @@ export const Register = () => {
                             transition: 'color var(--transition-fast)',
                         }}
                     >
-                        {t('register.loginLink')}
+                        {t('initialSetup.loginLink')}
                     </Link>
                 </p>
 
@@ -376,7 +445,7 @@ export const Register = () => {
                         fontSize: 'var(--text-xs)',
                         color: 'var(--color-text-muted)',
                     }}>
-                        {t('register.footer')}
+                        {t('initialSetup.footer')}
                     </p>
                 </div>
             </div>

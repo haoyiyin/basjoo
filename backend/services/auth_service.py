@@ -88,11 +88,12 @@ class AuthService:
 
         return admin
 
-    async def create_admin(self, email: str, password: str, name: str) -> AdminUser:
+    async def create_admin(self, email: str, password: str, name: str, role: str = "admin") -> AdminUser:
         admin = AdminUser(
             email=email,
             hashed_password=self.hash_password(password),
             name=name,
+            role=role,
             is_active=True,
         )
         self.db.add(admin)

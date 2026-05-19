@@ -90,12 +90,11 @@ async def test_register_first_admin(public_client):
             "name": "Test Admin",
         },
     )
-    if response.status_code == 200:
-        data = response.json()
-        assert data["email"] == "test@example.com"
-        assert data["name"] == "Test Admin"
-    else:
-        assert response.status_code == 403
+    assert response.status_code == 200
+    data = response.json()
+    assert data["email"] == "test@example.com"
+    assert data["name"] == "Test Admin"
+    assert data["role"] == "super_admin"
 
 
 @pytest.mark.asyncio
@@ -130,16 +129,12 @@ async def test_login(public_client):
             "name": "Login Test",
         },
     )
-
-    if reg_response.status_code == 200:
-        email = "login@example.com"
-    else:
-        email = "test@example.com"
+    assert reg_response.status_code == 200
 
     response = await public_client.post(
         "/api/admin/login",
         json={
-            "email": email,
+            "email": "login@example.com",
             "password": "testpassword123",
         },
     )
@@ -147,6 +142,7 @@ async def test_login(public_client):
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+    assert data["admin"]["role"] == "super_admin"
 
 
 @pytest.mark.asyncio
@@ -168,6 +164,42 @@ async def test_login_wrong_password(public_client):
         },
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_registration_settings_before_and_after_bootstrap(public_client):
+    # Before any admin — bootstrap should be required, public registration disabled.
+    res = await public_client.get("/api/admin/registration-settings")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["bootstrap_required"] is True
+    assert data["public_registration_enabled"] is False
+
+    # Create the first admin.
+    reg = await public_client.post(
+        "/api/admin/register",
+        json={"email": "bs@example.com", "password": "testpassword123", "name": "BS"},
+    )
+    assert reg.status_code == 200
+
+    # After bootstrap — still disabled, no longer required.
+    res = await public_client.get("/api/admin/registration-settings")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["bootstrap_required"] is False
+    assert data["public_registration_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_registration_settings_noop(client):
+    # The client fixture already creates a super_admin in isolated DBs.
+    res = await client.patch(
+        "/api/admin/registration-settings",
+        json={"public_registration_enabled": True},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["public_registration_enabled"] is False  # always disabled
 
 
 @pytest.mark.asyncio

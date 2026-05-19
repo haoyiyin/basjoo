@@ -576,12 +576,6 @@
   },
   "users": {
     "title": "用户管理",
-    "registrationSettings": {
-      "title": "注册设置",
-      "description": "控制登录页是否显示注册入口，并决定是否允许公开注册管理员账号。"
-    },
-    "enabled": "已开启",
-    "disabled": "已关闭",
     "addAdmin": "添加管理员",
     "email": "邮箱",
     "name": "姓名",
@@ -609,13 +603,9 @@
     "userCreated": "已创建管理员：{{email}}",
     "userUpdated": "用户已更新",
     "userDeleted": "用户已删除",
-    "registrationEnabledToast": "公开注册已开启",
-    "registrationDisabledToast": "公开注册已关闭",
     "loadUsersFailed": "加载用户失败",
-    "loadRegistrationFailed": "加载注册设置失败",
     "createFailed": "创建失败",
     "saveFailed": "保存失败",
-    "deleteFailed": "删除失败",
-    "registrationSaveFailed": "保存注册设置失败"
+    "deleteFailed": "删除失败"
   }
 }
