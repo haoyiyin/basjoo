@@ -10,6 +10,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
+
 INSECURE_SECRET_VALUES = {
     "",
     "change-me-in-production",
