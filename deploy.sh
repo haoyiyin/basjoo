@@ -13,9 +13,21 @@ if ! swapon --noheadings --show 2>/dev/null | grep -q '[^[:space:]]'; then
   printf '%s\n' '==> No swap detected. Creating 2GB swap file for Next.js build...'
   if [ -f /swapfile ]; then
     printf '%s\n' '==> Existing /swapfile found but not active, re-enabling...'
-    ${SUDO} swapon /swapfile 2>/dev/null || true
+    if ! ${SUDO} swapon /swapfile 2>/dev/null; then
+      printf '%s\n' '==> Re-enabling failed, recreating /swapfile...'
+      ${SUDO} rm -f /swapfile
+      ${SUDO} touch /swapfile 2>/dev/null || true
+      ${SUDO} chattr +C /swapfile 2>/dev/null || true
+      ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+      ${SUDO} chmod 600 /swapfile
+      ${SUDO} mkswap /swapfile
+      ${SUDO} swapon /swapfile
+    fi
   else
-    ${SUDO} fallocate -l 2G /swapfile 2>/dev/null || ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048
+    # Disable CoW on Btrfs before allocation (no-op on other filesystems)
+    ${SUDO} touch /swapfile 2>/dev/null || true
+    ${SUDO} chattr +C /swapfile 2>/dev/null || true
+    ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
     ${SUDO} chmod 600 /swapfile
     ${SUDO} mkswap /swapfile
     ${SUDO} swapon /swapfile
