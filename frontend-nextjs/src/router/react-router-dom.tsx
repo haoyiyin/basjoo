@@ -1,9 +1,44 @@
 'use client';
 
 import type { CSSProperties, MouseEventHandler, ReactNode } from 'react';
-import { useEffect, useMemo } from 'react';
+import { createContext, useContext, useEffect, useMemo } from 'react';
+import { Suspense } from 'react';
 import NextLink from 'next/link';
 import { usePathname, useRouter, useSearchParams as useNextSearchParams, useParams as useNextParams } from 'next/navigation';
+
+interface SearchParamsContextValue {
+  searchParams: URLSearchParams;
+}
+
+const SearchParamsContext = createContext<SearchParamsContextValue | null>(null);
+
+/**
+ * Provides search params to all router shim hooks via a Suspense boundary.
+ * Wrap this around any route group layout that uses useLocation or useSearchParams.
+ */
+function SearchParamsProvider({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={<SearchParamsProviderFallback>{children}</SearchParamsProviderFallback>}>
+      <SearchParamsProviderInner>{children}</SearchParamsProviderInner>
+    </Suspense>
+  );
+}
+
+function SearchParamsProviderInner({ children }: { children: ReactNode }) {
+  const nextParams = useNextSearchParams();
+  const value = useMemo<SearchParamsContextValue>(() => ({ searchParams: nextParams }), [nextParams]);
+  return <SearchParamsContext.Provider value={value}>{children}</SearchParamsContext.Provider>;
+}
+
+function SearchParamsProviderFallback({ children }: { children: ReactNode }) {
+  const fallback = useMemo<SearchParamsContextValue>(() => ({ searchParams: new URLSearchParams() }), []);
+  return <SearchParamsContext.Provider value={fallback}>{children}</SearchParamsContext.Provider>;
+}
+
+function getSearchParams(): URLSearchParams {
+  const ctx = useContext(SearchParamsContext);
+  return ctx?.searchParams ?? new URLSearchParams();
+}
 
 interface NavigateProps {
   to: string;
@@ -27,7 +62,7 @@ export function useNavigate() {
 
 export function useLocation() {
   const pathname = usePathname();
-  const searchParams = useNextSearchParams();
+  const searchParams = getSearchParams();
   const search = searchParams?.toString() || '';
 
   return useMemo(() => ({
@@ -41,7 +76,7 @@ export function useParamsTyped<T extends Record<string, string>>() {
 }
 
 export function useSearchParamsState() {
-  const searchParams = useNextSearchParams();
+  const searchParams = getSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const safePathname = pathname || '/';
@@ -98,4 +133,4 @@ export function Route() {
   return null;
 }
 
-export { useParamsTyped as useParams, useSearchParamsState as useSearchParams };
+export { useParamsTyped as useParams, useSearchParamsState as useSearchParams, SearchParamsProvider };
