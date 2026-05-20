@@ -15,6 +15,7 @@ import pytest
         ("post", "/api/v1/index:rebuild", {"force": False}),
         ("get", "/api/v1/index:status", None),
         ("get", "/api/v1/index:info", None),
+        ("get", "/api/v1/sources:summary", None),
     ],
 )
 async def test_management_endpoints_require_auth(public_client, default_agent_id, method, path, json_body):
@@ -33,7 +34,6 @@ async def test_management_endpoints_require_auth(public_client, default_agent_id
         ("post", "/api/v1/chat", {"message": "hello"}),
         ("get", "/api/v1/config:public", None),
         ("post", "/api/v1/contexts", {"query": "test"}),
-        ("get", "/api/v1/sources:summary", None),
     ],
 )
 async def test_public_endpoints_remain_accessible(public_client, default_agent_id, method, path, json_body):

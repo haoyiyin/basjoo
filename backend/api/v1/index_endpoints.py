@@ -8,7 +8,7 @@ import logging
 
 import database
 from database import get_db
-from api.endpoints.auth import get_current_admin
+from api.endpoints.auth import require_admin_or_super_admin
 from models import (
     Agent,
     URLSource,
@@ -22,7 +22,7 @@ from api.v1.provider_helpers import get_agent_embedding_config, get_agent_vector
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", dependencies=[Depends(get_current_admin)])
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin_or_super_admin)])
 
 
 # 全局服务实例

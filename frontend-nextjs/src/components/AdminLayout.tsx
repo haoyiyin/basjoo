@@ -99,6 +99,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [expandedNav, setExpandedNav] = useState<string | null>(null)
+  const isSupport = admin?.role === 'support'
 
   // Auto-expand knowledge submenu if on a knowledge child page
   useEffect(() => {
@@ -108,7 +109,11 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     }
   }, [location.pathname])
 
-  const navItems = navItemsConfig.map(item => ({
+  const allowedNav = isSupport
+    ? navItemsConfig.filter(item => item.path === '/sessions')
+    : navItemsConfig
+
+  const navItems = allowedNav.map(item => ({
     ...item,
     label: t(item.i18nKey),
     children: item.children?.map(child => ({
@@ -160,7 +165,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         borderBottom: '1px solid var(--color-border)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }} onClick={handleLogoClick}>
+          <Link to={isSupport ? "/sessions" : "/"} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }} onClick={handleLogoClick}>
             <div style={{
               width: '40px',
               height: '40px',

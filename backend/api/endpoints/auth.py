@@ -102,7 +102,7 @@ async def get_current_admin(
 
     return admin
 
-VALID_ADMIN_ROLES = {"super_admin", "admin", "support", "readonly"}
+VALID_ADMIN_ROLES = {"super_admin", "admin", "support"}
 
 
 def require_super_admin(current_admin: AdminUser):
@@ -111,6 +111,28 @@ def require_super_admin(current_admin: AdminUser):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only super administrators can manage users",
         )
+
+
+async def require_admin_or_super_admin(
+    current_admin: AdminUser = Depends(get_current_admin),
+) -> AdminUser:
+    if current_admin.role not in ("super_admin", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    return current_admin
+
+
+async def require_chat_operator(
+    current_admin: AdminUser = Depends(get_current_admin),
+) -> AdminUser:
+    if current_admin.role not in ("super_admin", "admin", "support"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    return current_admin
 
 
 def validate_admin_role(role: str):

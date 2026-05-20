@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import AdminLayout from '../components/AdminLayout';
 import { parseErrorResponse } from '../services/api';
 
-type AdminRole = 'super_admin' | 'admin' | 'support' | 'readonly';
+type AdminRole = 'super_admin' | 'admin' | 'support';
 type AdminUser = {
   id: number;
   email: string;
@@ -15,7 +15,7 @@ type AdminUser = {
   role: AdminRole;
 };
 
-const roleKeys: AdminRole[] = ['super_admin', 'admin', 'support', 'readonly'];
+const roleKeys: AdminRole[] = ['super_admin', 'admin', 'support'];
 
 export const AdminUsers = () => {
   const { t } = useTranslation();

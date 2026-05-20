@@ -448,3 +448,76 @@ async def test_clearing_siliconflow_embedding_key_updates_effective_status(clien
     status_response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
     assert status_response.status_code == 200
     assert status_response.json()["configured"] is False
+
+
+# ── Role permission tests ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_admin_with_readonly_is_rejected(client):
+    response = await client.post(
+        "/api/admin/users",
+        json={
+            "email": "readonly_test@example.com",
+            "password": "testpassword123",
+            "name": "Readonly Test",
+            "role": "readonly",
+        },
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_admin_to_readonly_is_rejected(client):
+    # First create a valid user
+    create_response = await client.post(
+        "/api/admin/users",
+        json={
+            "email": "support_test2@example.com",
+            "password": "testpassword123",
+            "name": "Support Test 2",
+            "role": "support",
+        },
+    )
+    assert create_response.status_code == 200
+    admin_id = create_response.json()["id"]
+
+    # Try to update to readonly
+    patch_response = await client.patch(
+        f"/api/admin/users/{admin_id}",
+        json={"role": "readonly"},
+    )
+    assert patch_response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_support_cannot_manage_users(support_client):
+    # List users
+    list_response = await support_client.get("/api/admin/users")
+    assert list_response.status_code == 403
+
+    # Create user
+    create_response = await support_client.post(
+        "/api/admin/users",
+        json={
+            "email": "nosupport@example.com",
+            "password": "testpassword123",
+            "name": "No Support",
+            "role": "support",
+        },
+    )
+    assert create_response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_support_can_access_own_me(support_client):
+    response = await support_client.get("/api/admin/me")
+    assert response.status_code == 200
+    assert response.json()["role"] == "support"
+
+
+@pytest.mark.asyncio
+async def test_readonly_denied_on_protected_endpoints(readonly_client, default_agent_id):
+    """Legacy readonly role should get 403 on protected routes."""
+    response = await readonly_client.get(f"/api/v1/agent?agent_id={default_agent_id}")
+    assert response.status_code == 403

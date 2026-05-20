@@ -85,6 +85,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(false)
   }, [])
 
+  // Refresh admin role from the backend on mount so that role changes
+  // (e.g. readonly → support migration, role downgrade) are reflected
+  // without requiring a re-login.
+  useEffect(() => {
+    if (!token || isTokenExpired(token)) {
+      return
+    }
+
+    let cancelled = false
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/admin/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) {
+          // Token invalid or user deactivated — clear auth state.
+          logout()
+          return
+        }
+        const data = await response.json()
+        if (!cancelled) {
+          const updated = { id: data.id, email: data.email, name: data.name, role: data.role }
+          setAdmin(updated)
+          localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(updated))
+        }
+      } catch {
+        // Network error — keep existing cached admin, don't log out.
+      }
+    }
+
+    refresh()
+    return () => { cancelled = true }
+  }, [token, logout])
+
   useEffect(() => {
     if (!token) {
       return

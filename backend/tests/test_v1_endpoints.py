@@ -549,3 +549,84 @@ async def test_admin_chat_bypasses_widget_origin_whitelist(client, default_agent
         },
     )
     assert response.status_code == 200
+
+
+# ── Role permission: support chat operator tests ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_support_list_sessions(support_client):
+    response = await support_client.get("/api/v1/admin/sessions?skip=0&limit=10")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+
+
+@pytest.mark.asyncio
+async def test_support_takeover_and_send(client, support_client, default_agent_id):
+    # Create a chat session as admin (super_admin)
+    chat_response = await client.post(
+        "/api/v1/chat",
+        json={"agent_id": default_agent_id, "message": "Support takeover test"},
+    )
+    assert chat_response.status_code == 200
+    business_session_id = chat_response.json()["session_id"]
+
+    # Support lists sessions and finds the session
+    sessions_response = await support_client.get("/api/v1/admin/sessions?skip=0&limit=20")
+    assert sessions_response.status_code == 200
+    sessions = sessions_response.json()["items"]
+    matched = next(item for item in sessions if item["session_id"] == business_session_id)
+    db_session_id = matched["id"]
+
+    # Support reads messages
+    messages_response = await support_client.get(
+        f"/api/v1/admin/sessions/{db_session_id}/messages"
+    )
+    assert messages_response.status_code == 200
+    assert len(messages_response.json()) > 0
+
+    # Support takes over
+    takeover_response = await support_client.post(
+        f"/api/v1/admin/sessions/{db_session_id}/takeover"
+    )
+    assert takeover_response.status_code == 200
+
+    # Support sends a human message
+    send_response = await support_client.post(
+        "/api/v1/admin/sessions/send",
+        json={"session_id": db_session_id, "content": "Support reply"},
+    )
+    assert send_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_support_denied_on_agent_endpoints(support_client, default_agent_id):
+    endpoints = [
+        ("GET", f"/api/v1/agent?agent_id={default_agent_id}"),
+        ("PUT", f"/api/v1/agent?agent_id={default_agent_id}"),
+        ("GET", f"/api/v1/agent:jina-key-status?agent_id={default_agent_id}"),
+        ("GET", f"/api/v1/quota?agent_id={default_agent_id}"),
+        ("GET", "/api/v1/agent:default"),
+        ("GET", f"/api/v1/tasks:status?agent_id={default_agent_id}"),
+        ("GET", f"/api/v1/sources:summary?agent_id={default_agent_id}"),
+    ]
+    for method, path in endpoints:
+        response = await support_client.request(method, path)
+        assert response.status_code == 403, f"{method} {path} should be denied for support"
+
+
+@pytest.mark.asyncio
+async def test_support_denied_on_url_endpoints(support_client, default_agent_id):
+    response = await support_client.get(
+        f"/api/v1/urls:list?agent_id={default_agent_id}"
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_support_denied_on_index_endpoints(support_client, default_agent_id):
+    response = await support_client.get(
+        f"/api/v1/index:status?agent_id={default_agent_id}"
+    )
+    assert response.status_code == 403

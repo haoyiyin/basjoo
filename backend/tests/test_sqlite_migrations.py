@@ -264,3 +264,73 @@ def test_migration_skips_fresh_db():
     """Migration should be a no-op when the DB file does not exist yet."""
     run_sqlite_migrations("sqlite:////nonexistent/path/test.db")
     # Should not raise
+
+
+_ADMIN_USERS_DDL = """
+CREATE TABLE admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    hashed_password TEXT NOT NULL,
+    name TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    role VARCHAR(50) NOT NULL DEFAULT 'admin',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+
+def _create_admin_db(db_path: str) -> str:
+    conn = sqlite3.connect(db_path)
+    conn.executescript(_ADMIN_USERS_DDL)
+    conn.execute(
+        "INSERT INTO admin_users (id, email, hashed_password, name, role) "
+        "VALUES (1, 'readonly@test.com', 'hash', 'ReadOnly User', 'readonly')"
+    )
+    conn.execute(
+        "INSERT INTO admin_users (id, email, hashed_password, name, role) "
+        "VALUES (2, 'admin@test.com', 'hash', 'Admin User', 'admin')"
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_migration_converts_readonly_to_support():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_admin_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = {
+            row["id"]: row["role"]
+            for row in conn.execute("SELECT id, role FROM admin_users").fetchall()
+        }
+        conn.close()
+
+        assert rows[1] == "support"  # readonly → support
+        assert rows[2] == "admin"  # admin unchanged
+    finally:
+        os.unlink(db_path)
+
+
+def test_migration_readonly_to_support_is_idempotent():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_admin_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+        run_sqlite_migrations(f"sqlite:///{db_path}")  # second run
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT role FROM admin_users WHERE id = 1"
+        ).fetchone()
+        conn.close()
+
+        assert row["role"] == "support"
+    finally:
+        os.unlink(db_path)

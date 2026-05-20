@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import database
 from database import get_db
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
-from api.endpoints.auth import get_current_admin
+from api.endpoints.auth import get_current_admin, require_admin_or_super_admin, require_chat_operator
 from models import (
     Agent,
     URLSource,
@@ -407,7 +407,10 @@ def enforce_widget_origin_whitelist(
     request: Request,
     admin_user: Optional[AdminUser] = None,
 ) -> None:
-    if admin_user:
+    # Only admin / super_admin may bypass the widget origin whitelist (e.g. for
+    # testing via the admin dashboard).  Support and other roles must still pass
+    # the whitelist when calling public chat endpoints.
+    if admin_user and admin_user.role in ("super_admin", "admin"):
         return
 
     configured_origins = agent.allowed_widget_origins or []
@@ -1439,7 +1442,7 @@ async def get_contexts(
 @router.get("/agent", response_model=AgentConfig)
 async def get_agent(
     agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
@@ -1457,7 +1460,7 @@ async def get_agent(
 async def update_agent(
     agent_id: str,
     request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
@@ -1501,7 +1504,7 @@ async def update_agent(
 @router.get("/agent:jina-key-status")
 async def get_jina_key_status(
     agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
@@ -1524,7 +1527,7 @@ async def get_jina_key_status(
 async def update_jina_key(
     agent_id: str,
     request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
@@ -1560,7 +1563,7 @@ async def update_jina_key(
 @router.get("/quota", response_model=QuotaInfo)
 async def get_quota(
     agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """获取配额信息"""
@@ -1609,7 +1612,7 @@ async def get_quota(
 
 @router.get("/agent:default", response_model=AgentConfig)
 async def get_default_agent(
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -1631,7 +1634,7 @@ async def get_default_agent(
 @router.post("/models:list")
 async def list_available_models(
     request: ModelsListRequest,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1681,7 +1684,7 @@ async def list_available_models(
 @router.get("/tasks:status")
 async def get_tasks_status(
     agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
 ):
     """
     获取当前Agent的任务状态
@@ -1707,7 +1710,7 @@ async def get_tasks_status(
 async def test_ai_api(
     agent_id: str,
     payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """测试AI API是否可用"""
@@ -1763,7 +1766,7 @@ async def test_ai_api(
 async def test_embedding_api(
     agent_id: str,
     payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """测试当前 Embedding 配置是否可用"""
@@ -1855,7 +1858,7 @@ async def test_embedding_api(
 async def test_jina_api(
     agent_id: str,
     payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """测试Jina Embedding API是否可用"""
@@ -1918,6 +1921,7 @@ async def test_jina_api(
 @router.get("/sources:summary", response_model=SourcesSummaryResponse)
 async def get_sources_summary(
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -2044,7 +2048,7 @@ async def list_sessions(
     keyword: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_chat_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -2107,7 +2111,7 @@ async def list_sessions(
 @router.get("/admin/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_chat_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -2139,7 +2143,7 @@ async def get_session_messages(
 @router.post("/admin/sessions/{session_id}/takeover")
 async def takeover_session(
     session_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_chat_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -2159,7 +2163,7 @@ async def takeover_session(
 @router.post("/admin/sessions/send")
 async def send_session_message(
     request: Request,
-    current_user: AdminUser = Depends(get_current_admin),
+    current_user: AdminUser = Depends(require_chat_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -2232,6 +2236,9 @@ async def admin_websocket(websocket: WebSocket):
         admin = await auth_service.get_current_admin(token)
         if not admin:
             await websocket.close(code=4003, reason="Invalid token")
+            return
+        if admin.role not in ("super_admin", "admin", "support"):
+            await websocket.close(code=4003, reason="Insufficient permissions")
             return
 
     await manager.connect(websocket)

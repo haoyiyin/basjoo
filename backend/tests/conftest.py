@@ -226,11 +226,75 @@ async def public_client(setup_test_db):
         yield ac
 
 
+async def _ensure_test_admin_with_role(role: str) -> str:
+    """Create an admin with a specific role and return a valid JWT token."""
+    from models import AdminUser
+    from services.auth_service import AuthService
+
+    async with database.AsyncSessionLocal() as session:
+        auth_service = AuthService(session)
+        result = await session.execute(
+            select(AdminUser).where(AdminUser.email == f"test_{role}@example.com")
+        )
+        admin = result.scalar_one_or_none()
+
+        if not admin:
+            admin = await auth_service.create_admin(
+                email=f"test_{role}@example.com",
+                password="testpassword123",
+                name=f"Test {role.replace('_', ' ').title()}",
+                role=role,
+            )
+
+        return auth_service.create_access_token({"sub": str(admin.id)})
+
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def client(setup_test_db):
     from main import app
 
     token = await ensure_test_admin_token()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+        ac.headers.update({"Authorization": f"Bearer {token}"})
+        yield ac
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def support_client(setup_test_db):
+    from main import app
+
+    token = await _ensure_test_admin_with_role("support")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+        ac.headers.update({"Authorization": f"Bearer {token}"})
+        yield ac
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def readonly_client(setup_test_db):
+    """Client using a legacy readonly token — should be denied on protected routes."""
+    from main import app
+    from models import AdminUser
+    from services.auth_service import AuthService
+
+    # Create the user directly with readonly role (bypassing validate_admin_role)
+    async with database.AsyncSessionLocal() as session:
+        auth_service = AuthService(session)
+        result = await session.execute(
+            select(AdminUser).where(AdminUser.email == "test_readonly@example.com")
+        )
+        admin = result.scalar_one_or_none()
+        if not admin:
+            admin = await auth_service.create_admin(
+                email="test_readonly@example.com",
+                password="testpassword123",
+                name="Test Readonly",
+                role="readonly",
+            )
+
+        token = auth_service.create_access_token({"sub": str(admin.id)})
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
         ac.headers.update({"Authorization": f"Bearer {token}"})

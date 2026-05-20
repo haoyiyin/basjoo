@@ -139,6 +139,17 @@ def run_sqlite_migrations(database_url: str) -> None:
                     f"{cursor.rowcount} row(s)"
                 )
 
+        # ── admin_users role migration ─────────────────────────────────────
+        if _table_exists(cursor, "admin_users"):
+            _ensure_columns(cursor, "admin_users", [("role", "VARCHAR(50) NOT NULL DEFAULT 'admin'")])
+            cursor.execute(
+                "UPDATE admin_users SET role = 'support' WHERE role = 'readonly'"
+            )
+            if cursor.rowcount > 0:
+                print(
+                    f"✓ Migrated {cursor.rowcount} admin_user(s) from readonly to support"
+                )
+
         conn.commit()
 
     except Exception:
