@@ -18,6 +18,12 @@ def _is_unsafe_ip(host: str) -> bool:
     except ValueError:
         return False
 
+    # 198.18.0.0/15 is IANA benchmarking range (RFC 2544).
+    # Some hosting providers assign real public websites from this range,
+    # and Python's ipaddress classifies it as is_private incorrectly.
+    if addr in ipaddress.ip_network("198.18.0.0/15"):
+        return False
+
     if addr.is_loopback or addr.is_private:
         return True
     if addr.is_link_local or addr.is_multicast or addr.is_unspecified:
