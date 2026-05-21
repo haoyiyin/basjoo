@@ -1,8 +1,7 @@
 """URL抓取和内容提取服务 - 使用 Scrapling 微服务"""
 
 import hashlib
-from typing import Optional, Dict, Any, List, Set, Tuple
-from urllib.parse import urlparse
+from typing import Dict, Any, List, Tuple
 import logging
 
 from services.url_safety import validate_url_safe
@@ -104,32 +103,6 @@ class URLScraper:
         except Exception as e:
             logger.error(f"Error discovering subpages from {url}: {e}")
             return []
-
-    def _clean_content(self, text: str) -> str:
-        """清理文本内容"""
-        lines = [line.strip() for line in text.split("\n") if line.strip()]
-        cleaned_lines = []
-        prev_empty = False
-        for line in lines:
-            if line:
-                cleaned_lines.append(line)
-                prev_empty = False
-            elif not prev_empty:
-                cleaned_lines.append("")
-                prev_empty = True
-
-        return "\n".join(cleaned_lines)
-
-    def _extract_title_from_url(self, url: str) -> str:
-        """从URL提取标题"""
-        try:
-            parsed = urlparse(url)
-            path_parts = [p for p in parsed.path.split("/") if p]
-            if path_parts:
-                return path_parts[-1].replace("-", " ").replace("_", " ").title()
-            return parsed.netloc
-        except Exception:
-            return "Untitled"
 
 
 class URLNormalizer:
