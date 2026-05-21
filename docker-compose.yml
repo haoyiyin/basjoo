@@ -44,6 +44,22 @@ services:
       retries: 5
     profiles: ["prod", "dev"]
 
+  scrapling-service:
+    build:
+      context: ./scrapling-service
+      dockerfile: Dockerfile
+    container_name: basjoo-scrapling
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles: ["prod", "dev"]
+
   # ============================================
   # 生产环境服务
   # ============================================
@@ -72,12 +88,15 @@ services:
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=INFO
+      - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
     volumes:
       - backend-data:/app/data
     depends_on:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      scrapling-service:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -163,6 +182,7 @@ services:
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=DEBUG
+      - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
     volumes:
       - backend-data:/app/data
       - ./backend:/app
@@ -170,6 +190,8 @@ services:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      scrapling-service:
         condition: service_healthy
     restart: unless-stopped
     networks:

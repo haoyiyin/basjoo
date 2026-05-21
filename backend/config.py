@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # Jina Embedding API
     jina_embedding_api_base: str = "https://api.jina.ai/v1/embeddings"
 
+    # Scrapling 微服务
+    scrapling_service_url: str = "http://scrapling-service:8001"
+
     # 数据库 - SQLite (轻量级MVP方案)
     database_url: str = "sqlite:///./data/basjoo.db"
 

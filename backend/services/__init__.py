@@ -1,6 +1,7 @@
 """服务模块"""
 from .scraper import URLNormalizer, check_content_changed
 from .crawler import SiteCrawler, CrawlPageResult
+from .scrapling_client import ScraplingClient, get_scrapling_client
 from .qdrant_store import QdrantVectorStore, TextChunker
 from .rag_qdrant import QdrantRAGService
 from .redis_service import RedisService, get_redis, close_redis
@@ -11,6 +12,8 @@ __all__ = [
     "check_content_changed",
     "SiteCrawler",
     "CrawlPageResult",
+    "ScraplingClient",
+    "get_scrapling_client",
     "QdrantVectorStore",
     "TextChunker",
     "QdrantRAGService",

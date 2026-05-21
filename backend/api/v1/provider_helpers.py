@@ -43,7 +43,6 @@ def get_agent_embedding_config(agent: Agent) -> dict:
             "embedding_model": embedding_model,
             "embedding_dimension": 1024,
             "embedding_batch_size": embedding_batch_size,
-            "fetcher_provider": "trafilatura",
         }
 
     return {
@@ -53,7 +52,6 @@ def get_agent_embedding_config(agent: Agent) -> dict:
         "embedding_model": agent.embedding_model or "jina-embeddings-v3",
         "embedding_dimension": 1024,
         "embedding_batch_size": embedding_batch_size,
-        "fetcher_provider": "jina_reader",
     }
 
 
@@ -72,8 +70,3 @@ def get_agent_vector_store(agent: Agent) -> QdrantVectorStore:
         embedding_dimension=embedding_config["embedding_dimension"],
         embedding_batch_size=embedding_config["embedding_batch_size"],
     )
-
-
-def get_agent_fetcher_provider(agent: Agent) -> str:
-    """Return the URL fetcher provider for the agent."""
-    return "trafilatura" if resolve_agent_embedding_provider(agent) in {"siliconflow", "custom"} else "jina_reader"

@@ -34,7 +34,7 @@ from api.v1.schemas import (
 from services import URLNormalizer, TextChunker, SiteCrawler, TaskType, task_lock
 from services.scraper import URLScraper
 from core.encryption import decrypt_api_key
-from api.v1.provider_helpers import get_agent_embedding_config, get_agent_vector_store, get_agent_fetcher_provider
+from api.v1.provider_helpers import get_agent_embedding_config, get_agent_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +75,6 @@ async def fetch_url_task(url_source_id: int):
             agent_id = url_source.agent_id
             url = url_source.url
 
-            agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-            agent = agent_result.scalar_one_or_none()
-            jina_api_key = decrypt_api_key(agent.jina_api_key) if agent else ""
-            fetcher_provider = get_agent_fetcher_provider(agent) if agent else "jina_reader"
-
         success, error = await task_lock.acquire_task(agent_id, TaskType.URL_FETCH, task_id)
         if not success:
             logger.warning(f"Cannot start URL fetch: {error}")
@@ -112,7 +107,7 @@ async def fetch_url_task(url_source_id: int):
                         await db.commit()
                 return
 
-            agent_scraper = URLScraper(jina_api_key=jina_api_key or "", fetcher_provider=fetcher_provider)
+            agent_scraper = URLScraper()
             fetch_result = await agent_scraper.fetch(url)
 
             async with database.AsyncSessionLocal() as db:
@@ -434,7 +429,7 @@ async def discover_subpages(
     )
     quota = quota_result.scalar_one_or_none()
 
-    agent_scraper = URLScraper(jina_api_key=decrypt_api_key(agent.jina_api_key) or "", fetcher_provider=get_agent_fetcher_provider(agent))
+    agent_scraper = URLScraper()
     discovered_urls = await agent_scraper.discover_subpages(
         url, max_depth=max_depth, max_pages=max_pages
     )
@@ -513,12 +508,10 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
             if not agent:
                 logger.error(f"[site_crawl_task] Agent {agent_id} not found for site crawl")
                 return
-            jina_api_key = decrypt_api_key(agent.jina_api_key) or ""
             workspace_id = agent.workspace_id
-            fetcher_provider = get_agent_fetcher_provider(agent)
 
         logger.info(f"[site_crawl_task] Initializing SiteCrawler...")
-        crawler = SiteCrawler(jina_api_key=jina_api_key, fetcher_provider=fetcher_provider)
+        crawler = SiteCrawler()
         logger.info(f"[site_crawl_task] Starting crawl_site({url}, depth={max_depth}, pages={max_pages})")
         results = await crawler.crawl_site(
             url=url,

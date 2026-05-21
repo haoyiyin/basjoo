@@ -11,8 +11,6 @@ from sqlalchemy import select, and_, or_
 from database import AsyncSessionLocal
 from models import Agent, URLSource
 from services.crawler import SiteCrawler
-from core.encryption import decrypt_api_key
-from api.v1.provider_helpers import get_agent_fetcher_provider
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +101,7 @@ class URLFetchScheduler:
                 f"(interval: {interval_days} days)"
             )
 
-            fetcher_provider = get_agent_fetcher_provider(agent)
-            crawler = SiteCrawler(jina_api_key=decrypt_api_key(agent.jina_api_key) or "", fetcher_provider=fetcher_provider)
+            crawler = SiteCrawler()
 
             for url_source in url_sources:
                 await self.fetch_single_url(crawler, url_source.id, str(agent.id))
