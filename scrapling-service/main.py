@@ -10,6 +10,7 @@ from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+import httpx
 from curl_cffi import requests as curl_requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -26,6 +27,28 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
 }
+
+
+def _fetch_with_fallback(url: str, timeout: int = 30):
+    """Fetch URL with curl_cffi first, falling back to httpx on failure."""
+    try:
+        resp = curl_requests.get(
+            url,
+            headers=DEFAULT_HEADERS,
+            timeout=timeout,
+            impersonate="chrome120",
+            allow_redirects=True,
+        )
+        return resp.text, resp.status_code, resp.url, resp.headers.get("content-type", "")
+    except Exception as e:
+        logger.warning(f"curl_cffi failed for {url}: {e}, falling back to httpx")
+        resp = httpx.get(
+            url,
+            headers=DEFAULT_HEADERS,
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        return resp.text, resp.status_code, str(resp.url), resp.headers.get("content-type", "")
 
 
 class FetchRequest(BaseModel):
@@ -87,26 +110,18 @@ async def fetch_url(request: FetchRequest):
     try:
         logger.info(f"Fetching URL: {request.url}")
 
-        # Use curl_cffi for TLS-impersonated HTTP (impersonates Chrome 120)
-        resp = curl_requests.get(
-            request.url,
-            headers=DEFAULT_HEADERS,
-            timeout=request.timeout,
-            impersonate="chrome120",
-            allow_redirects=True,
-        )
+        html, status_code, final_url, content_type = _fetch_with_fallback(request.url, request.timeout)
 
-        if resp.status_code >= 400:
+        if status_code >= 400:
             return FetchResponse(
                 title="",
                 content="",
                 content_hash="",
-                metadata={"url": request.url, "status_code": resp.status_code, "fetcher": "scrapling"},
+                metadata={"url": request.url, "status_code": status_code, "fetcher": "scrapling"},
                 success=False,
-                error=f"HTTP {resp.status_code}"
+                error=f"HTTP {status_code}"
             )
 
-        content_type = resp.headers.get("content-type", "")
         if "text/html" not in content_type.lower() and "text/plain" not in content_type.lower():
             return FetchResponse(
                 title="",
@@ -117,7 +132,6 @@ async def fetch_url(request: FetchRequest):
                 error=f"Unsupported content type: {content_type}"
             )
 
-        html = resp.text
         title, content_text = _extract_content(html, request.url)
 
         if not content_text or len(content_text.strip()) < 10:
@@ -134,8 +148,8 @@ async def fetch_url(request: FetchRequest):
 
         metadata = {
             "url": request.url,
-            "final_url": resp.url or request.url,
-            "status_code": resp.status_code,
+            "final_url": final_url or request.url,
+            "status_code": status_code,
             "content_type": content_type,
             "content_length": len(html),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -175,18 +189,12 @@ async def discover_links(request: DiscoverRequest):
             base_path = base_path[:-1]
         base_path_with_slash = "/" if base_path == "/" else f"{base_path}/"
 
-        resp = curl_requests.get(
-            request.url,
-            headers=DEFAULT_HEADERS,
-            timeout=30,
-            impersonate="chrome120",
-            allow_redirects=True,
-        )
+        html, status_code, _, _ = _fetch_with_fallback(request.url, 30)
 
-        if resp.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"HTTP {resp.status_code}")
+        if status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"HTTP {status_code}")
 
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(html, "lxml")
         discovered = []
         seen_urls = set()
 

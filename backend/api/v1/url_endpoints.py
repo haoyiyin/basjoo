@@ -547,12 +547,11 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                     candidates.append((page_result, normalized))
 
                 # Fetch already-existing URLs in one query
-                existing_normalized = {
-                    row.normalized_url
-                    for row in (await db.execute(
+                existing_normalized = set(
+                    (await db.execute(
                         select(URLSource.normalized_url).where(URLSource.agent_id == agent_id)
                     )).scalars().all()
-                }
+                )
 
                 to_insert = [
                     (pr, norm) for pr, norm in candidates
