@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `backend/` is a FastAPI app with SQLite persistence, Redis-backed rate limiting/cache fallbacks, and Qdrant-backed retrieval/indexing.
 - `widget/` builds the embeddable chat widget SDK that talks to the backend streaming chat endpoints.
 - `nginx/` contains the reverse-proxy config used in Docker deployments.
+- `scrapling-service/` is a standalone FastAPI microservice that performs HTTP fetching with `curl_cffi` (TLS-impersonated Chrome 120) and `readability-lxml` content extraction, with `httpx` fallback when `curl_cffi` fails. The backend talks to it via HTTP on port 8001 (internal Docker network).
 - `docker-compose.yml` is the primary local/dev/prod orchestration entrypoint.
 
 ## Common commands
@@ -17,6 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Start development stack: `docker compose --profile dev up -d`
 - Start production-style stack: `docker compose --profile prod up -d`
 - Rebuild a service: `docker compose --profile dev up -d --build backend-dev frontend-dev`
+- Rebuild scrapling service: `docker compose --profile dev up -d --build scrapling-service`
 - Follow logs: `docker compose logs -f backend-dev frontend-dev nginx`
 - Watch mode (auto-rebuild on file changes): `docker compose --profile dev up --watch`
 
@@ -81,9 +83,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Main chat APIs live in `backend/api/v1/endpoints.py`. They handle admin config APIs, public chat APIs, SSE streaming, session creation, quota checks, widget origin whitelist checks, and source normalization.
 - URL and Q&A ingestion lives in `backend/api/v1/url_endpoints.py`. Those routers are admin-protected at the router level; URL creation queues async fetch jobs, and refetch/crawl/import operations feed the same knowledge-source tables.
 - Full index rebuilds live in `backend/api/v1/index_endpoints.py`. Those routes are also admin-protected at the router level; rebuild jobs chunk URL/QA content, persist `DocumentChunk` rows, and replace the agent’s Qdrant collection.
-- Retrieval/storage logic is split across `backend/services/qdrant_store.py`, `backend/services/rag_qdrant.py`, `backend/services/scraper.py`, `backend/services/crawler.py`, and `backend/services/llm_service.py`.
-- URL safety/SSRF checks are centralized in `backend/services/url_safety.py` and reused by both schema validation and scraper fetch/discovery flows. If URL-ingestion policy changes, update the shared safety helper rather than reintroducing regex-only validation in multiple places.
-- `backend/services/llm_service.py` is the provider abstraction layer. Provider selection is driven by `Agent.provider_type`; many providers are implemented via OpenAI-compatible base URLs, while OpenAI Native and Google have dedicated paths.
+- Retrieval/storage logic is split across `backend/services/qdrant_store.py`, `backend/services/rag_qdrant.py`, `backend/services/scraper.py`, `backend/services/crawler.py`, `backend/services/scrapling_client.py`, and `backend/services/llm_service.py`.
+- **LLM vs embedding distinction**: `backend/services/llm_service.py` is the *chat-completion* provider abstraction (OpenAI, Google, DeepSeek, etc.). Embeddings are handled separately by `JinaEmbeddingClient` and `SiliconFlowEmbeddingClient` in `backend/services/qdrant_store.py`. They are not part of the LLM service abstraction.
+- URL safety/SSRF checks are centralized in `backend/services/url_safety.py` and reused by both schema validation and scraper fetch/discovery flows. SSRF protection blocks loopback, private, link-local, multicast, and unspecified addresses, plus direct IP literals and embedded credentials. The IANA benchmarking range `198.18.0.0/15` (RFC 2544) is explicitly whitelisted because Python's `ipaddress` incorrectly classifies it as `is_private`, but real public websites are hosted there.
 - Task concurrency for fetch/rebuild operations is guarded by the shared task lock service used by the URL and index endpoints.
 
 ### Frontend structure
@@ -134,7 +136,7 @@ Default dev ports: Frontend `3000`, Backend `8000`, Qdrant `6333`, Redis `6379`.
 
 ## Security model
 
-- **SSRF protection**: `backend/services/url_safety.py` validates all user-provided URLs, blocking localhost, direct IP literals, embedded credentials, and hostnames resolving to private/special-use IPs. DNS results are cached (512-entry LRU).
+- **SSRF protection**: `backend/services/url_safety.py` validates all user-provided URLs, blocking loopback, private, link-local, multicast, and unspecified addresses, plus direct IP literals and embedded credentials. The IANA benchmarking range `198.18.0.0/15` is explicitly whitelisted (Python misclassifies it as `is_private`). DNS results are cached (512-entry LRU).
 - **Widget origin whitelist**: Public chat routes enforce a per-agent origin whitelist; admin users bypass it for testing.
 - **CORS policy**: Early responses (429, 413) apply CORS through `apply_cors_headers()` in `backend/middleware/rate_limit.py`. `Origin: null` only gets wildcard CORS when `cors_allow_null_origin` is enabled. Missing `Origin` headers get no CORS.
 - **Task concurrency**: Shared `TaskLock` prevents conflicting rebuild/fetch operations on the same agent.
