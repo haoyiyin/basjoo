@@ -1,5 +1,7 @@
-# Scrapling is licensed under BSD-3-Clause (Copyright (c) 2024, Karim Shoair)
-# See LICENSE file for the full license text.
+"""
+Scrapling-based web scraping service.
+Uses curl_cffi for TLS-impersonated HTTP and readability-lxml for content extraction.
+"""
 
 import hashlib
 import logging
@@ -7,15 +9,23 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
+from bs4 import BeautifulSoup
+from curl_cffi import requests as curl_requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-
-from scrapling import Fetcher
+from readability import Document
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Scrapling Service", version="1.0.0")
+
+# TLS-impersonated browser-like headers
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+}
 
 
 class FetchRequest(BaseModel):
@@ -47,68 +57,98 @@ async def health():
     return {"status": "healthy"}
 
 
+def _extract_content(html: str, url: str) -> tuple:
+    """Extract title and main content from HTML using readability-lxml."""
+    try:
+        doc = Document(html)
+        title = doc.title() or ""
+        content_html = doc.summary()
+        soup = BeautifulSoup(content_html, "lxml")
+        content = soup.get_text(separator="\n", strip=True)
+        return title, content
+    except Exception:
+        # Fallback to BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+        title = ""
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+        elif soup.h1:
+            title = soup.h1.get_text().strip()
+        # Remove non-content elements
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "iframe"]):
+            tag.decompose()
+        main = soup.find("main") or soup.find("article") or soup.find("body")
+        content = main.get_text(separator="\n", strip=True) if main else soup.get_text(separator="\n", strip=True)
+        return title, content
+
+
 @app.post("/fetch", response_model=FetchResponse)
 async def fetch_url(request: FetchRequest):
     try:
         logger.info(f"Fetching URL: {request.url}")
 
-        # Use Scrapling Fetcher for HTTP request with TLS impersonation
-        page = Fetcher().get(request.url, timeout=request.timeout)
+        # Use curl_cffi for TLS-impersonated HTTP (impersonates Chrome 120)
+        resp = curl_requests.get(
+            request.url,
+            headers=DEFAULT_HEADERS,
+            timeout=request.timeout,
+            impersonate="chrome120",
+            allow_redirects=True,
+        )
 
-        # Extract title
-        title = ""
-        if page.css("title"):
-            title = page.css("title")[0].text.strip()
-        elif page.css("h1"):
-            title = page.css("h1")[0].text.strip()
+        if resp.status_code >= 400:
+            return FetchResponse(
+                title="",
+                content="",
+                content_hash="",
+                metadata={"url": request.url, "status_code": resp.status_code, "fetcher": "scrapling"},
+                success=False,
+                error=f"HTTP {resp.status_code}"
+            )
 
-        # Extract main content as text
-        # Try to find main content areas
-        main_content = None
-        for selector in ["main", "article", "div.content", "div.main", "body"]:
-            elements = page.css(selector)
-            if elements:
-                main_content = elements[0].text
-                break
+        content_type = resp.headers.get("content-type", "")
+        if "text/html" not in content_type.lower() and "text/plain" not in content_type.lower():
+            return FetchResponse(
+                title="",
+                content="",
+                content_hash="",
+                metadata={"url": request.url, "content_type": content_type, "fetcher": "scrapling"},
+                success=False,
+                error=f"Unsupported content type: {content_type}"
+            )
 
-        if not main_content:
-            main_content = page.text
+        html = resp.text
+        title, content_text = _extract_content(html, request.url)
 
-        # Clean up content
-        content_text = main_content.strip()
-        if not content_text or len(content_text) < 10:
+        if not content_text or len(content_text.strip()) < 10:
             return FetchResponse(
                 title=title or "",
                 content="",
                 content_hash="",
-                metadata={},
+                metadata={"url": request.url, "fetcher": "scrapling"},
                 success=False,
                 error="Extracted content is too short or empty"
             )
 
-        # Compute content hash
         content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
 
-        # Build metadata
         metadata = {
             "url": request.url,
-            "final_url": str(page.url) if hasattr(page, 'url') else request.url,
-            "status_code": getattr(page, 'status', 200),
-            "content_type": "text/html",
-            "content_length": len(content_text),
+            "final_url": resp.url or request.url,
+            "status_code": resp.status_code,
+            "content_type": content_type,
+            "content_length": len(html),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "fetcher": "scrapling",
         }
 
         logger.info(f"Successfully fetched {request.url}: {len(content_text)} chars")
-
         return FetchResponse(
             title=title or "",
             content=content_text,
             content_hash=content_hash,
             metadata=metadata,
             success=True,
-            error=None
         )
 
     except Exception as e:
@@ -135,41 +175,40 @@ async def discover_links(request: DiscoverRequest):
             base_path = base_path[:-1]
         base_path_with_slash = "/" if base_path == "/" else f"{base_path}/"
 
-        # Use Scrapling Fetcher to get the page
-        page = Fetcher().get(request.url, timeout=30)
+        resp = curl_requests.get(
+            request.url,
+            headers=DEFAULT_HEADERS,
+            timeout=30,
+            impersonate="chrome120",
+            allow_redirects=True,
+        )
 
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"HTTP {resp.status_code}")
+
+        soup = BeautifulSoup(resp.text, "lxml")
         discovered = []
         seen_urls = set()
 
-        # Extract all links
-        links = page.css("a[href]")
-        for link in links:
-            href = link.attrib.get("href", "")
-            if not href:
-                continue
-
-            # Skip anchors, javascript, mailto, tel
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
             if href.startswith("#") or href.startswith("javascript:"):
                 continue
             if href.startswith("mailto:") or href.startswith("tel:"):
                 continue
 
-            # Resolve relative URLs
             full_url = urljoin(request.url, href)
             parsed = urlparse(full_url)
 
-            # Only same domain
             if parsed.netloc != base_domain:
                 continue
 
-            # Normalize path
             normalized_path = parsed.path or "/"
             normalized = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
             if normalized.endswith("/") and normalized != f"{parsed.scheme}://{parsed.netloc}/":
                 normalized = normalized[:-1]
                 normalized_path = normalized_path[:-1]
 
-            # Check if subpath
             is_subpath = (
                 normalized_path == base_path
                 or normalized_path.startswith(base_path_with_slash)
@@ -185,9 +224,10 @@ async def discover_links(request: DiscoverRequest):
                 break
 
         logger.info(f"Discovered {len(discovered)} links from {request.url}")
-
         return DiscoverResponse(urls=discovered[:request.max_pages])
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error discovering links from {request.url}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

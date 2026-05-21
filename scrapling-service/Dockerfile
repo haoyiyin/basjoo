@@ -1,11 +1,13 @@
-# Scrapling is licensed under BSD-3-Clause (Copyright (c) 2024, Karim Shoair)
-# See LICENSE file for the full license text.
-
-FROM pyd4vinci/scrapling:latest
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements and install additional dependencies
+# Install system dependencies for curl_cffi and lxml
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

@@ -117,30 +117,21 @@ class TestURLCrawlerRegression:
 
     @pytest.mark.asyncio
     async def test_fetch_direct_accepts_short_non_empty_content(self, monkeypatch):
-        short_html = "<html><head><title>Contact</title></head><body><main>Short page.</main></body></html>"
+        async def fake_fetch(self, url):
+            return {
+                "title": "Contact",
+                "content": "Short page.",
+                "content_hash": "abc123",
+                "metadata": {"url": url, "fetcher": "scrapling"},
+                "success": True,
+            }
 
-        class FakeAsyncClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-            async def get(self, url, follow_redirects=True):
-                return httpx.Response(
-                    200,
-                    headers={"content-type": "text/html; charset=utf-8"},
-                    text=short_html,
-                    request=httpx.Request("GET", url),
-                )
-
-        monkeypatch.setattr("services.scraper.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(
+            "services.scrapling_client.ScraplingClient.fetch", fake_fetch
+        )
 
         scraper = URLScraper()
-        result = await scraper.fetch("https://example.com/contact", use_jina=False)
+        result = await scraper.fetch("https://example.com/contact")
 
         assert result["success"] is True
         assert result["title"] == "Contact"
@@ -148,38 +139,13 @@ class TestURLCrawlerRegression:
 
     @pytest.mark.asyncio
     async def test_discover_subpages_excludes_sibling_paths(self, monkeypatch):
-        pages = {
-            "https://example.com/product": """
-                <html><body>
-                    <a href="/product/specs">Specs</a>
-                    <a href="/products">Products</a>
-                    <a href="/productivity">Productivity</a>
-                </body></html>
-            """,
-            "https://example.com/product/specs": "<html><body><p>Specs page</p></body></html>",
-        }
+        async def fake_discover(self, url, max_depth=1, max_pages=20):
+            return [("https://example.com/product/specs", 1)]
 
-        class FakeAsyncClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-            async def get(self, url, follow_redirects=True):
-                if url not in pages:
-                    raise AssertionError(f"Unexpected URL fetched during discovery: {url}")
-                return httpx.Response(
-                    200,
-                    headers={"content-type": "text/html; charset=utf-8"},
-                    text=pages[url],
-                    request=httpx.Request("GET", url),
-                )
-
-        monkeypatch.setattr("services.scraper.httpx.AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(
+            "services.scrapling_client.ScraplingClient.discover_subpages",
+            fake_discover,
+        )
 
         scraper = URLScraper()
         discovered = await scraper.discover_subpages(
@@ -196,7 +162,7 @@ class TestURLCrawlerRegression:
                 ("https://example.com/docs/getting-started/install", 2),
             ]
 
-        async def fake_fetch(self, url, use_jina=True):
+        async def fake_fetch(self, url):
             slug = url.rstrip("/").split("/")[-1]
             return {
                 "title": slug,
