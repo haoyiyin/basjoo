@@ -79,12 +79,12 @@ class R2RClient:
         collection_id = await self.ensure_collection(agent_id)
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            import json
+
+            # Ingest file without collection_ids (R2R assigns to user's default collection)
             files = {"file": (filename, file_content, "application/octet-stream")}
-            data: dict[str, Any] = {
-                "collection_ids": f'["{collection_id}"]',
-            }
+            data = {}
             if metadata:
-                import json
                 data["metadata"] = json.dumps(metadata)
 
             resp = await client.post(
@@ -94,7 +94,24 @@ class R2RClient:
             )
             resp.raise_for_status()
             result = resp.json()
-            return result.get("results", result.get("data", result))
+            doc = result.get("results", result.get("data", result))
+            doc_id = doc.get("id", doc.get("document_id", ""))
+
+            # Assign document to the agent's collection
+            if doc_id:
+                try:
+                    assign_resp = await client.post(
+                        f"{self.base_url}/v3/collections/{collection_id}/documents/{doc_id}",
+                    )
+                    if assign_resp.status_code not in (200, 201, 409):
+                        logger.warning(
+                            f"Assign doc to collection returned {assign_resp.status_code}: "
+                            f"{assign_resp.text[:200]}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to assign document to collection: {e}")
+
+            return doc
 
     async def ingest_text(
         self,

@@ -111,7 +111,7 @@ async def upload_files(
 
             r2r_doc_id = result.get("id", result.get("document_id", ""))
             kf.r2r_document_id = str(r2r_doc_id)
-            kf.status = "processing"  # R2R processes asynchronously
+            kf.status = "ready"  # R2R processes synchronously during the request
             uploaded.append(kf)
             logger.info(f"Uploaded file '{filename}' to R2R (doc_id={r2r_doc_id})")
 

@@ -3,13 +3,14 @@ provider = "litellm"
 base_model = "jina_ai/jina-embeddings-v3"
 base_dimension = 1024
 batch_size = 16
-concurrent_request_limit = 256
+concurrent_request_limit = 2
 
 [completion_embedding]
 provider = "litellm"
 base_model = "jina_ai/jina-embeddings-v3"
 base_dimension = 1024
 batch_size = 16
+concurrent_request_limit = 2
 
 [ingestion]
 provider = "r2r"
