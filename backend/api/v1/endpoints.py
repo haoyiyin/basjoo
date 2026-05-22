@@ -150,7 +150,7 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": agent.embedding_provider or "jina",
+        "embedding_provider": agent.embedding_provider or "r2r",
         "embedding_api_base": agent.embedding_api_base,
         "embedding_api_key_set": bool(jina_key or siliconflow_key),
         "embedding_model": agent.embedding_model,
@@ -1297,13 +1297,17 @@ async def get_contexts(
     agent_id = agent.id
 
     # 检索 via R2R
-    rag_service = ensure_rag_service()
-    results = await rag_service.retrieve_async(
-        agent_id=agent_id,
-        query=request.query,
-        top_k=request.top_k,
-        threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
-    )
+    results = []
+    try:
+        rag_service = ensure_rag_service()
+        results = await rag_service.retrieve_async(
+            agent_id=agent_id,
+            query=request.query,
+            top_k=request.top_k,
+            threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
+        )
+    except Exception as error:
+        logger.warning(f"RAG retrieval failed for contexts: {error}")
 
     # 转换为响应格式
     contexts = []
@@ -1425,7 +1429,7 @@ async def get_jina_key_status(
     return {
         "agent_id": agent_id,
         "configured": bool(jina_key or siliconflow_key),
-        "embedding_provider": agent.embedding_provider or "jina",
+        "embedding_provider": agent.embedding_provider or "r2r",
     }
 
 
@@ -1453,7 +1457,7 @@ async def kb_status(
     return {
         "agent_id": agent_id,
         "kb_setup_completed": agent.kb_setup_completed,
-        "embedding_provider": agent.embedding_provider or "jina",
+        "embedding_provider": agent.embedding_provider or "r2r",
         "embedding_model": agent.embedding_model,
         "embedding_api_base": agent.embedding_api_base,
         "embedding_batch_size": agent.embedding_batch_size,

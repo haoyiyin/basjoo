@@ -47,7 +47,7 @@ export interface Source {
 
 export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian' | 'siliconflow';
 
-export type EmbeddingProvider = 'jina' | 'siliconflow' | 'custom'
+export type EmbeddingProvider = 'jina' | 'siliconflow' | 'custom' | 'r2r'
 
 export interface Agent {
   id: string;
@@ -633,9 +633,8 @@ class APIService {
     agent_id: string;
     status: string;
     result?: {
-      chunks_indexed: number;
-      urls_processed: number;
-      files_processed: number;
+      urls_ingested: number;
+      errors: string[];
     };
   }> {
     return this.request(`/api/v1/index:status?agent_id=${agentId}`);
@@ -644,9 +643,9 @@ class APIService {
   async getIndexInfo(agentId: string): Promise<{
     agent_id: string;
     urls_indexed: number;
-    files_indexed: number;
-    chunks_indexed: number;
     index_exists: boolean;
+    r2r_healthy: boolean;
+    status: string;
   }> {
     return this.request(`/api/v1/index:info?agent_id=${agentId}`);
   }

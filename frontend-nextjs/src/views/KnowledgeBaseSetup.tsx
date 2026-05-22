@@ -13,6 +13,7 @@ interface KnowledgeBaseSetupProps {
 }
 
 const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
+  r2r: 'jina-embeddings-v3',
   jina: 'jina-embeddings-v3',
   siliconflow: 'BAAI/bge-m3',
   custom: 'text-embedding-v4',
@@ -170,6 +171,8 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
 
   const getProviderLabel = (p: EmbeddingProvider): string => {
     switch (p) {
+      case 'r2r':
+        return 'R2R'
       case 'jina':
         return t('labels.embeddingProviderJina', 'Jina')
       case 'siliconflow':

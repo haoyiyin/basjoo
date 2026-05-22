@@ -211,7 +211,7 @@ class FileItem(BaseModel):
 class FileListResponse(BaseModel):
     """文件列表响应"""
 
-    items: List[FileItem]
+    files: List[FileItem]
     total: int
     quota: Dict[str, int] = Field(..., description="配额信息（used, max）")
 

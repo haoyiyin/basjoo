@@ -171,7 +171,7 @@ async def list_files(
     files = files_result.scalars().all()
 
     return FileListResponse(
-        items=[FileItem.model_validate(f) for f in files],
+        files=[FileItem.model_validate(f) for f in files],
         total=total,
         quota={"used": total, "max": max_files},
     )
@@ -236,4 +236,4 @@ async def clear_all_files(
 
     await db.commit()
 
-    return {"message": f"Cleared {len(files)} files"}
+    return {"message": f"Cleared {len(files)} files", "deleted_count": len(files)}
