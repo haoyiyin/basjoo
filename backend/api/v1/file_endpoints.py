@@ -121,12 +121,26 @@ async def upload_files(
             errors.append(f"{filename}: {str(e)[:100]}")
             logger.warning(f"Failed to upload file '{filename}': {e}")
 
+    file_items = [
+        FileItem(
+            id=f.id,
+            filename=f.filename,
+            file_size=f.file_size,
+            file_type=f.file_type,
+            status=f.status,
+            error_message=f.error_message,
+            created_at=f.created_at,
+            updated_at=f.updated_at,
+        )
+        for f in uploaded
+    ]
+
     await db.commit()
 
     return FileUploadResponse(
         uploaded=len(uploaded),
         failed=len(errors),
-        files=[FileItem.model_validate(f) for f in uploaded],
+        files=file_items,
         errors=errors,
     )
 
@@ -171,7 +185,19 @@ async def list_files(
     files = files_result.scalars().all()
 
     return FileListResponse(
-        files=[FileItem.model_validate(f) for f in files],
+        files=[
+            FileItem(
+                id=f.id,
+                filename=f.filename,
+                file_size=f.file_size,
+                file_type=f.file_type,
+                status=f.status,
+                error_message=f.error_message,
+                created_at=f.created_at,
+                updated_at=f.updated_at,
+            )
+            for f in files
+        ],
         total=total,
         quota={"used": total, "max": max_files},
     )

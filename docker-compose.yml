@@ -55,7 +55,9 @@ services:
     env_file:
       - ./r2r-config/r2r.env
     environment:
+      - R2R_CONFIG_PATH=/app/user_configs/r2r.toml
       - JINA_API_KEY=${JINA_API_KEY:-}
+      - JINA_AI_API_KEY=${JINA_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
     ports:
       - "127.0.0.1:7272:7272"
