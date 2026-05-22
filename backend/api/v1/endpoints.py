@@ -1371,7 +1371,7 @@ async def update_agent(
     update_data = request.model_dump(exclude_unset=True)
 
     # Block embedding changes when KB setup is locked
-    embedding_fields = {"embedding_provider", "embedding_api_base", "embedding_model", "embedding_batch_size", "jina_api_key", "siliconflow_api_key"}
+    embedding_fields = {"embedding_provider", "embedding_api_base", "embedding_model", "jina_api_key", "siliconflow_api_key"}
     if agent.kb_setup_completed and embedding_fields.intersection(update_data.keys()):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
