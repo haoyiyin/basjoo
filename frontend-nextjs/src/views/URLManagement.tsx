@@ -440,6 +440,7 @@ export default function URLManagement() {
       return;
     }
     setIsRetraining(true);
+    wasRetrainingRef.current = true;
     try {
         await api.updateAgent(agentId, {
           embedding_batch_size: embeddingBatchSize,
@@ -448,6 +449,7 @@ export default function URLManagement() {
       // 轮询会自动处理训练完成后的状态更新
     } catch (error) {
       alert(`${t('sources.retrainFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      wasRetrainingRef.current = false;
       setIsRetraining(false);
     }
   };
