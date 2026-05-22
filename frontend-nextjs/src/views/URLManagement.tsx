@@ -49,7 +49,6 @@ export default function URLManagement() {
   const wasRetrainingRef = useRef(false);
   const stopPollingRequestedRef = useRef(false);
   const [embeddingBatchSize, setEmbeddingBatchSize] = useState(4);
-  const [kbGuardKey, setKbGuardKey] = useState(0);
   // Auto-complete URL with https:// if missing protocol
   const normalizeUrl = (url: string): string => {
     const trimmed = url.trim();
@@ -424,7 +423,7 @@ export default function URLManagement() {
   return (
     <AdminLayout>
       {agentId ? (
-        <KBSetupGuard key={kbGuardKey} agentId={agentId}>
+        <KBSetupGuard agentId={agentId}>
           {showClearConfirm && (
         <div
           style={{
@@ -1274,7 +1273,6 @@ export default function URLManagement() {
                 refreshTrigger={refreshTrigger}
                 embeddingBatchSize={embeddingBatchSize}
   				onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
-                onReset={() => setKbGuardKey(k => k + 1)}
               />
             </div>
           )}
@@ -1290,7 +1288,6 @@ export default function URLManagement() {
               refreshTrigger={refreshTrigger}
               embeddingBatchSize={embeddingBatchSize}
   			  onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
-              onReset={() => setKbGuardKey(k => k + 1)}
             />
           </div>
         )}

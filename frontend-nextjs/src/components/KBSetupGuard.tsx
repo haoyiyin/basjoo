@@ -97,13 +97,13 @@ export default function KBSetupGuard({ agentId, children }: KBSetupGuardProps) {
               backgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
             }}>
-              {t('kb.setup.title', '知识库设置')}
+              {t('kb.setupTitle')}
             </h1>
             <p style={{
               color: 'var(--color-text-secondary)',
               fontSize: 'var(--text-base)',
             }}>
-              {t('kb.setup.desc', '配置 Embedding 提供商以初始化知识库。')}
+              {t('kb.setupDescription')}
             </p>
           </div>
 

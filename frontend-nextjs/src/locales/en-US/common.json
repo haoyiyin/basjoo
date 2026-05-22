@@ -651,7 +651,6 @@
     "testFailed": "Connection failed",
     "initButton": "Initialize Knowledge Base",
     "warning": "Cannot be changed after setup, only can be reset",
-    "r2rNotice": "Embedding is managed by R2R. After changing settings, restart the R2R container (docker compose restart r2r) for changes to take effect.",
     "locked": "Locked",
     "lockedDescription": "Knowledge base initialized. Embedding configuration is locked.",
     "resetButton": "Reset Embedding",

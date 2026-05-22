@@ -651,7 +651,6 @@
     "testFailed": "连接失败",
     "initButton": "初始化知识库",
     "warning": "设置后无法更改，只能重置",
-    "r2rNotice": "Embedding 配置由 R2R 管理。更改设置后需要重启 R2R 容器（docker compose restart r2r）才能生效。",
     "locked": "已锁定",
     "lockedDescription": "知识库已初始化，Embedding 配置已锁定。",
     "resetButton": "重置 Embedding",
