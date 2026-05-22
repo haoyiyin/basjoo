@@ -1,0 +1,35 @@
+[embedding]
+provider = "litellm"
+base_model = "jina/jina-embeddings-v3"
+base_dimension = 1024
+batch_size = 16
+concurrent_request_limit = 256
+
+[completion_embedding]
+provider = "litellm"
+base_model = "jina/jina-embeddings-v3"
+base_dimension = 1024
+batch_size = 16
+
+[ingestion]
+provider = "r2r"
+chunking_strategy = "recursive"
+chunk_size = 1024
+chunk_overlap = 512
+automatic_extraction = false
+skip_document_summary = true
+
+[completion]
+provider = "r2r"
+
+[database]
+provider = "postgres"
+
+[file]
+provider = "postgres"
+
+[auth]
+require_authentication = false
+
+[orchestration]
+provider = "simple"

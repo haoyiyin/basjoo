@@ -28,7 +28,7 @@ interface Message {
   role: string
   content: string
   sources?: Array<{
-    type: 'url' | 'qa'
+    type: 'url' | 'file'
     title?: string
     url?: string
     snippet?: string

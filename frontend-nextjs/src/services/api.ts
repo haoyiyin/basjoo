@@ -37,7 +37,7 @@ export interface StreamDoneMeta {
 }
 
 export interface Source {
-  type: 'url' | 'qa';
+  type: 'url' | 'file';
   title?: string;
   url?: string;
   snippet?: string;
@@ -81,6 +81,7 @@ export interface Agent {
   embedding_api_key_set?: boolean;
   embedding_model: string;
   embedding_batch_size?: number;
+  kb_setup_completed?: boolean;
   crawl_max_depth?: number;
   crawl_max_pages?: number;
   top_k: number;
@@ -117,12 +118,12 @@ export interface URLSource {
   updated_at?: string;
 }
 
-export interface QAItem {
+export interface FileItem {
   id: string;
-  question: string;
-  answer: string;
-  tags?: string[];
-  is_indexed: boolean;
+  filename: string;
+  file_type: string;
+  file_size: number;
+  status: 'ready' | 'processing' | 'failed';
   created_at: string;
   updated_at?: string;
 }
@@ -130,16 +131,16 @@ export interface QAItem {
 export interface Quota {
   max_agents: number;
   max_urls: number;
-  max_qa_items: number;
+  max_files: number;
   max_messages_per_day: number;
   max_total_text_mb: number;
   used_agents: number;
   used_urls: number;
-  used_qa_items: number;
+  used_files: number;
   used_messages_today: number;
   used_total_text_mb: number;
   remaining_urls: number;
-  remaining_qa_items: number;
+  remaining_files: number;
   remaining_messages_today: number;
 }
 
@@ -455,6 +456,39 @@ class APIService {
     return this.request<Quota>(`/api/v1/quota?agent_id=${agentId}`);
   }
 
+  // KB Setup
+  async kbStatus(agentId: string): Promise<{
+    agent_id: string;
+    kb_setup_completed: boolean;
+    embedding_provider: EmbeddingProvider;
+    embedding_model: string;
+    embedding_api_base: string | null;
+    embedding_batch_size: number | null;
+    embedding_api_key_set: boolean;
+  }> {
+    return this.request(`/api/v1/agent:kb-status?agent_id=${agentId}`)
+  }
+
+  async kbSetup(agentId: string, config: {
+    embedding_provider: EmbeddingProvider;
+    embedding_model: string;
+    embedding_api_base?: string;
+    embedding_batch_size?: number;
+    jina_api_key?: string;
+    siliconflow_api_key?: string;
+  }): Promise<Agent> {
+    return this.request(`/api/v1/agent:kb-setup?agent_id=${agentId}`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    })
+  }
+
+  async kbReset(agentId: string): Promise<{ message: string; r2r_restart_needed: boolean }> {
+    return this.request(`/api/v1/agent:kb-reset?agent_id=${agentId}`, {
+      method: 'POST',
+    })
+  }
+
   // URL Management APIs
   async createURLs(agentId: string, urls: string[]): Promise<{ created: number; message: string }> {
     return this.request(`/api/v1/urls:create?agent_id=${agentId}`, {
@@ -531,37 +565,55 @@ class APIService {
     return result;
   }
 
-  // Q&A Management APIs
-  async importQA(agentId: string, content: string, format: 'json' | 'csv' = 'json', overwrite = false): Promise<{
-    imported: number;
+  // File Upload APIs
+  async uploadFiles(agentId: string, files: File[]): Promise<{
+    uploaded: number;
     failed: number;
     errors: string[];
+    files: FileItem[];
   }> {
-    return this.request(`/api/v1/qa:batch_import?agent_id=${agentId}`, {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append('files', file);
+    }
+    const token = localStorage.getItem('token');
+    const url = new URL(`${this.baseUrl}/api/v1/files:upload`, window.location.origin);
+    url.searchParams.set('agent_id', agentId);
+    url.searchParams.set('locale', this.getLocale());
+
+    const response = await fetch(url.toString(), {
       method: 'POST',
-      body: JSON.stringify({ format, content, overwrite }),
-    }).then(result => result as { imported: number; failed: number; errors: string[] });
-  }
-
-  async listQA(agentId: string, skip = 0, limit = 50): Promise<{
-    items: QAItem[];
-    total: number;
-    quota: { used: number; max: number };
-  }> {
-    return this.request(`/api/v1/qa:list?agent_id=${agentId}&skip=${skip}&limit=${limit}`);
-  }
-
-  async updateQA(qaId: string, updates: { question?: string; answer?: string; tags?: string[] }): Promise<void> {
-    await this.request(`/api/v1/qa:update?qa_id=${qaId}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
     });
+
+    if (!response.ok) {
+      const errorMessage = await parseErrorResponse(response);
+      throw new Error(errorMessage);
+    }
+
+    return response.json();
   }
 
-  async deleteQA(qaId: string): Promise<void> {
-    await this.request(`/api/v1/qa:delete?qa_id=${qaId}`, {
+  async listFiles(agentId: string, skip = 0, limit = 100): Promise<{
+    files: FileItem[];
+    total: number;
+  }> {
+    return this.request(`/api/v1/files:list?agent_id=${agentId}&skip=${skip}&limit=${limit}`);
+  }
+
+  async deleteFile(agentId: string, fileId: string): Promise<void> {
+    await this.request(`/api/v1/files:delete?agent_id=${agentId}&file_id=${fileId}`, {
       method: 'DELETE',
     });
+  }
+
+  async clearAllFiles(agentId: string): Promise<{ message: string; deleted_count: number }> {
+    return this.request(`/api/v1/files:clear_all?agent_id=${agentId}`, {
+      method: 'DELETE',
+    }).then(result => result as { message: string; deleted_count: number });
   }
 
   // Index APIs
@@ -583,7 +635,7 @@ class APIService {
     result?: {
       chunks_indexed: number;
       urls_processed: number;
-      qa_items_processed: number;
+      files_processed: number;
     };
   }> {
     return this.request(`/api/v1/index:status?agent_id=${agentId}`);
@@ -592,7 +644,7 @@ class APIService {
   async getIndexInfo(agentId: string): Promise<{
     agent_id: string;
     urls_indexed: number;
-    qa_items_indexed: number;
+    files_indexed: number;
     chunks_indexed: number;
     index_exists: boolean;
   }> {
@@ -626,7 +678,7 @@ class APIService {
   // Sources Summary API
   async getSourcesSummary(agentId: string): Promise<{
     urls: { total: number; indexed: number; pending: number; total_size_kb: number };
-    qa: { total: number; indexed: number; pending: number; total_size_kb: number };
+    files: { total: number; ready: number; processing: number; total_size_kb: number };
     has_pending: boolean;
   }> {
     return this.request(`/api/v1/sources:summary?agent_id=${agentId}`);

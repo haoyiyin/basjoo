@@ -27,21 +27,53 @@ services:
       retries: 5
     profiles: ["prod", "dev"]
 
-  qdrant:
-    image: qdrant/qdrant:v1.12.1
-    container_name: basjoo-qdrant
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: basjoo-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
     volumes:
-      - qdrant-data:/qdrant/storage
+      - postgres-data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:5432:5432"
     restart: unless-stopped
     networks:
       - basjoo-network
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
+    command: postgres -c max_connections=1024
+    profiles: ["prod", "dev"]
+
+  r2r:
+    image: sciphiai/r2r:latest
+    container_name: basjoo-r2r
+    env_file:
+      - ./r2r-config/r2r.env
+    environment:
+      - JINA_API_KEY=${JINA_API_KEY:-}
+    ports:
+      - "127.0.0.1:7272:7272"
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7272/v3/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ./r2r-config/user_configs:/app/user_configs
+    extra_hosts:
+      - host.docker.internal:host-gateway
     profiles: ["prod", "dev"]
 
   scrapling-service:
@@ -71,8 +103,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
+      - R2R_API_URL=http://r2r:7272
       - SECRET_KEY=${SECRET_KEY:-}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
       - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
@@ -94,7 +125,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      qdrant:
+      r2r:
         condition: service_healthy
       scrapling-service:
         condition: service_healthy
@@ -166,8 +197,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
+      - R2R_API_URL=http://r2r:7272
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
       - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
@@ -189,7 +219,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      qdrant:
+      r2r:
         condition: service_healthy
       scrapling-service:
         condition: service_healthy
@@ -256,5 +286,5 @@ networks:
 
 volumes:
   redis-data:
-  qdrant-data:
+  postgres-data:
   backend-data:

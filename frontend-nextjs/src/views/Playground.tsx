@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
 import { api } from '../services/api'
 import type { Agent as ApiAgent, ChatRequest, Source, StreamDoneMeta, UsageInfo } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
@@ -29,8 +28,6 @@ export default function Playground() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [activeTab, setActiveTab] = useState<TabType>('preview');
-  const [searchParams] = useSearchParams();
-  const highlightJinaKey = searchParams?.get('highlightJinaKey') === 'true';
   const [showSaved, setShowSaved] = useState(false);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -417,7 +414,7 @@ export default function Playground() {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {activeTab === 'settings' ? (
               <div style={{ height: '100%', overflow: 'auto' }}>
-                <AISettingsForm compact highlightJinaKey={highlightJinaKey} onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+                <AISettingsForm compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
               </div>
             ) : (
               <ChatPanel
@@ -504,7 +501,7 @@ export default function Playground() {
             </div>
           </div>
           <div style={{ flex: 1, overflow: 'auto' }}>
-            <AISettingsForm compact highlightJinaKey={highlightJinaKey} onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+            <AISettingsForm compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
           </div>
         </div>
 

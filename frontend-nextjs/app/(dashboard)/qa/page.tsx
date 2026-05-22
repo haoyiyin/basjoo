@@ -1,5 +1,14 @@
-import QAManagementPage from '../../../src/views/QAManagement';
+'use client';
+
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export default function Page() {
-  return <QAManagementPage />;
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    navigate('/files', { replace: true });
+  }, [navigate]);
+
+  return null;
 }

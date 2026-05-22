@@ -11,7 +11,6 @@ import pytest
         ("get", "/api/v1/urls:list", None),
         ("post", "/api/v1/urls:crawl_site", {"url": "https://example.com/"}),
         ("delete", "/api/v1/urls:clear_all", None),
-        ("post", "/api/v1/qa:batch_import", {"format": "json", "content": "[]"}),
         ("post", "/api/v1/index:rebuild", {"force": False}),
         ("get", "/api/v1/index:status", None),
         ("get", "/api/v1/index:info", None),

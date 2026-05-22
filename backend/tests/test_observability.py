@@ -5,7 +5,6 @@ This suite tests system observability, logging, and monitoring capabilities
 
 import pytest
 import asyncio
-import json
 
 
 class TestSystemObservability:
@@ -62,9 +61,9 @@ class TestSystemObservability:
 
         # Verify all quota fields are present
         required_fields = [
-            "max_urls", "max_qa_items", "max_messages_per_day",
-            "used_urls", "used_qa_items", "used_messages_today",
-            "remaining_urls", "remaining_qa_items", "remaining_messages_today"
+            "max_urls", "max_files", "max_messages_per_day",
+            "used_urls", "used_files", "used_messages_today",
+            "remaining_urls", "remaining_files", "remaining_messages_today"
         ]
         for field in required_fields:
             assert field in quota, f"Missing quota field: {field}"
@@ -105,14 +104,14 @@ class TestSystemObservability:
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Test Q&A list with different page sizes
+        # Test URL list with different page sizes
         for page_size in [5, 10, 20]:
             response = await client.get(
-                f"/api/v1/qa:list?agent_id={agent_id}&limit={page_size}"
+                f"/api/v1/urls:list?agent_id={agent_id}&limit={page_size}"
             )
             assert response.status_code == 200
             data = response.json()
-            assert "items" in data
+            assert "urls" in data
             assert "total" in data
 
     @pytest.mark.asyncio
@@ -185,32 +184,6 @@ class TestSystemObservability:
         assert sum(results) == 10
 
     @pytest.mark.asyncio
-    async def test_quota_accuracy_tracking(self, client):
-        """Test quota tracking is accurate"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Get initial quota
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        initial_quota = response.json()
-
-        # Import exactly 3 Q&A items
-        qa_content = json.dumps([
-            {"question": f"Q{i}", "answer": f"A{i}"}
-            for i in range(3)
-        ])
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-
-        # Verify quota increased by exactly 3
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        new_quota = response.json()
-        assert new_quota["used_qa_items"] == initial_quota["used_qa_items"] + 3
-
-    @pytest.mark.asyncio
     async def test_index_status_tracking(self, client):
         """Test index job status is properly tracked"""
         response = await client.get("/api/v1/agent:default")
@@ -269,7 +242,7 @@ class TestSystemObservability:
         # All responses should be identical
         for i in range(1, len(responses)):
             assert responses[i]["max_urls"] == responses[0]["max_urls"]
-            assert responses[i]["max_qa_items"] == responses[0]["max_qa_items"]
+            assert responses[i]["max_files"] == responses[0]["max_files"]
 
     @pytest.mark.asyncio
     async def test_resource_cleanup_efficiency(self, client):
@@ -337,34 +310,3 @@ class TestSystemObservability:
         # Most should succeed
         assert success_count >= 28, f"Only {success_count}/30 succeeded under load"
 
-    @pytest.mark.asyncio
-    async def test_data_consistency_after_operations(self, client):
-        """Test data remains consistent after various operations"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Perform various operations
-        operations = []
-
-        # Import Q&A
-        qa_content = json.dumps([{"question": "Test", "answer": "Test"}])
-        operations.append(
-            client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": qa_content, "overwrite": False},
-            )
-        )
-
-        # Get quota multiple times
-        for _ in range(5):
-            operations.append(client.get(f"/api/v1/quota?agent_id={agent_id}"))
-
-        # Execute all operations
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        # All should succeed
-        successful = sum(
-            1 for r in results
-            if not isinstance(r, Exception) and r.status_code == 200
-        )
-        assert successful == len(operations)

@@ -53,12 +53,11 @@ class ChatRequest(BaseModel):
 class SourceItem(BaseModel):
     """来源项"""
 
-    type: Literal["url", "qa"] = Field(..., description="来源类型")
-    title: Optional[str] = Field(None, description="标题（URL类型）")
+    type: Literal["url", "file"] = Field(..., description="来源类型")
+    title: Optional[str] = Field(None, description="标题")
     url: Optional[str] = Field(None, description="URL（URL类型）")
     snippet: Optional[str] = Field(None, description="摘要片段")
-    question: Optional[str] = Field(None, description="问题（Q&A类型）")
-    id: Optional[str] = Field(None, description="Q&A ID（Q&A类型）")
+    filename: Optional[str] = Field(None, description="文件名（文件类型）")
 
 
 class UsageInfo(BaseModel):
@@ -92,12 +91,11 @@ class ContextRequest(BaseModel):
 class ContextItem(BaseModel):
     """上下文项"""
 
-    type: Literal["url", "qa"] = Field(..., description="类型")
+    type: Literal["url", "file"] = Field(..., description="类型")
     url: Optional[str] = Field(None, description="URL（URL类型）")
-    title: Optional[str] = Field(None, description="标题（URL类型）")
+    title: Optional[str] = Field(None, description="标题")
+    filename: Optional[str] = Field(None, description="文件名（文件类型）")
     score: float = Field(..., ge=0, le=1, description="相似度分数")
-    chunk_id: Optional[str] = Field(None, description="块ID（URL类型）")
-    id: Optional[str] = Field(None, description="Q&A ID（Q&A类型）")
 
 
 class ContextResponse(BaseModel):
@@ -192,52 +190,38 @@ class SiteCrawlResponse(BaseModel):
     message: str = Field(..., description="状态消息")
 
 
-# ========== Q&A Management Schemas ==========
+# ========== File Upload Schemas ==========
 
 
-class QABatchImportRequest(BaseModel):
-    """批量导入Q&A请求"""
-
-    format: Literal["json", "csv"] = Field("json", description="导入格式")
-    content: str = Field(..., description="JSON/CSV内容")
-    overwrite: bool = Field(False, description="是否覆盖已存在的Q&A（根据question）")
-
-
-class QAItem(BaseModel):
-    """Q&A项"""
+class FileItem(BaseModel):
+    """文件项"""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    question: str
-    answer: str
-    tags: Optional[List[str]] = None
-    is_indexed: bool = False
+    filename: str
+    file_size: Optional[int] = None
+    file_type: Optional[str] = None
+    status: Literal["uploading", "processing", "ready", "failed"] = "uploading"
+    error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
 
-class QAListResponse(BaseModel):
-    """Q&A列表响应"""
+class FileListResponse(BaseModel):
+    """文件列表响应"""
 
-    items: List[QAItem]
+    items: List[FileItem]
     total: int
     quota: Dict[str, int] = Field(..., description="配额信息（used, max）")
 
 
-class QAUpdateRequest(BaseModel):
-    """更新Q&A请求"""
+class FileUploadResponse(BaseModel):
+    """文件上传响应"""
 
-    question: Optional[str] = Field(None, min_length=1, max_length=500)
-    answer: Optional[str] = Field(None, min_length=1)
-    tags: Optional[List[str]] = None
-
-
-class QABatchImportResponse(BaseModel):
-    """批量导入响应"""
-
-    imported: int = Field(..., description="成功导入数量")
+    uploaded: int = Field(..., description="成功上传数量")
     failed: int = Field(..., description="失败数量")
+    files: List[FileItem] = Field(default_factory=list, description="上传的文件列表")
     errors: List[str] = Field(default_factory=list, description="错误信息")
 
 
@@ -291,9 +275,9 @@ class AgentConfig(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Literal["jina", "siliconflow", "custom"] = Field(
-        "jina",
-        description="Embedding provider: jina, siliconflow, or custom",
+    embedding_provider: Literal["jina", "siliconflow", "custom", "r2r"] = Field(
+        "r2r",
+        description="Embedding provider: r2r, jina, siliconflow, or custom",
     )
     embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
     embedding_api_key_set: bool = Field(
@@ -339,6 +323,7 @@ class AgentConfig(BaseModel):
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: int = Field(default=30, description="Chat history retention days")
     embedding_batch_size: int = Field(default=4, ge=1, le=64, description="Embedding batch size")
+    kb_setup_completed: bool = Field(default=False, description="Whether the knowledge base setup has been completed")
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -372,7 +357,7 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Optional[Literal["jina", "siliconflow","custom"]] = Field(None, description="Embedding provider: jina or siliconflow")
+    embedding_provider: Optional[Literal["jina", "siliconflow", "custom", "r2r"]] = Field(None, description="Embedding provider: r2r, jina, siliconflow, or custom")
     embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
     embedding_model: Optional[str] = Field(None, min_length=1)
     crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
@@ -456,16 +441,16 @@ class QuotaInfo(BaseModel):
 
     max_agents: int
     max_urls: int
-    max_qa_items: int
+    max_files: int
     max_messages_per_day: int
     max_total_text_mb: int
     used_agents: int
     used_urls: int
-    used_qa_items: int
+    used_files: int
     used_messages_today: int
     used_total_text_mb: float
     remaining_urls: int
-    remaining_qa_items: int
+    remaining_files: int
     remaining_messages_today: int
 
 
@@ -561,16 +546,16 @@ class SourcesURLSummary(BaseModel):
     total_size_kb: float = Field(..., description="总大小(KB)")
 
 
-class SourcesQASummary(BaseModel):
-    """QA知识源统计"""
-    total: int = Field(..., description="QA总数")
-    indexed: int = Field(..., description="已训练数量")
-    pending: int = Field(..., description="待训练数量")
+class SourcesFileSummary(BaseModel):
+    """文件知识源统计"""
+    total: int = Field(..., description="文件总数")
+    ready: int = Field(..., description="就绪数量")
+    processing: int = Field(..., description="处理中数量")
     total_size_kb: float = Field(..., description="总大小(KB)")
 
 
 class SourcesSummaryResponse(BaseModel):
     """知识源统计响应"""
     urls: SourcesURLSummary
-    qa: SourcesQASummary
-    has_pending: bool = Field(..., description="是否有待训练内容")
+    files: SourcesFileSummary
+    has_pending: bool = Field(..., description="是否有待处理内容")

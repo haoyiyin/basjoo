@@ -131,11 +131,8 @@ class Settings(BaseSettings):
     redis_cache_ttl: int = 3600  # 缓存过期时间（秒）
     redis_rate_limit_ttl: int = 60  # 限流窗口（秒）
 
-    # Qdrant 向量数据库配置
-    qdrant_host: str = "qdrant"
-    qdrant_port: int = 6333
-    qdrant_api_key: Optional[str] = None  # 可选的 API Key
-    qdrant_path: Optional[str] = None  # 本地Qdrant存储路径
+    # R2R 配置
+    r2r_api_url: str = "http://r2r:7272"
 
     # JWT 认证
     secret_key: str = ""

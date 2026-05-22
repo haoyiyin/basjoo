@@ -156,7 +156,6 @@ def test_should_apply_rate_limit_only_for_public_client_endpoints():
         "/api/v1/agent",
         "/api/v1/agent:default",
         "/api/v1/urls:list",
-        "/api/v1/qa:list",
         "/api/v1/index:status",
         "/health",
     ]

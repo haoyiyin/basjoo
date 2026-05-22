@@ -24,9 +24,6 @@ anthropic==0.40.0
 # Google Gemini API
 google-generativeai==0.8.3
 
-# 向量数据库 - Qdrant
-qdrant-client==1.12.1
-
 # URL抓取 - 通过 Scrapling 微服务处理，后端无需额外依赖
 requests==2.31.0
 

@@ -9,7 +9,7 @@ def test_replace_source_placeholders_uses_only_url_sources():
     reply = "See [website](#source-1), [faq](#source-2), and [missing](#source-5)."
     sources = [
         {"type": "url", "url": "https://example.com/page"},
-        {"type": "qa", "question": "FAQ"},
+        {"type": "file", "filename": "FAQ"},
     ]
 
     result = replace_source_placeholders(reply, sources)
@@ -45,39 +45,6 @@ async def test_create_url(client):
 
 
 @pytest.mark.asyncio
-async def test_list_qa_empty(client):
-    response = await client.get("/api/v1/agent:default")
-    agent_id = response.json()["id"]
-
-    response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-    assert response.status_code == 200
-    data = response.json()
-    assert "items" in data
-    assert "total" in data
-    # Note: May not be empty if other tests have run, just verify structure
-    assert data["total"] >= 0
-
-
-@pytest.mark.asyncio
-async def test_import_qa(client):
-    response = await client.get("/api/v1/agent:default")
-    agent_id = response.json()["id"]
-
-    # Use unique question to avoid conflicts with existing data
-    qa_content = (
-        '[{"question": "What is Basjoo TEST UNIQUE?", "answer": "An intelligent system TEST."}]'
-    )
-    response = await client.post(
-        f"/api/v1/qa:batch_import?agent_id={agent_id}",
-        json={"format": "json", "content": qa_content, "overwrite": False},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    # Should import at least 1, might not import exact 1 if question already exists
-    assert data["imported"] >= 1 or data["failed"] == 0
-
-
-@pytest.mark.asyncio
 async def test_get_quota(client):
     response = await client.get("/api/v1/agent:default")
     agent_id = response.json()["id"]
@@ -86,7 +53,7 @@ async def test_get_quota(client):
     assert response.status_code == 200
     data = response.json()
     assert "max_urls" in data
-    assert "max_qa_items" in data
+    assert "max_files" in data
     assert "used_urls" in data
 
 
@@ -220,22 +187,21 @@ async def test_chat_response_replaces_url_placeholders(public_client, default_ag
                 },
             },
             {
-                "type": "qa",
+                "type": "file",
                 "content": "FAQ answer content.",
                 "metadata": {
-                    "question": "FAQ",
-                    "qa_id": "qa-1",
+                    "filename": "FAQ",
                 },
             },
         ]
 
     monkeypatch.setattr(endpoints, "get_llm_service", lambda **kwargs: PlaceholderLLM())
-    monkeypatch.setattr(endpoints, "ensure_vector_services", lambda **kwargs: type(
+    monkeypatch.setattr(endpoints, "ensure_rag_service", lambda: type(
         "FakeRAG",
         (),
         {
             "retrieve_async": staticmethod(fake_retrieve_async),
-            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] Q: FAQ\nA: Answer"),
+            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] File: FAQ\nContent"),
         },
     )())
 
@@ -251,7 +217,7 @@ async def test_chat_response_replaces_url_placeholders(public_client, default_ag
     payload = response.json()
     assert payload["reply"] == "Use [website](https://example.com/page) and faq."
     assert payload["sources"][0]["url"] == "https://example.com/page"
-    assert payload["sources"][1]["type"] == "qa"
+    assert payload["sources"][1]["type"] == "file"
 
     history_response = await public_client.get(
         f"/api/v1/chat/messages?session_id={payload['session_id']}"
@@ -288,22 +254,21 @@ async def test_chat_stream_replaces_url_placeholders(public_client, default_agen
                 },
             },
             {
-                "type": "qa",
+                "type": "file",
                 "content": "FAQ answer content.",
                 "metadata": {
-                    "question": "FAQ",
-                    "qa_id": "qa-1",
+                    "filename": "FAQ",
                 },
             },
         ]
 
     monkeypatch.setattr(endpoints, "get_llm_service", lambda **kwargs: PlaceholderLLM())
-    monkeypatch.setattr(endpoints, "ensure_vector_services", lambda **kwargs: type(
+    monkeypatch.setattr(endpoints, "ensure_rag_service", lambda: type(
         "FakeRAG",
         (),
         {
             "retrieve_async": staticmethod(fake_retrieve_async),
-            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] Q: FAQ\nA: Answer"),
+            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] File: FAQ\nContent"),
         },
     )())
 

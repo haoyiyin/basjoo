@@ -80,52 +80,10 @@ class TestEdgeCases:
             assert response.status_code in [200, 400, 422]
 
     @pytest.mark.asyncio
-    async def test_qa_with_markdown_content(self, client):
-        """Test Q&A items with markdown formatting"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        qa_content = json.dumps([{
-            "question": "How to format text?",
-            "answer": """
-# Heading
-## Subheading
-
-**Bold text** and *italic text*
-
-- List item 1
-- List item 2
-- List item 3
-
-```code block```
-
-[Link](https://example.com)
-"""
-        }])
-
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 1
-
-    @pytest.mark.asyncio
     async def test_concurrent_index_rebuilds(self, client):
         """Test handling of concurrent index rebuild requests"""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
-
-        # Import some data first
-        qa_content = json.dumps([
-            {"question": f"Question {i}", "answer": f"Answer {i}"}
-            for i in range(5)
-        ])
-        await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
 
         # Trigger multiple concurrent rebuilds
         async def rebuild_index():
@@ -154,18 +112,18 @@ class TestEdgeCases:
 
         # Verify quota values are reasonable
         assert quota["max_urls"] > 0
-        assert quota["max_qa_items"] > 0
+        assert quota["max_files"] > 0
         assert quota["max_messages_per_day"] > 0
         assert quota["used_urls"] >= 0
-        assert quota["used_qa_items"] >= 0
+        assert quota["used_files"] >= 0
         assert quota["used_messages_today"] >= 0
         assert quota["remaining_urls"] >= 0
-        assert quota["remaining_qa_items"] >= 0
+        assert quota["remaining_files"] >= 0
         assert quota["remaining_messages_today"] >= 0
 
         # Verify consistency
         assert quota["used_urls"] <= quota["max_urls"]
-        assert quota["used_qa_items"] <= quota["max_qa_items"]
+        assert quota["used_files"] <= quota["max_files"]
         assert quota["used_messages_today"] <= quota["max_messages_per_day"]
 
     @pytest.mark.asyncio
@@ -248,63 +206,20 @@ class TestEdgeCases:
             )
 
     @pytest.mark.asyncio
-    async def test_unicode_and_multilingual_content(self, client):
-        """Test system with various unicode and multilingual content"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Test various languages and scripts
-        test_cases = [
-            {"question": "English question?", "answer": "English answer"},
-            {"question": "中文问题？", "answer": "中文回答"},
-            {"question": "日本語の質問？", "answer": "日本語の回答"},
-            {"question": "한국어 질문?", "answer": "한국어 대답"},
-            {"question": "العربية سؤال؟", "answer": "العربية إجابة"},
-            {"question": "Вопрос на русском?", "answer": "Ответ на русском"},
-            {"question": "Emoji test 🎉 🔥 💯", "answer": "Emoji response ✅ 🚀"},
-            {"question": "Mix of 中文 and English and 日本語", "answer": "Mixed response"},
-        ]
-
-        qa_content = json.dumps(test_cases)
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == len(test_cases)
-
-    @pytest.mark.asyncio
     async def test_delete_nonexistent_items(self, client):
         """Test deleting items that don't exist"""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Try to delete non-existent Q&A
+        # Try to delete non-existent file
         response = await client.delete(
-            f"/api/v1/qa:delete?qa_id=qa_nonexistent123"
+            f"/api/v1/files:delete?agent_id={agent_id}&file_id=kf_nonexistent123"
         )
         assert response.status_code == 404
 
         # Try to delete non-existent URL
         response = await client.delete(
             f"/api/v1/urls:delete?agent_id={agent_id}&url_id=99999"
-        )
-        assert response.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_update_nonexistent_item(self, client):
-        """Test updating an item that doesn't exist"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Try to update non-existent Q&A
-        response = await client.put(
-            f"/api/v1/qa:update?qa_id=qa_nonexistent123",
-            json={
-                "question": "Updated question",
-                "answer": "Updated answer"
-            }
         )
         assert response.status_code == 404
 
@@ -327,45 +242,6 @@ class TestEdgeCases:
         )
         # Should handle gracefully (may accept or reject based on validation)
         assert response.status_code in [200, 422]
-
-    @pytest.mark.asyncio
-    async def test_empty_qa_batch(self, client):
-        """Test importing empty Q&A batch"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Empty list
-        qa_content = json.dumps([])
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 0
-
-    @pytest.mark.asyncio
-    async def test_mixed_valid_invalid_qa_items(self, client):
-        """Test batch import with mix of valid and invalid items"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Mix of valid and invalid items
-        qa_content = json.dumps([
-            {"question": "Valid question 1", "answer": "Valid answer 1"},
-            {"question": "", "answer": "Invalid - empty question"},  # Invalid
-            {"question": "Valid question 2", "answer": ""},  # Invalid - empty answer
-            {"question": "Valid question 3", "answer": "Valid answer 3"},
-        ])
-
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        # Should import valid items and report failures for invalid ones
-        assert data["imported"] >= 1
 
     @pytest.mark.asyncio
     async def test_url_with_authentication_params(self, client):
@@ -410,34 +286,5 @@ class TestEdgeCases:
         first_quota = quotas[0]
         for quota in quotas[1:]:
             assert quota["max_urls"] == first_quota["max_urls"]
-            assert quota["max_qa_items"] == first_quota["max_qa_items"]
+            assert quota["max_files"] == first_quota["max_files"]
 
-    @pytest.mark.asyncio
-    async def test_html_in_qa_content(self, client):
-        """Test Q&A with HTML content"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        qa_content = json.dumps([{
-            "question": "How to use HTML?",
-            "answer": """
-<div class="container">
-  <h1>Title</h1>
-  <p>Paragraph with <strong>bold</strong> and <em>italic</em></p>
-  <ul>
-    <li>Item 1</li>
-    <li>Item 2</li>
-  </ul>
-  <a href="https://example.com">Link</a>
-  <img src="image.jpg" alt="Image" />
-</div>
-"""
-        }])
-
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 1

@@ -24,8 +24,7 @@ def _host_resolves(host: str) -> bool:
         return False
 
 
-os.environ.setdefault("QDRANT_HOST", "qdrant" if _host_resolves("qdrant") else "localhost")
-os.environ.setdefault("QDRANT_PORT", "6333")
+os.environ.setdefault("R2R_API_URL", "http://r2r:7272" if _host_resolves("r2r") else "http://localhost:7272")
 os.environ.setdefault("REDIS_URL", "redis://redis:6379/0" if _host_resolves("redis") else "redis://localhost:6379/0")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ["SECRET_KEY_FILE"] = "/tmp/basjoo_test_secret.key"
@@ -36,51 +35,51 @@ from database import configure_database, init_db
 
 
 @pytest.fixture(autouse=True)
-def mock_jina_embeddings(monkeypatch):
-    from services.qdrant_store import JinaEmbeddingClient
-
-    def _mock_embed(self, texts):
-        return [[float((index % 8) + 1) for index in range(1024)] for _ in texts]
-
-    monkeypatch.setattr(JinaEmbeddingClient, "embed", _mock_embed)
-
-
-@pytest.fixture(autouse=True)
-def mock_qdrant_store(monkeypatch, request):
+def mock_r2r_client(monkeypatch, request):
     integration_fixtures = {"client", "public_client", "default_agent_id"}
     if not integration_fixtures.intersection(set(request.fixturenames)):
         return
 
-    store_data = {}
+    store_data: dict[str, list[dict]] = {}
 
-    class FakeQdrantVectorStore:
-        def __init__(
-            self,
-            jina_api_key: str = "",
-            embedding_model: str = "jina-embeddings-v3",
-            collection_prefix: str = "basjoo",
-            *,
-            embedding_provider: str = "jina",
-            embedding_api_key: str | None = None,
-            embedding_api_base: str | None = None,
-            embedding_dimension: int = 1024,
-            embedding_batch_size: int = 4,
-        ):
-            self.embedding_model = embedding_model
-            self.collection_prefix = collection_prefix
+    class FakeR2RClient:
+        def __init__(self, base_url: str | None = None, timeout: float = 60.0):
+            pass
 
-        def add_documents(self, agent_id: str, chunks):
-            store_data[agent_id] = list(chunks)
-            return len(chunks)
+        async def ensure_collection(self, agent_id: str) -> str:
+            return f"col_{agent_id}"
 
-        def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = DEFAULT_AGENT_SIMILARITY_THRESHOLD, source_type=None):
+        async def delete_collection(self, agent_id: str) -> bool:
+            store_data.pop(agent_id, None)
+            return True
+
+        async def ingest_file(self, agent_id: str, file_content: bytes, filename: str, metadata: dict | None = None) -> dict:
+            doc_id = f"doc_{len(store_data.get(agent_id, []))}"
+            store_data.setdefault(agent_id, []).append({
+                "content": f"[file:{filename}]",
+                "metadata": metadata or {},
+            })
+            return {"id": doc_id}
+
+        async def ingest_text(self, agent_id: str, text: str, title: str, metadata: dict | None = None) -> dict:
+            doc_id = f"doc_{len(store_data.get(agent_id, []))}"
+            store_data.setdefault(agent_id, []).append({
+                "content": text,
+                "metadata": {**(metadata or {}), "title": title},
+            })
+            return {"id": doc_id}
+
+        async def delete_document(self, document_id: str) -> bool:
+            return True
+
+        async def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = 0.3) -> list[dict]:
             chunks = store_data.get(agent_id, [])
             results = []
             query_lower = query.lower()
             for chunk in chunks:
                 content = chunk.get("content", "")
                 metadata = chunk.get("metadata", {})
-                haystacks = [content.lower(), str(metadata.get("question", "")).lower(), str(metadata.get("title", "")).lower()]
+                haystacks = [content.lower(), str(metadata.get("title", "")).lower()]
                 if any(query_lower in hay for hay in haystacks):
                     results.append({
                         "content": content,
@@ -89,28 +88,14 @@ def mock_qdrant_store(monkeypatch, request):
                     })
             return results[:top_k]
 
-        def clear_collection(self, agent_id: str):
-            store_data[agent_id] = []
+        async def health(self) -> bool:
             return True
 
-        def delete_collection(self, agent_id: str):
-            store_data.pop(agent_id, None)
-            return True
-
-        def get_collection_info(self, agent_id: str):
-            chunks = store_data.get(agent_id, [])
-            return {
-                "name": f"basjoo_{agent_id}",
-                "vectors_count": len(chunks),
-                "points_count": len(chunks),
-                "status": "green" if chunks else "not_found",
-            }
-
-    monkeypatch.setattr("services.QdrantVectorStore", FakeQdrantVectorStore)
-    monkeypatch.setattr("services.qdrant_store.QdrantVectorStore", FakeQdrantVectorStore)
-    monkeypatch.setattr("services.rag_qdrant.QdrantVectorStore", FakeQdrantVectorStore)
-    monkeypatch.setattr("api.v1.endpoints.QdrantVectorStore", FakeQdrantVectorStore)
-    monkeypatch.setattr("api.v1.provider_helpers.QdrantVectorStore", FakeQdrantVectorStore)
+    monkeypatch.setattr("services.R2RClient", FakeR2RClient)
+    monkeypatch.setattr("services.r2r_client.R2RClient", FakeR2RClient)
+    monkeypatch.setattr("api.v1.endpoints.R2RClient", FakeR2RClient)
+    monkeypatch.setattr("api.v1.index_endpoints.R2RClient", FakeR2RClient)
+    monkeypatch.setattr("api.v1.file_endpoints.R2RClient", FakeR2RClient)
 
 
 @pytest.fixture(autouse=True)

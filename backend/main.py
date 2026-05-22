@@ -12,6 +12,7 @@ from api.endpoints import auth
 from api.v1 import endpoints as v1_endpoints
 from api.v1 import url_endpoints as v1_url_endpoints
 from api.v1 import index_endpoints as v1_index_endpoints
+from api.v1 import file_endpoints as v1_file_endpoints
 from services.scheduler import url_fetch_scheduler, history_cleanup_scheduler, session_auto_close_scheduler
 from services.redis_service import get_redis, close_redis
 from middleware import RateLimitMiddleware, apply_cors_headers, get_request_client_ip
@@ -162,6 +163,7 @@ app.include_router(auth.router, prefix="/api/admin", tags=["auth"])
 app.include_router(v1_endpoints.router, tags=["v1"])
 app.include_router(v1_url_endpoints.router, tags=["v1"])
 app.include_router(v1_index_endpoints.router, tags=["v1"])
+app.include_router(v1_file_endpoints.router, tags=["v1"])
 
 
 # SDK.js 路由 - 用于嵌入 widget

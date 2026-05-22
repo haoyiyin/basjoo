@@ -21,7 +21,7 @@ from api.endpoints.auth import get_current_admin, require_admin_or_super_admin, 
 from models import (
     Agent,
     URLSource,
-    QAItem,
+    KnowledgeFile,
     ChatSession,
     ChatMessage,
     Workspace,
@@ -37,10 +37,9 @@ from api.v1.schemas import (
     URLListResponse,
     URLRefetchRequest,
     URLRefetchResponse,
-    QABatchImportRequest,
-    QAListResponse,
-    QAUpdateRequest,
-    QABatchImportResponse,
+    FileUploadResponse,
+    FileListResponse,
+    FileItem,
     AgentConfig,
     AgentUpdateRequest,
     IndexRebuildRequest,
@@ -49,17 +48,14 @@ from api.v1.schemas import (
     QuotaInfo,
     SourcesSummaryResponse,
     SourcesURLSummary,
-    SourcesQASummary,
+    SourcesFileSummary,
     SessionListItem,
     SessionListResponse,
     normalize_widget_origin,
 )
-from services import URLNormalizer, TextChunker, TaskType, task_lock
+from services import URLNormalizer, TaskType, task_lock, R2RClient, R2RRAGService
 from core.encryption import encrypt_api_key, decrypt_api_key
-from api.v1.provider_helpers import get_agent_embedding_config
-from services.qdrant_store import clear_disabled_key, clear_client_cache
-from services.rag_qdrant import QdrantRAGService
-from services.qdrant_store import QdrantVectorStore
+from api.v1.provider_helpers import get_agent_r2r_client
 from services.llm_service import get_llm_service
 from services.auth_service import AuthService
 from middleware import get_request_client_ip
@@ -122,29 +118,15 @@ def get_restricted_reply(
     return restricted_reply or default
 
 
-def get_agent_plaintext_keys(agent: Agent) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """Return decrypted agent API credentials once per request path."""
-    return decrypt_api_key(agent.api_key), decrypt_api_key(agent.jina_api_key), decrypt_api_key(getattr(agent, 'siliconflow_api_key', '') or '')
+def get_agent_plaintext_keys(agent: Agent) -> Optional[str]:
+    """Return decrypted agent API key."""
+    return decrypt_api_key(agent.api_key)
 
 
 def build_agent_config(agent: Agent) -> dict:
-    api_key, jina_key, siliconflow_key = get_agent_plaintext_keys(agent)
-    # Resolve the provider-normalised embedding_provider so the value always
-    # satisfies the AgentConfig Literal constraint even when the stored DB
-    # value is stale / non-standard.  resolve_agent_embedding_provider never
-    # raises, so we can always get a safe value.
-    from api.v1.provider_helpers import resolve_agent_embedding_provider
-    resolved_embedding_provider = resolve_agent_embedding_provider(agent)
-    try:
-        embedding_config = get_agent_embedding_config(agent)
-        configuration_error = None
-    except ValueError as exc:
-        embedding_config = {}
-        configuration_error = str(exc)
-        logger.warning(
-            "Embedding config error for agent %s (provider=%s): %s",
-            agent.id, getattr(agent, "embedding_provider", None), exc,
-        )
+    api_key = get_agent_plaintext_keys(agent)
+    jina_key = decrypt_api_key(agent.jina_api_key)
+    siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
     return {
         "id": agent.id,
         "name": agent.name,
@@ -168,12 +150,13 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": resolved_embedding_provider,
+        "embedding_provider": agent.embedding_provider or "jina",
         "embedding_api_base": agent.embedding_api_base,
-        "embedding_api_key_set": bool(embedding_config.get("embedding_api_key")),
+        "embedding_api_key_set": bool(jina_key or siliconflow_key),
         "embedding_model": agent.embedding_model,
-        "embedding_batch_size": getattr(agent, "embedding_batch_size", 4) or 4,
-        "configuration_error": configuration_error,
+        "embedding_batch_size": agent.embedding_batch_size,
+        "configuration_error": None,
+        "kb_setup_completed": agent.kb_setup_completed,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
         "top_k": agent.top_k,
@@ -199,32 +182,13 @@ def build_agent_config(agent: Agent) -> dict:
 security = HTTPBearer()
 
 # 全局服务实例
-qdrant_store = None
 rag_service = None
-text_chunker = TextChunker()
 
 
-def ensure_vector_services(
-    *,
-    embedding_provider: str,
-    embedding_api_key: Optional[str],
-    embedding_api_base: Optional[str],
-    embedding_model: str,
-    embedding_dimension: int,
-) -> QdrantRAGService:
-    """Create a fresh per-request vector service instance."""
-    if not embedding_api_key:
-        raise ValueError("Embedding API key is required")
-
-    local_qdrant_store = QdrantVectorStore(
-        embedding_provider=embedding_provider,
-        embedding_api_key=embedding_api_key,
-        embedding_api_base=embedding_api_base,
-        embedding_model=embedding_model,
-        embedding_dimension=embedding_dimension,
-    )
-    local_rag_service = QdrantRAGService(local_qdrant_store)
-    return local_rag_service
+def ensure_rag_service() -> R2RRAGService:
+    """Create a fresh per-request RAG service instance backed by R2R."""
+    r2r_client = R2RClient()
+    return R2RRAGService(r2r_client)
 
 
 # ========== 依赖注入 ==========
@@ -319,12 +283,11 @@ def build_chat_sources(retrieval_results: List[Dict[str, Any]]) -> List[Dict[str
                     "snippet": snippet or None,
                 }
             )
-        elif result["type"] == "qa":
+        elif result["type"] == "file":
             sources.append(
                 {
-                    "type": "qa",
-                    "question": result.get("metadata", {}).get("question", ""),
-                    "id": result.get("metadata", {}).get("qa_id", ""),
+                    "type": "file",
+                    "filename": result.get("metadata", {}).get("filename", ""),
                     "snippet": snippet or None,
                 }
             )
@@ -592,7 +555,7 @@ async def prepare_chat_request(
     agent_max_tokens = DEFAULT_AGENT_MAX_TOKENS
     agent_system_prompt = agent.system_prompt
     agent_enable_context = agent.enable_context
-    agent_api_key, _, _ = get_agent_plaintext_keys(agent)
+    agent_api_key = get_agent_plaintext_keys(agent)
     agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
     use_mock_llm = not agent_api_key
@@ -639,35 +602,6 @@ async def prepare_chat_request(
                 "session": session,
             }
 
-    qa_items = None
-    if not os.getenv("BASJOO_TEST_MODE") == "1":
-        # Try to get QA items from Redis cache first
-        from services.redis_service import get_redis
-        qa_cache_key = f"qa_items:{agent_id}"
-        try:
-            redis = await get_redis()
-            qa_items = await redis.get_cache(qa_cache_key)
-        except Exception:
-            qa_items = None
-
-    if qa_items is None:
-        qa_result = await db.execute(select(QAItem).where(QAItem.agent_id == agent_id))
-        qa_items = [
-            {
-                "id": qa.id,
-                "question": qa.question,
-                "answer": qa.answer,
-            }
-            for qa in qa_result.scalars().all()
-        ]
-        if not os.getenv("BASJOO_TEST_MODE") == "1":
-            # Cache for 5 minutes
-            try:
-                redis = await get_redis()
-                await redis.set_cache(qa_cache_key, qa_items, ttl=300)
-            except Exception:
-                pass
-
     history_result = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.session_id == session.id)
@@ -710,32 +644,20 @@ async def prepare_chat_request(
 
     current_rag_service = None
     retrieval_results: List[Dict[str, Any]] = []
-    agent_embedding_config = get_agent_embedding_config(agent)
-    should_retrieve_context = bool(agent_embedding_config["embedding_api_key"])
-    if should_retrieve_context:
-        try:
-            current_rag_service = ensure_vector_services(
-                embedding_provider=agent_embedding_config["embedding_provider"],
-                embedding_api_key=agent_embedding_config["embedding_api_key"],
-                embedding_api_base=agent_embedding_config["embedding_api_base"],
-                embedding_model=agent_embedding_config["embedding_model"],
-                embedding_dimension=agent_embedding_config["embedding_dimension"],
-            )
-            retrieval_results = await current_rag_service.retrieve_async(
-                agent_id=agent_id,
-                query=request.message,
-                top_k=agent_top_k,
-                threshold=agent_similarity_threshold,
-                qa_items=qa_items,
-            )
-        except Exception as error:
-            # Use info level for rate limiting to avoid log error penalty
-            error_str = str(error)
-            if "429" in error_str or "rate" in error_str.lower():
-                # Avoid using "error" word to prevent log scanner penalty
-                logger.info(f"RAG retrieval delayed due to API rate limit")
-            else:
-                logger.warning(f"RAG retrieval skipped: {error}")
+    try:
+        current_rag_service = ensure_rag_service()
+        retrieval_results = await current_rag_service.retrieve_async(
+            agent_id=agent_id,
+            query=request.message,
+            top_k=agent_top_k,
+            threshold=agent_similarity_threshold,
+        )
+    except Exception as error:
+        error_str = str(error)
+        if "429" in error_str or "rate" in error_str.lower():
+            logger.info(f"RAG retrieval delayed due to API rate limit")
+        else:
+            logger.warning(f"RAG retrieval skipped: {error}")
 
     context = ""
     if retrieval_results and current_rag_service:
@@ -747,9 +669,9 @@ async def prepare_chat_request(
         system_content += (
             f"\n\nKnowledge base:\n{context}\n\n"
             "Please answer based on the above knowledge base content. "
-            "When you cite a URL source in the reply body, use markdown links with placeholders like "
+            "When you cite a source in the reply body, use markdown links with placeholders like "
             "[keyword](#source-1) and only use the source numbers provided in the knowledge base. "
-            "Do not create visible links for QA sources or invent any external URLs."
+            "Do not invent any external URLs."
         )
     else:
         system_content += (
@@ -1373,42 +1295,14 @@ async def get_contexts(
         )
 
     agent_id = agent.id
-    embedding_config = get_agent_embedding_config(agent)
 
-    # 注意：enable_context仅控制对话历史，不影响知识库检索
-    # /contexts 端点始终返回检索结果
-
-    # 获取Q&A列表
-    qa_result = await db.execute(select(QAItem).where(QAItem.agent_id == agent_id))
-    qa_items = [
-        {
-            "id": qa.id,
-            "question": qa.question,
-            "answer": qa.answer,
-        }
-        for qa in qa_result.scalars().all()
-    ]
-
-    # 检索
-    if not embedding_config["embedding_api_key"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Embedding API key is required",
-        )
-
-    rag_service = ensure_vector_services(
-        embedding_provider=embedding_config["embedding_provider"],
-        embedding_api_key=embedding_config["embedding_api_key"],
-        embedding_api_base=embedding_config["embedding_api_base"],
-        embedding_model=embedding_config["embedding_model"],
-        embedding_dimension=embedding_config["embedding_dimension"],
-    )
-    results = rag_service.retrieve(
+    # 检索 via R2R
+    rag_service = ensure_rag_service()
+    results = await rag_service.retrieve_async(
         agent_id=agent_id,
         query=request.query,
         top_k=request.top_k,
         threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
-        qa_items=qa_items,
     )
 
     # 转换为响应格式
@@ -1421,14 +1315,13 @@ async def get_contexts(
                     "url": r["metadata"].get("url", ""),
                     "title": r["metadata"].get("title", ""),
                     "score": r["score"],
-                    "chunk_id": r["metadata"].get("chunk_id", ""),
                 }
             )
-        elif r["type"] == "qa":
+        elif r["type"] == "file":
             contexts.append(
                 {
-                    "type": "qa",
-                    "id": r["metadata"].get("qa_id", ""),
+                    "type": "file",
+                    "filename": r["metadata"].get("filename", r["metadata"].get("title", "")),
                     "score": r["score"],
                 }
             )
@@ -1473,10 +1366,22 @@ async def update_agent(
 
     update_data = request.model_dump(exclude_unset=True)
 
+    # Block embedding changes when KB setup is locked
+    embedding_fields = {"embedding_provider", "embedding_api_base", "embedding_model", "embedding_batch_size", "jina_api_key", "siliconflow_api_key"}
+    if agent.kb_setup_completed and embedding_fields.intersection(update_data.keys()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Embedding configuration is locked. Use the KB reset flow first.",
+        )
+
     # 根据 persona_type 设置 system_prompt（仅对预设人设）
     persona_type = update_data.get("persona_type")
     if persona_type and persona_type in PERSONA_PRESETS:
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
+
+    # Remove "r2r" from embedding_provider before setting (not a valid DB value)
+    if update_data.get("embedding_provider") == "r2r":
+        update_data.pop("embedding_provider")
 
     for field, value in update_data.items():
         if field in ("api_key", "jina_api_key", "siliconflow_api_key") and isinstance(value, str):
@@ -1515,11 +1420,167 @@ async def get_jina_key_status(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
 
-    embedding_config = get_agent_embedding_config(agent)
+    jina_key = decrypt_api_key(agent.jina_api_key)
+    siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
     return {
         "agent_id": agent_id,
-        "configured": bool(embedding_config["embedding_api_key"]),
-        "embedding_provider": embedding_config["embedding_provider"],
+        "configured": bool(jina_key or siliconflow_key),
+        "embedding_provider": agent.embedding_provider or "jina",
+    }
+
+
+# ========== Knowledge Base Setup ==========
+
+
+@router.get("/agent:kb-status")
+async def kb_status(
+    agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get knowledge base setup status."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
+        )
+
+    jina_key = decrypt_api_key(agent.jina_api_key)
+    siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
+
+    return {
+        "agent_id": agent_id,
+        "kb_setup_completed": agent.kb_setup_completed,
+        "embedding_provider": agent.embedding_provider or "jina",
+        "embedding_model": agent.embedding_model,
+        "embedding_api_base": agent.embedding_api_base,
+        "embedding_batch_size": agent.embedding_batch_size,
+        "embedding_api_key_set": bool(jina_key or siliconflow_key),
+    }
+
+
+@router.post("/agent:kb-setup")
+async def kb_setup(
+    agent_id: str,
+    request: AgentUpdateRequest,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-time knowledge base embedding initialization."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
+        )
+
+    if agent.kb_setup_completed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Knowledge base setup already completed. Use reset to change embedding settings.",
+        )
+
+    # Validate required fields
+    embedding_provider = request.embedding_provider or "jina"
+    if embedding_provider not in ("jina", "siliconflow", "custom"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Embedding provider must be 'jina', 'siliconflow', or 'custom'",
+        )
+
+    # Validate API key
+    if embedding_provider == "jina" and not request.jina_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jina API key is required for jina embedding provider",
+        )
+    if embedding_provider in ("siliconflow", "custom") and not request.siliconflow_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SiliconFlow API key is required for siliconflow/custom embedding provider",
+        )
+
+    # Save embedding settings
+    agent.embedding_provider = embedding_provider
+    if request.embedding_api_base:
+        agent.embedding_api_base = request.embedding_api_base
+    if request.embedding_model:
+        agent.embedding_model = request.embedding_model
+    if request.embedding_batch_size:
+        agent.embedding_batch_size = request.embedding_batch_size
+    if request.jina_api_key:
+        agent.jina_api_key = encrypt_api_key(request.jina_api_key)
+    if request.siliconflow_api_key:
+        agent.siliconflow_api_key = encrypt_api_key(request.siliconflow_api_key)
+
+    agent.kb_setup_completed = True
+    await db.commit()
+    await db.refresh(agent)
+
+    # Generate r2r.toml
+    from services.r2r_config_generator import write_r2r_config
+    jina_key = decrypt_api_key(agent.jina_api_key)
+    sf_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
+    try:
+        write_r2r_config(
+            embedding_provider=agent.embedding_provider,
+            embedding_model=agent.embedding_model,
+            embedding_batch_size=agent.embedding_batch_size,
+            embedding_api_base=agent.embedding_api_base,
+            jina_api_key=jina_key,
+            siliconflow_api_key=sf_key,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write r2r.toml: {e}")
+
+    return {
+        **build_agent_config(agent),
+        "message": "知识库初始化完成。请重启 R2R 容器使配置生效：docker compose restart r2r",
+        "r2r_restart_needed": True,
+    }
+
+
+@router.post("/agent:kb-reset")
+async def kb_reset(
+    agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset knowledge base embedding configuration."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
+        )
+
+    if not agent.kb_setup_completed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Knowledge base setup not completed yet.",
+        )
+
+    # Clear embedding keys
+    agent.jina_api_key = ""
+    agent.siliconflow_api_key = ""
+    agent.kb_setup_completed = False
+    await db.commit()
+    await db.refresh(agent)
+
+    # Delete R2R collection
+    try:
+        r2r = R2RClient()
+        await r2r.delete_collection(agent_id)
+    except Exception as e:
+        logger.warning(f"Failed to delete R2R collection during reset: {e}")
+
+    return {
+        "message": "Embedding 配置已重置。索引需要重构，所有文件需要重新上传。",
+        "r2r_restart_needed": True,
     }
 
 
@@ -1543,20 +1604,13 @@ async def update_jina_key(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Jina API key is required"
         )
 
-    # Clear any previous disabled state and cache for this key so the new
-    # value takes effect without requiring a process restart.
-    old_key = decrypt_api_key(agent.jina_api_key)
-    if old_key:
-        clear_disabled_key(old_key)
-        clear_client_cache(old_key)
-
     agent.jina_api_key = encrypt_api_key(request.jina_api_key)
     await db.commit()
     await db.refresh(agent)
 
     return {
         "agent_id": agent_id,
-        "configured": bool(agent.jina_api_key),
+        "configured": True,
     }
 
 
@@ -1591,16 +1645,16 @@ async def get_quota(
     return QuotaInfo(
         max_agents=quota.max_agents,
         max_urls=quota.max_urls,
-        max_qa_items=quota.max_qa_items,
+        max_files=quota.max_qa_items,
         max_messages_per_day=quota.max_messages_per_day,
         max_total_text_mb=quota.max_total_text_mb,
         used_agents=1,  # MVP固定为1
         used_urls=quota.used_urls,
-        used_qa_items=quota.used_qa_items,
+        used_files=quota.used_qa_items,
         used_messages_today=quota.used_messages_today,
         used_total_text_mb=quota.used_total_text_mb,
         remaining_urls=max(0, quota.max_urls - quota.used_urls),
-        remaining_qa_items=max(0, quota.max_qa_items - quota.used_qa_items),
+        remaining_files=max(0, quota.max_qa_items - quota.used_qa_items),
         remaining_messages_today=max(
             0, quota.max_messages_per_day - quota.used_messages_today
         ),
@@ -1843,7 +1897,7 @@ async def test_embedding_api(
             embedding = data["data"][0].get("embedding")
             if not embedding or all(v == 0.0 for v in embedding):
                 raise ValueError("SiliconFlow API returned zero vector")
-            return {"success": True, "message": "SiliconFlow embedding API connection successful"}
+            return {"success": True, "message": "SiliconFlow embedding API connection successful", "note": "Embedding is managed by R2R. After changing settings, restart the R2R container: docker compose restart r2r"}
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SiliconFlow API key is invalid")
@@ -1897,7 +1951,8 @@ async def test_jina_api(
 
         return {
             "success": True,
-            "message": "Jina API connection successful"
+            "message": "Jina API connection successful",
+            "note": "Embedding is managed by R2R. After changing settings, restart the R2R container: docker compose restart r2r",
         }
     except httpx.HTTPStatusError as e:
         logger.error(f"Jina API test failed: {e}")
@@ -1956,33 +2011,39 @@ async def get_sources_summary(
     url_size_bytes = url_size_result.scalar() or 0
     url_size_kb = round(url_size_bytes / 1024, 2)
 
-    # 统计QA
-    qa_total_result = await db.execute(
-        select(func.count()).select_from(QAItem).where(QAItem.agent_id == agent_id)
-    )
-    qa_total = qa_total_result.scalar() or 0
-
-    qa_indexed_result = await db.execute(
-        select(func.count()).select_from(QAItem).where(
-            QAItem.agent_id == agent_id,
-            QAItem.is_indexed == True
-        )
-    )
-    qa_indexed = qa_indexed_result.scalar() or 0
-
-    # 计算QA内容大小（仅已训练的，question + answer，转换为KB）
-    qa_size_result = await db.execute(
-        select(func.sum(func.length(QAItem.question) + func.length(QAItem.answer))).where(
-            QAItem.agent_id == agent_id,
-            QAItem.is_indexed == True
-        )
-    )
-    qa_size_bytes = qa_size_result.scalar() or 0
-    qa_size_kb = round(qa_size_bytes / 1024, 2)
-
     url_pending = url_total - url_indexed
-    qa_pending = qa_total - qa_indexed
-    has_pending = url_pending > 0 or qa_pending > 0
+
+    # 统计文件
+    file_total_result = await db.execute(
+        select(func.count()).select_from(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id)
+    )
+    file_total = file_total_result.scalar() or 0
+
+    file_ready_result = await db.execute(
+        select(func.count()).select_from(KnowledgeFile).where(
+            KnowledgeFile.agent_id == agent_id,
+            KnowledgeFile.status == "ready"
+        )
+    )
+    file_ready = file_ready_result.scalar() or 0
+
+    file_processing_result = await db.execute(
+        select(func.count()).select_from(KnowledgeFile).where(
+            KnowledgeFile.agent_id == agent_id,
+            KnowledgeFile.status.in_(["uploading", "processing"])
+        )
+    )
+    file_processing = file_processing_result.scalar() or 0
+
+    file_size_result = await db.execute(
+        select(func.sum(KnowledgeFile.file_size)).where(
+            KnowledgeFile.agent_id == agent_id
+        )
+    )
+    file_size_bytes = file_size_result.scalar() or 0
+    file_size_kb = round(file_size_bytes / 1024, 2)
+
+    has_pending = url_pending > 0 or file_processing > 0
 
     return SourcesSummaryResponse(
         urls=SourcesURLSummary(
@@ -1991,11 +2052,11 @@ async def get_sources_summary(
             pending=url_pending,
             total_size_kb=url_size_kb
         ),
-        qa=SourcesQASummary(
-            total=qa_total,
-            indexed=qa_indexed,
-            pending=qa_pending,
-            total_size_kb=qa_size_kb
+        files=SourcesFileSummary(
+            total=file_total,
+            ready=file_ready,
+            processing=file_processing,
+            total_size_kb=file_size_kb
         ),
         has_pending=has_pending
     )

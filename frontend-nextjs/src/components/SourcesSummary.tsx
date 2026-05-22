@@ -20,10 +20,10 @@ interface SourcesSummaryData {
     pending: number;
     total_size_kb: number;
   };
-  qa: {
+  files: {
     total: number;
-    indexed: number;
-    pending: number;
+    ready: number;
+    processing: number;
     total_size_kb: number;
   };
   has_pending: boolean;
@@ -76,7 +76,7 @@ export default function SourcesSummary({
   }
 
   const hasPending = data.has_pending;
-  const totalSizeKb = data.urls.total_size_kb + data.qa.total_size_kb;
+  const totalSizeKb = data.urls.total_size_kb + data.files.total_size_kb;
 
   return (
     <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
@@ -126,7 +126,7 @@ export default function SourcesSummary({
         </div>
       </div>
 
-      {/* QA Stats */}
+      {/* File Stats */}
       <div style={{
         padding: 'var(--space-4)',
         background: 'var(--color-bg-tertiary)',
@@ -144,21 +144,20 @@ export default function SourcesSummary({
             gap: 'var(--space-3)',
           }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--color-text-muted)' }}>
-              <circle cx="12" cy="12" r="10" />
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
             </svg>
             <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
-              {t('sources.qaItems', { count: data.qa.total })}
+              {t('sources.fileItems', { count: data.files.total })}
             </span>
-            {data.qa.pending > 0 && (
+            {data.files.processing > 0 && (
               <span className="badge badge-warning" style={{ fontSize: 'var(--text-xs)' }}>
-                {data.qa.pending} {t('sources.pending')}
+                {data.files.processing} {t('sources.processing')}
               </span>
             )}
           </div>
           <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
-            {data.qa.total_size_kb} KB
+            {data.files.total_size_kb} KB
           </span>
         </div>
       </div>

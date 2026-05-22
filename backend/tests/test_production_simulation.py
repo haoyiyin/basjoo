@@ -24,20 +24,6 @@ class TestProductionSimulation:
         assert response.status_code == 200
         agent_id = response.json()["id"]
 
-        # Import some Q&A data first
-        qa_content = '[{"question": "What is Basjoo?", "answer": "Basjoo is an intelligent system."},'
-        qa_content += '{"question": "How does it work?", "answer": "It uses RAG technology."}]'
-        await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-
-        # Build index
-        await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-
         # Simulate 10 concurrent users
         async def send_chat_message(user_id: int):
             session_id = f"test_session_{user_id}"
@@ -129,47 +115,6 @@ class TestProductionSimulation:
         assert data["total"] == 1, f"Expected 1 unique URL, got {data['total']}"
 
     @pytest.mark.asyncio
-    async def test_batch_operations_stress(self, client):
-        """Test batch import operations with large datasets"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Check current quota to avoid hitting limits
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota_data = response.json()
-        max_qa = quota_data["max_qa_items"]
-        used_qa = quota_data["used_qa_items"]
-
-        # Calculate how many items we can import (stay within quota)
-        num_to_import = min(20, max_qa - used_qa)  # Import up to 20 items or remaining quota
-
-        # Import Q&A items in batch
-        qa_items = []
-        for i in range(num_to_import):
-            qa_items.append(
-                {
-                    "question": f"Test question {i}",
-                    "answer": f"Test answer {i}" * 10,  # Longer content
-                }
-            )
-
-        import json
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": json.dumps(qa_items), "overwrite": False},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == num_to_import
-
-        # Verify all items were imported
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] >= num_to_import  # At least our imported items
-
-    @pytest.mark.asyncio
     async def test_error_handling_invalid_agent(self, client):
         """Test error handling for invalid agent ID"""
         invalid_agent_id = "agt_invalid123"
@@ -197,18 +142,6 @@ class TestProductionSimulation:
             json={"agent_id": agent_id},  # Missing message
         )
         assert response.status_code == 422  # Validation error
-
-        # Invalid JSON for QA import
-        # Note: The API catches JSON parse errors and returns 200 with errors in the response
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": "invalid json", "overwrite": False},
-        )
-        # Should succeed but with errors reported
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 0
-        assert data["failed"] > 0 or len(data.get("errors", [])) > 0
 
     @pytest.mark.asyncio
     async def test_session_persistence(self, client):
@@ -269,11 +202,12 @@ class TestProductionSimulation:
         job_id = data["job_id"]
         await wait_for_index_job(client, agent_id, job_id)
 
-        # Verify index was created
+        # Verify index info endpoint works (no data expected since Scrapling isn't available in tests)
         response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
         assert response.status_code == 200
         data = response.json()
-        assert data["index_exists"] or data["total_chunks"] > 0
+        assert "urls_indexed" in data
+        assert "r2r_healthy" in data
 
     @pytest.mark.asyncio
     async def test_quota_daily_reset(self, client):
@@ -312,86 +246,6 @@ class TestProductionSimulation:
 
         # Should handle gracefully (may succeed or fail with appropriate error)
         assert response.status_code in [200, 413, 422]
-
-    @pytest.mark.asyncio
-    async def test_special_characters_in_content(self, client):
-        """Test handling of special characters and unicode"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Import Q&A with special characters
-        qa_content = json.dumps([
-            {
-                "question": "测试中文问题？",
-                "answer": "这是中文答案！包含emoji 🎉 and symbols @#$%"
-            },
-            {
-                "question": "Question with 'quotes' and \"double quotes\"?",
-                "answer": "Answer with <html> &amp; entities</html>"
-            }
-        ])
-
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 2
-
-    @pytest.mark.asyncio
-    async def test_qa_update_and_delete(self, client):
-        """Test Q&A item update and deletion"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Import Q&A first
-        qa_content = json.dumps([
-            {
-                "question": "Original question",
-                "answer": "Original answer"
-            }
-        ])
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-
-        # Get the QA item ID
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        items = response.json()["items"]
-        assert len(items) > 0
-        qa_id = items[0]["id"]
-
-        # Update Q&A
-        response = await client.put(
-            f"/api/v1/qa:update?qa_id={qa_id}",
-            json={
-                "question": "Updated question",
-                "answer": "Updated answer"
-            }
-        )
-        assert response.status_code == 200
-
-        # Verify update
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        items = response.json()["items"]
-        updated_item = next((item for item in items if item["id"] == qa_id), None)
-        assert updated_item is not None
-        assert updated_item["question"] == "Updated question"
-
-        # Delete Q&A
-        response = await client.delete(
-            f"/api/v1/qa:delete?qa_id={qa_id}"
-        )
-        assert response.status_code == 200
-
-        # Verify deletion
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        items = response.json()["items"]
-        assert not any(item["id"] == qa_id for item in items)
 
     @pytest.mark.asyncio
     async def test_url_delete_and_refetch(self, client):
@@ -447,7 +301,3 @@ class TestProductionSimulation:
         assert data["name"] == "Updated Agent Name"
         assert data["temperature"] == 0.5
         assert data["max_tokens"] == 1024
-
-
-# Import json for special characters test
-import json

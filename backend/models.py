@@ -118,6 +118,8 @@ class Agent(Base):
     embedding_api_base = Column(String(500), nullable=True)
     embedding_model = Column(String(100), nullable=False, default="jina-embeddings-v3")
     embedding_batch_size = Column(Integer, nullable=False, default=4)
+    # 知识库初始化状态
+    kb_setup_completed = Column(Boolean, nullable=False, default=False)
     # URL抓取配置
     crawl_max_depth = Column(Integer, nullable=False, default=2)  # 全站爬取深度
     crawl_max_pages = Column(Integer, nullable=False, default=500)  # 全站爬取最大页面数
@@ -168,8 +170,8 @@ class Agent(Base):
     url_sources = relationship(
         "URLSource", back_populates="agent", cascade="all, delete-orphan"
     )
-    qa_items = relationship(
-        "QAItem", back_populates="agent", cascade="all, delete-orphan"
+    knowledge_files = relationship(
+        "KnowledgeFile", back_populates="agent", cascade="all, delete-orphan"
     )
     chat_sessions = relationship(
         "ChatSession", back_populates="agent", cascade="all, delete-orphan"
@@ -212,9 +214,6 @@ class URLSource(Base):
 
     # 关系
     agent = relationship("Agent", back_populates="url_sources")
-    chunks = relationship(
-        "DocumentChunk", back_populates="url_source", cascade="all, delete-orphan"
-    )
 
     # 索引和约束
     __table_args__ = (
@@ -223,59 +222,44 @@ class URLSource(Base):
     )
 
 
-class QAItem(Base):
-    """Q&A知识条目模型"""
+class KnowledgeFile(Base):
+    """知识文件模型（通过 R2R 管理）"""
 
-    __tablename__ = "qa_items"
+    __tablename__ = "knowledge_files"
 
     id = Column(
-        String(50), primary_key=True, default=lambda: f"qa_{uuid.uuid4().hex[:12]}"
+        String(50), primary_key=True, default=lambda: f"kf_{uuid.uuid4().hex[:12]}"
     )
     agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
 
-    # Q&A内容
-    question = Column(Text, nullable=False)
-    answer = Column(Text, nullable=False)  # 支持Markdown
+    # 文件信息
+    filename = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=True)  # bytes
+    file_type = Column(String(50), nullable=True)  # pdf, txt, csv, etc.
+
+    # R2R document ID
+    r2r_document_id = Column(String(100), nullable=True, index=True)
+    r2r_collection_id = Column(String(100), nullable=True)
+
+    # 状态
+    status = Column(
+        SQLEnum("uploading", "processing", "ready", "failed", name="file_status"),
+        default="uploading",
+        index=True,
+    )
+    error_message = Column(Text, nullable=True)
 
     # 元数据
-    tags = Column(JSON, nullable=True)  # 标签列表
-    is_indexed = Column(Boolean, nullable=False, default=False)  # 是否已训练
+    metadata_json = Column(JSON, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # 关系
-    agent = relationship("Agent", back_populates="qa_items")
+    agent = relationship("Agent", back_populates="knowledge_files")
 
     # 索引
-    __table_args__ = (Index("ix_qa_items_agent", "agent_id"),)
-
-
-class DocumentChunk(Base):
-    """文档分块模型（用于向量索引）"""
-
-    __tablename__ = "document_chunks"
-
-    id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
-    url_source_id = Column(
-        Integer, ForeignKey("url_sources.id"), nullable=True, index=True
-    )
-
-    # 分块内容
-    content = Column(Text, nullable=False)
-    chunk_index = Column(Integer, nullable=False)  # 在文档中的序号
-
-    # 元数据
-    doc_metadata = Column(JSON, nullable=True)  # 标题、URL、片段位置等
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # 关系
-    url_source = relationship("URLSource", back_populates="chunks")
-
-    # 索引
-    __table_args__ = (
-        Index("ix_chunks_url", "url_source_id", "chunk_index"),
-    )
+    __table_args__ = (Index("ix_knowledge_files_agent", "agent_id"),)
 
 
 class ChatSession(Base):

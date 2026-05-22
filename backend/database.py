@@ -58,7 +58,6 @@ def _build_default_agent(workspace_id: int):
     from models import Agent
 
     raw_api_key = settings.deepseek_api_key
-    raw_jina_key = os.getenv("JINA_API_KEY", "")
 
     return Agent(
         id=settings.default_agent_id,
@@ -71,10 +70,7 @@ def _build_default_agent(workspace_id: int):
         max_tokens=DEFAULT_AGENT_MAX_TOKENS,
         api_key=encrypt_api_key(raw_api_key) if raw_api_key else "",
         api_base="https://api.deepseek.com/v1",
-        jina_api_key=encrypt_api_key(raw_jina_key) if raw_jina_key else "",
         provider_type="deepseek",
-        embedding_provider="jina",
-        embedding_model="jina-embeddings-v3",
         top_k=5,
         similarity_threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
         enable_context=False,
@@ -116,8 +112,7 @@ async def init_db():
             Workspace,
             Agent,
             URLSource,
-            QAItem,
-            DocumentChunk,
+            KnowledgeFile,
             ChatSession,
             ChatMessage,
             WorkspaceQuota,

@@ -194,6 +194,8 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("embedding_api_base", "VARCHAR(500)"),
         ("embedding_model", "VARCHAR(100) DEFAULT 'jina-embeddings-v3'"),
         ("embedding_batch_size", "INTEGER DEFAULT 4"),
+        # kb setup state
+        ("kb_setup_completed", "BOOLEAN DEFAULT 0"),
         # crawl / retrieval
         ("crawl_max_depth", "INTEGER DEFAULT 2"),
         ("crawl_max_pages", "INTEGER DEFAULT 500"),

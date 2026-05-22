@@ -29,14 +29,13 @@ const quickActionsConfig: QuickAction[] = [
     gradient: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
   },
   {
-    titleKey: 'navigation.qaManagement',
-    descriptionKey: 'labels.manageQa',
-    path: '/qa',
+    titleKey: 'navigation.fileManagement',
+    descriptionKey: 'labels.manageFiles',
+    path: '/files',
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
       </svg>
     ),
     gradient: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
@@ -64,14 +63,14 @@ export default function Dashboard() {
   const [quota, setQuota] = useState<{
     used_urls: number
     max_urls: number
-    used_qa_items: number
-    max_qa_items: number
+    used_files: number
+    max_files: number
     used_messages_today: number
     max_messages_per_day: number
   } | null>(null)
   const [sourcesSummary, setSourcesSummary] = useState<{
     urls: { total: number; indexed: number; pending: number }
-    qa: { total: number; indexed: number; pending: number }
+    files: { total: number; ready: number; processing: number }
     has_pending: boolean
   } | null>(null)
   const [agentId, setAgentId] = useState<string | null>(null)
@@ -164,15 +163,15 @@ export default function Dashboard() {
               color: 'var(--color-accent-primary)'
             },
             {
-              label: t('labels.qaItems'),
-              value: sourcesSummary?.qa.total ?? 0,
-              indexed: sourcesSummary?.qa.indexed ?? 0,
+              label: t('labels.fileItems'),
+              value: sourcesSummary?.files.total ?? 0,
+              indexed: sourcesSummary?.files.ready ?? 0,
               color: 'var(--color-accent-secondary)'
             },
             {
               label: t('labels.indexedDocBlocks'),
               value: sourcesSummary
-                ? (sourcesSummary.urls.indexed + sourcesSummary.qa.indexed)
+                ? (sourcesSummary.urls.indexed + sourcesSummary.files.ready)
                 : '-',
               color: 'var(--color-warning)'
             },

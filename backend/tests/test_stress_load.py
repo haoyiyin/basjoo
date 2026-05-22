@@ -20,17 +20,6 @@ class TestStressLoad:
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Import some Q&A data first
-        import json
-        qa_content = json.dumps([
-            {"question": f"Test question {i}", "answer": f"Test answer {i}"}
-            for i in range(10)
-        ])
-        await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-
         # Build index
         response = await client.post(
             f"/api/v1/index:rebuild?agent_id={agent_id}",
@@ -157,8 +146,8 @@ class TestStressLoad:
         async def quota_op():
             return await client.get(f"/api/v1/quota?agent_id={agent_id}")
 
-        async def list_qa_op():
-            return await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
+        async def list_files_op():
+            return await client.get(f"/api/v1/files:list?agent_id={agent_id}")
 
         async def agent_info_op():
             return await client.get(f"/api/v1/agent?agent_id={agent_id}")
@@ -171,7 +160,7 @@ class TestStressLoad:
             elif i % 4 == 1:
                 operations.append(quota_op())
             elif i % 4 == 2:
-                operations.append(list_qa_op())
+                operations.append(list_files_op())
             else:
                 operations.append(agent_info_op())
 
@@ -188,92 +177,6 @@ class TestStressLoad:
 
         print(f"\n✓ Mixed Workload Test:")
         print(f"  - Successful: {successful}/30")
-
-    @pytest.mark.asyncio
-    async def test_database_connection_recovery(self, client):
-        """Test system behavior with database operations under stress"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Perform multiple database write operations rapidly
-        operations = []
-
-        # Create multiple Q&A items
-        import json
-        for i in range(5):
-            qa_content = json.dumps([
-                {"question": f"DB test {i}-{j}", "answer": f"Answer {i}-{j}"}
-                for j in range(3)
-            ])
-            operations.append(
-                client.post(
-                    f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                    json={"format": "json", "content": qa_content, "overwrite": False},
-                )
-            )
-
-        # Execute all operations
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        # Verify all writes succeeded
-        successful = sum(
-            1 for r in results
-            if not isinstance(r, Exception) and r.status_code == 200
-        )
-
-        assert successful == 5, f"Expected all 5 operations to succeed, got {successful}"
-
-        # Verify data was actually written
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] >= 15  # At least our 15 new items
-
-        print(f"\n✓ Database Operations Test:")
-        print(f"  - All write operations succeeded")
-        print(f"  - Data persistence verified")
-
-    @pytest.mark.asyncio
-    async def test_memory_efficiency(self, client):
-        """Test that system handles large data without memory issues"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Import Q&A with large content
-        import json
-        qa_items = []
-        for i in range(10):
-            qa_items.append({
-                "question": f"Large content question {i}",
-                "answer": "This is a large answer. " * 100  # ~2500 chars
-            })
-
-        qa_content = json.dumps(qa_items)
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 10
-
-        # Verify we can list and retrieve them
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] >= 10
-
-        # Build index with large content
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-
-        print(f"\n✓ Memory Efficiency Test:")
-        print(f"  - Handled 10 large Q&A items")
-        print(f"  - Index rebuild successful")
 
     @pytest.mark.asyncio
     async def test_error_recovery(self, client):

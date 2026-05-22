@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api'
 import type { URLSource, Agent } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
@@ -20,14 +19,11 @@ interface TaskStatus {
 export default function URLManagement() {
   const { t } = useTranslation('common');
   const isMobile = useIsMobile();
-  const navigate = useNavigate();
   const [agentId, setAgentId] = useState<string | null>(null);
   const [urls, setUrls] = useState<URLSource[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [embeddingKeyReady, setEmbeddingKeyReady] = useState<boolean | null>(null);
-  const [embeddingKeyStatusError, setEmbeddingKeyStatusError] = useState<string | null>(null);
   const [newUrl, setNewUrl] = useState('');
   const [refetching, setRefetching] = useState(false);
   const [crawling, setCrawling] = useState(false);
@@ -50,8 +46,6 @@ export default function URLManagement() {
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
   const wasRetrainingRef = useRef(false);
-  const embeddingKeyCheckInFlightRef = useRef(false);
-  const redirectedForEmbeddingKeyRef = useRef(false);
   const stopPollingRequestedRef = useRef(false);
   const [embeddingBatchSize, setEmbeddingBatchSize] = useState(4);
   // Auto-complete URL with https:// if missing protocol
@@ -75,35 +69,6 @@ export default function URLManagement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (!agentId || embeddingKeyCheckInFlightRef.current || embeddingKeyReady !== null) return;
-    // 检查开始时设为 null，表示检查中，不显示警告
-    setEmbeddingKeyReady(null);
-    embeddingKeyCheckInFlightRef.current = true;
-    const checkEmbeddingKey = async () => {
-      try {
-        const status = await api.getJinaKeyStatus(agentId);
-        setEmbeddingKeyStatusError(null);
-        if (!status.configured) {
-          setEmbeddingKeyReady(false);
-          if (!redirectedForEmbeddingKeyRef.current) {
-            redirectedForEmbeddingKeyRef.current = true;
-            navigate('/playground?highlightJinaKey=true');
-          }
-        } else {
-          redirectedForEmbeddingKeyRef.current = false;
-          setEmbeddingKeyReady(true);
-        }
-      } catch (error) {
-        setEmbeddingKeyReady(null);
-        setEmbeddingKeyStatusError(error instanceof Error ? error.message : t('errors.unknown'));
-      } finally {
-        embeddingKeyCheckInFlightRef.current = false;
-      }
-    };
-    checkEmbeddingKey();
-  }, [agentId, embeddingKeyReady, navigate, t]);
-
   const loadDefaultAgent = async () => {
     try {
       const data = await api.getDefaultAgent();
@@ -120,7 +85,7 @@ export default function URLManagement() {
   };
 
   const loadURLs = useCallback(async () => {
-    if (!agentId || !embeddingKeyReady) return;
+    if (!agentId) return;
     setLoading(true);
     try {
       const data = await api.listURLs(agentId);
@@ -139,7 +104,7 @@ export default function URLManagement() {
     } finally {
       setLoading(false);
     }
-  }, [agentId, embeddingKeyReady, t]);
+  }, [agentId, t]);
 
   // Stable refs for functions used inside interval callbacks.
   const agentIdRef = useRef(agentId);
@@ -151,7 +116,7 @@ export default function URLManagement() {
 
   useEffect(() => {
     isMountedRef.current = true;
-    if (agentId && embeddingKeyReady) {
+    if (agentId) {
       void loadURLs();
       const pollTaskStatus = async () => {
         if (!isMountedRef.current || !agentIdRef.current) return;
@@ -198,7 +163,7 @@ export default function URLManagement() {
         clearInterval(taskStatusIntervalRef.current);
       }
     };
-  }, [agentId, embeddingKeyReady, loadURLs]);
+  }, [agentId, loadURLs]);
 
   const handleAddURL = async () => {
     if (!agentId) return;
@@ -340,7 +305,7 @@ export default function URLManagement() {
   }, []);
 
   const handleCrawlSite = async () => {
-    if (!agentId || !embeddingKeyReady) {
+    if (!agentId) {
       return;
     }
     if (!newUrl.trim()) {
@@ -389,13 +354,13 @@ export default function URLManagement() {
   };
 
   const handleClearAll = () => {
-    if (!agentId || !embeddingKeyReady) return;
+    if (!agentId) return;
     if (urls.length === 0) return;
     setShowClearConfirm(true);
   };
 
   const confirmClearAll = async () => {
-    if (!agentId || !embeddingKeyReady) return;
+    if (!agentId) return;
 
     setClearing(true);
     try {
@@ -411,7 +376,7 @@ export default function URLManagement() {
   };
 
   const handleSaveAutoFetchSettings = async () => {
-    if (!agent || !embeddingKeyReady) return;
+    if (!agent) return;
     setSaving(true);
     try {
       await api.updateAgent(agent.id, {
@@ -430,13 +395,13 @@ export default function URLManagement() {
   };
 
   const handleRetrain = async () => {
-    if (!agentId || !embeddingKeyReady) return;
+    if (!agentId) return;
     if (taskStatus?.is_crawling) {
-      alert(t('labels.qa.crawlInProgress'));
+      alert(t('labels.urlManagement.crawlInProgress'));
       return;
     }
     if (taskStatus?.is_rebuilding) {
-      alert(t('labels.qa.rebuildInProgress'));
+      alert(t('labels.urlManagement.indexRebuildInProgress'));
       return;
     }
     setIsRetraining(true);
@@ -555,20 +520,6 @@ export default function URLManagement() {
           gridTemplateRows: isMobile ? 'auto' : 'auto auto',
           gap: 'var(--space-6)',
         }}>
-          {(embeddingKeyReady === false || embeddingKeyStatusError) && (
-            <div style={{
-              gridColumn: isMobile ? 'auto' : '1 / -1',
-              padding: 'var(--space-3)',
-              marginBottom: 'var(--space-2)',
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.3)',
-              borderRadius: 'var(--radius-md)',
-              color: '#ef4444',
-              fontSize: 'var(--text-sm)',
-            }}>
-              {embeddingKeyStatusError ? `${t('labels.embeddingKeyStatusUnavailable')} ${embeddingKeyStatusError}` : t('labels.jinaKeyRequired')}
-            </div>
-          )}
           <div className="glass-card" style={{ padding: 'var(--space-6)', gridColumn: isMobile ? 'auto' : '1', gridRow: isMobile ? 'auto' : '1' }}>
             <h2 style={{
               fontSize: 'var(--text-lg)',
@@ -657,7 +608,7 @@ export default function URLManagement() {
 
               <button
                 onClick={handleAddURL}
-                disabled={adding || !newUrl.trim() || !embeddingKeyReady}
+                disabled={adding || !newUrl.trim()}
                 style={{
                   width: '100%',
                   padding: 'var(--space-3)',
@@ -665,8 +616,8 @@ export default function URLManagement() {
                   color: 'var(--color-text-inverse)',
                   border: 'none',
                   borderRadius: 'var(--radius-md)',
-                  cursor: adding || !newUrl.trim() || !embeddingKeyReady ? 'not-allowed' : 'pointer',
-                  opacity: adding || !newUrl.trim() || !embeddingKeyReady ? 0.5 : 1,
+                  cursor: adding || !newUrl.trim() ? 'not-allowed' : 'pointer',
+                  opacity: adding || !newUrl.trim() ? 0.5 : 1,
                   fontWeight: 600,
                   display: 'flex',
                   alignItems: 'center',
@@ -693,7 +644,7 @@ export default function URLManagement() {
 
               <button
                   onClick={handleCrawlSite}
-                  disabled={crawling || !newUrl.trim() || !embeddingKeyReady}
+                  disabled={crawling || !newUrl.trim()}
                   className="btn-secondary"
                   style={{
                     width: '100%',
@@ -986,7 +937,7 @@ export default function URLManagement() {
 
             <button
               onClick={handleSaveAutoFetchSettings}
-              disabled={saving || !embeddingKeyReady}
+              disabled={saving}
               style={{
                 width: '100%',
                 padding: 'var(--space-3)',
@@ -1089,7 +1040,7 @@ export default function URLManagement() {
                   <button
                     type="button"
                     onClick={handleClearAll}
-                    disabled={clearing || !embeddingKeyReady}
+                    disabled={clearing}
                     className="btn-ghost"
                     style={{
                       display: 'flex',
@@ -1097,8 +1048,8 @@ export default function URLManagement() {
                       justifyContent: 'center',
                       gap: 'var(--space-2)',
                       color: 'var(--color-error)',
-                      opacity: clearing || !embeddingKeyReady ? 0.5 : 1,
-                      cursor: clearing || !embeddingKeyReady ? 'not-allowed' : 'pointer',
+                      opacity: clearing ? 0.5 : 1,
+                      cursor: clearing ? 'not-allowed' : 'pointer',
                       minHeight: isMobile ? '44px' : undefined,
                       width: isMobile ? '100%' : 'auto',
                     }}

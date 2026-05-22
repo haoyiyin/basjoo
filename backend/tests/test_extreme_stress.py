@@ -5,9 +5,7 @@ This suite tests the system under extreme conditions to verify production readin
 
 import pytest
 import asyncio
-import json
 import time
-from datetime import datetime, timezone
 
 
 class TestExtremeStress:
@@ -102,46 +100,6 @@ class TestExtremeStress:
 
         successful = sum(1 for r in results if r and r.status_code == 200)
         assert successful >= 48, f"Only {successful}/50 mixed operations succeeded"
-
-    @pytest.mark.asyncio
-    async def test_memory_efficiency_large_batch(self, client):
-        """Test memory efficiency with large batch operations"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Get quota to see how much we can import
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota = response.json()
-        max_qa = quota["max_qa_items"]
-        used_qa = quota["used_qa_items"]
-
-        # Import a large batch (up to quota limit)
-        num_to_import = min(30, max_qa - used_qa)
-
-        # Create large QA items with substantial content
-        qa_items = [
-            {
-                "question": f"Large batch question {i} " * 10,  # ~300 chars
-                "answer": f"Large batch answer {i} " * 50,  # ~1500 chars
-            }
-            for i in range(num_to_import)
-        ]
-
-        qa_content = json.dumps(qa_items)
-
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-
-        assert response.status_code == 200
-        result = response.json()
-        assert result["imported"] == num_to_import
-
-        # Verify quota updated correctly
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        new_quota = response.json()
-        assert new_quota["used_qa_items"] == used_qa + num_to_import
 
     @pytest.mark.asyncio
     async def test_concurrent_url_operations(self, client):
@@ -301,10 +259,9 @@ class TestExtremeStress:
                         json={"agent_id": agent_id, "message": ""},
                     )
                 elif req_num % 5 == 2:
-                    # Non-existent QA item (should 404)
-                    return await client.put(
-                        "/api/v1/qa:update?qa_id=999999",
-                        json={"question": "test", "answer": "test"},
+                    # Non-existent URL (should 404)
+                    return await client.get(
+                        "/api/v1/agent?agent_id=nonexistent_agent_999999",
                     )
                 else:
                     # Valid request
@@ -326,53 +283,3 @@ class TestExtremeStress:
         # System should handle errors gracefully without crashing
         assert success_200 + client_errors == 50, "Some requests caused unexpected failures"
         assert success_200 >= 20, "Too few valid requests succeeded"
-
-    @pytest.mark.asyncio
-    async def test_database_consistency_under_concurrent_writes(self, client):
-        """Test database remains consistent under concurrent writes"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Get initial counts
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota = response.json()
-        initial_qa = quota["used_qa_items"]
-
-        # Create 3 concurrent QA batch imports with unique questions (SQLite has limited concurrency)
-        async def import_qa_batch(batch_num: int):
-            qa_content = json.dumps(
-                [
-                    {
-                        "question": f"Unique batch {batch_num} question {i}",
-                        "answer": f"Batch {batch_num} A{i}",
-                    }
-                    for i in range(3)
-                ]
-            )
-            return await client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": qa_content, "overwrite": False},
-            )
-
-        tasks = [import_qa_batch(i) for i in range(3)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Count total imported items from all responses
-        total_imported = sum(
-            r.json().get("imported", 0) if not isinstance(r, Exception) and r.status_code == 200 else 0
-            for r in results
-        )
-
-        # Verify final count is consistent
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        new_quota = response.json()
-        final_qa = new_quota["used_qa_items"]
-
-        # Verify at least one batch was imported successfully
-        assert total_imported > 0, "No items were imported"
-        assert final_qa >= initial_qa, "Final count should not be less than initial"
-
-        # Verify database integrity - final count should match what was reported as imported
-        # Note: Due to SQLite's limited concurrency support, some concurrent writes may be serialized
-        assert final_qa >= initial_qa + min(3, total_imported), \
-            f"Database integrity issue: {final_qa} vs initial {initial_qa} + imported {total_imported}"

@@ -288,9 +288,13 @@ verify_deployment() {
     show_failure_logs
     fail "Redis did not become healthy in time."
   }
-  wait_for_container basjoo-qdrant healthy 120 || {
+  wait_for_container basjoo-postgres healthy 120 || {
     show_failure_logs
-    fail "Qdrant did not become healthy in time."
+    fail "PostgreSQL did not become healthy in time."
+  }
+  wait_for_container basjoo-r2r healthy 120 || {
+    show_failure_logs
+    fail "R2R did not become healthy in time."
   }
   wait_for_container basjoo-backend healthy 180 || {
     show_failure_logs

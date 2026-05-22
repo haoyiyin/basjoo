@@ -5,7 +5,6 @@ This suite tests security measures and system robustness under various condition
 
 import pytest
 import asyncio
-import json
 
 
 class TestSecurityMeasures:
@@ -79,34 +78,6 @@ class TestSecurityMeasures:
         )
         # Should either accept or reject gracefully
         assert response.status_code in [200, 413, 422, 400]
-
-    @pytest.mark.asyncio
-    async def test_invalid_json_handling(self, client):
-        """Test invalid JSON is handled gracefully"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Try importing invalid JSON
-        invalid_json_attempts = [
-            "{invalid json}",
-            '{"question": "unclosed',
-            '{"question": null, "answer":}',
-            '[]',
-            'null',
-        ]
-
-        for invalid_json in invalid_json_attempts:
-            response = await client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": invalid_json, "overwrite": False},
-            )
-            # Should reject gracefully
-            assert response.status_code in [200, 400, 422]
-
-            if response.status_code == 200:
-                result = response.json()
-                # Should report failed imports
-                assert result.get("imported", 0) == 0 or result.get("failed", 0) > 0
 
 
 class TestSystemRobustness:
@@ -316,56 +287,6 @@ class TestSystemRobustness:
         assert response.status_code in [200, 400, 422, 413]
 
     @pytest.mark.asyncio
-    async def test_quota_boundary_behavior(self, client):
-        """Test behavior at quota boundaries"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Get quota
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota = response.json()
-
-        # Try to import up to quota limit (or 100, whichever is less due to batch limit)
-        remaining = quota["max_qa_items"] - quota["used_qa_items"]
-        to_import = min(remaining, 100)  # Batch import limit is 100
-
-        if to_import > 0:
-            # Import items up to batch/quota limit
-            qa_content = json.dumps(
-                [
-                    {"question": f"Boundary Q{i}", "answer": f"Boundary A{i}"}
-                    for i in range(to_import)
-                ]
-            )
-
-            response = await client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": qa_content, "overwrite": False},
-            )
-
-            assert response.status_code == 200
-            result = response.json()
-            assert result["imported"] == to_import
-
-        # If quota is now full, try to import one more (should fail)
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota = response.json()
-
-        if quota["used_qa_items"] >= quota["max_qa_items"]:
-            qa_content = json.dumps([{"question": "Extra Q", "answer": "Extra A"}])
-
-            response = await client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": qa_content, "overwrite": False},
-            )
-
-            # Should be rejected due to quota
-            assert response.status_code in [200, 429]
-            if response.status_code == 200:
-                result = response.json()
-                assert result["imported"] == 0
-
-    @pytest.mark.asyncio
     async def test_data_type_validation(self, client):
         """Test data type validation in inputs"""
         response = await client.get("/api/v1/agent:default")
@@ -417,28 +338,3 @@ class TestSystemRobustness:
 
         # Should match successful requests
         assert messages_sent == successful, f"Quota tracking mismatch: {messages_sent} vs {successful}"
-
-    @pytest.mark.asyncio
-    async def test_special_json_characters(self, client):
-        """Test JSON with special characters"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Test with special JSON characters
-        special_cases = [
-            {"question": 'Test "quoted" text', "answer": 'Answer with "quotes"'},
-            {"question": "Test\nnewline\ttab", "answer": "Answer with\nnewline"},
-            {"question": "Test \\ backslash", "answer": "Answer with \\ backslash"},
-            {"question": "Test / slash", "answer": "Answer with / slash"},
-            {"question": "Test \u0000 null", "answer": "Answer with unicode"},
-        ]
-
-        for qa_pair in special_cases:
-            qa_content = json.dumps([qa_pair])
-
-            response = await client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": qa_content, "overwrite": False},
-            )
-            # Should handle gracefully
-            assert response.status_code in [200, 400, 422]

@@ -51,7 +51,7 @@ const navItemsConfig: NavItem[] = [
     ),
     children: [
       { path: '/urls', i18nKey: 'navigation.websites' },
-      { path: '/qa', i18nKey: 'navigation.qa' },
+      { path: '/files', i18nKey: 'navigation.files' },
     ]
   },
   {
@@ -135,6 +135,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     if (item.children) {
       e?.preventDefault()
       setExpandedNav(expandedNav === item.path ? null : item.path)
+      navigate(item.path)
     } else {
       // Close submenu when clicking non-child nav items
       setExpandedNav(null)

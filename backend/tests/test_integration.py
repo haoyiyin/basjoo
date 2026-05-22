@@ -5,7 +5,6 @@ This suite tests complete end-to-end workflows and multi-step operations
 
 import pytest
 import asyncio
-import json
 
 from tests.conftest import wait_for_index_job
 
@@ -21,29 +20,12 @@ class TestIntegrationWorkflows:
         assert response.status_code == 200
         agent_id = response.json()["id"]
 
-        # 2. Import Q&A knowledge
-        qa_content = json.dumps([
-            {
-                "question": "What is the refund policy?",
-                "answer": "We offer 30-day full refund policy for all products."
-            },
-            {
-                "question": "How long does shipping take?",
-                "answer": "Standard shipping takes 3-5 business days. Express shipping takes 1-2 days."
-            },
-            {
-                "question": "What payment methods do you accept?",
-                "answer": "We accept credit cards, PayPal, and bank transfers."
-            }
-        ])
-
+        # 2. Add URL knowledge
         response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
+            f"/api/v1/urls:create?agent_id={agent_id}",
+            json={"urls": ["https://example.com"]},
         )
         assert response.status_code == 200
-        data = response.json()
-        assert data["imported"] == 3
 
         # 3. Build index
         response = await client.post(
@@ -56,11 +38,12 @@ class TestIntegrationWorkflows:
         # 4. Wait for index rebuild to complete
         await wait_for_index_job(client, agent_id, job_id)
 
-        # 5. Verify index was built
+        # 5. Verify index info endpoint works
         response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
         assert response.status_code == 200
         index_info = response.json()
-        assert index_info["index_exists"] or index_info["total_chunks"] > 0
+        assert "urls_indexed" in index_info
+        assert "r2r_healthy" in index_info
 
         # 6. Chat and verify RAG is working
         response = await client.post(
@@ -120,16 +103,6 @@ class TestIntegrationWorkflows:
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Add some knowledge
-        qa_content = json.dumps([{
-            "question": "What is your name?",
-            "answer": "I am Basjoo AI Assistant."
-        }])
-        await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-
         session_id = "multi_turn_test"
 
         # Turn 1: Introduce yourself
@@ -172,61 +145,6 @@ class TestIntegrationWorkflows:
         assert len(reply1) > 0
         assert len(reply2) > 0
         assert len(reply3) > 0
-
-    @pytest.mark.asyncio
-    async def test_crud_workflow_for_qa(self, client):
-        """Test complete CRUD workflow for Q&A items"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # CREATE: Import Q&A
-        qa_content = json.dumps([
-            {"question": "Original question 1", "answer": "Original answer 1"},
-            {"question": "Original question 2", "answer": "Original answer 2"},
-        ])
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        assert response.json()["imported"] == 2
-
-        # READ: List Q&A items
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        items = response.json()["items"]
-        assert len(items) >= 2
-
-        # Get specific item to update
-        qa_id = items[0]["id"]
-
-        # UPDATE: Modify Q&A
-        response = await client.put(
-            f"/api/v1/qa:update?qa_id={qa_id}",
-            json={
-                "question": "Updated question",
-                "answer": "Updated answer"
-            }
-        )
-        assert response.status_code == 200
-
-        # Verify update
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        updated_item = next(
-            (item for item in response.json()["items"] if item["id"] == qa_id),
-            None
-        )
-        assert updated_item is not None
-        assert updated_item["question"] == "Updated question"
-
-        # DELETE: Remove Q&A
-        response = await client.delete(f"/api/v1/qa:delete?qa_id={qa_id}")
-        assert response.status_code == 200
-
-        # Verify deletion
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        items = response.json()["items"]
-        assert not any(item["id"] == qa_id for item in items)
 
     @pytest.mark.asyncio
     async def test_agent_configuration_workflow(self, client):
@@ -282,23 +200,19 @@ class TestIntegrationWorkflows:
         # Get initial quota
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         initial_quota = response.json()
-        initial_qa_count = initial_quota["used_qa_items"]
+        initial_url_count = initial_quota["used_urls"]
 
-        # Import some Q&A items
-        qa_content = json.dumps([
-            {"question": f"Question {i}", "answer": f"Answer {i}"}
-            for i in range(3)
-        ])
+        # Add some URLs
         response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
+            f"/api/v1/urls:create?agent_id={agent_id}",
+            json={"urls": ["https://example.com", "https://example.org", "https://example.net"]},
         )
         assert response.status_code == 200
 
         # Check quota increased
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         new_quota = response.json()
-        assert new_quota["used_qa_items"] == initial_qa_count + 3
+        assert new_quota["used_urls"] >= initial_url_count + 1
 
         # Send some chat messages
         for i in range(5):
@@ -316,69 +230,15 @@ class TestIntegrationWorkflows:
         assert final_quota["used_messages_today"] >= initial_quota["used_messages_today"] + 5
 
     @pytest.mark.asyncio
-    async def test_overwrite_qa_items(self, client):
-        """Test overwriting existing Q&A items"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Import initial Q&A
-        qa_content = json.dumps([{
-            "question": "Test question",
-            "answer": "Initial answer"
-        }])
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        assert response.json()["imported"] == 1
-
-        # Try to import same question again (should fail without overwrite)
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
-        )
-        assert response.status_code == 200
-        # Should skip duplicate
-        assert response.json()["imported"] == 0
-
-        # Now import with overwrite enabled
-        qa_content_updated = json.dumps([{
-            "question": "Test question",
-            "answer": "Updated answer"
-        }])
-        response = await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content_updated, "overwrite": True},
-        )
-        assert response.status_code == 200
-        # Should update existing item
-        assert response.json()["imported"] == 1
-
-        # Verify the update
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        items = response.json()["items"]
-        updated_item = next(
-            (item for item in items if item["question"] == "Test question"),
-            None
-        )
-        assert updated_item is not None
-        assert updated_item["answer"] == "Updated answer"
-
-    @pytest.mark.asyncio
     async def test_index_operations_workflow(self, client):
         """Test complete index management workflow"""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # 1. Add knowledge
-        qa_content = json.dumps([
-            {"question": "Q1", "answer": "A1"},
-            {"question": "Q2", "answer": "A2"},
-        ])
+        # 1. Add knowledge via URL
         await client.post(
-            f"/api/v1/qa:batch_import?agent_id={agent_id}",
-            json={"format": "json", "content": qa_content, "overwrite": False},
+            f"/api/v1/urls:create?agent_id={agent_id}",
+            json={"urls": ["https://example.com"]},
         )
 
         # 2. Check initial index state
@@ -415,8 +275,8 @@ class TestIntegrationWorkflows:
         response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
         final_info = response.json()
         assert "agent_id" in final_info
-        assert "chunks_indexed" in final_info
-        assert "total_documents" in final_info
+        assert "urls_indexed" in final_info
+        assert "r2r_healthy" in final_info
 
     @pytest.mark.asyncio
     async def test_error_recovery_workflow(self, client):
@@ -461,23 +321,11 @@ class TestIntegrationWorkflows:
         # Perform multiple operations
         operations = []
 
-        # Import Q&A
-        qa_content = json.dumps([
-            {"question": f"Question {i}", "answer": f"Answer {i}"}
-            for i in range(10)
-        ])
-        operations.append(
-            client.post(
-                f"/api/v1/qa:batch_import?agent_id={agent_id}",
-                json={"format": "json", "content": qa_content, "overwrite": False},
-            )
-        )
-
         # Add URLs
         operations.append(
             client.post(
                 f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"urls": ["https://example.com"]},
+                json={"urls": ["https://example.com", "https://example.org"]},
             )
         )
 
@@ -504,10 +352,12 @@ class TestIntegrationWorkflows:
         assert successful == len(operations)
 
         # Verify data consistency
-        response = await client.get(f"/api/v1/qa:list?agent_id={agent_id}")
-        assert response.json()["total"] >= 10
+        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
+        assert response.status_code == 200
+        urls = response.json()["urls"]
+        assert len(urls) >= 1
 
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         quota = response.json()
-        assert quota["used_qa_items"] >= 10
+        assert quota["used_urls"] >= 1
         assert quota["used_messages_today"] >= 5

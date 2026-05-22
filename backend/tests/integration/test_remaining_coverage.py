@@ -91,42 +91,20 @@ class TestURLCrawlQuotaConvergence:
         assert quota["remaining_urls"] == 0
 
 
-class TestKeyRotation:
-    """Jina API key rotation clears disabled state and cache."""
+class TestJinaKeyUpdate:
+    """Jina API key update still persists the key."""
 
-    async def test_update_jina_key_clears_disabled(
-        self, client: AsyncClient, default_agent_id: str, monkeypatch
+    async def test_update_jina_key(
+        self, client: AsyncClient, default_agent_id: str
     ):
-        """After updating a Jina key, previous disabled state should be cleared."""
-        from services.qdrant_store import _disabled_keys, _cache_by_client
-        from core.encryption import encrypt_api_key, decrypt_api_key
-        from sqlalchemy import select
-        from models import Agent
-        from database import AsyncSessionLocal
-
-        # Set the agent's key to "test-old-key" so update_jina_key will clear it
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Agent).where(Agent.id == default_agent_id))
-            agent = result.scalar_one_or_none()
-            assert agent is not None
-            agent.jina_api_key = encrypt_api_key("test-old-key")
-            await db.commit()
-
-        # Add a fake disabled entry
-        _disabled_keys.add("test-old-key")
-        _cache_by_client[("test-old-key", "jina-embeddings-v3")] = {"cached": True}
-
-        # Update the key
+        """Updating a Jina key should succeed."""
         resp = await client.put(
             f"/api/v1/agent:jina-key?agent_id={default_agent_id}",
             json={"jina_api_key": "new-test-key"},
         )
         assert resp.status_code == 200
-
-        # Old key should no longer be in disabled set
-        assert "test-old-key" not in _disabled_keys
-        # Old cache should be cleared
-        assert ("test-old-key", "jina-embeddings-v3") not in _cache_by_client
+        data = resp.json()
+        assert data["configured"] is True
 
 
 class TestCORSSecurity:

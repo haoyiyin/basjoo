@@ -1,4 +1,4 @@
-"""URL和Q&A管理API v1"""
+"""URL管理API v1"""
 
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,7 +6,6 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from typing import List
 import logging
-import csv
 import asyncio
 
 import database
@@ -15,9 +14,7 @@ from api.endpoints.auth import require_admin_or_super_admin
 from models import (
     Agent,
     URLSource,
-    QAItem,
     WorkspaceQuota,
-    DocumentChunk,
 )
 from api.v1.schemas import (
     URLCreateRequest,
@@ -26,24 +23,14 @@ from api.v1.schemas import (
     URLRefetchResponse,
     SiteCrawlRequest,
     SiteCrawlResponse,
-    QABatchImportRequest,
-    QAListResponse,
-    QAUpdateRequest,
-    QABatchImportResponse,
 )
-from services import URLNormalizer, TextChunker, SiteCrawler, TaskType, task_lock
+from services import URLNormalizer, SiteCrawler, TaskType, task_lock
+from services.r2r_client import R2RClient
 from services.scraper import URLScraper
-from core.encryption import decrypt_api_key
-from api.v1.provider_helpers import get_agent_embedding_config, get_agent_vector_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin_or_super_admin)])
-
-
-# 全局服务实例
-qdrant_store = None
-text_chunker = TextChunker()
 
 
 # ========== URL Management ==========
@@ -392,14 +379,7 @@ async def delete_url(
 
     await db.commit()
 
-    # 同步删除 Qdrant 向量索引中的数据
-    try:
-        has_embedding_key = agent and bool(get_agent_embedding_config(agent)["embedding_api_key"])
-        if has_embedding_key:
-            qdrant_store = get_agent_vector_store(agent)
-            qdrant_store.delete_by_source(agent_id, "url", str(url_id))
-    except Exception as e:
-        logger.warning(f"Failed to delete vectors for URL {url_id}: {e}")
+    # Note: R2R content for this URL will be cleaned up on next index rebuild
 
     return {"message": "URL deleted successfully"}
 
@@ -663,294 +643,6 @@ async def crawl_site(
     )
 
 
-# ========== Q&A Management ==========
-
-
-@router.post("/qa:batch_import", response_model=QABatchImportResponse)
-async def batch_import_qa(
-    request: QABatchImportRequest,
-    agent_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    批量导入Q&A
-
-    根据PRD第8.4节规范
-    """
-    import json
-    import io
-
-    # 获取Agent
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
-
-    # 获取配额并加锁（一次性完成，防止并发问题）
-    quota_result = await db.execute(
-        select(WorkspaceQuota)
-        .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-        .with_for_update()  # 立即加锁
-    )
-    quota = quota_result.scalar_one_or_none()
-
-    if not quota:
-        # 如果配额不存在，创建并加锁
-        quota = WorkspaceQuota(workspace_id=agent.workspace_id)
-        db.add(quota)
-        await db.flush()  # flush以确保行存在但不释放锁
-
-    # 解析内容
-    items_to_import = []
-    errors = []
-
-    try:
-        if request.format == "json":
-            data = json.loads(request.content)
-            if isinstance(data, list):
-                items_to_import = data
-            elif isinstance(data, dict) and "items" in data:
-                items_to_import = data["items"]
-            else:
-                errors.append("Invalid JSON format")
-
-        elif request.format == "csv":
-            lines = request.content.strip().split("\n")
-            reader = csv.reader(lines)
-            for index, row in enumerate(reader):
-                normalized_row = [cell.strip() for cell in row]
-                if index == 0 and len(normalized_row) >= 2 and normalized_row[0].lower() == "question" and normalized_row[1].lower() == "answer":
-                    continue
-                if len(normalized_row) >= 2:
-                    items_to_import.append(
-                        {
-                            "question": normalized_row[0],
-                            "answer": normalized_row[1],
-                        }
-                    )
-                elif len(normalized_row) > 0:
-                    errors.append(f"Invalid CSV row: {row}")
-
-    except Exception as e:
-        errors.append(f"Parse error: {str(e)}")
-
-    # 导入
-    imported = 0
-    failed = 0
-
-    for item in items_to_import[:100]:  # 限制单次最多100条
-        try:
-            question = item.get("question", "").strip()
-            answer = item.get("answer", "").strip()
-
-            if not question or not answer:
-                errors.append(f"Empty question or answer: {item}")
-                failed += 1
-                continue
-
-            # 检查是否已存在
-            existing = await db.execute(
-                select(QAItem).where(
-                    QAItem.agent_id == agent_id, QAItem.question == question
-                )
-            )
-            existing_qa = existing.scalar_one_or_none()
-            if existing_qa:
-                if request.overwrite:
-                    existing_qa.answer = answer
-                    imported += 1
-                else:
-                    failed += 1
-                    continue
-            else:
-                # 检查配额（使用锁定的quota值）
-                if quota.used_qa_items >= quota.max_qa_items:
-                    errors.append("Q&A quota exceeded")
-                    break
-
-                # 创建新Q&A
-                qa = QAItem(
-                    agent_id=agent_id,
-                    question=question,
-                    answer=answer,
-                )
-                db.add(qa)
-
-                # 立即更新配额计数
-                quota.used_qa_items += 1
-                imported += 1
-
-        except Exception as e:
-            errors.append(str(e))
-            failed += 1
-
-    await db.commit()
-
-    # Invalidate QA cache for this agent
-    try:
-        from services.redis_service import get_redis
-        redis = await get_redis()
-        await redis.delete_cache(f"qa_items:{agent_id}")
-    except Exception:
-        pass
-
-    # 注意：不再自动增量更新索引，由用户手动点击"重新训练智能体"
-
-    return QABatchImportResponse(
-        imported=imported,
-        failed=failed,
-        errors=errors[:10],  # 最多返回10个错误
-    )
-
-
-@router.get("/qa:list", response_model=QAListResponse)
-async def list_qa(
-    agent_id: str,
-    skip: int = 0,
-    limit: int = 50,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    列出Q&A
-
-    根据PRD第8.4节规范
-    """
-    # 获取Agent
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
-
-    # 获取配额
-    quota_result = await db.execute(
-        select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
-    )
-    quota = quota_result.scalar_one_or_none()
-
-    # 查询Q&A列表
-    result = await db.execute(
-        select(QAItem)
-        .where(QAItem.agent_id == agent_id)
-        .order_by(QAItem.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-    )
-    items = result.scalars().all()
-
-    # 获取总数
-    count_result = await db.execute(
-        select(func.count(QAItem.id)).where(QAItem.agent_id == agent_id)
-    )
-    total = count_result.scalar() or 0
-
-    from api.v1.schemas import QAItem as QASchema
-
-    return QAListResponse(
-        items=[QASchema.model_validate(q) for q in items],
-        total=total,
-        quota={
-            "used": quota.used_qa_items if quota else 0,
-            "max": quota.max_qa_items if quota else 500,
-        },
-    )
-
-
-@router.put("/qa:update")
-async def update_qa(
-    qa_id: str,
-    request: QAUpdateRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """更新Q&A"""
-    result = await db.execute(select(QAItem).where(QAItem.id == qa_id))
-    qa = result.scalar_one_or_none()
-
-    if not qa:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Q&A {qa_id} not found"
-        )
-
-    # 更新字段
-    update_data = request.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(qa, field, value)
-
-    await db.commit()
-
-    # Invalidate QA cache for this agent
-    try:
-        from services.redis_service import get_redis
-        redis = await get_redis()
-        await redis.delete_cache(f"qa_items:{qa.agent_id}")
-    except Exception:
-        pass
-
-    return {"message": "Q&A updated successfully"}
-
-
-@router.delete("/qa:delete")
-async def delete_qa(
-    qa_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """删除Q&A"""
-    result = await db.execute(select(QAItem).where(QAItem.id == qa_id))
-    qa = result.scalar_one_or_none()
-
-    if not qa:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Q&A {qa_id} not found"
-        )
-
-    # 获取Agent
-    agent_result = await db.execute(select(Agent).where(Agent.id == qa.agent_id))
-    agent = agent_result.scalar_one_or_none()
-
-    # 保存 agent_id 用于后续删除向量
-    agent_id_for_vectors = qa.agent_id
-
-    # 删除
-    await db.delete(qa)
-
-    # 更新配额
-    if agent:
-        quota_result = await db.execute(
-            select(WorkspaceQuota).where(
-                WorkspaceQuota.workspace_id == agent.workspace_id
-            )
-        )
-        quota = quota_result.scalar_one_or_none()
-        if quota:
-            quota.used_qa_items = max(0, quota.used_qa_items - 1)
-
-    await db.commit()
-
-    # Invalidate QA cache for this agent
-    try:
-        from services.redis_service import get_redis
-        redis = await get_redis()
-        await redis.delete_cache(f"qa_items:{agent_id_for_vectors}")
-    except Exception:
-        pass
-
-    # 同步删除 Qdrant 向量索引中的数据
-    try:
-        has_embedding_key = agent and bool(get_agent_embedding_config(agent)["embedding_api_key"])
-        if has_embedding_key:
-            qdrant_store = get_agent_vector_store(agent)
-            qdrant_store.delete_by_source(agent_id_for_vectors, "qa", qa_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete vectors for QA {qa_id}: {e}")
-
-    return {"message": "Q&A deleted successfully"}
-
-
 @router.delete("/urls:clear_all")
 async def clear_all_urls(
     agent_id: str,
@@ -992,14 +684,7 @@ async def clear_all_urls(
 
     await db.commit()
 
-    # 同步清空 Qdrant 向量索引
-    try:
-        has_embedding_key = bool(get_agent_embedding_config(agent)["embedding_api_key"])
-        if has_embedding_key:
-            qdrant_store = get_agent_vector_store(agent)
-            qdrant_store.delete_collection(agent_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete collection for agent {agent_id}: {e}")
+    # Note: R2R content will be cleaned up on next index rebuild
 
     return {
         "message": f"Successfully cleared {deleted_count} URLs",
