@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import KBSetupWizard from './KBSetupWizard';
 
 interface KBSetupGuardProps {
   agentId: string;
@@ -14,61 +14,117 @@ interface KBSetupGuardProps {
 export default function KBSetupGuard({ agentId, children }: KBSetupGuardProps) {
   const { t } = useTranslation('common');
   const isMobile = useIsMobile();
-  const navigate = useNavigate();
   const [kbSetupCompleted, setKbSetupCompleted] = useState<boolean | null>(null);
 
-  useEffect(() => {
-    const checkKBStatus = async () => {
-      try {
-        const kbStatus = await api.kbStatus(agentId);
-        setKbSetupCompleted(kbStatus.kb_setup_completed);
-      } catch {
-        setKbSetupCompleted(false);
-      }
-    };
-    checkKBStatus();
+  const checkKBStatus = useCallback(async () => {
+    try {
+      const kbStatus = await api.kbStatus(agentId);
+      setKbSetupCompleted(kbStatus.kb_setup_completed);
+    } catch {
+      setKbSetupCompleted(false);
+    }
   }, [agentId]);
+
+  useEffect(() => {
+    checkKBStatus();
+  }, [checkKBStatus]);
 
   if (kbSetupCompleted === false) {
     return (
       <div style={{
-        padding: isMobile ? 'var(--space-4)' : 'var(--space-8)',
-        maxWidth: '600px',
-        margin: '0 auto',
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        background: 'rgba(0, 0, 0, 0.6)',
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+        padding: isMobile ? 'var(--space-4)' : 'var(--space-6)',
+        overflowY: 'auto',
+      }}>
+        {/* Decorative blur blobs */}
+        <div style={{
+          position: 'absolute',
+          top: '10%',
+          right: '20%',
+          width: '350px',
+          height: '350px',
+          background: 'radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%)',
+          borderRadius: '50%',
+          filter: 'blur(60px)',
+          pointerEvents: 'none',
+        }} />
+        <div style={{
+          position: 'absolute',
+          bottom: '15%',
+          left: '10%',
+          width: '280px',
+          height: '280px',
+          background: 'radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%)',
+          borderRadius: '50%',
+          filter: 'blur(60px)',
+          pointerEvents: 'none',
+        }} />
+
+        <div style={{
+          width: '100%',
+          maxWidth: '480px',
+          position: 'relative',
+          zIndex: 1,
+          animation: 'fadeIn 0.5s ease-out forwards',
+        }}>
+          {/* Logo and heading */}
+          <div style={{
+            textAlign: 'center',
+            marginBottom: 'var(--space-6)',
+          }}>
+            <img
+              src="/logo.png"
+              alt="Basjoo Logo"
+              style={{
+                width: '64px',
+                height: '64px',
+                objectFit: 'contain',
+                marginBottom: 'var(--space-4)',
+              }}
+            />
+            <h1 style={{
+              fontSize: 'var(--text-2xl)',
+              fontWeight: 700,
+              marginBottom: 'var(--space-2)',
+              background: 'linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)',
+              WebkitBackgroundClip: 'text',
+              backgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}>
+              {t('kb.setup.title', '知识库设置')}
+            </h1>
+            <p style={{
+              color: 'var(--color-text-secondary)',
+              fontSize: 'var(--text-base)',
+            }}>
+              {t('kb.setup.desc', '配置 Embedding 提供商以初始化知识库。')}
+            </p>
+          </div>
+
+          <KBSetupWizard
+            agentId={agentId}
+            onSetupComplete={() => checkKBStatus()}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (kbSetupCompleted === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
         minHeight: '60vh',
       }}>
-        <div className="glass-card" style={{ padding: 'var(--space-8)', textAlign: 'center', width: '100%' }}>
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" strokeWidth="1.5" style={{ marginBottom: 'var(--space-4)' }}>
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 'var(--space-3)' }}>
-            {t('kb.setupRequired')}
-          </h2>
-          <p style={{ color: 'var(--color-text-secondary)', marginBottom: 'var(--space-6)', lineHeight: 1.6 }}>
-            {t('kb.setupDescription')}
-          </p>
-          <button
-            onClick={() => navigate('/knowledge')}
-            style={{
-              padding: '10px 24px',
-              borderRadius: 'var(--radius-md)',
-              border: 'none',
-              background: 'var(--color-accent-primary)',
-              color: 'var(--color-text-inverse)',
-              fontWeight: 600,
-              fontSize: 'var(--text-sm)',
-              cursor: 'pointer',
-            }}
-          >
-            {t('kb.goToSetup')}
-          </button>
-        </div>
+        <div className="spinner" />
       </div>
     );
   }

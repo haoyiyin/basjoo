@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode, useState } from 'react'
+import { ReactNode, useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +15,7 @@ interface NavItem {
   path: string
   i18nKey: string
   icon: JSX.Element
+  children?: NavItem[]
 }
 
 const navItemsConfig: NavItem[] = [
@@ -48,26 +49,28 @@ const navItemsConfig: NavItem[] = [
         <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
       </svg>
     ),
-  },
-  {
-    path: '/urls',
-    i18nKey: 'navigation.urlKnowledge',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-      </svg>
-    ),
-  },
-  {
-    path: '/files',
-    i18nKey: 'navigation.fileManagement',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-      </svg>
-    ),
+    children: [
+      {
+        path: '/urls',
+        i18nKey: 'navigation.urlKnowledge',
+        icon: (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+        ),
+      },
+      {
+        path: '/files',
+        i18nKey: 'navigation.fileManagement',
+        icon: (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
     path: '/sessions',
@@ -124,7 +127,27 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     label: t(item.i18nKey),
   }))
 
-  const isActive = (path: string) => location.pathname === path
+  // Auto-expand knowledge group when child route is active
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
+    if (location.pathname === '/urls' || location.pathname === '/files') {
+      return new Set(['/knowledge'])
+    }
+    return new Set()
+  })
+
+  useEffect(() => {
+    if (location.pathname === '/urls' || location.pathname === '/files') {
+      setExpandedGroups(prev => new Set([...prev, '/knowledge']))
+    }
+  }, [location.pathname])
+
+  const isActive = (item: NavItem) => {
+    if (item.path === location.pathname) return true
+    if (item.children) {
+      return item.children.some(child => child.path === location.pathname)
+    }
+    return false
+  }
 
   const handleLogout = () => {
     logout()
@@ -205,47 +228,141 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           flexDirection: 'column',
           gap: 'var(--space-1)',
         }}>
-          {navItems.map((item) => (
-            <Link
-              key={item.path}
-              to={item.path}
-              onClick={handleNavClick}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-3)',
-                padding: 'var(--space-3) var(--space-4)',
-                borderRadius: 'var(--radius-md)',
-                color: isActive(item.path) ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
-                background: isActive(item.path) ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
-                textDecoration: 'none',
-                fontSize: 'var(--text-sm)',
-                fontWeight: isActive(item.path) ? 500 : 400,
-                transition: 'all var(--transition-fast)',
-                position: 'relative',
-              }}
-            >
-              {isActive(item.path) && (
-                <div style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  width: '3px',
-                  height: '60%',
-                  background: 'var(--color-accent-gradient)',
-                  borderRadius: '0 2px 2px 0',
-                }} />
-              )}
-              <span style={{
-                display: 'flex',
-                opacity: isActive(item.path) ? 1 : 0.7,
-              }}>
-                {item.icon}
-              </span>
-              {item.label}
-            </Link>
-          ))}
+          {navItems.map((item) => {
+            const hasChildren = item.children && item.children.length > 0
+            const isExpanded = expandedGroups.has(item.path)
+            const active = isActive(item)
+
+            return (
+              <div key={item.path}>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <Link
+                    to={item.path}
+                    onClick={handleNavClick}
+                    style={{
+                      flex: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 'var(--space-3)',
+                      padding: 'var(--space-3) var(--space-4)',
+                      borderRadius: 'var(--radius-md)',
+                      color: active ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
+                      background: active ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
+                      textDecoration: 'none',
+                      fontSize: 'var(--text-sm)',
+                      fontWeight: active ? 500 : 400,
+                      transition: 'all var(--transition-fast)',
+                      position: 'relative',
+                    }}
+                  >
+                    {active && (
+                      <div style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: '3px',
+                        height: '60%',
+                        background: 'var(--color-accent-gradient)',
+                        borderRadius: '0 2px 2px 0',
+                      }} />
+                    )}
+                    <span style={{
+                      display: 'flex',
+                      opacity: active ? 1 : 0.7,
+                    }}>
+                      {item.icon}
+                    </span>
+                    {item.label}
+                  </Link>
+                  {hasChildren && (
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setExpandedGroups(prev => {
+                          const next = new Set(prev)
+                          if (next.has(item.path)) {
+                            next.delete(item.path)
+                          } else {
+                            next.add(item.path)
+                          }
+                          return next
+                        })
+                      }}
+                      style={{
+                        padding: 'var(--space-2)',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--color-text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                        style={{
+                          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                          transition: 'transform 0.2s ease',
+                        }}>
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                {hasChildren && isExpanded && (
+                  <div style={{ marginLeft: 'var(--space-4)' }}>
+                    {item.children!.map((child) => {
+                      const childActive = location.pathname === child.path
+                      return (
+                        <Link
+                          key={child.path}
+                          to={child.path}
+                          onClick={handleNavClick}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 'var(--space-3)',
+                            padding: 'var(--space-2) var(--space-4)',
+                            paddingLeft: 'var(--space-10)',
+                            borderRadius: 'var(--radius-md)',
+                            color: childActive ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
+                            background: childActive ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
+                            textDecoration: 'none',
+                            fontSize: 'var(--text-sm)',
+                            fontWeight: childActive ? 500 : 400,
+                            transition: 'all var(--transition-fast)',
+                            position: 'relative',
+                          }}
+                        >
+                          {childActive && (
+                            <div style={{
+                              position: 'absolute',
+                              left: 0,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              width: '2px',
+                              height: '40%',
+                              background: 'var(--color-accent-gradient)',
+                              borderRadius: '0 2px 2px 0',
+                            }} />
+                          )}
+                          <span style={{
+                            display: 'flex',
+                            opacity: childActive ? 1 : 0.7,
+                          }}>
+                            {child.icon}
+                          </span>
+                          {t(child.i18nKey)}
+                        </Link>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       </nav>
 

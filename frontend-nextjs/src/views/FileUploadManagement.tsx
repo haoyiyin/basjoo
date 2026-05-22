@@ -31,6 +31,7 @@ export default function FileUploadManagement() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [kbGuardKey, setKbGuardKey] = useState(0);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
   const wasRetrainingRef = useRef(false);
@@ -283,7 +284,7 @@ export default function FileUploadManagement() {
   return (
     <AdminLayout>
       {agentId ? (
-        <KBSetupGuard agentId={agentId}>
+        <KBSetupGuard key={kbGuardKey} agentId={agentId}>
           {showClearConfirm && (
         <div
           style={{
@@ -667,6 +668,7 @@ export default function FileUploadManagement() {
                 onRetrain={handleRetrain}
                 isRetraining={isRetraining}
                 refreshTrigger={refreshTrigger}
+                onReset={() => setKbGuardKey(k => k + 1)}
               />
             </div>
           )}
@@ -680,6 +682,7 @@ export default function FileUploadManagement() {
               onRetrain={handleRetrain}
               isRetraining={isRetraining}
               refreshTrigger={refreshTrigger}
+              onReset={() => setKbGuardKey(k => k + 1)}
             />
           </div>
         )}

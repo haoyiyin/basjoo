@@ -568,7 +568,13 @@
     "processing": "Processing",
     "hasPendingHint": "Has pending content",
     "retrainStarted": "Agent training started",
-    "retrainFailed": "Training failed"
+    "retrainFailed": "Training failed",
+    "resetKnowledgeBase": "Reset Knowledge Base",
+    "resetConfirmTitle": "Reset Knowledge Base",
+    "resetConfirmMessage": "After reset, you will need to reconfigure the Embedding provider. Are you sure?",
+    "resetting": "Resetting...",
+    "resetFailed": "Failed to reset knowledge base",
+    "setupKnowledgeBase": "Configure Knowledge Base"
   },
   "files": {
     "description": "Upload files to use as AI knowledge sources",

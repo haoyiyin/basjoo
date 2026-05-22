@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
+import KBSetupWizard from './KBSetupWizard';
 
 interface SourcesSummaryProps {
   agentId: string;
@@ -11,6 +12,7 @@ interface SourcesSummaryProps {
   refreshTrigger?: number;
   embeddingBatchSize?: number;
   onEmbeddingBatchSizeChange?: (value: number) => void;
+  onReset?: () => void;
 }
 
 interface SourcesSummaryData {
@@ -29,17 +31,21 @@ interface SourcesSummaryData {
   has_pending: boolean;
 }
 
-export default function SourcesSummary({ 
-  agentId, 
-  onRetrain, 
+export default function SourcesSummary({
+  agentId,
+  onRetrain,
   isRetraining,
   refreshTrigger = 0,
   embeddingBatchSize = 4,
   onEmbeddingBatchSizeChange,
+  onReset,
 }: SourcesSummaryProps) {
   const { t } = useTranslation('common');
   const [data, setData] = useState<SourcesSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
 
   const loadSummary = useCallback(async () => {
     if (!agentId) return;
@@ -64,6 +70,21 @@ export default function SourcesSummary({
       return () => clearInterval(interval);
     }
   }, [isRetraining, loadSummary]);
+
+  const handleResetConfirm = async () => {
+    if (!agentId) return;
+    setResetting(true);
+    try {
+      await api.kbReset(agentId);
+      setShowResetConfirm(false);
+      setShowSetupWizard(true);
+    } catch (error) {
+      console.error('Failed to reset KB:', error);
+      alert(t('sources.resetFailed', '重置知识库失败'));
+    } finally {
+      setResetting(false);
+    }
+  };
 
   if (loading || !data) {
     return (
@@ -268,6 +289,7 @@ export default function SourcesSummary({
           gap: 'var(--space-2)',
           boxShadow: hasPending ? '0 4px 14px rgba(245, 158, 11, 0.4)' : 'none',
           transition: 'all 0.2s ease',
+          marginBottom: 'var(--space-3)',
         }}
       >
         {isRetraining ? (
@@ -280,6 +302,209 @@ export default function SourcesSummary({
         )}
         {isRetraining ? t('sources.retraining') : t('sources.retrainAgent')}
       </button>
+
+      {/* Reset Knowledge Base Button */}
+      <button
+        onClick={() => setShowResetConfirm(true)}
+        disabled={isRetraining || resetting}
+        style={{
+          width: '100%',
+          padding: 'var(--space-3)',
+          background: 'transparent',
+          color: '#ef4444',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: 'var(--radius-md)',
+          cursor: (isRetraining || resetting) ? 'not-allowed' : 'pointer',
+          opacity: (isRetraining || resetting) ? 0.5 : 1,
+          fontWeight: 500,
+          fontSize: 'var(--text-sm)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 'var(--space-2)',
+          transition: 'all 0.2s ease',
+        }}
+      >
+        {resetting ? (
+          <div className="spinner" style={{ width: '16px', height: '16px' }} />
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+        )}
+        {resetting ? t('sources.resetting', '重置中...') : t('sources.resetKnowledgeBase', '重置知识库')}
+      </button>
+
+      {/* Reset Confirmation Dialog */}
+      {showResetConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 2000,
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 'var(--space-4)',
+          }}
+          onClick={() => setShowResetConfirm(false)}
+        >
+          <div
+            className="glass-card"
+            style={{
+              maxWidth: '420px',
+              width: '100%',
+              padding: 'var(--space-6)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.12)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 'var(--space-2)' }}>
+                  {t('sources.resetConfirmTitle', '重置知识库')}
+                </h3>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
+                  {t('sources.resetConfirmMessage', '重置后需要重新配置 Embedding 提供商。确定要重置吗？')}
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)' }}>
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="btn-secondary"
+                disabled={resetting}
+              >
+                {t('buttons.cancel', '取消')}
+              </button>
+              <button
+                onClick={handleResetConfirm}
+                disabled={resetting}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: '#ef4444',
+                  color: 'white',
+                  fontWeight: 500,
+                  fontSize: 'var(--text-sm)',
+                  cursor: resetting ? 'not-allowed' : 'pointer',
+                  opacity: resetting ? 0.7 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                {resetting && <div className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px' }} />}
+                {t('buttons.confirm', '确定')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KB Setup Wizard Modal */}
+      {showSetupWizard && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 3000,
+          background: 'rgba(0, 0, 0, 0.6)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 'var(--space-4)',
+          overflowY: 'auto',
+        }}>
+          {/* Decorative blur blobs */}
+          <div style={{
+            position: 'absolute',
+            top: '10%',
+            right: '20%',
+            width: '350px',
+            height: '350px',
+            background: 'radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%)',
+            borderRadius: '50%',
+            filter: 'blur(60px)',
+            pointerEvents: 'none',
+          }} />
+          <div style={{
+            position: 'absolute',
+            bottom: '15%',
+            left: '10%',
+            width: '280px',
+            height: '280px',
+            background: 'radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%)',
+            borderRadius: '50%',
+            filter: 'blur(60px)',
+            pointerEvents: 'none',
+          }} />
+
+          <div style={{
+            width: '100%',
+            maxWidth: '480px',
+            position: 'relative',
+            zIndex: 1,
+            animation: 'fadeIn 0.5s ease-out forwards',
+          }}>
+            {/* Logo and heading */}
+            <div style={{
+              textAlign: 'center',
+              marginBottom: 'var(--space-6)',
+            }}>
+              <img
+                src="/logo.png"
+                alt="Basjoo Logo"
+                style={{
+                  width: '64px',
+                  height: '64px',
+                  objectFit: 'contain',
+                  marginBottom: 'var(--space-4)',
+                }}
+              />
+              <h1 style={{
+                fontSize: 'var(--text-2xl)',
+                fontWeight: 700,
+                marginBottom: 'var(--space-2)',
+                background: 'linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)',
+                WebkitBackgroundClip: 'text',
+                backgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+              }}>
+                {t('sources.setupKnowledgeBase', '配置知识库')}
+              </h1>
+            </div>
+
+            <KBSetupWizard
+              agentId={agentId}
+              onSetupComplete={() => {
+                setShowSetupWizard(false);
+                loadSummary();
+                onReset?.();
+              }}
+              onCancel={() => setShowSetupWizard(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
