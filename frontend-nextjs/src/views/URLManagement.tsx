@@ -6,6 +6,7 @@ import { api } from '../services/api'
 import type { URLSource, Agent } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
 import HelpTooltip from '../components/HelpTooltip';
+import KBSetupGuard from '../components/KBSetupGuard';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import SourcesSummary from '../components/SourcesSummary';
 
@@ -421,7 +422,9 @@ export default function URLManagement() {
 
   return (
     <AdminLayout>
-      {showClearConfirm && (
+      {agentId ? (
+        <KBSetupGuard agentId={agentId}>
+          {showClearConfirm && (
         <div
           style={{
             position: 'fixed',
@@ -1289,6 +1292,12 @@ export default function URLManagement() {
           </div>
         )}
       </div>
+        </KBSetupGuard>
+      ) : (
+        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', textAlign: 'center' }}>
+          <div className="spinner" />
+        </div>
+      )}
     </AdminLayout>
   );
 }

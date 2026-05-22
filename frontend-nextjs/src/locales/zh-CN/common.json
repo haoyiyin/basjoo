@@ -657,6 +657,8 @@
     "apiKeyNotConfigured": "未配置",
     "setupRequired": "请先完成知识库初始化设置",
     "goToSetup": "前往设置",
-    "batchSize": "批处理大小"
+    "batchSize": "批处理大小",
+    "manageUrlsDesc": "管理网站知识源，添加和抓取网页内容",
+    "manageFilesDesc": "上传和管理文件，支持 PDF、TXT、CSV 等格式"
   }
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import type { EmbeddingProvider } from '../services/api'
 
@@ -21,6 +22,7 @@ const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
 
 export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComplete }: KnowledgeBaseSetupProps) {
   const { t } = useTranslation('common')
+  const navigate = useNavigate()
   const [agentId, setAgentId] = useState<string | null>(agentIdProp || null)
   const [kbStatus, setKbStatus] = useState<KBStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -296,6 +298,7 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
                 gap: '8px',
                 color: '#ef4444',
                 borderColor: 'rgba(239, 68, 68, 0.3)',
+                padding: '12px',
               }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -304,6 +307,38 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
               </svg>
               {t('kb.resetEmbedding', '重置 Embedding')}
             </button>
+          </div>
+        </div>
+
+        {/* Navigation cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 'var(--space-4)' }}>
+          <div
+            className="glass-card"
+            style={{ padding: 'var(--space-5)', cursor: 'pointer', transition: 'all 0.2s' }}
+            onClick={() => navigate('/urls')}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-primary)" strokeWidth="2">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+              <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{t('navigation.urlKnowledge')}</span>
+            </div>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{t('kb.manageUrlsDesc', '管理网站知识源，添加和抓取网页内容')}</p>
+          </div>
+          <div
+            className="glass-card"
+            style={{ padding: 'var(--space-5)', cursor: 'pointer', transition: 'all 0.2s' }}
+            onClick={() => navigate('/files')}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-primary)" strokeWidth="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+              <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{t('navigation.fileManagement')}</span>
+            </div>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{t('kb.manageFilesDesc', '上传和管理文件，支持 PDF、TXT、CSV 等格式')}</p>
           </div>
         </div>
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode, useState, useEffect } from 'react'
+import { ReactNode, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from 'react-i18next'
@@ -15,7 +15,6 @@ interface NavItem {
   path: string
   i18nKey: string
   icon: JSX.Element
-  children?: { path: string; i18nKey: string }[]
 }
 
 const navItemsConfig: NavItem[] = [
@@ -49,10 +48,26 @@ const navItemsConfig: NavItem[] = [
         <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
       </svg>
     ),
-    children: [
-      { path: '/urls', i18nKey: 'navigation.websites' },
-      { path: '/files', i18nKey: 'navigation.files' },
-    ]
+  },
+  {
+    path: '/urls',
+    i18nKey: 'navigation.urlKnowledge',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+      </svg>
+    ),
+  },
+  {
+    path: '/files',
+    i18nKey: 'navigation.fileManagement',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+    ),
   },
   {
     path: '/sessions',
@@ -98,16 +113,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const { admin, logout } = useAuth()
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [expandedNav, setExpandedNav] = useState<string | null>(null)
   const isSupport = admin?.role === 'support'
-
-  // Auto-expand knowledge submenu if on a knowledge child page
-  useEffect(() => {
-    const knowledgeItem = navItemsConfig.find(item => item.path === '/knowledge')
-    if (knowledgeItem?.children?.some(child => location.pathname === child.path)) {
-      setExpandedNav('/knowledge')
-    }
-  }, [location.pathname])
 
   const allowedNav = isSupport
     ? navItemsConfig.filter(item => item.path === '/sessions')
@@ -116,44 +122,22 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const navItems = allowedNav.map(item => ({
     ...item,
     label: t(item.i18nKey),
-    children: item.children?.map(child => ({
-      ...child,
-      label: t(child.i18nKey)
-    }))
   }))
 
   const isActive = (path: string) => location.pathname === path
-  const isParentActive = (item: typeof navItems[0]) => 
-    item.children?.some(child => location.pathname === child.path) || location.pathname === item.path
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
-  const handleNavClick = (item: typeof navItems[0], e?: React.MouseEvent) => {
-    if (item.children) {
-      e?.preventDefault()
-      setExpandedNav(expandedNav === item.path ? null : item.path)
-      navigate(item.path)
-    } else {
-      // Close submenu when clicking non-child nav items
-      setExpandedNav(null)
-      if (isMobile) {
-        setSidebarOpen(false)
-      }
-    }
-  }
-
-  const handleChildNavClick = () => {
-    // Keep parent expanded when clicking child items
+  const handleNavClick = () => {
     if (isMobile) {
       setSidebarOpen(false)
     }
   }
 
   const handleLogoClick = () => {
-    setExpandedNav(null)
     if (isMobile) {
       setSidebarOpen(false)
     }
@@ -222,145 +206,45 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           gap: 'var(--space-1)',
         }}>
           {navItems.map((item) => (
-            <div key={item.path}>
-              {item.children ? (
-                <>
-                  <button
-                    onClick={(e) => handleNavClick(item, e)}
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-3)',
-                      padding: 'var(--space-3) var(--space-4)',
-                      borderRadius: 'var(--radius-md)',
-                      color: isParentActive(item) ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
-                      background: isParentActive(item) ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
-                      border: 'none',
-                      fontSize: 'var(--text-sm)',
-                      fontWeight: isParentActive(item) ? 500 : 400,
-                      transition: 'all var(--transition-fast)',
-                      position: 'relative',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                  >
-                    {isParentActive(item) && (
-                      <div style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        width: '3px',
-                        height: '60%',
-                        background: 'var(--color-accent-gradient)',
-                        borderRadius: '0 2px 2px 0',
-                      }} />
-                    )}
-                    <span style={{ 
-                      display: 'flex',
-                      opacity: isParentActive(item) ? 1 : 0.7,
-                    }}>
-                      {item.icon}
-                    </span>
-                    {item.label}
-                    <svg 
-                      width="12" 
-                      height="12" 
-                      viewBox="0 0 24 24" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      strokeWidth="2"
-                      style={{
-                        marginLeft: 'auto',
-                        transform: expandedNav === item.path ? 'rotate(180deg)' : 'rotate(0deg)',
-                        transition: 'transform var(--transition-fast)',
-                      }}
-                    >
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </button>
-                  {expandedNav === item.path && (
-                    <div style={{
-                      marginLeft: 'var(--space-8)',
-                      marginTop: 'var(--space-1)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 'var(--space-1)',
-                    }}>
-                      {item.children.map((child) => (
-                        <Link
-                          key={child.path}
-                          to={child.path}
-                          onClick={handleChildNavClick}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 'var(--space-2)',
-                            padding: 'var(--space-2) var(--space-3)',
-                            borderRadius: 'var(--radius-md)',
-                            color: isActive(child.path) ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
-                            background: isActive(child.path) ? 'rgba(6, 182, 212, 0.08)' : 'transparent',
-                            textDecoration: 'none',
-                            fontSize: 'var(--text-xs)',
-                            fontWeight: isActive(child.path) ? 500 : 400,
-                            transition: 'all var(--transition-fast)',
-                          }}
-                        >
-                          <span style={{
-                            width: '4px',
-                            height: '4px',
-                            borderRadius: '50%',
-                            background: isActive(child.path) ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
-                            opacity: isActive(child.path) ? 1 : 0.5,
-                          }} />
-                          {child.label}
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <Link
-                  to={item.path}
-                  onClick={() => handleNavClick(item)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-3)',
-                    padding: 'var(--space-3) var(--space-4)',
-                    borderRadius: 'var(--radius-md)',
-                    color: isActive(item.path) ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
-                    background: isActive(item.path) ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
-                    textDecoration: 'none',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: isActive(item.path) ? 500 : 400,
-                    transition: 'all var(--transition-fast)',
-                    position: 'relative',
-                  }}
-                >
-                  {isActive(item.path) && (
-                    <div style={{
-                      position: 'absolute',
-                      left: 0,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      width: '3px',
-                      height: '60%',
-                      background: 'var(--color-accent-gradient)',
-                      borderRadius: '0 2px 2px 0',
-                    }} />
-                  )}
-                  <span style={{ 
-                    display: 'flex',
-                    opacity: isActive(item.path) ? 1 : 0.7,
-                  }}>
-                    {item.icon}
-                  </span>
-                  {item.label}
-                </Link>
+            <Link
+              key={item.path}
+              to={item.path}
+              onClick={handleNavClick}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-3)',
+                padding: 'var(--space-3) var(--space-4)',
+                borderRadius: 'var(--radius-md)',
+                color: isActive(item.path) ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
+                background: isActive(item.path) ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
+                textDecoration: 'none',
+                fontSize: 'var(--text-sm)',
+                fontWeight: isActive(item.path) ? 500 : 400,
+                transition: 'all var(--transition-fast)',
+                position: 'relative',
+              }}
+            >
+              {isActive(item.path) && (
+                <div style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: '3px',
+                  height: '60%',
+                  background: 'var(--color-accent-gradient)',
+                  borderRadius: '0 2px 2px 0',
+                }} />
               )}
-            </div>
+              <span style={{
+                display: 'flex',
+                opacity: isActive(item.path) ? 1 : 0.7,
+              }}>
+                {item.icon}
+              </span>
+              {item.label}
+            </Link>
           ))}
         </div>
       </nav>
