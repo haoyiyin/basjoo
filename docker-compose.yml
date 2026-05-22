@@ -56,6 +56,7 @@ services:
       - ./r2r-config/r2r.env
     environment:
       - JINA_API_KEY=${JINA_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
     ports:
       - "127.0.0.1:7272:7272"
     restart: unless-stopped

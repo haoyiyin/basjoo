@@ -20,7 +20,15 @@ automatic_extraction = false
 skip_document_summary = true
 
 [completion]
-provider = "r2r"
+provider = "litellm"
+concurrent_request_limit = 16
+
+    [completion.generation_config]
+    model = "deepseek/deepseek-chat"
+    temperature = 0.1
+    top_p = 1
+    max_tokens_to_sample = 1024
+    stream = false
 
 [database]
 provider = "postgres"
