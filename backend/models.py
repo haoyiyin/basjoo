@@ -371,7 +371,7 @@ class WorkspaceQuota(Base):
     # 配额限制（MVP限制）
     max_agents = Column(Integer, default=1)
     max_urls = Column(Integer, default=500)
-    max_qa_items = Column(Integer, default=500)
+    max_qa_items = Column(Integer, default=100)
     max_messages_per_day = Column(Integer, default=1500)
     max_total_text_mb = Column(Integer, default=20)  # 最大文本量MB
 

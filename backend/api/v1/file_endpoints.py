@@ -173,7 +173,7 @@ async def list_files(
         select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
     )
     quota = quota_result.scalar_one_or_none()
-    max_files = quota.max_qa_items if quota else 500
+    max_files = quota.max_qa_items if quota else 100
 
     # Paginated list
     files_result = await db.execute(
