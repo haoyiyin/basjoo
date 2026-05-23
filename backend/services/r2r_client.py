@@ -1,6 +1,7 @@
 """R2R HTTP client for document ingestion and retrieval."""
 
 import logging
+import re
 import httpx
 from typing import Any, Optional
 
@@ -41,6 +42,7 @@ class R2RClient:
                 if col.get("name") == collection_name:
                     col_id = col["id"]
                     _collection_cache[agent_id] = col_id
+                    logger.info(f"Found existing R2R collection '{collection_name}' (id={col_id})")
                     return col_id
 
             # Create new collection
@@ -48,6 +50,21 @@ class R2RClient:
                 f"{self.base_url}/v3/collections",
                 json={"name": collection_name, "description": f"Knowledge base for agent {agent_id}"},
             )
+            if resp.status_code == 409:
+                # Collection already exists (created by another process) — re-fetch
+                logger.info(f"Collection '{collection_name}' already exists, re-fetching list")
+                _collection_cache.pop(agent_id, None)
+                resp2 = await client.get(f"{self.base_url}/v3/collections")
+                resp2.raise_for_status()
+                data2 = resp2.json()
+                collections2 = data2.get("results", data2.get("data", []))
+                if isinstance(collections2, dict):
+                    collections2 = collections2.get("items", [])
+                for col in collections2:
+                    if col.get("name") == collection_name:
+                        col_id = col["id"]
+                        _collection_cache[agent_id] = col_id
+                        return col_id
             resp.raise_for_status()
             result = resp.json().get("results", resp.json().get("data", resp.json()))
             col_id = result["id"]
@@ -81,18 +98,36 @@ class R2RClient:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             import json
 
-            # Ingest file without collection_ids (R2R assigns to user's default collection)
             files = {"file": (filename, file_content, "application/octet-stream")}
-            data = {}
+            data: dict[str, Any] = {}
             if metadata:
                 data["metadata"] = json.dumps(metadata)
 
-            resp = await client.post(
-                f"{self.base_url}/v3/documents",
-                files=files,
-                data=data,
-            )
-            resp.raise_for_status()
+            # Try upload; on 409 (duplicate content), delete old doc and retry once
+            for attempt in range(2):
+                resp = await client.post(
+                    f"{self.base_url}/v3/documents",
+                    files=files,
+                    data=data,
+                )
+
+                if resp.status_code == 409 and attempt == 0:
+                    # Duplicate content — extract existing doc ID, delete it, retry
+                    error_text = resp.text
+                    match = re.search(r"Document\s+([0-9a-f-]+)\s+already exists", error_text)
+                    if match:
+                        existing_id = match.group(1)
+                        logger.info(f"R2R duplicate detected (doc={existing_id}), deleting and retrying")
+                        del_resp = await client.delete(f"{self.base_url}/v3/documents/{existing_id}")
+                        logger.info(f"Delete existing doc {existing_id}: {del_resp.status_code}")
+                        continue
+                    else:
+                        logger.warning(f"R2R 409 but could not parse doc ID from: {error_text[:200]}")
+                resp.raise_for_status()
+                break
+            else:
+                resp.raise_for_status()
+
             result = resp.json()
             doc = result.get("results", result.get("data", result))
             doc_id = doc.get("id", doc.get("document_id", ""))
@@ -105,11 +140,13 @@ class R2RClient:
                     )
                     if assign_resp.status_code not in (200, 201, 409):
                         logger.warning(
-                            f"Assign doc to collection returned {assign_resp.status_code}: "
-                            f"{assign_resp.text[:200]}"
+                            f"Assign doc {doc_id} to collection {collection_id} "
+                            f"returned {assign_resp.status_code}: {assign_resp.text[:200]}"
                         )
+                    else:
+                        logger.info(f"Assigned doc {doc_id} to collection {collection_id}")
                 except Exception as e:
-                    logger.warning(f"Failed to assign document to collection: {e}")
+                    logger.warning(f"Failed to assign document {doc_id} to collection: {e}")
 
             return doc
 
@@ -195,6 +232,8 @@ class R2RClient:
             if isinstance(results, dict):
                 results = results.get("chunk_search_results", [])
 
+            logger.info(f"R2R search: collection={collection_id}, raw_results={len(results)}, threshold={threshold}")
+
             # Normalize to [{content, score, metadata}]
             normalized = []
             for r in results:
@@ -207,6 +246,7 @@ class R2RClient:
                     "metadata": r.get("metadata", {}),
                 })
 
+            logger.info(f"R2R search: {len(normalized)} results above threshold {threshold}")
             return normalized
 
     # ── Health ───────────────────────────────────────────────────
