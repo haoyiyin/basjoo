@@ -160,19 +160,48 @@ class R2RClient:
         """Ingest raw text content (e.g., from URL scraping)."""
         collection_id = await self.ensure_collection(agent_id)
 
+        import json as _json
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            payload: dict[str, Any] = {
+            # Merge title into metadata
+            merged_metadata = dict(metadata or {})
+            if title:
+                merged_metadata["title"] = title
+
+            # R2R /v3/documents expects form data, not JSON
+            data: dict[str, Any] = {
                 "raw_text": text,
-                "collection_ids": [collection_id],
-                "metadata": metadata or {},
+                "collection_ids": _json.dumps([collection_id]),
             }
+            if merged_metadata:
+                data["metadata"] = _json.dumps(merged_metadata)
+
             resp = await client.post(
                 f"{self.base_url}/v3/documents",
-                json=payload,
+                data=data,
             )
             resp.raise_for_status()
             result = resp.json()
-            return result.get("results", result.get("data", result))
+            doc = result.get("results", result.get("data", result))
+            doc_id = doc.get("id", doc.get("document_id", ""))
+
+            # Assign document to the agent's collection
+            if doc_id:
+                try:
+                    assign_resp = await client.post(
+                        f"{self.base_url}/v3/collections/{collection_id}/documents/{doc_id}",
+                    )
+                    if assign_resp.status_code not in (200, 201, 409):
+                        logger.warning(
+                            f"Assign doc {doc_id} to collection {collection_id} "
+                            f"returned {assign_resp.status_code}: {assign_resp.text[:200]}"
+                        )
+                    else:
+                        logger.info(f"Assigned doc {doc_id} to collection {collection_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to assign document {doc_id} to collection: {e}")
+
+            return doc
 
     async def delete_document(self, document_id: str) -> bool:
         """Delete a document from R2R. Returns True if deleted or already gone."""
