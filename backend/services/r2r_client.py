@@ -214,7 +214,7 @@ class R2RClient:
             payload = {
                 "query": query,
                 "search_settings": {
-                    "filters": {"collection_ids": {"$eq": collection_id}},
+                    "filters": {"collection_ids": {"$in": [collection_id]}},
                     "limit": top_k,
                     "hybrid_settings": {
                         "semantic_weight": 0.7,
