@@ -383,7 +383,6 @@
     "retentionTip1": "Shorter duration saves space, longer duration facilitates historical queries.",
     "cleanupWarning": "Conversation records older than this will be automatically cleaned up",
     "retentionFinalAdvice": "Suggested to set 7-90 days to balance storage space and historical query needs",
-    "items": "items",
     "sampleQuestion1": "How to reset password?",
     "sampleAnswer1": "Click the 'Forgot Password' link on the login page, enter your email address, and follow the instructions in the email.",
     "sampleQuestion2": "How to contact customer service?",
@@ -467,7 +466,8 @@
       "clearing": "Clearing...",
       "clearSuccess": "Successfully cleared {{count}} URLs",
       "pollingStopped": "Updates stopped",
-      "indexRebuildInProgress": "Index rebuild in progress, please wait..."
+      "indexRebuildInProgress": "Index rebuild in progress, please wait...",
+      "invalidUrl": "Invalid URL, please re-enter"
     }
   },
   "personas": {

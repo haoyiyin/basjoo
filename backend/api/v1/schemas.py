@@ -111,7 +111,7 @@ def _validate_safe_ingest_url(url: str) -> str:
     normalized = (url or "").strip()
     safe, reason = validate_url_safe(normalized)
     if not safe:
-        raise ValueError(f"Invalid URL format: {normalized} ({reason})")
+        raise ValueError(f"Invalid URL: {normalized}")
     return normalized
 
 

@@ -167,7 +167,12 @@ export default function URLManagement() {
       setNewUrl('');
       await loadURLs();
     } catch (error) {
-      alert(`${t('labels.urlManagement.addFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      const errMsg = error instanceof Error ? error.message : '';
+      if (errMsg.includes('Invalid URL')) {
+        alert(t('labels.urlManagement.invalidUrl'));
+      } else {
+        alert(`${t('labels.urlManagement.addFailed')}: ${errMsg || t('errors.unknown')}`);
+      }
     } finally {
       setAdding(false);
     }
@@ -308,7 +313,12 @@ export default function URLManagement() {
       setCrawlPolling(true);
     } catch (error) {
       console.error('Crawl API error:', error);
-      alert(`${t('labels.urlManagement.crawlFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      const errMsg = error instanceof Error ? error.message : '';
+      if (errMsg.includes('Invalid URL')) {
+        alert(t('labels.urlManagement.invalidUrl'));
+      } else {
+        alert(`${t('labels.urlManagement.crawlFailed')}: ${errMsg || t('errors.unknown')}`);
+      }
     } finally {
       setCrawling(false);
     }
