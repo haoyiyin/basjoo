@@ -63,7 +63,7 @@ async def upload_files(
             )
 
     r2r = R2RClient()
-    uploaded = []
+    uploaded_items = []  # FileItem Pydantic models, built inside loop to avoid ORM attr expiry
     errors = []
 
     for upload_file in files:
@@ -112,7 +112,6 @@ async def upload_files(
             r2r_doc_id = result.get("id", result.get("document_id", ""))
             kf.r2r_document_id = str(r2r_doc_id)
             kf.status = "ready"  # R2R processes synchronously during the request
-            uploaded.append(kf)
             logger.info(f"Uploaded file '{filename}' to R2R (doc_id={r2r_doc_id})")
 
         except Exception as e:
@@ -121,26 +120,28 @@ async def upload_files(
             errors.append(f"{filename}: {str(e)[:100]}")
             logger.warning(f"Failed to upload file '{filename}': {e}")
 
-    file_items = [
-        FileItem(
-            id=f.id,
-            filename=f.filename,
-            file_size=f.file_size,
-            file_type=f.file_type,
-            status=f.status,
-            error_message=f.error_message,
-            created_at=f.created_at,
-            updated_at=f.updated_at,
+        # Build FileItem now, while ORM attributes are still fresh.
+        # A later db.flush() in the next iteration can expire updated_at
+        # (onupdate=func.now()), causing MissingGreenlet on access.
+        uploaded_items.append(
+            FileItem(
+                id=kf.id,
+                filename=kf.filename,
+                file_size=kf.file_size,
+                file_type=kf.file_type,
+                status=kf.status,
+                error_message=kf.error_message,
+                created_at=kf.created_at,
+                updated_at=kf.updated_at,
+            )
         )
-        for f in uploaded
-    ]
 
     await db.commit()
 
     return FileUploadResponse(
-        uploaded=len(uploaded),
+        uploaded=len([f for f in uploaded_items if f.status == "ready"]),
         failed=len(errors),
-        files=file_items,
+        files=[f for f in uploaded_items if f.status == "ready"],
         errors=errors,
     )
 
