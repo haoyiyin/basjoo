@@ -283,14 +283,6 @@ def build_chat_sources(retrieval_results: List[Dict[str, Any]]) -> List[Dict[str
                     "snippet": snippet or None,
                 }
             )
-        elif result["type"] == "file":
-            sources.append(
-                {
-                    "type": "file",
-                    "filename": result.get("metadata", {}).get("filename", ""),
-                    "snippet": snippet or None,
-                }
-            )
 
     return sources
 

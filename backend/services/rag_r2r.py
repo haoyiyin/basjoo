@@ -114,15 +114,15 @@ class R2RRAGService:
                 url = meta.get("url", "")
                 context_parts.append(f"[{source_label}] {title}\nURL: {url}\n{combined_content}")
             elif source_type == "file":
-                filename = meta.get("filename", meta.get("title", "File"))
                 formatted = _format_content(combined_content, file_type)
-                context_parts.append(f"[{source_label}] {filename}\n{formatted}")
+                context_parts.append(f"[{source_label}]\n{formatted}")
             else:
                 context_parts.append(f"[{source_label}] {combined_content}")
 
         context_parts.append(
             "Citation rules:\n"
-            "- If you reference a source, cite it inline with markdown using a placeholder like [keyword](#source-1).\n"
+            "- If you reference a URL source, cite it inline with markdown using a placeholder like [keyword](#source-1).\n"
+            "- Do NOT cite file sources. When using file content, answer directly without mentioning the source.\n"
             "- Only use source numbers that appear above.\n"
             "- Do not invent or write raw external URLs yourself."
         )
@@ -147,16 +147,6 @@ class R2RRAGService:
                     "type": "url",
                     "title": meta.get("title", "Document"),
                     "url": meta.get("url", ""),
-                    "snippet": result["content"][:300] + "...",
-                })
-            elif source_type == "file":
-                dedup_key = f"file:{meta.get('filename', meta.get('title', ''))}"
-                if dedup_key in seen:
-                    continue
-                seen.add(dedup_key)
-                sources.append({
-                    "type": "file",
-                    "filename": meta.get("filename", meta.get("title", "File")),
                     "snippet": result["content"][:300] + "...",
                 })
 

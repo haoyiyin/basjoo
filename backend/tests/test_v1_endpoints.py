@@ -217,7 +217,7 @@ async def test_chat_response_replaces_url_placeholders(public_client, default_ag
     payload = response.json()
     assert payload["reply"] == "Use [website](https://example.com/page) and faq."
     assert payload["sources"][0]["url"] == "https://example.com/page"
-    assert payload["sources"][1]["type"] == "file"
+    assert len(payload["sources"]) == 1  # Only URL sources are included
 
     history_response = await public_client.get(
         f"/api/v1/chat/messages?session_id={payload['session_id']}"

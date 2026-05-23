@@ -149,7 +149,16 @@ export async function parseErrorResponse(response: Response): Promise<string> {
 
   if (contentType.includes('application/json')) {
     const data = await response.json().catch(() => null);
-    if (data?.detail) return typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+    if (data?.detail) {
+      if (typeof data.detail === 'string') return data.detail;
+      if (Array.isArray(data.detail)) {
+        const messages = data.detail
+          .map((e: { msg?: string; message?: string }) => e.msg || e.message)
+          .filter(Boolean);
+        if (messages.length) return messages.join('; ');
+      }
+      return JSON.stringify(data.detail);
+    }
     if (data?.message) return data.message;
   }
 
