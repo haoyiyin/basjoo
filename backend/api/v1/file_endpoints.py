@@ -224,7 +224,9 @@ async def delete_file(
     if kf.r2r_document_id:
         r2r = R2RClient()
         try:
-            await r2r.delete_document(kf.r2r_document_id)
+            deleted = await r2r.delete_document(kf.r2r_document_id)
+            if not deleted:
+                logger.warning(f"R2R returned non-success for document deletion {kf.r2r_document_id}")
         except Exception as e:
             logger.warning(f"Failed to delete R2R document {kf.r2r_document_id}: {e}")
 

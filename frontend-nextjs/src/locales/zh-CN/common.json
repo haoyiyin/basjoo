@@ -574,7 +574,9 @@
     "resetConfirmMessage": "重置后需要重新配置 Embedding 提供商。确定要重置吗？",
     "resetting": "重置中...",
     "resetFailed": "重置知识库失败",
-    "setupKnowledgeBase": "配置知识库"
+    "setupKnowledgeBase": "配置知识库",
+    "embeddingBatchSize": "嵌入批处理大小",
+    "embeddingBatchSizeHint": "每次嵌入请求处理的文本块数量，范围 1-64"
   },
   "files": {
     "description": "上传文件作为AI知识来源",

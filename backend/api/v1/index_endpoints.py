@@ -11,6 +11,7 @@ from api.endpoints.auth import require_admin_or_super_admin
 from models import (
     Agent,
     URLSource,
+    KnowledgeFile,
     IndexJob,
 )
 from api.v1.schemas import IndexRebuildRequest, IndexRebuildResponse
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin_or_supe
 
 
 async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
-    """异步重建索引任务 — re-ingest URL content into R2R"""
+    """异步重建索引任务 — re-ingest URL content into R2R without destroying existing file documents."""
     task_id = f"rebuild_{job_id}"
 
     success, error = await task_lock.acquire_task(agent_id, TaskType.INDEX_REBUILD, task_id)
@@ -50,20 +51,28 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
                     job.started_at = func.now()
                     await db.commit()
 
-                # Get all successful URL sources
-                url_result = await db.execute(
-                    select(URLSource).where(
-                        URLSource.agent_id == agent_id, URLSource.status == "success"
-                    )
-                )
-                url_sources = url_result.scalars().all()
-
                 r2r = R2RClient()
 
-                # Delete existing collection and recreate for clean rebuild
-                await r2r.delete_collection(agent_id)
+                # Determine which URL sources need ingestion:
+                # - force=False: only ingest URLs that haven't been indexed yet
+                # - force=True: re-ingest all successful URLs (may create minor duplicates, but safe)
+                if force:
+                    url_result = await db.execute(
+                        select(URLSource).where(
+                            URLSource.agent_id == agent_id, URLSource.status == "success"
+                        )
+                    )
+                else:
+                    url_result = await db.execute(
+                        select(URLSource).where(
+                            URLSource.agent_id == agent_id,
+                            URLSource.status == "success",
+                            URLSource.is_indexed == False,
+                        )
+                    )
+                url_sources = url_result.scalars().all()
 
-                # Re-ingest all URL content
+                # Ingest URL content (never delete the collection — files must be preserved)
                 ingested_count = 0
                 errors = []
                 for url_source in url_sources:
@@ -85,7 +94,7 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
                             errors.append(f"URL {url_source.url}: {str(e)[:100]}")
                             logger.warning(f"Failed to ingest URL {url_source.url}: {e}")
 
-                # Mark all URLs as indexed
+                # Mark ingested URLs as indexed
                 for url_source in url_sources:
                     url_source.is_indexed = True
                 await db.commit()
@@ -208,6 +217,14 @@ async def get_index_info(
     )
     urls_indexed = url_result.scalar() or 0
 
+    # Count files
+    file_result = await db.execute(
+        select(func.count()).select_from(KnowledgeFile).where(
+            KnowledgeFile.agent_id == agent_id, KnowledgeFile.status == "ready"
+        )
+    )
+    files_ready = file_result.scalar() or 0
+
     # Try to get R2R collection info
     r2r = R2RClient()
     try:
@@ -217,8 +234,9 @@ async def get_index_info(
 
     return {
         "agent_id": agent_id,
-        "index_exists": r2r_healthy and urls_indexed > 0,
+        "index_exists": r2r_healthy and (urls_indexed > 0 or files_ready > 0),
         "urls_indexed": urls_indexed,
+        "files_ready": files_ready,
         "r2r_healthy": r2r_healthy,
         "status": "ready" if r2r_healthy else "unavailable",
     }

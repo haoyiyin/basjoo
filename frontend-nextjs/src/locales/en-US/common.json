@@ -574,7 +574,9 @@
     "resetConfirmMessage": "After reset, you will need to reconfigure the Embedding provider. Are you sure?",
     "resetting": "Resetting...",
     "resetFailed": "Failed to reset knowledge base",
-    "setupKnowledgeBase": "Configure Knowledge Base"
+    "setupKnowledgeBase": "Configure Knowledge Base",
+    "embeddingBatchSize": "Embedding Batch Size",
+    "embeddingBatchSizeHint": "Number of text chunks per embedding API call, range 1-64"
   },
   "files": {
     "description": "Upload files to use as AI knowledge sources",

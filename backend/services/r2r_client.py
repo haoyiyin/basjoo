@@ -138,9 +138,11 @@ class R2RClient:
             return result.get("results", result.get("data", result))
 
     async def delete_document(self, document_id: str) -> bool:
-        """Delete a document from R2R."""
+        """Delete a document from R2R. Returns True if deleted or already gone."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.delete(f"{self.base_url}/v3/documents/{document_id}")
+            if resp.status_code == 404:
+                return True  # Already deleted — desired state achieved
             return resp.status_code in (200, 204)
 
     async def list_documents(self, agent_id: str) -> list[dict[str, Any]]:
