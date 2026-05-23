@@ -468,7 +468,8 @@
       "pollingStopped": "Updates stopped",
       "indexRebuildInProgress": "Index rebuild in progress, please wait...",
       "invalidUrl": "Invalid URL, please re-enter"
-    }
+    },
+    "embeddingGetKey": "Get API Key:"
   },
   "personas": {
     "generic": {
@@ -594,6 +595,8 @@
     "uploadHint": "Upload files to get started",
     "ready": "Ready",
     "processing": "Processing",
+    "uploadingStatus": "Uploading",
+    "pending": "Pending",
     "confirmDelete": "Are you sure you want to delete this file?",
     "clearAll": "Clear All",
     "confirmClearAll": "Are you sure you want to delete all files? This action cannot be undone.",

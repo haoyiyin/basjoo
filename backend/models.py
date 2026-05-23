@@ -243,7 +243,7 @@ class KnowledgeFile(Base):
 
     # 状态
     status = Column(
-        SQLEnum("uploading", "processing", "ready", "failed", name="file_status"),
+        SQLEnum("uploading", "processing", "ready", "failed", "pending", name="file_status"),
         default="uploading",
         index=True,
     )

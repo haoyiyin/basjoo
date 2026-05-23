@@ -129,14 +129,14 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
   // Auto-expand knowledge group when child route is active
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
-    if (location.pathname === '/urls' || location.pathname === '/files') {
+    if (location.pathname === '/knowledge' || location.pathname === '/urls' || location.pathname === '/files') {
       return new Set(['/knowledge'])
     }
     return new Set()
   })
 
   useEffect(() => {
-    if (location.pathname === '/urls' || location.pathname === '/files') {
+    if (location.pathname === '/knowledge' || location.pathname === '/urls' || location.pathname === '/files') {
       setExpandedGroups(prev => new Set([...prev, '/knowledge']))
     }
   }, [location.pathname])
@@ -238,7 +238,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <Link
                     to={item.path}
-                    onClick={handleNavClick}
+                    onClick={() => {
+                      if (hasChildren) {
+                        setExpandedGroups(prev => new Set([...prev, item.path]))
+                      }
+                      handleNavClick()
+                    }}
                     style={{
                       flex: 1,
                       display: 'flex',

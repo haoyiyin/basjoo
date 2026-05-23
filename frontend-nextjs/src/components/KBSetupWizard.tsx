@@ -12,6 +12,9 @@ const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
   custom: 'text-embedding-v4',
 }
 
+const JINA_API_KEY_URL = 'https://jina.ai/'
+const SILICONFLOW_API_KEY_URL = 'https://cloud.siliconflow.cn/'
+
 interface KBSetupWizardProps {
   agentId: string
   onSetupComplete: () => void
@@ -224,6 +227,19 @@ export default function KBSetupWizard({ agentId, onSetupComplete, onCancel }: KB
                 {testResult.success
                   ? t('kb.testSuccess')
                   : testResult.message}
+              </div>
+            )}
+            {provider !== 'custom' && (
+              <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+                {t('labels.embeddingGetKey')}{' '}
+                <a
+                  href={provider === 'jina' ? JINA_API_KEY_URL : SILICONFLOW_API_KEY_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}
+                >
+                  {provider === 'jina' ? 'Jina' : 'SiliconFlow'}
+                </a>
               </div>
             )}
           </div>

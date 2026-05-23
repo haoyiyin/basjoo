@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocke
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, delete
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import Any, Dict, List, Optional
 import asyncio
@@ -1560,6 +1560,16 @@ async def kb_reset(
             detail="Knowledge base setup not completed yet.",
         )
 
+    # Delete all URLs for this agent
+    await db.execute(
+        delete(URLSource).where(URLSource.agent_id == agent_id)
+    )
+
+    # Delete all files for this agent
+    await db.execute(
+        delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id)
+    )
+
     # Clear embedding keys
     agent.jina_api_key = ""
     agent.siliconflow_api_key = ""
@@ -2026,7 +2036,7 @@ async def get_sources_summary(
     file_processing_result = await db.execute(
         select(func.count()).select_from(KnowledgeFile).where(
             KnowledgeFile.agent_id == agent_id,
-            KnowledgeFile.status.in_(["uploading", "processing"])
+            KnowledgeFile.status.in_(["uploading", "processing", "pending"])
         )
     )
     file_processing = file_processing_result.scalar() or 0

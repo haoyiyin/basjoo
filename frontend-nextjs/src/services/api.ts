@@ -123,7 +123,7 @@ export interface FileItem {
   filename: string;
   file_type: string;
   file_size: number;
-  status: 'ready' | 'processing' | 'failed';
+  status: 'ready' | 'processing' | 'uploading' | 'pending' | 'failed';
   created_at: string;
   updated_at?: string;
 }

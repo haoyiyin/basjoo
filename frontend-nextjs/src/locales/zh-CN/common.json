@@ -468,7 +468,8 @@
       "pollingStopped": "已停止更新",
       "indexRebuildInProgress": "索引重建中，请稍候...",
       "invalidUrl": "无效网址，请重新输入"
-    }
+    },
+    "embeddingGetKey": "获取 API Key:"
   },
   "personas": {
     "generic": {
@@ -594,6 +595,8 @@
     "uploadHint": "上传文件以开始使用",
     "ready": "就绪",
     "processing": "处理中",
+    "uploadingStatus": "上传中",
+    "pending": "待处理",
     "confirmDelete": "确定要删除此文件吗？",
     "clearAll": "清空全部",
     "confirmClearAll": "确定要删除所有文件吗？此操作不可撤销。",

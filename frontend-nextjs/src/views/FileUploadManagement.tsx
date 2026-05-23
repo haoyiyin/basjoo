@@ -241,6 +241,8 @@ export default function FileUploadManagement() {
     const styles: Record<string, { className: string; label: string }> = {
       ready: { className: 'badge badge-success', label: t('files.ready') },
       processing: { className: 'badge badge-warning', label: t('files.processing') },
+      uploading: { className: 'badge badge-info', label: t('files.uploadingStatus') },
+      pending: { className: 'badge badge-info', label: t('files.pending') },
       failed: { className: 'badge badge-error', label: t('status.failed') },
     };
     return styles[status] || { className: 'badge', label: status };
@@ -532,9 +534,9 @@ export default function FileUploadManagement() {
                       key={file.id}
                       style={{
                         padding: 'var(--space-4)',
-                        background: file.status === 'ready' ? 'var(--color-bg-tertiary)' : file.status === 'processing' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                        background: file.status === 'ready' ? 'var(--color-bg-tertiary)' : (file.status === 'processing' || file.status === 'uploading' || file.status === 'pending') ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
                         borderRadius: 'var(--radius-md)',
-                        border: file.status === 'ready' ? '1px solid var(--color-border)' : file.status === 'processing' ? '2px solid var(--color-warning)' : '2px solid var(--color-error)',
+                        border: file.status === 'ready' ? '1px solid var(--color-border)' : (file.status === 'processing' || file.status === 'uploading' || file.status === 'pending') ? '2px solid var(--color-warning)' : '2px solid var(--color-error)',
                       }}
                     >
                       <div style={{
