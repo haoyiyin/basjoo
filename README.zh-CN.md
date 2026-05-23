@@ -15,6 +15,18 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 - **PostgreSQL**：R2R 持久化存储
 - **nginx**：Docker 部署下的反向代理
 
+## 系统要求
+
+Basjoo 以 Docker 容器方式运行。所有 LLM 推理和 Embedding 调用均走外部 API（OpenAI、DeepSeek、Anthropic、Gemini、Jina、SiliconFlow），**无需 GPU**。
+
+| | 最低配置 | 推荐配置 |
+|---|---|---|
+| CPU | 2 vCPU | 2–4 vCPU |
+| 内存 | 4 GB | 8 GB |
+| 磁盘 | 20 GB | 50 GB |
+| 操作系统 | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
+| Docker | 20.10+ | 最新版 |
+
 ## 自动部署
 
 对于一台全新的 Ubuntu 或 Debian 服务器，可直接执行：

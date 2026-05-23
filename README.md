@@ -10,6 +10,18 @@ Basjoo is an AI customer-support platform with three main parts:
 
 The stack also uses **SQLite** for application data, **Redis** for rate limiting, **R2R** (with PostgreSQL + pgvector) for vector search and document indexing, a **Scrapling microservice** for web content fetching, and **nginx** for Docker-based reverse proxying.
 
+## System requirements
+
+Basjoo runs as a set of Docker containers. All LLM inference and embedding calls are made to external APIs (OpenAI, DeepSeek, Anthropic, Gemini, Jina, SiliconFlow), so **no GPU is required**.
+
+| | Minimum | Recommended |
+|---|---|---|
+| CPU | 2 vCPU | 2–4 vCPU |
+| RAM | 4 GB | 8 GB |
+| Disk | 20 GB | 50 GB |
+| OS | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
+| Docker | 20.10+ | latest |
+
 ## Automatic deployment
 
 For a blank Ubuntu or Debian server, run:
