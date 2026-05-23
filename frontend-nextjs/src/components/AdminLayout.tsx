@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode, useState, useEffect } from 'react'
+import { ReactNode, useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from 'react-i18next'
@@ -106,7 +106,6 @@ const navItemsConfig: NavItem[] = [
       </svg>
     )
   },
-
 ]
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
@@ -166,8 +165,36 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     }
   }
 
+  // Water-drop indicator tracking
+  const navRef = useRef<HTMLDivElement>(null)
+  const [indicatorStyle, setIndicatorStyle] = useState<{ top: number; height: number }>({ top: 0, height: 0 })
+
+  const updateIndicator = useCallback(() => {
+    if (!navRef.current) return
+    const activeEl = navRef.current.querySelector('[data-nav-active="true"]') as HTMLElement | null
+    if (activeEl) {
+      const navRect = navRef.current.getBoundingClientRect()
+      const elRect = activeEl.getBoundingClientRect()
+      setIndicatorStyle({
+        top: elRect.top - navRect.top,
+        height: elRect.height,
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    updateIndicator()
+  }, [location.pathname, updateIndicator])
+
+  // Re-measure after expand/collapse animations
+  useEffect(() => {
+    const timer = setTimeout(updateIndicator, 350)
+    return () => clearTimeout(timer)
+  }, [expandedGroups, updateIndicator])
+
   const SidebarContent = () => (
     <>
+      {/* Logo */}
       <div style={{
         padding: 'var(--space-6)',
         borderBottom: '1px solid var(--color-border)',
@@ -177,11 +204,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <div style={{
               width: '40px',
               height: '40px',
-              borderRadius: '12px',
+              borderRadius: 'var(--radius-md)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               overflow: 'hidden',
+              boxShadow: '0 0 20px hsla(188deg, 90%, 50%, 0.2)',
             }}>
               <img
                 src="/logo.png"
@@ -199,7 +227,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 fontWeight: 700,
                 color: 'var(--color-text-primary)',
                 letterSpacing: '-0.02em',
-                background: 'linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)',
+                background: 'linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(265deg, 90%, 65%) 100%)',
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
                 backgroundClip: 'text',
@@ -214,30 +242,54 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               </span>
             </div>
           </Link>
-
         </div>
       </div>
 
+      {/* Navigation */}
       <nav style={{
         flex: 1,
         padding: 'var(--space-4)',
         overflowY: 'auto',
       }}>
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--space-1)',
-        }}>
+        <div
+          ref={navRef}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--space-1)',
+            position: 'relative',
+          }}
+        >
+          {/* Water-drop floating indicator */}
+          {indicatorStyle.height > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                left: '4px',
+                top: `${indicatorStyle.top}px`,
+                height: `${indicatorStyle.height}px`,
+                width: 'calc(100% - 8px)',
+                background: 'hsla(188deg, 90%, 50%, 0.08)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid hsla(188deg, 90%, 50%, 0.12)',
+                transition: 'top 400ms cubic-bezier(0.34, 1.56, 0.64, 1), height 300ms cubic-bezier(0.25, 1.1, 0.5, 1.15)',
+                pointerEvents: 'none',
+                zIndex: 0,
+              }}
+            />
+          )}
+
           {navItems.map((item) => {
             const hasChildren = item.children && item.children.length > 0
             const isExpanded = expandedGroups.has(item.path)
             const active = isActive(item)
 
             return (
-              <div key={item.path}>
+              <div key={item.path} style={{ position: 'relative', zIndex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <Link
                     to={item.path}
+                    data-nav-active={active ? 'true' : undefined}
                     onClick={() => {
                       if (hasChildren) {
                         setExpandedGroups(prev => new Set([...prev, item.path]))
@@ -252,29 +304,19 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                       padding: 'var(--space-3) var(--space-4)',
                       borderRadius: 'var(--radius-md)',
                       color: active ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
-                      background: active ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
+                      background: 'transparent',
                       textDecoration: 'none',
                       fontSize: 'var(--text-sm)',
-                      fontWeight: active ? 500 : 400,
-                      transition: 'all var(--transition-fast)',
+                      fontWeight: active ? 600 : 400,
+                      transition: 'color var(--transition-fast), font-weight var(--transition-fast)',
                       position: 'relative',
                     }}
                   >
-                    {active && (
-                      <div style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        width: '3px',
-                        height: '60%',
-                        background: 'var(--color-accent-gradient)',
-                        borderRadius: '0 2px 2px 0',
-                      }} />
-                    )}
                     <span style={{
                       display: 'flex',
-                      opacity: active ? 1 : 0.7,
+                      opacity: active ? 1 : 0.6,
+                      transition: 'opacity var(--transition-fast)',
+                      filter: active ? 'drop-shadow(0 0 6px hsla(188deg, 90%, 50%, 0.4))' : 'none',
                     }}>
                       {item.icon}
                     </span>
@@ -303,12 +345,13 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                         display: 'flex',
                         alignItems: 'center',
                         borderRadius: 'var(--radius-sm)',
+                        transition: 'color var(--transition-fast)',
                       }}
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                         style={{
                           transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                          transition: 'transform 0.2s ease',
+                          transition: 'transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1)',
                         }}>
                         <polyline points="9 18 15 12 9 6" />
                       </svg>
@@ -317,7 +360,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 </div>
 
                 {hasChildren && isExpanded && (
-                  <div style={{ marginLeft: 'var(--space-4)' }}>
+                  <div style={{
+                    marginLeft: 'var(--space-4)',
+                    overflow: 'hidden',
+                  }}>
                     {item.children!.map((child) => {
                       const childActive = location.pathname === child.path
                       return (
@@ -333,7 +379,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                             paddingLeft: 'var(--space-10)',
                             borderRadius: 'var(--radius-md)',
                             color: childActive ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
-                            background: childActive ? 'rgba(6, 182, 212, 0.1)' : 'transparent',
+                            background: childActive ? 'hsla(188deg, 90%, 50%, 0.06)' : 'transparent',
                             textDecoration: 'none',
                             fontSize: 'var(--text-sm)',
                             fontWeight: childActive ? 500 : 400,
@@ -344,18 +390,21 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                           {childActive && (
                             <div style={{
                               position: 'absolute',
-                              left: 0,
+                              left: '12px',
                               top: '50%',
                               transform: 'translateY(-50%)',
-                              width: '2px',
-                              height: '40%',
-                              background: 'var(--color-accent-gradient)',
-                              borderRadius: '0 2px 2px 0',
+                              width: '4px',
+                              height: '4px',
+                              borderRadius: '50%',
+                              background: 'var(--color-accent-primary)',
+                              boxShadow: '0 0 8px hsla(188deg, 90%, 50%, 0.5)',
                             }} />
                           )}
                           <span style={{
                             display: 'flex',
-                            opacity: childActive ? 1 : 0.7,
+                            opacity: childActive ? 1 : 0.6,
+                            transition: 'opacity var(--transition-fast)',
+                            filter: childActive ? 'drop-shadow(0 0 4px hsla(188deg, 90%, 50%, 0.3))' : 'none',
                           }}>
                             {child.icon}
                           </span>
@@ -371,6 +420,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         </div>
       </nav>
 
+      {/* User profile & logout */}
       <div style={{
         padding: 'var(--space-4)',
         borderTop: '1px solid var(--color-border)',
@@ -380,8 +430,11 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           alignItems: 'center',
           gap: 'var(--space-3)',
           padding: 'var(--space-3)',
-          background: 'var(--color-bg-tertiary)',
-          borderRadius: 'var(--radius-md)',
+          background: 'hsla(220deg, 20%, 13%, 0.5)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          border: '1px solid var(--color-border-glass)',
+          borderRadius: 'var(--radius-lg)',
           marginBottom: 'var(--space-3)',
         }}>
           <div style={{
@@ -395,6 +448,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             fontSize: 'var(--text-sm)',
             fontWeight: 600,
             color: 'var(--color-text-inverse)',
+            boxShadow: '0 0 16px hsla(188deg, 90%, 50%, 0.25)',
           }}>
             {admin?.name?.charAt(0).toUpperCase() || 'A'}
           </div>
@@ -451,15 +505,15 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   )
 
   return (
-    <div style={{ 
-      display: 'flex', 
+    <div style={{
+      display: 'flex',
       minHeight: '100vh',
       background: 'var(--color-bg-primary)',
     }}>
       {/* Mobile Header */}
       {isMobile && (
         <header className="mobile-header">
-          <button 
+          <button
             onClick={() => setSidebarOpen(true)}
             aria-label="Open menu"
             style={{
@@ -486,7 +540,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <span style={{
               fontSize: 'var(--text-lg)',
               fontWeight: 700,
-              background: 'linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)',
+              background: 'linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(265deg, 90%, 65%) 100%)',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
               backgroundClip: 'text',
@@ -500,7 +554,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
       {/* Sidebar Overlay (Mobile) */}
       {isMobile && (
-        <div 
+        <div
           className={`sidebar-overlay ${sidebarOpen ? 'open' : ''}`}
           onClick={() => setSidebarOpen(false)}
         />
@@ -508,10 +562,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
       {/* Sidebar */}
       {isMobile ? (
-        <aside 
-          className={`mobile-sidebar ${sidebarOpen ? 'open' : ''}`}
+        <aside
+          className={`mobile-sidebar glass-sidebar ${sidebarOpen ? 'open' : ''}`}
           style={{
-            background: 'var(--color-bg-secondary)',
             display: 'flex',
             flexDirection: 'column',
           }}
@@ -519,23 +572,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           <SidebarContent />
         </aside>
       ) : (
-        <aside style={{
-          width: 'var(--sidebar-width)',
-          background: 'var(--color-bg-secondary)',
-          borderRight: '1px solid var(--color-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          bottom: 0,
-          zIndex: 50,
-        }}>
+        <aside
+          className="glass-sidebar"
+          style={{
+            width: 'var(--sidebar-width)',
+            display: 'flex',
+            flexDirection: 'column',
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            bottom: 0,
+            zIndex: 50,
+          }}
+        >
           <SidebarContent />
         </aside>
       )}
 
-      <main 
+      <main
         className={isMobile ? 'mobile-main' : ''}
         style={{
           flex: 1,

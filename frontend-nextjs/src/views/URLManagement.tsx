@@ -328,8 +328,8 @@ export default function URLManagement() {
     const styles: Record<string, { className: string; label: string }> = {
       success: { className: 'badge badge-success', label: t('status.successBadge') },
       failed: { className: 'badge badge-error', label: t('status.failed') },
-      fetching: { className: 'badge badge-warning', label: t('status.fetching') },
-      pending: { className: 'badge badge-info', label: t('status.pending') },
+      fetching: { className: 'badge badge-warning badge-pulse', label: t('status.fetching') },
+      pending: { className: 'badge badge-info badge-pulse', label: t('status.pending') },
     };
     return styles[status] || { className: 'badge', label: status };
   };
@@ -399,6 +399,8 @@ export default function URLManagement() {
             position: 'fixed',
             inset: 0,
             background: 'rgba(15, 23, 42, 0.6)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -407,13 +409,10 @@ export default function URLManagement() {
           }}
         >
           <div
+            className="glass-modal"
             style={{
               width: '100%',
               maxWidth: '420px',
-              background: 'var(--color-bg-secondary)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-lg)',
-              boxShadow: 'var(--shadow-xl)',
               padding: 'var(--space-6)',
             }}
           >
@@ -492,7 +491,7 @@ export default function URLManagement() {
           gridTemplateRows: isMobile ? 'auto' : 'auto auto',
           gap: 'var(--space-6)',
         }}>
-          <div className="glass-card" style={{ padding: 'var(--space-6)', gridColumn: isMobile ? 'auto' : '1', gridRow: isMobile ? 'auto' : '1' }}>
+          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', gridColumn: isMobile ? 'auto' : '1', gridRow: isMobile ? 'auto' : '1' }}>
             <h2 style={{
               fontSize: 'var(--text-lg)',
               fontWeight: 600,
@@ -743,7 +742,7 @@ export default function URLManagement() {
           </div>
 
           
-          <div className="glass-card" style={{ padding: 'var(--space-6)', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '2', gridRow: isMobile ? 'auto' : '1', display: 'flex', flexDirection: 'column' }}>
+          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '2', gridRow: isMobile ? 'auto' : '1', display: 'flex', flexDirection: 'column' }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -944,7 +943,7 @@ export default function URLManagement() {
             </button>
           </div>
           
-          <div className="glass-card" style={{ padding: 'var(--space-6)', height: 'fit-content', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '1 / span 2', gridRow: isMobile ? 'auto' : '2' }}>
+          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', height: 'fit-content', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '1 / span 2', gridRow: isMobile ? 'auto' : '2' }}>
             <div style={{
               display: 'flex',
               flexDirection: isMobile ? 'column' : 'row',
@@ -1113,11 +1112,10 @@ export default function URLManagement() {
                 urls.map((url) => (
                   <div
                     key={url.id}
+                    className="liquid-glass-card"
                     style={{
                       padding: 'var(--space-4)',
-                      background: 'var(--color-bg-tertiary)',
                       borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-border)',
                     }}
                   >
                     <div style={{

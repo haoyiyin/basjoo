@@ -121,7 +121,7 @@ export default function KBSetupWizard({ agentId, onSetupComplete, onCancel }: KB
         </div>
       )}
 
-      <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+      <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
         <h3 style={{
           fontSize: 'var(--text-lg)',
           fontWeight: 600,

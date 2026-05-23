@@ -277,14 +277,16 @@ function ChatPanel({
             <div style={{
               width: '72px',
               height: '72px',
-              background: 'var(--color-bg-tertiary)',
+              background: 'hsla(220deg, 20%, 13%, 0.5)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
               borderRadius: 'var(--radius-xl)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               marginBottom: 'var(--space-4)',
-              border: '1px solid var(--color-border)',
-              boxShadow: 'var(--shadow-md)',
+              border: '1px solid hsla(188deg, 90%, 50%, 0.15)',
+              boxShadow: '0 0 30px hsla(188deg, 90%, 50%, 0.1)',
             }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--color-accent-primary)' }}>
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -320,23 +322,25 @@ function ChatPanel({
                   gap: 'var(--space-2)',
                 }}>
                   {/* Message Bubble */}
-                  <div style={{
+                  <div
+                    className={msg.role === 'assistant' ? 'rainbow-border' : undefined}
+                    style={{
                     padding: 'var(--space-3) var(--space-4)',
                     borderRadius: msg.role === 'user'
                       ? 'var(--radius-lg) var(--radius-lg) 4px var(--radius-lg)'
                       : 'var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px',
                     background: msg.role === 'user'
-                      ? 'var(--color-accent-gradient)'
-                      : 'var(--color-bg-tertiary)',
+                      ? 'linear-gradient(135deg, hsla(265deg, 80%, 55%, 0.9), hsla(225deg, 30%, 15%, 0.95))'
+                      : 'hsla(220deg, 20%, 13%, 0.6)',
+                    backdropFilter: msg.role === 'assistant' ? 'blur(16px) saturate(180%)' : undefined,
+                    WebkitBackdropFilter: msg.role === 'assistant' ? 'blur(16px) saturate(180%)' : undefined,
                     color: msg.role === 'user'
                       ? 'var(--color-text-inverse)'
                       : 'var(--color-text-primary)',
                     boxShadow: msg.role === 'user'
-                      ? '0 4px 12px rgba(6, 182, 212, 0.25)'
-                      : '0 2px 8px var(--color-shadow)',
-                    borderLeft: msg.role === 'assistant'
-                      ? '3px solid var(--color-accent-primary)'
-                      : 'none',
+                      ? '0 4px 20px hsla(265deg, 80%, 55%, 0.3), inset 0 1px 1px hsla(0deg, 0%, 100%, 0.1)'
+                      : '0 2px 12px rgba(0, 0, 0, 0.2), inset 0 1px 1px hsla(0deg, 0%, 100%, 0.05)',
+                    border: msg.role === 'assistant' ? '1px solid hsla(188deg, 90%, 50%, 0.1)' : 'none',
                   }}>
                     <div style={{
                       fontSize: 'var(--text-sm)',
@@ -407,13 +411,15 @@ function ChatPanel({
               }}>
                 <div style={{
                   padding: 'var(--space-3) var(--space-4)',
-                  background: 'var(--color-bg-tertiary)',
+                  background: 'hsla(220deg, 20%, 13%, 0.6)',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
                   borderRadius: 'var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px',
-                  borderLeft: '3px solid var(--color-accent-primary)',
+                  borderLeft: '3px solid hsla(188deg, 90%, 50%, 0.5)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 'var(--space-3)',
-                  boxShadow: '0 2px 8px var(--color-shadow)',
+                  boxShadow: '0 2px 12px rgba(0, 0, 0, 0.2)',
                 }}>
                   <LoadingDots />
                   <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
@@ -464,11 +470,11 @@ function ChatPanel({
                 paddingRight: 'var(--space-10)',
                 borderRadius: 'var(--radius-lg)',
                 border: '1px solid var(--color-border)',
-                background: 'var(--color-bg-primary)',
+                background: 'var(--color-bg-tertiary)',
                 color: 'var(--color-text-primary)',
                 fontSize: 'var(--text-sm)',
                 outline: 'none',
-                transition: 'all 0.2s ease',
+                transition: 'all var(--transition-fast)',
               }}
             />
             {input.length > 0 && (
@@ -536,8 +542,8 @@ function ChatPanel({
               display: 'flex',
               alignItems: 'center',
               gap: 'var(--space-2)',
-              boxShadow: isLoading || isSettingsSaving || !input.trim() ? 'none' : '0 4px 12px rgba(6, 182, 212, 0.3)',
-              transition: 'all 0.2s ease',
+              boxShadow: isLoading || isSettingsSaving || !input.trim() ? 'none' : '0 0 20px hsla(188deg, 90%, 50%, 0.3)',
+              transition: 'all var(--transition-fast)',
               minWidth: '100px',
             }}
           >

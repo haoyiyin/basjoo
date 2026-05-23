@@ -447,6 +447,8 @@ export default function Playground() {
           maxWidth: '480px',
           borderRight: '1px solid var(--color-border)',
           background: 'var(--color-bg-secondary)',
+          backdropFilter: 'blur(var(--glass-blur-surface))',
+          WebkitBackdropFilter: 'blur(var(--glass-blur-surface))',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

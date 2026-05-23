@@ -51,7 +51,7 @@ export default function SourcesSummary({
 
   if (loading || !data) {
     return (
-      <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+      <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
         <div style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
           <div className="spinner" style={{ margin: '0 auto' }} />
         </div>
@@ -62,7 +62,7 @@ export default function SourcesSummary({
   const totalSizeKb = data.urls.total_size_kb + data.files.total_size_kb;
 
   return (
-    <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+    <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
       <h2 style={{
         fontSize: 'var(--text-lg)',
         fontWeight: 600,
@@ -75,8 +75,9 @@ export default function SourcesSummary({
       {/* URL Stats */}
       <div style={{
         padding: 'var(--space-4)',
-        background: 'var(--color-bg-tertiary)',
+        background: 'hsla(220deg, 20%, 13%, 0.4)',
         borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--color-border-glass)',
         marginBottom: 'var(--space-4)',
       }}>
         <div style={{
@@ -107,8 +108,9 @@ export default function SourcesSummary({
       {/* File Stats */}
       <div style={{
         padding: 'var(--space-4)',
-        background: 'var(--color-bg-tertiary)',
+        background: 'hsla(220deg, 20%, 13%, 0.4)',
         borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--color-border-glass)',
         marginBottom: 'var(--space-4)',
       }}>
         <div style={{
@@ -143,8 +145,9 @@ export default function SourcesSummary({
       {/* Total Size */}
       <div style={{
         padding: 'var(--space-4)',
-        background: 'var(--color-bg-tertiary)',
+        background: 'hsla(220deg, 20%, 13%, 0.4)',
         borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--color-border-glass)',
       }}>
         <div style={{
           display: 'flex',

@@ -456,7 +456,7 @@ export default function SystemSettings() {
           </div>
         )}
 
-        <div className="glass-card" style={{
+        <div className="liquid-glass-card" style={{
           padding: 'var(--space-6)',
           marginBottom: 'var(--space-6)',
         }}>
@@ -582,7 +582,7 @@ export default function SystemSettings() {
           </div>
         </div>
 
-        <div className="glass-card" style={{
+        <div className="liquid-glass-card" style={{
           padding: 'var(--space-6)',
           marginBottom: 'var(--space-6)',
         }}>
@@ -730,7 +730,7 @@ export default function SystemSettings() {
           </div>
         </div>
 
-        <div className="glass-card" style={{
+        <div className="liquid-glass-card" style={{
           padding: 'var(--space-6)',
           marginBottom: 'var(--space-6)',
         }}>
@@ -799,7 +799,7 @@ export default function SystemSettings() {
           />
         </div>
 
-        <div className="glass-card" style={{
+        <div className="liquid-glass-card" style={{
           padding: 'var(--space-6)',
           marginBottom: 'var(--space-6)',
         }}>
@@ -888,7 +888,7 @@ export default function SystemSettings() {
           </p>
         </div>
 
-        <div className="glass-card" style={{
+        <div className="liquid-glass-card" style={{
           padding: 'var(--space-6)',
           marginBottom: 'var(--space-6)',
         }}>
@@ -1011,7 +1011,7 @@ export default function SystemSettings() {
             </div>
         </div>
 
-        <div className="glass-card" style={{
+        <div className="liquid-glass-card" style={{
           padding: 'var(--space-6)',
           marginBottom: 'var(--space-6)',
         }}>

@@ -120,34 +120,18 @@ export const Register = () => {
             padding: 'var(--space-6)',
             position: 'relative',
         }}>
-            <div style={{
-                position: 'absolute',
-                top: '10%',
-                right: '20%',
-                width: '350px',
-                height: '350px',
-                background: 'radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%)',
-                borderRadius: '50%',
-                filter: 'blur(60px)',
-                animation: 'float 9s ease-in-out infinite',
-            }} />
-            <div style={{
-                position: 'absolute',
-                bottom: '15%',
-                left: '10%',
-                width: '280px',
-                height: '280px',
-                background: 'radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%)',
-                borderRadius: '50%',
-                filter: 'blur(60px)',
-                animation: 'float 11s ease-in-out infinite reverse',
-            }} />
+            {/* Liquid blob background */}
+            <div className="liquid-blob-container">
+                <div className="liquid-blob-1" style={{ top: '10%', right: '10%', left: 'auto', width: '45vw', height: '45vw' }} />
+                <div className="liquid-blob-2" style={{ bottom: '10%', left: '10%', right: 'auto', width: '40vw', height: '40vw' }} />
+            </div>
 
             <div style={{
                 width: '100%',
                 maxWidth: '420px',
-                animation: 'fadeIn 0.6s ease-out forwards',
+                animation: 'fadeIn 0.6s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards',
             }}>
+                {/* Logo & title */}
                 <div style={{
                     textAlign: 'center',
                     marginBottom: 'var(--space-8)',
@@ -159,6 +143,7 @@ export const Register = () => {
                         width: '80px',
                         height: '80px',
                         marginBottom: 'var(--space-6)',
+                        filter: 'drop-shadow(0 0 20px hsla(265deg, 90%, 65%, 0.3))',
                     }}>
                         <img
                             src="/logo.png"
@@ -174,7 +159,7 @@ export const Register = () => {
                         fontSize: 'var(--text-3xl)',
                         fontWeight: 700,
                         marginBottom: 'var(--space-3)',
-                        background: 'linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)',
+                        background: 'linear-gradient(135deg, hsl(265deg, 90%, 65%) 0%, hsl(188deg, 90%, 50%) 100%)',
                         WebkitBackgroundClip: 'text',
                         backgroundClip: 'text',
                         WebkitTextFillColor: 'transparent',
@@ -189,7 +174,8 @@ export const Register = () => {
                     </p>
                 </div>
 
-                <div className="glass-card" style={{
+                {/* Register form card */}
+                <div className="liquid-glass-card" style={{
                     padding: 'var(--space-8)',
                 }}>
                     {error && (
@@ -203,6 +189,7 @@ export const Register = () => {
                             display: 'flex',
                             alignItems: 'center',
                             gap: 'var(--space-3)',
+                            border: '1px solid hsla(350deg, 85%, 58%, 0.2)',
                         }}>
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <circle cx="12" cy="12" r="10" />
@@ -234,12 +221,12 @@ export const Register = () => {
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
                                 />
-                                <svg 
-                                    width="18" 
-                                    height="18" 
-                                    viewBox="0 0 24 24" 
-                                    fill="none" 
-                                    stroke="currentColor" 
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
                                     strokeWidth="2"
                                     style={{
                                         position: 'absolute',
@@ -275,12 +262,12 @@ export const Register = () => {
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
                                 />
-                                <svg 
-                                    width="18" 
-                                    height="18" 
-                                    viewBox="0 0 24 24" 
-                                    fill="none" 
-                                    stroke="currentColor" 
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
                                     strokeWidth="2"
                                     style={{
                                         position: 'absolute',
@@ -316,12 +303,12 @@ export const Register = () => {
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
                                 />
-                                <svg 
-                                    width="18" 
-                                    height="18" 
-                                    viewBox="0 0 24 24" 
-                                    fill="none" 
-                                    stroke="currentColor" 
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
                                     strokeWidth="2"
                                     style={{
                                         position: 'absolute',
@@ -357,12 +344,12 @@ export const Register = () => {
                                     disabled={loading}
                                     style={{ paddingLeft: 'var(--space-12)' }}
                                 />
-                                <svg 
-                                    width="18" 
-                                    height="18" 
-                                    viewBox="0 0 24 24" 
-                                    fill="none" 
-                                    stroke="currentColor" 
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
                                     strokeWidth="2"
                                     style={{
                                         position: 'absolute',
@@ -380,22 +367,11 @@ export const Register = () => {
                         <button
                             type="submit"
                             disabled={loading}
+                            className="btn-primary"
                             style={{
                                 width: '100%',
                                 padding: 'var(--space-4)',
                                 fontSize: 'var(--text-base)',
-                                fontWeight: 600,
-                                background: 'var(--color-accent-gradient)',
-                                color: 'var(--color-text-inverse)',
-                                border: 'none',
-                                borderRadius: 'var(--radius-md)',
-                                cursor: loading ? 'not-allowed' : 'pointer',
-                                opacity: loading ? 0.7 : 1,
-                                transition: 'all var(--transition-fast)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: 'var(--space-2)',
                             }}
                         >
                             {loading ? (

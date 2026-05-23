@@ -240,7 +240,7 @@ export default function FileUploadManagement() {
   const getStatusBadge = (status: string) => {
     const styles: Record<string, { className: string; label: string }> = {
       ready: { className: 'badge badge-success', label: t('files.ready') },
-      processing: { className: 'badge badge-warning', label: t('files.processing') },
+      processing: { className: 'badge badge-warning badge-pulse', label: t('files.processing') },
       uploading: { className: 'badge badge-info', label: t('files.uploadingStatus') },
       pending: { className: 'badge badge-info', label: t('files.pending') },
       failed: { className: 'badge badge-error', label: t('status.failed') },
@@ -258,6 +258,8 @@ export default function FileUploadManagement() {
             position: 'fixed',
             inset: 0,
             background: 'rgba(15, 23, 42, 0.6)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -266,13 +268,10 @@ export default function FileUploadManagement() {
           }}
         >
           <div
+            className="glass-modal"
             style={{
               width: '100%',
               maxWidth: '420px',
-              background: 'var(--color-bg-secondary)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-lg)',
-              boxShadow: 'var(--shadow-xl)',
               padding: 'var(--space-6)',
             }}
           >
@@ -347,7 +346,7 @@ export default function FileUploadManagement() {
           gap: 'var(--space-6)',
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
-            <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+            <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
               <h2 style={{
                 fontSize: 'var(--text-lg)',
                 fontWeight: 600,
@@ -373,12 +372,14 @@ export default function FileUploadManagement() {
                 onClick={() => fileInputRef.current?.click()}
                 style={{
                   border: `2px dashed ${dragActive ? 'var(--color-accent-primary)' : 'var(--color-border)'}`,
-                  borderRadius: 'var(--radius-lg)',
+                  borderRadius: 'var(--radius-xl)',
                   padding: 'var(--space-8)',
                   textAlign: 'center',
                   cursor: 'pointer',
-                  background: dragActive ? 'rgba(6, 182, 212, 0.05)' : 'var(--color-bg-tertiary)',
-                  transition: 'all 0.2s ease',
+                  background: dragActive ? 'hsla(188deg, 90%, 50%, 0.06)' : 'var(--color-bg-tertiary)',
+                  transition: 'all var(--transition-base)',
+                  transform: dragActive ? 'scale(1.01)' : 'scale(1)',
+                  boxShadow: dragActive ? 'inset 0 0 30px hsla(188deg, 90%, 50%, 0.08)' : 'none',
                 }}
               >
                 <input
@@ -428,7 +429,7 @@ export default function FileUploadManagement() {
               )}
             </div>
 
-            <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+            <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',

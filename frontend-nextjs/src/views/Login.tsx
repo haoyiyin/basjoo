@@ -27,7 +27,7 @@ export const Login = () => {
             })
             .catch(() => setBootstrapRequired(false));
     }, [navigate]);
-    
+
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -53,34 +53,18 @@ export const Login = () => {
             padding: 'var(--space-6)',
             position: 'relative',
         }}>
-            <div style={{
-                position: 'absolute',
-                top: '15%',
-                left: '10%',
-                width: '300px',
-                height: '300px',
-                background: 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 0%, transparent 70%)',
-                borderRadius: '50%',
-                filter: 'blur(60px)',
-                animation: 'float 8s ease-in-out infinite',
-            }} />
-            <div style={{
-                position: 'absolute',
-                bottom: '20%',
-                right: '15%',
-                width: '250px',
-                height: '250px',
-                background: 'radial-gradient(circle, rgba(139, 92, 246, 0.12) 0%, transparent 70%)',
-                borderRadius: '50%',
-                filter: 'blur(60px)',
-                animation: 'float 10s ease-in-out infinite reverse',
-            }} />
+            {/* Liquid blob background */}
+            <div className="liquid-blob-container">
+                <div className="liquid-blob-1" style={{ top: '5%', left: '5%', width: '40vw', height: '40vw' }} />
+                <div className="liquid-blob-2" style={{ bottom: '5%', right: '5%', width: '45vw', height: '45vw' }} />
+            </div>
 
             <div style={{
                 width: '100%',
                 maxWidth: '420px',
-                animation: 'fadeIn 0.6s ease-out forwards',
+                animation: 'fadeIn 0.6s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards',
             }}>
+                {/* Logo & title */}
                 <div style={{
                     textAlign: 'center',
                     marginBottom: 'var(--space-10)',
@@ -92,6 +76,7 @@ export const Login = () => {
                         width: '80px',
                         height: '80px',
                         marginBottom: 'var(--space-6)',
+                        filter: 'drop-shadow(0 0 20px hsla(188deg, 90%, 50%, 0.3))',
                     }}>
                         <img
                             src="/logo.png"
@@ -107,7 +92,7 @@ export const Login = () => {
                         fontSize: 'var(--text-3xl)',
                         fontWeight: 700,
                         marginBottom: 'var(--space-3)',
-                        background: 'linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)',
+                        background: 'linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(265deg, 90%, 65%) 100%)',
                         WebkitBackgroundClip: 'text',
                         backgroundClip: 'text',
                         WebkitTextFillColor: 'transparent',
@@ -122,7 +107,8 @@ export const Login = () => {
                     </p>
                 </div>
 
-                <div className="glass-card" style={{
+                {/* Login form card */}
+                <div className="liquid-glass-card" style={{
                     padding: 'var(--space-8)',
                 }}>
                     {error && (
@@ -136,6 +122,7 @@ export const Login = () => {
                             display: 'flex',
                             alignItems: 'center',
                             gap: 'var(--space-3)',
+                            border: '1px solid hsla(350deg, 85%, 58%, 0.2)',
                         }}>
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <circle cx="12" cy="12" r="10" />
@@ -169,12 +156,12 @@ export const Login = () => {
                                         paddingLeft: 'var(--space-12)',
                                     }}
                                 />
-                                <svg 
-                                    width="18" 
-                                    height="18" 
-                                    viewBox="0 0 24 24" 
-                                    fill="none" 
-                                    stroke="currentColor" 
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
                                     strokeWidth="2"
                                     style={{
                                         position: 'absolute',
@@ -212,12 +199,12 @@ export const Login = () => {
                                         paddingLeft: 'var(--space-12)',
                                     }}
                                 />
-                                <svg 
-                                    width="18" 
-                                    height="18" 
-                                    viewBox="0 0 24 24" 
-                                    fill="none" 
-                                    stroke="currentColor" 
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
                                     strokeWidth="2"
                                     style={{
                                         position: 'absolute',
@@ -236,22 +223,11 @@ export const Login = () => {
                         <button
                             type="submit"
                             disabled={loading}
+                            className="btn-primary"
                             style={{
                                 width: '100%',
                                 padding: 'var(--space-4)',
                                 fontSize: 'var(--text-base)',
-                                fontWeight: 600,
-                                background: 'var(--color-accent-gradient)',
-                                color: 'var(--color-text-inverse)',
-                                border: 'none',
-                                borderRadius: 'var(--radius-md)',
-                                cursor: loading ? 'not-allowed' : 'pointer',
-                                opacity: loading ? 0.7 : 1,
-                                transition: 'all var(--transition-fast)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: 'var(--space-2)',
                             }}
                         >
                             {loading ? (

@@ -3,7 +3,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../services/api'
 import { useTranslation } from 'react-i18next'
 import { useIsMobile } from '../hooks/useMediaQuery'
@@ -14,6 +14,7 @@ interface QuickAction {
   path: string
   icon: JSX.Element
   gradient: string
+  glowColor: string
 }
 
 const quickActionsConfig: QuickAction[] = [
@@ -26,7 +27,8 @@ const quickActionsConfig: QuickAction[] = [
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     ),
-    gradient: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
+    gradient: 'linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(188deg, 80%, 40%) 100%)',
+    glowColor: 'hsla(188deg, 90%, 50%, 0.25)',
   },
   {
     titleKey: 'navigation.fileManagement',
@@ -38,7 +40,8 @@ const quickActionsConfig: QuickAction[] = [
         <polyline points="14 2 14 8 20 8" />
       </svg>
     ),
-    gradient: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+    gradient: 'linear-gradient(135deg, hsl(265deg, 90%, 65%) 0%, hsl(265deg, 80%, 55%) 100%)',
+    glowColor: 'hsla(265deg, 90%, 65%, 0.25)',
   },
   {
     titleKey: 'navigation.urlKnowledge',
@@ -50,9 +53,84 @@ const quickActionsConfig: QuickAction[] = [
         <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
       </svg>
     ),
-    gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    gradient: 'linear-gradient(135deg, hsl(150deg, 80%, 45%) 0%, hsl(150deg, 70%, 35%) 100%)',
+    glowColor: 'hsla(150deg, 80%, 45%, 0.25)',
   },
 ]
+
+/* Stat card with mouse-tracking gradient */
+function StatCard({ stat, idx, isMobile }: { stat: { label: string; value: string | number; indexed?: number; color: string; accentHue: number }; idx: number; isMobile: boolean }) {
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [mousePos, setMousePos] = useState({ x: 50, y: 50 })
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!cardRef.current) return
+    const rect = cardRef.current.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * 100
+    const y = ((e.clientY - rect.top) / rect.height) * 100
+    setMousePos({ x, y })
+  }, [])
+
+  return (
+    <div
+      ref={cardRef}
+      onMouseMove={handleMouseMove}
+      className="liquid-glass-card"
+      style={{
+        padding: isMobile ? 'var(--space-5)' : 'var(--space-6)',
+        animation: 'fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards',
+        animationDelay: `${idx * 0.1}s`,
+        opacity: 0,
+        position: 'relative',
+        overflow: 'hidden',
+        cursor: 'default',
+      }}
+    >
+      {/* Mouse-tracking aurora gradient */}
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        background: `radial-gradient(circle at ${mousePos.x}% ${mousePos.y}%, hsla(${stat.accentHue}deg, 90%, 50%, 0.08) 0%, transparent 50%)`,
+        transition: 'background 0.3s ease',
+        pointerEvents: 'none',
+      }} />
+
+      <div style={{
+        fontSize: 'var(--text-sm)',
+        color: 'var(--color-text-muted)',
+        marginBottom: 'var(--space-2)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        position: 'relative',
+      }}>
+        {stat.label}
+      </div>
+      <div style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 'var(--space-2)',
+        position: 'relative',
+      }}>
+        <span style={{
+          fontSize: 'var(--text-3xl)',
+          fontWeight: 700,
+          color: stat.color,
+          textShadow: `0 0 30px hsla(${stat.accentHue}deg, 90%, 50%, 0.3)`,
+        }}>
+          {stat.value}
+        </span>
+        {typeof stat.indexed === 'number' && stat.indexed > 0 && (
+          <span style={{
+            fontSize: 'var(--text-sm)',
+            color: 'var(--color-text-muted)',
+          }}>
+            ({stat.indexed} {stat.label.includes('URL') || stat.label.includes('url') ? 'indexed' : 'ready'})
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function Dashboard() {
   const { t } = useTranslation('common')
@@ -119,6 +197,31 @@ export default function Dashboard() {
     agentIdCopiedTimerRef.current = setTimeout(() => setAgentIdCopied(false), 2000)
   }
 
+  const stats = [
+    {
+      label: t('labels.urlKnowledgeSource'),
+      value: sourcesSummary?.urls.total ?? 0,
+      indexed: sourcesSummary?.urls.indexed ?? 0,
+      color: 'var(--color-accent-primary)',
+      accentHue: 188,
+    },
+    {
+      label: t('labels.fileItems'),
+      value: sourcesSummary?.files.total ?? 0,
+      indexed: sourcesSummary?.files.ready ?? 0,
+      color: 'var(--color-accent-secondary)',
+      accentHue: 265,
+    },
+    {
+      label: t('labels.indexedDocBlocks'),
+      value: sourcesSummary
+        ? (sourcesSummary.urls.indexed + sourcesSummary.files.ready)
+        : '-',
+      color: 'var(--color-warning)',
+      accentHue: 38,
+    },
+  ]
+
   return (
     <AdminLayout>
       <div style={{
@@ -126,9 +229,10 @@ export default function Dashboard() {
         maxWidth: '1400px',
         margin: '0 auto',
       }}>
+        {/* Greeting header */}
         <header style={{
           marginBottom: isMobile ? 'var(--space-6)' : 'var(--space-10)',
-          animation: 'fadeIn 0.5s ease-out forwards',
+          animation: 'fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards',
         }}>
           <h1 style={{
             fontSize: isMobile ? 'var(--text-2xl)' : 'var(--text-4xl)',
@@ -149,77 +253,19 @@ export default function Dashboard() {
           </p>
         </header>
 
+        {/* Stat cards */}
         <div className="responsive-grid-3" style={{
           display: 'grid',
           gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)',
           gap: 'var(--space-4)',
           marginBottom: isMobile ? 'var(--space-6)' : 'var(--space-10)',
         }}>
-          {[
-            {
-              label: t('labels.urlKnowledgeSource'),
-              value: sourcesSummary?.urls.total ?? 0,
-              indexed: sourcesSummary?.urls.indexed ?? 0,
-              color: 'var(--color-accent-primary)'
-            },
-            {
-              label: t('labels.fileItems'),
-              value: sourcesSummary?.files.total ?? 0,
-              indexed: sourcesSummary?.files.ready ?? 0,
-              color: 'var(--color-accent-secondary)'
-            },
-            {
-              label: t('labels.indexedDocBlocks'),
-              value: sourcesSummary
-                ? (sourcesSummary.urls.indexed + sourcesSummary.files.ready)
-                : '-',
-              color: 'var(--color-warning)'
-            },
-          ].map((stat, idx) => (
-            <div
-              key={idx}
-              className="glass-card"
-              style={{
-                padding: 'var(--space-6)',
-                animation: 'fadeIn 0.5s ease-out forwards',
-                animationDelay: `${idx * 0.1}s`,
-                opacity: 0,
-              }}
-            >
-              <div style={{
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-muted)',
-                marginBottom: 'var(--space-2)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}>
-                {stat.label}
-              </div>
-              <div style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: 'var(--space-2)',
-              }}>
-                <span style={{
-                  fontSize: 'var(--text-3xl)',
-                  fontWeight: 700,
-                  color: stat.color,
-                }}>
-                  {stat.value}
-                </span>
-                {'indexed' in stat && typeof stat.indexed === 'number' && stat.indexed > 0 && (
-                  <span style={{
-                    fontSize: 'var(--text-sm)',
-                    color: 'var(--color-text-muted)',
-                  }}>
-                    ({stat.indexed} {t('sources.trained')})
-                  </span>
-                )}
-              </div>
-            </div>
+          {stats.map((stat, idx) => (
+            <StatCard key={idx} stat={stat} idx={idx} isMobile={isMobile} />
           ))}
         </div>
 
+        {/* Quick actions */}
         <section style={{ marginBottom: isMobile ? 'var(--space-6)' : 'var(--space-10)' }}>
           <h2 style={{
             fontSize: isMobile ? 'var(--text-lg)' : 'var(--text-xl)',
@@ -238,31 +284,28 @@ export default function Dashboard() {
               <button
                 key={action.path}
                 onClick={() => navigate(action.path)}
+                className="liquid-glass-card"
                 style={{
                   display: 'flex',
                   alignItems: 'flex-start',
                   gap: 'var(--space-4)',
                   padding: 'var(--space-6)',
-                  background: 'var(--color-bg-glass)',
-                  backdropFilter: 'blur(var(--blur-md))',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-lg)',
                   cursor: 'pointer',
                   textAlign: 'left',
-                  transition: 'all var(--transition-fast)',
-                  animation: 'fadeIn 0.5s ease-out forwards',
+                  animation: 'fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards',
                   animationDelay: `${(idx + 4) * 0.1}s`,
                   opacity: 0,
+                  width: '100%',
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'translateY(-4px)'
-                  e.currentTarget.style.boxShadow = 'var(--shadow-lg)'
+                  e.currentTarget.style.boxShadow = `0 0 30px ${action.glowColor}, var(--shadow-lg)`
                   e.currentTarget.style.borderColor = 'var(--color-border-hover)'
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = 'translateY(0)'
-                  e.currentTarget.style.boxShadow = 'none'
-                  e.currentTarget.style.borderColor = 'var(--color-border)'
+                  e.currentTarget.style.boxShadow = ''
+                  e.currentTarget.style.borderColor = ''
                 }}
               >
                 <div style={{
@@ -275,6 +318,7 @@ export default function Dashboard() {
                   justifyContent: 'center',
                   color: 'white',
                   flexShrink: 0,
+                  boxShadow: `0 0 20px ${action.glowColor}`,
                 }}>
                   {action.icon}
                 </div>
@@ -315,6 +359,7 @@ export default function Dashboard() {
           </div>
         </section>
 
+        {/* System status */}
         <section>
           <h2 style={{
             fontSize: isMobile ? 'var(--text-lg)' : 'var(--text-xl)',
@@ -324,9 +369,9 @@ export default function Dashboard() {
           }}>
             {t('labels.systemStatus')}
           </h2>
-          <div className="glass-card" style={{
+          <div className="liquid-glass-card" style={{
             padding: isMobile ? 'var(--space-4)' : 'var(--space-6)',
-            animation: 'fadeIn 0.5s ease-out forwards',
+            animation: 'fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards',
             animationDelay: '0.8s',
             opacity: 0,
           }}>
@@ -335,6 +380,7 @@ export default function Dashboard() {
               gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(200px, 1fr))',
               gap: 'var(--space-6)',
             }}>
+              {/* Vector index status */}
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -346,8 +392,9 @@ export default function Dashboard() {
                   background: sourcesSummary && sourcesSummary.urls.indexed > 0 ? 'var(--color-success)' : 'var(--color-warning)',
                   borderRadius: 'var(--radius-full)',
                   boxShadow: sourcesSummary && sourcesSummary.urls.indexed > 0
-                    ? '0 0 10px var(--color-success)'
-                    : '0 0 10px var(--color-warning)',
+                    ? '0 0 12px hsla(150deg, 80%, 45%, 0.5)'
+                    : '0 0 12px hsla(38deg, 95%, 55%, 0.5)',
+                  animation: sourcesSummary && sourcesSummary.urls.indexed > 0 ? 'breathe 3s ease-in-out infinite' : 'none',
                 }} />
                 <div>
                   <div style={{
@@ -366,6 +413,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* API status */}
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -376,7 +424,8 @@ export default function Dashboard() {
                   height: '10px',
                   background: 'var(--color-success)',
                   borderRadius: 'var(--radius-full)',
-                  boxShadow: '0 0 10px var(--color-success)',
+                  boxShadow: '0 0 12px hsla(150deg, 80%, 45%, 0.5)',
+                  animation: 'breathe 3s ease-in-out infinite',
                 }} />
                 <div>
                   <div style={{
@@ -395,6 +444,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Agent status */}
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -405,9 +455,10 @@ export default function Dashboard() {
                   height: '10px',
                   background: agentId ? 'var(--color-success)' : 'var(--color-error)',
                   borderRadius: 'var(--radius-full)',
-                  boxShadow: agentId 
-                    ? '0 0 10px var(--color-success)' 
-                    : '0 0 10px var(--color-error)',
+                  boxShadow: agentId
+                    ? '0 0 12px hsla(150deg, 80%, 45%, 0.5)'
+                    : '0 0 12px hsla(350deg, 85%, 58%, 0.5)',
+                  animation: agentId ? 'breathe 3s ease-in-out infinite' : 'none',
                 }} />
                 <div>
                   <div style={{
@@ -437,6 +488,7 @@ export default function Dashboard() {
                         fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
                         textAlign: 'left',
                         wordBreak: 'break-all',
+                        transition: 'color var(--transition-fast)',
                       }}
                       title={agentIdCopied ? t('status.success') : t('buttons.copy')}
                     >

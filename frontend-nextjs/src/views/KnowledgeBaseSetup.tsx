@@ -152,7 +152,7 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
             </div>
           )}
 
-          <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
             <h3 style={{
               fontSize: 'var(--text-lg)',
               fontWeight: 600,
@@ -244,7 +244,7 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
               onClick={() => setShowResetDialog(false)}
             >
               <div
-                className="glass-card"
+                className="liquid-glass-card"
                 style={{
                   padding: 'var(--space-6)',
                   maxWidth: '420px',

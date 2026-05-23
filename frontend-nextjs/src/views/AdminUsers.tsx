@@ -149,7 +149,7 @@ useEffect(() => {
 
       {message && <div style={{ color: 'var(--color-success)', marginBottom: 'var(--space-4)' }}>{message}</div>}
       {error && <div style={{ color: 'var(--color-error)', marginBottom: 'var(--space-4)' }}>{error}</div>}
-      {isSuperAdmin && (<div className="glass-card" style={{ padding: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
+      {isSuperAdmin && (<div className="liquid-glass-card" style={{ padding: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.addAdmin')}</h2>
         <form onSubmit={createUser} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 180px auto', gap: 'var(--space-4)', alignItems: 'end' }}>
           <label>{t('users.email')}<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
@@ -163,7 +163,7 @@ useEffect(() => {
         </form>
       </div>
 	)}
-      <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
+      <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.adminList')}</h2>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
