@@ -46,7 +46,8 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
     api_base: '',
     provider_type: 'openai' as ProviderType,
     api_format: 'openai' as ApiFormatType,
-    top_k: 5,
+    top_k: 8,
+    similarity_threshold: 0.3,
     enable_context: false,
     rate_limit_per_minute: 20,
     restricted_reply: '',
@@ -97,7 +98,8 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
         api_base: agentData.api_base || 'https://api.deepseek.com/v1',
         provider_type: agentData.provider_type || 'openai',
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
-        top_k: agentData.top_k ?? 5,
+        top_k: agentData.top_k ?? 8,
+        similarity_threshold: agentData.similarity_threshold ?? 0.3,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
         restricted_reply: agentData.restricted_reply ?? t('labels.restrictedReplyPlaceholder'),
@@ -166,6 +168,7 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
         provider_type: formData.provider_type,
         api_format: formData.api_format,
         top_k: formData.top_k,
+        similarity_threshold: formData.similarity_threshold,
         enable_context: formData.enable_context,
         rate_limit_per_minute: formData.rate_limit_per_minute,
         restricted_reply: formData.restricted_reply,
@@ -255,6 +258,7 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
     formData.provider_type,
     formData.api_format,
     formData.top_k,
+    formData.similarity_threshold,
     formData.enable_context,
     formData.rate_limit_per_minute,
     formData.restricted_reply,
@@ -599,6 +603,70 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
             step="0.1"
             value={formData.temperature}
             onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div>
+          <label style={{
+            display: 'block',
+            marginBottom: 'var(--space-2)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 500,
+            color: 'var(--color-text-secondary)',
+          }}>
+            {t('labels.topK')} ({formData.top_k})
+            <HelpTooltip
+              title={t('labels.topK')}
+              content={[
+                t('labels.topKDesc'),
+                t('labels.topKTip1'),
+                t('labels.topKTip2'),
+                t('labels.topKTip3'),
+                t('labels.topKTip4'),
+              ]}
+              position="top"
+              size="xs"
+            />
+          </label>
+          <input
+            type="range"
+            min="1"
+            max="20"
+            step="1"
+            value={formData.top_k}
+            onChange={(e) => setFormData({ ...formData, top_k: parseInt(e.target.value) })}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div>
+          <label style={{
+            display: 'block',
+            marginBottom: 'var(--space-2)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 500,
+            color: 'var(--color-text-secondary)',
+          }}>
+            {t('labels.similarityThreshold')} ({formData.similarity_threshold.toFixed(2)})
+            <HelpTooltip
+              title={t('labels.similarityThreshold')}
+              content={[
+                t('labels.similarityThresholdDesc', { defaultValue: 'Only include results with similarity score above this threshold.' }),
+                t('labels.similarityThresholdTip1', { defaultValue: 'Lower values: more results, more noise' }),
+                t('labels.similarityThresholdTip2', { defaultValue: 'Higher values: fewer results, higher precision' }),
+              ]}
+              position="top"
+              size="xs"
+            />
+          </label>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={formData.similarity_threshold}
+            onChange={(e) => setFormData({ ...formData, similarity_threshold: parseFloat(e.target.value) })}
             style={{ width: '100%' }}
           />
         </div>

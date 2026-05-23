@@ -160,7 +160,7 @@ def build_agent_config(agent: Agent) -> dict:
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
         "top_k": agent.top_k,
-        "similarity_threshold": DEFAULT_AGENT_SIMILARITY_THRESHOLD,
+        "similarity_threshold": agent.similarity_threshold,
         "enable_context": agent.enable_context,
         "enable_auto_fetch": agent.enable_auto_fetch,
         "url_fetch_interval_days": agent.url_fetch_interval_days,
@@ -550,7 +550,7 @@ async def prepare_chat_request(
     agent_id = agent.id
     agent_workspace_id = agent.workspace_id
     agent_top_k = agent.top_k
-    agent_similarity_threshold = DEFAULT_AGENT_SIMILARITY_THRESHOLD
+    agent_similarity_threshold = agent.similarity_threshold
     agent_temperature = agent.temperature
     agent_max_tokens = DEFAULT_AGENT_MAX_TOKENS
     agent_system_prompt = agent.system_prompt

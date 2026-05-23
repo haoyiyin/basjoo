@@ -1,11 +1,31 @@
 """RAG service backed by R2R."""
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from .r2r_client import R2RClient
 
 logger = logging.getLogger(__name__)
+
+
+def _format_content(content: str, file_type: Optional[str] = None) -> str:
+    """Detect tabular data and format as markdown code block for better LLM interpretation."""
+    # Always wrap known tabular file types
+    if file_type in ("xlsx", "csv", "tsv"):
+        return f"```csv\n{content}\n```"
+
+    lines = [l for l in content.split("\n") if l.strip()]
+    if len(lines) < 2:
+        return content
+
+    # Check if all lines have consistent delimiter counts (CSV/TSV pattern)
+    for sep in (",", "\t"):
+        counts = [l.count(sep) for l in lines]
+        if counts[0] > 0 and all(c == counts[0] for c in counts):
+            lang = "csv" if sep == "," else "tsv"
+            return f"```{lang}\n{content}\n```"
+
+    return content
 
 
 class R2RRAGService:
@@ -51,28 +71,54 @@ class R2RRAGService:
             return []
 
     def build_context(self, retrieval_results: list[dict[str, Any]], locale: str = "zh-CN") -> str:
-        """Build context string for LLM system prompt."""
+        """Build context string for LLM system prompt.
+
+        Groups chunks from the same file together so the LLM can see
+        header + data rows as a coherent table for structured formats.
+        """
         if not retrieval_results:
             return ""
 
-        context_parts = []
-
-        for i, result in enumerate(retrieval_results[:3], 1):
+        # Group results by (type, key) where key is filename or URL
+        from collections import OrderedDict
+        grouped: OrderedDict[str, list[tuple[int, dict]]] = OrderedDict()
+        for i, result in enumerate(retrieval_results, 1):
             source_type = result.get("type", "file")
             meta = result.get("metadata", {})
+            if source_type == "url":
+                key = f"url:{meta.get('url', '')}"
+            elif source_type == "file":
+                key = f"file:{meta.get('filename', meta.get('title', ''))}"
+            else:
+                key = f"other:{i}"
+            grouped.setdefault(key, []).append((i, result))
+
+        # Sort chunks within each group by chunk_order to preserve document structure
+        for key in grouped:
+            grouped[key].sort(key=lambda x: x[1].get("metadata", {}).get("chunk_order", 0))
+
+        context_parts = []
+        for key, items in grouped.items():
+            indices = [str(i) for i, _ in items]
+            first_result = items[0][1]
+            source_type = first_result.get("type", "file")
+            meta = first_result.get("metadata", {})
+            file_type = meta.get("file_type")
+            source_label = f"Source{'s' if len(indices) > 1 else ''} {', '.join(indices)}"
+
+            # Combine content from all chunks of the same file
+            combined_content = "\n".join(r["content"][:800] for _, r in items)
 
             if source_type == "url":
                 title = meta.get("title", "Document")
                 url = meta.get("url", "")
-                content = result["content"][:500]
-                context_parts.append(f"[Source {i}] {title}\nURL: {url}\n{content}...")
+                context_parts.append(f"[{source_label}] {title}\nURL: {url}\n{combined_content}")
             elif source_type == "file":
                 filename = meta.get("filename", meta.get("title", "File"))
-                content = result["content"][:500]
-                context_parts.append(f"[Source {i}] {filename}\n{content}...")
+                formatted = _format_content(combined_content, file_type)
+                context_parts.append(f"[{source_label}] {filename}\n{formatted}")
             else:
-                content = result["content"][:500]
-                context_parts.append(f"[Source {i}] {content}...")
+                context_parts.append(f"[{source_label}] {combined_content}")
 
         context_parts.append(
             "Citation rules:\n"
@@ -84,25 +130,34 @@ class R2RRAGService:
         return "\n\n".join(context_parts)
 
     def extract_sources(self, retrieval_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Extract source information for API response."""
+        """Extract source information for API response, deduplicated by file/URL."""
+        seen = set()
         sources = []
 
-        for result in retrieval_results[:3]:
+        for result in retrieval_results:
             source_type = result.get("type", "file")
             meta = result.get("metadata", {})
 
             if source_type == "url":
+                dedup_key = f"url:{meta.get('url', '')}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
                 sources.append({
                     "type": "url",
                     "title": meta.get("title", "Document"),
                     "url": meta.get("url", ""),
-                    "snippet": result["content"][:200] + "...",
+                    "snippet": result["content"][:300] + "...",
                 })
             elif source_type == "file":
+                dedup_key = f"file:{meta.get('filename', meta.get('title', ''))}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
                 sources.append({
                     "type": "file",
                     "filename": meta.get("filename", meta.get("title", "File")),
-                    "snippet": result["content"][:200] + "...",
+                    "snippet": result["content"][:300] + "...",
                 })
 
         return sources

@@ -217,8 +217,8 @@ class R2RClient:
                     "filters": {"collection_ids": {"$in": [collection_id]}},
                     "limit": top_k,
                     "hybrid_settings": {
-                        "semantic_weight": 0.7,
-                        "full_text_weight": 0.3,
+                        "semantic_weight": 0.6,
+                        "full_text_weight": 0.4,
                     },
                 },
             }

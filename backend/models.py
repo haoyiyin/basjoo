@@ -131,7 +131,7 @@ class Agent(Base):
     )  # 是否启用自动抓取
 
     # 检索配置
-    top_k = Column(Integer, nullable=False, default=5)
+    top_k = Column(Integer, nullable=False, default=8)
     similarity_threshold = Column(Float, nullable=False, default=DEFAULT_AGENT_SIMILARITY_THRESHOLD)
     enable_context = Column(Boolean, nullable=False, default=False)
 

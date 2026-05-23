@@ -363,6 +363,7 @@ class AgentUpdateRequest(BaseModel):
     crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
     crawl_max_pages: Optional[int] = Field(None, ge=1, le=500, description="Max pages for site crawling")
     top_k: Optional[int] = Field(None, ge=1, le=20)
+    similarity_threshold: Optional[float] = Field(None, ge=0, le=1, description="Minimum similarity score for retrieval results")
     enable_context: Optional[bool] = Field(
         None, description="Enable conversation context"
     )
