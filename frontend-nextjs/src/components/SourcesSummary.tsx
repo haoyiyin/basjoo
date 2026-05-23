@@ -6,11 +6,7 @@ import { api } from '../services/api';
 
 interface SourcesSummaryProps {
   agentId: string;
-  onRetrain: () => void;
-  isRetraining: boolean;
   refreshTrigger?: number;
-  embeddingBatchSize?: number;
-  onEmbeddingBatchSizeChange?: (value: number) => void;
 }
 
 interface SourcesSummaryData {
@@ -31,11 +27,7 @@ interface SourcesSummaryData {
 
 export default function SourcesSummary({
   agentId,
-  onRetrain,
-  isRetraining,
   refreshTrigger = 0,
-  embeddingBatchSize = 4,
-  onEmbeddingBatchSizeChange,
 }: SourcesSummaryProps) {
   const { t } = useTranslation('common');
   const [data, setData] = useState<SourcesSummaryData | null>(null);
@@ -57,14 +49,6 @@ export default function SourcesSummary({
     loadSummary();
   }, [loadSummary, refreshTrigger]);
 
-  // Poll every 5 seconds when retraining
-  useEffect(() => {
-    if (isRetraining) {
-      const interval = setInterval(loadSummary, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [isRetraining, loadSummary]);
-
   if (loading || !data) {
     return (
       <div className="glass-card" style={{ padding: 'var(--space-6)' }}>
@@ -75,7 +59,6 @@ export default function SourcesSummary({
     );
   }
 
-  const hasPending = data.has_pending;
   const totalSizeKb = data.urls.total_size_kb + data.files.total_size_kb;
 
   return (
@@ -114,11 +97,6 @@ export default function SourcesSummary({
             <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
               {t('sources.links', { count: data.urls.total })}
             </span>
-            {data.urls.pending > 0 && (
-              <span className="badge badge-warning" style={{ fontSize: 'var(--text-xs)' }}>
-                {data.urls.pending} {t('sources.pending')}
-              </span>
-            )}
           </div>
           <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
             {data.urls.total_size_kb} KB
@@ -167,7 +145,6 @@ export default function SourcesSummary({
         padding: 'var(--space-4)',
         background: 'var(--color-bg-tertiary)',
         borderRadius: 'var(--radius-md)',
-        marginBottom: 'var(--space-6)',
       }}>
         <div style={{
           display: 'flex',
@@ -182,105 +159,6 @@ export default function SourcesSummary({
           </span>
         </div>
       </div>
-
-      {/* Pending hint */}
-      {hasPending && (
-        <div style={{
-          padding: 'var(--space-3)',
-          background: 'rgba(245, 158, 11, 0.1)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid rgba(245, 158, 11, 0.3)',
-          marginBottom: 'var(--space-4)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-2)',
-          color: 'var(--color-warning)',
-          fontSize: 'var(--text-sm)',
-        }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          {t('sources.hasPendingHint')}
-        </div>
-      )}
-      {onEmbeddingBatchSizeChange && (
-        <div style={{ marginBottom: 'var(--space-4)' }}>
-          <label style={{
-            display: 'block',
-            marginBottom: 'var(--space-2)',
-            fontSize: 'var(--text-sm)',
-            fontWeight: 500,
-            color: 'var(--color-text-secondary)',
-          }}>
-            {t('sources.embeddingBatchSize')}
-          </label>
-            <input
-              type="number"
-              value={embeddingBatchSize}
-              onChange={(e) => {
-                const rawValue = e.target.value;
-                if (rawValue === '') {
-                  return;
-                }
-            
-                const nextValue = Number(rawValue);
-                if (!Number.isFinite(nextValue)) {
-                  return;
-                }
-            
-                onEmbeddingBatchSizeChange?.(Math.max(1, Math.min(64, nextValue)));
-              }}
-              min={1}
-              max={64}
-              style={{ width: '100%' }}
-            />
-          <p style={{
-            marginTop: 'var(--space-2)',
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-muted)',
-          }}>
-            {t('sources.embeddingBatchSizeHint')}
-          </p>
-        </div>
-    	)}
-      {/* Retrain Button */}
-      <button
-        onClick={onRetrain}
-        disabled={isRetraining}
-        style={{
-          width: '100%',
-          padding: 'var(--space-4)',
-          background: hasPending
-            ? 'linear-gradient(135deg, #F59E0B, #F97316)'
-            : 'linear-gradient(135deg, #06b6d4, #0891b2)',
-          color: 'white',
-          border: 'none',
-          borderRadius: 'var(--radius-md)',
-          cursor: isRetraining ? 'not-allowed' : 'pointer',
-          opacity: isRetraining ? 0.7 : 1,
-          fontWeight: 600,
-          fontSize: 'var(--text-base)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 'var(--space-2)',
-          boxShadow: hasPending ? '0 4px 14px rgba(245, 158, 11, 0.4)' : 'none',
-          transition: 'all 0.2s ease',
-          marginBottom: 'var(--space-3)',
-        }}
-      >
-        {isRetraining ? (
-          <div className="spinner" style={{ width: '18px', height: '18px' }} />
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M23 4v6h-6M1 20v-6h6" />
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-          </svg>
-        )}
-        {isRetraining ? t('sources.retraining') : t('sources.retrainAgent')}
-      </button>
     </div>
   );
 }

@@ -157,8 +157,26 @@ class URLFetchScheduler:
                     await db.commit()
 
                     if old_hash != new_hash:
-                        logger.info(f"URL content changed, triggering index rebuild for agent {agent_id}")
-                        await self.trigger_index_rebuild(agent_id)
+                        logger.info(f"URL content changed, ingesting into R2R for agent {agent_id}")
+                        try:
+                            from services.r2r_client import R2RClient
+                            r2r = R2RClient()
+                            await r2r.ingest_text(
+                                agent_id=agent_id,
+                                text=url_source.content,
+                                title=url_source.title or url_source.url,
+                                metadata={
+                                    "url": url_source.url,
+                                    "title": url_source.title,
+                                    "source_type": "url",
+                                    "url_source_id": url_source.id,
+                                },
+                            )
+                            url_source.is_indexed = True
+                            await db.commit()
+                            logger.info(f"R2R ingest OK for changed URL {url_source.url}")
+                        except Exception as e:
+                            logger.warning(f"R2R ingest failed for changed URL {url_source.url}: {e}")
                 else:
                     url_source.status = "failed"
                     url_source.last_error = page_result.error or "Unknown error"
@@ -181,24 +199,6 @@ class URLFetchScheduler:
             except Exception:
                 logger.exception("Failed to persist fetch_single_url error state")
 
-    async def trigger_index_rebuild(self, agent_id: str):
-        """
-        触发索引重建任务
-
-        Args:
-            agent_id: Agent ID
-        """
-        try:
-            from api.v1.index_endpoints import rebuild_index_task
-
-            # 创建索引重建任务
-            job_id = f"index_rebuild_{agent_id}_{int(datetime.now(timezone.utc).timestamp())}"
-            await rebuild_index_task(agent_id, job_id)
-
-            logger.info(f"Triggered index rebuild for agent {agent_id} (job_id: {job_id})")
-
-        except Exception as e:
-            logger.exception(f"Failed to trigger index rebuild for agent {agent_id}: {e}")
 
 
 # 全局实例

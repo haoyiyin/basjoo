@@ -119,6 +119,26 @@ async def fetch_url_task(url_source_id: int):
                     url_source.fetch_metadata = fetch_result.get("metadata")
                     await db.commit()
                     logger.info(f"Successfully fetched {url_source.url}")
+
+                    # Auto-ingest into R2R so content is immediately searchable
+                    try:
+                        r2r = R2RClient()
+                        await r2r.ingest_text(
+                            agent_id=agent_id,
+                            text=url_source.content,
+                            title=url_source.title or url_source.url,
+                            metadata={
+                                "url": url_source.url,
+                                "title": url_source.title,
+                                "source_type": "url",
+                                "url_source_id": url_source.id,
+                            },
+                        )
+                        url_source.is_indexed = True
+                        await db.commit()
+                        logger.info(f"R2R ingest OK for URL {url_source.url}")
+                    except Exception as e:
+                        logger.warning(f"R2R ingest failed for URL {url_source.url}: {e}")
                 else:
                     url_source.status = "failed"
                     url_source.last_error = fetch_result.get("error") or "Unknown error"
@@ -544,6 +564,7 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                     to_insert = to_insert[:remaining]
 
                 # Insert only new rows
+                inserted_sources = []
                 for page_result, normalized in to_insert:
                     url_source = URLSource(
                         agent_id=agent_id,
@@ -556,12 +577,34 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                         fetch_metadata=page_result.metadata,
                     )
                     db.add(url_source)
+                    inserted_sources.append(url_source)
 
                 if quota:
                     quota.used_urls += len(to_insert)
 
                 await db.commit()
                 logger.info(f"Site crawl completed for {url}: {len(to_insert)} pages added")
+
+                # Auto-ingest into R2R so crawled content is immediately searchable
+                r2r = R2RClient()
+                for src in inserted_sources:
+                    if src.content:
+                        try:
+                            await r2r.ingest_text(
+                                agent_id=agent_id,
+                                text=src.content,
+                                title=src.title or src.url,
+                                metadata={
+                                    "url": src.url,
+                                    "title": src.title,
+                                    "source_type": "url",
+                                    "url_source_id": src.id,
+                                },
+                            )
+                            src.is_indexed = True
+                        except Exception as e:
+                            logger.warning(f"R2R ingest failed for crawled URL {src.url}: {e}")
+                await db.commit()
 
             except asyncio.CancelledError:
                 logger.info(f"[site_crawl_task] Task {task_id} cancelled")

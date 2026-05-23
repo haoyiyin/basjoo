@@ -37,7 +37,6 @@ export default function URLManagement() {
   const [crawlPolling, setCrawlPolling] = useState(false);
   const [crawlStartCount, setCrawlStartCount] = useState(0);
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
-  const [isRetraining, setIsRetraining] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [clearing, setClearing] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -46,9 +45,7 @@ export default function URLManagement() {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
-  const wasRetrainingRef = useRef(false);
   const stopPollingRequestedRef = useRef(false);
-  const [embeddingBatchSize, setEmbeddingBatchSize] = useState(4);
   // Auto-complete URL with https:// if missing protocol
   const normalizeUrl = (url: string): string => {
     const trimmed = url.trim();
@@ -79,7 +76,6 @@ export default function URLManagement() {
       setFetchIntervalDays(data.url_fetch_interval_days || 7);
       setCrawlMaxDepth(data.crawl_max_depth ?? 2);
       setCrawlMaxPages(data.crawl_max_pages ?? 20);
-      setEmbeddingBatchSize(data.embedding_batch_size ?? 4);
     } catch (error) {
       alert(`${t('labels.urlManagement.loadAgentFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
     }
@@ -139,17 +135,6 @@ export default function URLManagement() {
           });
           if (status.is_crawling && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
             setCrawlPolling(true);
-          }
-          if (status.is_rebuilding) {
-            wasRetrainingRef.current = true;
-            setIsRetraining(true);
-          } else {
-            setIsRetraining(false);
-            if (wasRetrainingRef.current) {
-              wasRetrainingRef.current = false;
-              setRefreshTrigger(t => t + 1);
-              void loadURLsRef.current();
-            }
           }
         } catch (error) {
           console.error('Failed to poll task status:', error);
@@ -385,38 +370,12 @@ export default function URLManagement() {
         url_fetch_interval_days: fetchIntervalDays,
         crawl_max_depth: crawlMaxDepth,
         crawl_max_pages: crawlMaxPages,
-        embedding_batch_size: embeddingBatchSize,
       });
       alert(t('labels.urlManagement.autoFetchSaved'));
     } catch (error) {
       alert(`${t('errors.saveFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleRetrain = async () => {
-    if (!agentId) return;
-    if (taskStatus?.is_crawling) {
-      alert(t('labels.urlManagement.crawlInProgress'));
-      return;
-    }
-    if (taskStatus?.is_rebuilding) {
-      alert(t('labels.urlManagement.indexRebuildInProgress'));
-      return;
-    }
-    setIsRetraining(true);
-    wasRetrainingRef.current = true;
-    try {
-        await api.updateAgent(agentId, {
-          embedding_batch_size: embeddingBatchSize,
-        });
-      await api.rebuildIndex(agentId, true);
-      // 轮询会自动处理训练完成后的状态更新
-    } catch (error) {
-      alert(`${t('sources.retrainFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
-      wasRetrainingRef.current = false;
-      setIsRetraining(false);
     }
   };
 
@@ -1120,24 +1079,6 @@ export default function URLManagement() {
               </div>
             )}
 
-            {taskStatus?.is_rebuilding && (
-              <div style={{
-                padding: 'var(--space-3) var(--space-4)',
-                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(37, 99, 235, 0.1))',
-                borderRadius: 'var(--radius-md)',
-                marginBottom: 'var(--space-4)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-3)',
-                border: '1px solid rgba(59, 130, 246, 0.3)',
-              }}>
-                <div className="spinner" style={{ width: '16px', height: '16px' }} />
-                <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
-                  {t('labels.urlManagement.indexRebuildInProgress')}
-                </span>
-              </div>
-            )}
-
             <div style={{
               maxHeight: '600px',
               overflow: 'auto',
@@ -1164,9 +1105,9 @@ export default function URLManagement() {
                     key={url.id}
                     style={{
                       padding: 'var(--space-4)',
-                      background: url.is_indexed ? 'var(--color-bg-tertiary)' : 'rgba(245, 158, 11, 0.1)',
+                      background: 'var(--color-bg-tertiary)',
                       borderRadius: 'var(--radius-md)',
-                      border: url.is_indexed ? '1px solid var(--color-border)' : '2px solid var(--color-warning)',
+                      border: '1px solid var(--color-border)',
                     }}
                   >
                     <div style={{
@@ -1186,14 +1127,6 @@ export default function URLManagement() {
                           <span className={getStatusBadge(url.status).className}>
                             {getStatusBadge(url.status).label}
                           </span>
-                          {url.status === 'success' && (
-                            <span 
-                              className={url.is_indexed ? 'badge badge-success' : 'badge badge-warning'}
-                              style={{ fontSize: 'var(--text-xs)' }}
-                            >
-                              {url.is_indexed ? t('sources.trained') : t('sources.pending')}
-                            </span>
-                          )}
                         </div>
                         <a
                           href={url.url}
@@ -1268,11 +1201,7 @@ export default function URLManagement() {
             <div style={{ position: 'sticky', top: 'var(--space-8)', gridColumn: '3', gridRow: '1' }}>
               <SourcesSummary
                 agentId={agentId}
-                onRetrain={handleRetrain}
-                isRetraining={isRetraining}
                 refreshTrigger={refreshTrigger}
-                embeddingBatchSize={embeddingBatchSize}
-  				onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
               />
             </div>
           )}
@@ -1283,11 +1212,7 @@ export default function URLManagement() {
           <div style={{ marginTop: 'var(--space-6)' }}>
             <SourcesSummary
               agentId={agentId}
-              onRetrain={handleRetrain}
-              isRetraining={isRetraining}
               refreshTrigger={refreshTrigger}
-              embeddingBatchSize={embeddingBatchSize}
-  			  onEmbeddingBatchSizeChange={setEmbeddingBatchSize}
             />
           </div>
         )}

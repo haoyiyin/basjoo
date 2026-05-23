@@ -25,7 +25,6 @@ export default function FileUploadManagement() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
-  const [isRetraining, setIsRetraining] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [clearing, setClearing] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -33,7 +32,6 @@ export default function FileUploadManagement() {
   const [dragActive, setDragActive] = useState(false);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
-  const wasRetrainingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -91,17 +89,6 @@ export default function FileUploadManagement() {
             }
             return status;
           });
-          if (status.is_rebuilding) {
-            wasRetrainingRef.current = true;
-            setIsRetraining(true);
-          } else {
-            setIsRetraining(false);
-            if (wasRetrainingRef.current) {
-              wasRetrainingRef.current = false;
-              setRefreshTrigger(t => t + 1);
-              void loadFilesRef.current();
-            }
-          }
         } catch (error) {
           console.error('Failed to poll task status:', error);
         }
@@ -201,27 +188,6 @@ export default function FileUploadManagement() {
       alert(`${t('files.clearFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
     } finally {
       setClearing(false);
-    }
-  };
-
-  const handleRetrain = async () => {
-    if (!agentId) return;
-    if (taskStatus?.is_crawling) {
-      alert(t('labels.urlManagement.crawlInProgress'));
-      return;
-    }
-    if (taskStatus?.is_rebuilding) {
-      alert(t('labels.urlManagement.indexRebuildInProgress'));
-      return;
-    }
-    setIsRetraining(true);
-    wasRetrainingRef.current = true;
-    try {
-      await api.rebuildIndex(agentId, true);
-    } catch (error) {
-      alert(`${t('sources.retrainFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
-      wasRetrainingRef.current = false;
-      setIsRetraining(false);
     }
   };
 
@@ -664,8 +630,6 @@ export default function FileUploadManagement() {
             <div style={{ position: 'sticky', top: 'var(--space-8)' }}>
               <SourcesSummary
                 agentId={agentId}
-                onRetrain={handleRetrain}
-                isRetraining={isRetraining}
                 refreshTrigger={refreshTrigger}
               />
             </div>
@@ -677,8 +641,6 @@ export default function FileUploadManagement() {
           <div style={{ marginTop: 'var(--space-6)' }}>
             <SourcesSummary
               agentId={agentId}
-              onRetrain={handleRetrain}
-              isRetraining={isRetraining}
               refreshTrigger={refreshTrigger}
             />
           </div>
