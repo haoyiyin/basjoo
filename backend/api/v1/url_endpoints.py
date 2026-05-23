@@ -138,7 +138,7 @@ async def fetch_url_task(url_source_id: int):
                         await db.commit()
                         logger.info(f"R2R ingest OK for URL {url_source.url}")
                     except Exception as e:
-                        logger.warning(f"R2R ingest failed for URL {url_source.url}: {e}")
+                        logger.warning(f"R2R ingest failed for URL {url_source.url}: {type(e).__name__}: {e}")
                 else:
                     url_source.status = "failed"
                     url_source.last_error = fetch_result.get("error") or "Unknown error"
@@ -603,7 +603,7 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                             )
                             src.is_indexed = True
                         except Exception as e:
-                            logger.warning(f"R2R ingest failed for crawled URL {src.url}: {e}")
+                            logger.warning(f"R2R ingest failed for crawled URL {src.url}: {type(e).__name__}: {e}")
                 await db.commit()
 
             except asyncio.CancelledError:

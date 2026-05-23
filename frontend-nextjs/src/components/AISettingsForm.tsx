@@ -47,7 +47,7 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
     provider_type: 'openai' as ProviderType,
     api_format: 'openai' as ApiFormatType,
     top_k: 8,
-    similarity_threshold: 0.3,
+    similarity_threshold: 0.01,
     enable_context: false,
     rate_limit_per_minute: 20,
     restricted_reply: '',
@@ -99,7 +99,7 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
         provider_type: agentData.provider_type || 'openai',
         api_format: (agentData.api_format as ApiFormatType) || 'openai',
         top_k: agentData.top_k ?? 8,
-        similarity_threshold: agentData.similarity_threshold ?? 0.3,
+        similarity_threshold: agentData.similarity_threshold ?? 0.01,
         enable_context: agentData.enable_context ?? false,
         rate_limit_per_minute: agentData.rate_limit_per_minute ?? agentData.rate_limit_per_hour ?? 20,
         restricted_reply: agentData.restricted_reply ?? t('labels.restrictedReplyPlaceholder'),
@@ -648,12 +648,12 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
             fontWeight: 500,
             color: 'var(--color-text-secondary)',
           }}>
-            {t('labels.similarityThreshold')} ({formData.similarity_threshold.toFixed(2)})
+            {t('labels.similarityThreshold')} ({Math.round(formData.similarity_threshold * 1000)}%)
             <HelpTooltip
               title={t('labels.similarityThreshold')}
               content={[
-                t('labels.similarityThresholdDesc', { defaultValue: 'Only include results with similarity score above this threshold.' }),
-                t('labels.similarityThresholdTip1', { defaultValue: 'Lower values: more results, more noise' }),
+                t('labels.similarityThresholdDesc', { defaultValue: 'Only include results with score above this threshold. Scores range ~10%-50%, recommended: 10%.' }),
+                t('labels.similarityThresholdTip1', { defaultValue: '0%: return all results' }),
                 t('labels.similarityThresholdTip2', { defaultValue: 'Higher values: fewer results, higher precision' }),
               ]}
               position="top"
@@ -663,10 +663,10 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
           <input
             type="range"
             min="0"
-            max="1"
-            step="0.05"
-            value={formData.similarity_threshold}
-            onChange={(e) => setFormData({ ...formData, similarity_threshold: parseFloat(e.target.value) })}
+            max="100"
+            step="1"
+            value={Math.round(formData.similarity_threshold * 1000)}
+            onChange={(e) => setFormData({ ...formData, similarity_threshold: parseInt(e.target.value) / 1000 })}
             style={{ width: '100%' }}
           />
         </div>

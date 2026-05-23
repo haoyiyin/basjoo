@@ -82,9 +82,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Main chat APIs live in `backend/api/v1/endpoints.py`. They handle admin config APIs, public chat APIs, SSE streaming, session creation, quota checks, widget origin whitelist checks, and source normalization.
 - URL ingestion lives in `backend/api/v1/url_endpoints.py`. File upload lives in `backend/api/v1/file_endpoints.py`. Both routers are admin-protected at the router level; URL creation queues async fetch jobs, and file uploads are ingested into R2R.
+  - **URL fetch pipeline**: `create_urls` → DB record (status="pending") → `background_tasks.add_task(fetch_url_task)` → Scrapling fetch → DB update (status="success") → `r2r.ingest_text()` → `is_indexed=True`. If R2R ingest fails, `is_indexed` stays `False` and the URL is silently invisible to chat. The index rebuild endpoint picks up URLs with `is_indexed=False`.
 - Full index rebuilds live in `backend/api/v1/index_endpoints.py`. Those routes are also admin-protected at the router level; rebuild jobs re-ingest URL content into R2R.
+  - `force=False` (default): only re-ingests URLs where `is_indexed == False`. `force=True`: re-ingests all URLs with `status == "success"`.
 - Retrieval/storage logic is split across `backend/services/r2r_client.py`, `backend/services/rag_r2r.py`, `backend/services/scraper.py`, `backend/services/crawler.py`, `backend/services/scrapling_client.py`, and `backend/services/llm_service.py`.
 - **R2R integration**: `backend/services/r2r_client.py` is a thin async HTTP wrapper around the R2R REST API (v3). Each Basjoo agent maps to an R2R collection for data isolation. R2R handles document parsing, chunking, embedding, and hybrid search server-side.
+  - `/v3/documents` for raw text uses **form data** (`data=data`), not JSON. `collection_ids` and `metadata` must be JSON-encoded strings within form fields. Sending plain JSON will return 422.
+  - `/v3/documents` returns 409 Conflict when the same content already exists. The existing document ID is embedded in the error message text (e.g. `Document <uuid> already exists`). `ingest_text` and `ingest_file` both handle 409 by extracting the ID, deleting the old document, and retrying.
+  - `/v3/retrieval/search` uses **JSON body** (`json=payload`). Hybrid search requires `use_hybrid_search: true` in `search_settings` — without it, the `hybrid_settings` weights are silently ignored.
+  - Collection IDs are cached in a module-level `_collection_cache` dict — never persisted, scoped to the process lifetime.
+- **R2R scoring (RRF)**: The R2R hybrid search returns Reciprocal Rank Fusion scores, not cosine similarity. Scores are in the ~0.01-0.05 range (displayed as 10%-50% in the frontend slider). The `similarity_threshold` filter in `r2r_client.py:search()` uses `score < threshold` — with the old default of 0.3, all results were silently filtered out. The default is now 0.01 (slider 10%).
+  - Frontend slider: 0-100% maps to 0.00-0.10 internally via `display/1000 = internal`. Default: 10% (0.01).
 - **LLM vs embedding distinction**: `backend/services/llm_service.py` is the *chat-completion* provider abstraction (OpenAI, Google, DeepSeek, etc.). Embeddings are managed by R2R server-side using the Jina embeddings model configured in `r2r-config/user_configs/r2r.toml`.
 - URL safety/SSRF checks are centralized in `backend/services/url_safety.py` and reused by both schema validation and scraper fetch/discovery flows. SSRF protection blocks loopback, private, link-local, multicast, and unspecified addresses, plus direct IP literals and embedded credentials. The IANA benchmarking range `198.18.0.0/15` (RFC 2544) is explicitly whitelisted because Python's `ipaddress` incorrectly classifies it as `is_private`, but real public websites are hosted there.
 - Task concurrency for fetch/rebuild operations is guarded by the shared task lock service used by the URL and index endpoints.
@@ -116,6 +124,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Backend tests use `backend/tests/conftest.py` to force `BASJOO_TEST_MODE=1`, create isolated SQLite DBs under `backend/.pytest_dbs/`, and monkeypatch R2R/LLM integrations for most API tests.
 - Use the existing `client` fixture for authenticated admin API tests and `public_client` for unauthenticated/public-route coverage instead of building ad-hoc `AsyncClient` fixtures in individual test files.
+- `conftest.py` provides `FakeR2RClient` which bypasses HTTP entirely — R2R API format issues will NOT be caught by unit tests. To test actual R2R integration, run against the Docker dev stack.
+- Run tests locally via venv (not system python): `source venv/bin/activate && python3 -m pytest tests/ --ignore=tests/integration/`. The `--ignore` is needed because `tests/integration/test_service_clients.py` imports an unavailable module.
 - If a test depends on real Redis/R2R hostnames, the fixtures auto-fallback between container hostnames and localhost.
 
 ## Environment and configuration

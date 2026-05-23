@@ -19,7 +19,7 @@ INSECURE_SECRET_VALUES = {
 
 DEFAULT_AGENT_ID_FILE = "/app/data/.agent_id"
 DEFAULT_AGENT_MAX_TOKENS = 1024
-DEFAULT_AGENT_SIMILARITY_THRESHOLD = 0.3
+DEFAULT_AGENT_SIMILARITY_THRESHOLD = 0.01  # R2R hybrid search uses RRF scores (~10%-50%), default 10% (0.01)
 
 
 def _is_missing_or_insecure_secret(value: Optional[str]) -> bool:

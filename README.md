@@ -8,7 +8,7 @@ Basjoo is an AI customer-support platform with three main parts:
 - a **Next.js admin/dashboard frontend** in `frontend-nextjs/`
 - an **embeddable chat widget** in `widget/` that talks to the backend over HTTP and SSE
 
-The stack also uses **SQLite** for application data, **Redis** for rate limiting/cache-related services, **Qdrant** for vector search, and **nginx** for Docker-based reverse proxying.
+The stack also uses **SQLite** for application data, **Redis** for rate limiting, **R2R** (with PostgreSQL + pgvector) for vector search and document indexing, a **Scrapling microservice** for web content fetching, and **nginx** for Docker-based reverse proxying.
 
 ## Automatic deployment
 
@@ -29,7 +29,9 @@ sudo sh install-deploy.sh
 - `backend/` — FastAPI app, data models, chat APIs, auth, ingestion, indexing, tests
 - `frontend-nextjs/` — active admin/dashboard UI
 - `widget/` — embeddable chat widget bundle
+- `scrapling-service/` — standalone microservice for web content fetching (curl_cffi + readability)
 - `nginx/` — Docker nginx config
+- `r2r-config/` — R2R vector database server configuration
 - `docker-compose.yml` — dev/prod orchestration
 - `frontend/` — legacy frontend reference; the active frontend is `frontend-nextjs/`
 
@@ -38,7 +40,7 @@ sudo sh install-deploy.sh
 - Configurable AI agents with multiple provider settings
 - Independent Embedding API selection for knowledge retrieval: Jina or SiliconFlow
 - URL ingestion and Q&A knowledge management
-- Qdrant-backed retrieval and index rebuild jobs
+- R2R-backed retrieval and index rebuild jobs
 - Streaming chat responses over Server-Sent Events
 - Embeddable website widget with session persistence
 - Widget copy auto-translation by visitor locale
@@ -97,8 +99,10 @@ The widget provides the visitor-facing chat window with persisted sessions, mult
 
 - FastAPI
 - SQLAlchemy async + SQLite
-- Redis
-- Qdrant
+- Redis (rate limiting, caching)
+- R2R REST API v3 (vector search, document ingestion, hybrid retrieval)
+- PostgreSQL + pgvector (R2R persistence)
+- Scrapling microservice (curl_cffi + readability-lxml web content extraction)
 - APScheduler
 - Provider SDKs for OpenAI-compatible APIs, Anthropic, and Google Gemini
 
@@ -143,7 +147,8 @@ Default dev ports:
 
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:8000`
-- Qdrant: `http://localhost:6333`
+- R2R: `http://localhost:7272`
+- PostgreSQL: `127.0.0.1:5432`
 - Redis: `127.0.0.1:6379`
 
 The dev frontend and backend ports are bound as `3000:3000` and `8000:8000`, so they are reachable from other devices that can access the host.
@@ -242,8 +247,7 @@ Important runtime settings used in the current codebase include:
 
 - `DATABASE_URL`
 - `REDIS_URL`
-- `QDRANT_HOST`
-- `QDRANT_PORT`
+- `R2R_API_URL`
 - `SECRET_KEY`
 - `SECRET_KEY_FILE`
 - `DEFAULT_AGENT_ID`
@@ -291,7 +295,7 @@ The main backend domains are:
 
 - **Agent config**: provider/model/system-prompt/widget settings
 - **Knowledge sources**: URLs and Q&A items, with SSRF protection via `backend/services/url_safety.py`
-- **Indexing**: chunking content and rebuilding Qdrant collections; rebuilds replace the entire collection (clear + add)
+- **Indexing**: chunking content and rebuilding R2R collections; each agent maps to its own R2R collection for data isolation
 - **Chat**: session creation, streaming replies, source citations, quota checks
 - **Admin auth**: dashboard login and registration
 - **Scheduling**: URL fetch scheduler, history cleanup, session auto-close (30-min inactivity timeout)
@@ -301,8 +305,7 @@ The main persistent entities in `backend/models.py` are:
 - `Workspace`
 - `Agent`
 - `URLSource`
-- `QAItem`
-- `DocumentChunk`
+- `KnowledgeFile`
 - `ChatSession`
 - `ChatMessage`
 - `WorkspaceQuota`
@@ -315,8 +318,8 @@ The retrieval/indexing pipeline spans:
 
 - `backend/api/v1/url_endpoints.py`
 - `backend/api/v1/index_endpoints.py`
-- `backend/services/qdrant_store.py`
-- `backend/services/rag_qdrant.py`
+- `backend/services/r2r_client.py`
+- `backend/services/rag_r2r.py`
 - `backend/services/scraper.py`
 - `backend/services/crawler.py`
 
@@ -363,8 +366,8 @@ Key testing behavior from `backend/tests/conftest.py`:
 
 - sets `BASJOO_TEST_MODE=1`
 - uses isolated SQLite databases under `backend/.pytest_dbs/`
-- monkeypatches Qdrant/Jina/LLM integrations for many tests
-- falls back between Docker hostnames and localhost for Redis/Qdrant where needed
+- monkeypatches R2R/Jina/LLM integrations for many tests
+- falls back between Docker hostnames and localhost for Redis/R2R where needed
 
 Run all tests:
 
