@@ -7,7 +7,7 @@ import type { URLSource, Agent } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
 import HelpTooltip from '../components/HelpTooltip';
 import KBSetupGuard from '../components/KBSetupGuard';
-import { useIsMobile } from '../hooks/useMediaQuery';
+import { useIsMobile, useIsTablet } from '../hooks/useMediaQuery';
 import SourcesSummary from '../components/SourcesSummary';
 
 interface TaskStatus {
@@ -20,6 +20,7 @@ interface TaskStatus {
 export default function URLManagement() {
   const { t } = useTranslation('common');
   const isMobile = useIsMobile();
+  const isTablet = useIsTablet();
   const [agentId, setAgentId] = useState<string | null>(null);
   const [urls, setUrls] = useState<URLSource[]>([]);
   const [total, setTotal] = useState(0);
@@ -487,8 +488,8 @@ export default function URLManagement() {
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr' : 'minmax(320px, 380px) 1fr 300px',
-          gridTemplateRows: isMobile ? 'auto' : 'auto auto',
+          gridTemplateColumns: isMobile ? '1fr' : isTablet ? '1fr 1fr' : '1fr 1fr 300px',
+          gridTemplateRows: isMobile ? 'auto' : isTablet ? 'auto auto auto' : 'auto auto',
           gap: 'var(--space-6)',
         }}>
           <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', gridColumn: isMobile ? 'auto' : '1', gridRow: isMobile ? 'auto' : '1' }}>
@@ -1205,7 +1206,7 @@ export default function URLManagement() {
           </div>
 
           {/* Sources Summary - Desktop: right side, Mobile: bottom */}
-          {!isMobile && agentId && (
+          {!isMobile && !isTablet && agentId && (
             <div style={{ position: 'sticky', top: 'var(--space-8)', gridColumn: '3', gridRow: '1' }}>
               <SourcesSummary
                 agentId={agentId}
@@ -1216,8 +1217,8 @@ export default function URLManagement() {
         </div>
 
         {/* Mobile: Sources Summary at bottom */}
-        {isMobile && agentId && (
-          <div style={{ marginTop: 'var(--space-6)' }}>
+        {(isMobile || isTablet) && agentId && (
+          <div style={{ marginTop: 'var(--space-6)', gridColumn: isTablet ? '1 / span 2' : 'auto' }}>
             <SourcesSummary
               agentId={agentId}
               refreshTrigger={refreshTrigger}

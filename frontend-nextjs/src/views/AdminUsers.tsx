@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import AdminLayout from '../components/AdminLayout';
 import { parseErrorResponse } from '../services/api';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 type AdminRole = 'super_admin' | 'admin' | 'support';
 type AdminUser = {
@@ -19,6 +20,7 @@ const roleKeys: AdminRole[] = ['super_admin', 'admin', 'support'];
 
 export const AdminUsers = () => {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const { token, admin } = useAuth();
   const isSuperAdmin = admin?.role === 'super_admin';
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -140,7 +142,7 @@ useEffect(() => {
 
   return (
   <AdminLayout>
-    <div style={{ width: '100%', maxWidth: 1120, margin: '0 auto' }}>
+    <div style={{ width: '100%', maxWidth: 1120, margin: '0 auto', padding: isMobile ? 'var(--space-4)' : '0' }}>
       <div style={{ marginBottom: 'var(--space-8)' }}>
         <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, marginBottom: 'var(--space-2)' }}>
           {t('users.title')}
@@ -151,7 +153,7 @@ useEffect(() => {
       {error && <div style={{ color: 'var(--color-error)', marginBottom: 'var(--space-4)' }}>{error}</div>}
       {isSuperAdmin && (<div className="liquid-glass-card" style={{ padding: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.addAdmin')}</h2>
-        <form onSubmit={createUser} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 180px auto', gap: 'var(--space-4)', alignItems: 'end' }}>
+        <form onSubmit={createUser} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr 180px auto', gap: 'var(--space-4)', alignItems: isMobile ? 'stretch' : 'end' }}>
           <label>{t('users.email')}<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label>{t('users.name')}<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
           <label>{t('users.password')}<input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
@@ -159,61 +161,119 @@ useEffect(() => {
     ))}
   </select>
 </label>
-          <button type="submit">{t('users.create')}</button>
+          <button type="submit" style={{ minHeight: isMobile ? '44px' : undefined, width: isMobile ? '100%' : undefined }}>{t('users.create')}</button>
         </form>
       </div>
 	)}
-      <div className="liquid-glass-card" style={{ padding: 'var(--space-6)' }}>
+      <div className="liquid-glass-card" style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-6)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-5)' }}>{t('users.adminList')}</h2>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.id')}</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.email')}</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.name')}</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.role')}</th>
-                <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.status')}</th>
-               {isSuperAdmin && <th style={{ textAlign: 'right', padding: '12px' }}>{t('users.actions')}</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id} style={{ borderTop: '1px solid var(--color-border)' }}>
-                  <td style={{ padding: '12px' }}>{user.id}</td>
-                  <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.email} onChange={(e) => setEditData({ ...editData, email: e.target.value })} /> : user.email}</td>
-                  <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.name} onChange={(e) => setEditData({ ...editData, name: e.target.value })} /> : user.name}</td>
-                  <td style={{ padding: '12px' }}>{editingId === user.id ? (<select value={editData.role} onChange={(e) => setEditData({ ...editData, role: e.target.value as AdminRole })}>
-                      {roleKeys.map((r) => (
-                        <option key={r} value={r}>
-                          {t(`users.roleLabels.${r}`)}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    t(`users.roleLabels.${user.role}`)
-                  )}
-                </td>
-                  <td style={{ padding: '12px' }}>{editingId === user.id ? <label><input type="checkbox" checked={editData.is_active} onChange={(e) => setEditData({ ...editData, is_active: e.target.checked })} /> {t('users.statusEnabled')}</label> : user.is_active ? t('users.statusEnabled') : t('users.statusDisabled')}</td>
-                 {isSuperAdmin && ( <td style={{ padding: '12px', textAlign: 'right' }}>
-                    {editingId === user.id ? (
-                      <>
-                        <input type="password" placeholder={t('users.newPasswordPlaceholder')} value={editData.password} onChange={(e) => setEditData({ ...editData, password: e.target.value })} style={{ maxWidth: 180, marginRight: 8 }} />
-                        <button onClick={() => saveEdit(user.id)}>{t('users.save')}</button>
-                        <button onClick={() => setEditingId(null)} style={{ marginLeft: 8 }}>{t('users.cancel')}</button>
-                      </>
-                    ) : (
-                      <>
-                        <button onClick={() => startEdit(user)}>{t('users.edit')}</button>
-                        <button onClick={() => deleteUser(user.id)} style={{ marginLeft: 8 }}>{t('users.delete')}</button>
-                      </>
+
+        {isMobile ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            {users.map((user) => (
+              <div key={user.id} className="liquid-glass-card" style={{ padding: 'var(--space-4)' }}>
+                {editingId === user.id ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>#{user.id}</span>
+                      <span className={user.is_active ? 'badge badge-success' : 'badge badge-error'}>
+                        {user.is_active ? t('users.statusEnabled') : t('users.statusDisabled')}
+                      </span>
+                    </div>
+                    <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{t('users.email')}
+                      <input value={editData.email} onChange={(e) => setEditData({ ...editData, email: e.target.value })} style={{ width: '100%', marginTop: 'var(--space-1)' }} />
+                    </label>
+                    <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{t('users.name')}
+                      <input value={editData.name} onChange={(e) => setEditData({ ...editData, name: e.target.value })} style={{ width: '100%', marginTop: 'var(--space-1)' }} />
+                    </label>
+                    <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{t('users.role')}
+                      <select value={editData.role} onChange={(e) => setEditData({ ...editData, role: e.target.value as AdminRole })} style={{ width: '100%', marginTop: 'var(--space-1)' }}>
+                        {roleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>))}
+                      </select>
+                    </label>
+                    <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <input type="checkbox" checked={editData.is_active} onChange={(e) => setEditData({ ...editData, is_active: e.target.checked })} />
+                      {t('users.statusEnabled')}
+                    </label>
+                    <input type="password" placeholder={t('users.newPasswordPlaceholder')} value={editData.password} onChange={(e) => setEditData({ ...editData, password: e.target.value })} style={{ width: '100%' }} />
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <button onClick={() => saveEdit(user.id)} style={{ flex: 1 }}>{t('users.save')}</button>
+                      <button onClick={() => setEditingId(null)} className="btn-ghost" style={{ flex: 1 }}>{t('users.cancel')}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+                      <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>#{user.id}</span>
+                      <span className={user.is_active ? 'badge badge-success' : 'badge badge-error'}>
+                        {user.is_active ? t('users.statusEnabled') : t('users.statusDisabled')}
+                      </span>
+                    </div>
+                    <div style={{ marginBottom: 'var(--space-2)' }}>
+                      <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{user.name}</div>
+                      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{user.email}</div>
+                    </div>
+                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
+                      {t(`users.roleLabels.${user.role}`)}
+                    </div>
+                    {isSuperAdmin && (
+                      <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                        <button onClick={() => startEdit(user)} className="btn-ghost" style={{ flex: 1, minHeight: '44px' }}>{t('users.edit')}</button>
+                        <button onClick={() => deleteUser(user.id)} className="btn-ghost" style={{ flex: 1, minHeight: '44px', color: 'var(--color-error)' }}>{t('users.delete')}</button>
+                      </div>
                     )}
-                  </td>)}
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.id')}</th>
+                  <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.email')}</th>
+                  <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.name')}</th>
+                  <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.role')}</th>
+                  <th style={{ textAlign: 'left', padding: '12px' }}>{t('users.status')}</th>
+                  {isSuperAdmin && <th style={{ textAlign: 'right', padding: '12px' }}>{t('users.actions')}</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id} style={{ borderTop: '1px solid var(--color-border)' }}>
+                    <td style={{ padding: '12px' }}>{user.id}</td>
+                    <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.email} onChange={(e) => setEditData({ ...editData, email: e.target.value })} /> : user.email}</td>
+                    <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.name} onChange={(e) => setEditData({ ...editData, name: e.target.value })} /> : user.name}</td>
+                    <td style={{ padding: '12px' }}>{editingId === user.id ? (
+                      <select value={editData.role} onChange={(e) => setEditData({ ...editData, role: e.target.value as AdminRole })}>
+                        {roleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>))}
+                      </select>
+                    ) : t(`users.roleLabels.${user.role}`)}</td>
+                    <td style={{ padding: '12px' }}>{editingId === user.id ? <label><input type="checkbox" checked={editData.is_active} onChange={(e) => setEditData({ ...editData, is_active: e.target.checked })} /> {t('users.statusEnabled')}</label> : user.is_active ? t('users.statusEnabled') : t('users.statusDisabled')}</td>
+                    {isSuperAdmin && (
+                      <td style={{ padding: '12px', textAlign: 'right' }}>
+                        {editingId === user.id ? (
+                          <>
+                            <input type="password" placeholder={t('users.newPasswordPlaceholder')} value={editData.password} onChange={(e) => setEditData({ ...editData, password: e.target.value })} style={{ maxWidth: 180, marginRight: 8 }} />
+                            <button onClick={() => saveEdit(user.id)}>{t('users.save')}</button>
+                            <button onClick={() => setEditingId(null)} style={{ marginLeft: 8 }}>{t('users.cancel')}</button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => startEdit(user)}>{t('users.edit')}</button>
+                            <button onClick={() => deleteUser(user.id)} style={{ marginLeft: 8 }}>{t('users.delete')}</button>
+                          </>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
     </AdminLayout>

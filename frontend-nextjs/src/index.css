@@ -120,6 +120,10 @@
   --color-warning-bg: hsla(38deg, 95%, 55%, 0.15);
   --color-error-bg: hsla(350deg, 85%, 58%, 0.15);
   --color-info-bg: hsla(210deg, 90%, 55%, 0.15);
+
+  /* Sidebar glass — dark tint */
+  --sidebar-bg: hsla(225deg, 30%, 6%, 0.6);
+  --sidebar-user-bg: hsla(220deg, 20%, 13%, 0.5);
 }
 
 /* ==================== Light Theme ==================== */
@@ -155,6 +159,10 @@
   --shadow-glow: 0 0 40px -10px hsla(188deg, 90%, 50%, 0.15);
   --shadow-glow-lg: 0 0 80px -20px hsla(188deg, 90%, 50%, 0.1);
   --shadow-inner-glow: inset 0 1.5px 2px hsla(0deg, 0%, 100%, 0.5);
+
+  /* Sidebar glass — light tint */
+  --sidebar-bg: hsla(0deg, 0%, 100%, 0.7);
+  --sidebar-user-bg: hsla(210deg, 15%, 92%, 0.6);
 }
 
 /* ==================== Reset & Base ==================== */
@@ -468,7 +476,7 @@ button:disabled {
 
 /* Sidebar glass — deeper tint */
 .glass-sidebar {
-  background: hsla(225deg, 30%, 6%, 0.6);
+  background: var(--sidebar-bg);
   backdrop-filter: blur(var(--glass-blur-sidebar)) saturate(160%);
   -webkit-backdrop-filter: blur(var(--glass-blur-sidebar)) saturate(160%);
   border-right: 1px solid var(--color-border-glass);

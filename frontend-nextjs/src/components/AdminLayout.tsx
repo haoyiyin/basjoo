@@ -430,7 +430,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           alignItems: 'center',
           gap: 'var(--space-3)',
           padding: 'var(--space-3)',
-          background: 'hsla(220deg, 20%, 13%, 0.5)',
+          background: 'var(--sidebar-user-bg)',
           backdropFilter: 'blur(12px)',
           WebkitBackdropFilter: 'blur(12px)',
           border: '1px solid var(--color-border-glass)',
