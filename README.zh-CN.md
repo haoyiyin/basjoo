@@ -1,5 +1,15 @@
 # Basjoo
 
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Next.js](https://img.shields.io/badge/Next.js-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
+[![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![R2R](https://img.shields.io/badge/R2R-向量检索-blue)](https://r2r-docs.sciphi.ai/)
+[![Scrapling](https://img.shields.io/badge/Scrapling-网页抓取-green)](https://github.com/D4Vinci/Scrapling)
+
 Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 
 - `backend/` 中的 **FastAPI 后端**，负责智能体配置、聊天、索引、认证和定时任务
@@ -56,7 +66,7 @@ sudo sh install-deploy.sh
 
 - 支持多种模型服务商配置的 AI 智能体
 - 支持独立选择知识检索 Embedding API：Jina 或 SiliconFlow
-- URL 抓取与 Q&A 知识管理
+- URL 抓取与文件知识管理
 - 基于 R2R 的检索与索引重建任务
 - 基于 Server-Sent Events 的流式聊天回复
 - 可嵌入网站的聊天组件，并带有会话持久化能力
@@ -86,11 +96,17 @@ Playground 页面可以测试回复效果、观察检索结果，并联动调整
 
 ![中文网站管理截图](resource/screenshots/admin/zh-CN/websites.png)
 
-### Q&A 知识管理
+### 文件知识管理
 
-Q&A 页面用于录入、批量导入、编辑问答条目，并在保存后重建知识索引。
+文件上传页面支持拖拽上传 PDF、TXT、CSV、Markdown、DOCX 等文件，作为 AI 知识检索的来源。
 
-![中文 Q&A 管理截图](resource/screenshots/admin/zh-CN/qa.png)
+![文件上传截图](resource/screenshots/admin/zh-CN/files.png)
+
+### 用户管理
+
+管理管理员账户，支持基于角色的访问控制——超级管理员、普通管理员和客服人员。
+
+![用户管理截图](resource/screenshots/admin/zh-CN/users.png)
 
 ### 会话中心
 
@@ -299,7 +315,7 @@ docker compose --profile dev up --watch
 
 - `/api/admin` 下的认证路由
 - `/api/v1` 下的业务 API（聊天、智能体配置、会话、配额、任务状态）
-- admin-only 路由：`url_endpoints.py`（URL 导入、Q&A 管理、抓取）和 `index_endpoints.py`（索引重建任务）在 router 级别通过 `Depends(get_current_admin)` 进行管理员鉴权保护
+- admin-only 路由：`url_endpoints.py`（URL 导入、抓取）、`file_endpoints.py`（文件上传）和 `index_endpoints.py`（索引重建任务）在 router 级别通过 `Depends(get_current_admin)` 进行管理员鉴权保护
 - public v1 路由：`/api/v1/chat`、`/api/v1/chat/stream`、`/api/v1/contexts`、`/api/v1/config:public`
 - CORS 中间件，早返回响应（限流 429、请求体 413）通过共享 `apply_cors_headers()` 处理
 - i18n 中间件
@@ -342,7 +358,7 @@ docker compose --profile dev up --watch
 
 模型服务抽象位于 `backend/services/llm_service.py`。服务商选择由 `Agent.provider_type` 决定。当前代码支持多种 OpenAI 兼容服务商，以及专门的 OpenAI Native 和 Google 路径。
 
-Embedding 设置与聊天模型服务商相互独立。管理员可以在 Playground 中为知识库索引/检索选择 Jina 或 SiliconFlow；网站与 Q&A 知识库页面只要求当前已选择的 Embedding API 对应 Key 已配置。SiliconFlow 可以使用独立的 SiliconFlow Embedding API Key；当 AI 服务商也选择 SiliconFlow 时，也兼容使用主 SiliconFlow AI Key 作为历史回退。
+Embedding 设置与聊天模型服务商相互独立。管理员可以在 Playground 中为知识库索引/检索选择 Jina 或 SiliconFlow；网站与文件上传页面只要求当前已选择的 Embedding API 对应 Key 已配置。SiliconFlow 可以使用独立的 SiliconFlow Embedding API Key；当 AI 服务商也选择 SiliconFlow 时，也兼容使用主 SiliconFlow AI Key 作为历史回退。
 
 ### 前端
 
@@ -452,6 +468,26 @@ DEFAULT_AGENT_ID=agt_123456789abc
 - `/api/v1/urls:refetch`
 - `/api/v1/index:rebuild`
 - `/api/v1/index:status`
+
+## 致谢
+
+Basjoo 基于以下优秀的开源项目构建：
+
+- **[R2R](https://github.com/SciPhi-AI/R2R)** — RAG 生产化方案：向量检索、文档摄入、混合检索（RRF 评分）。驱动 Basjoo 的知识库后端（PostgreSQL + pgvector）。
+- **[Scrapling](https://github.com/D4Vinci/Scrapling)** — 隐身网页抓取，支持 TLS 指纹伪装（curl_cffi）。驱动 Basjoo 的 URL 内容提取微服务。
+- **[FastAPI](https://github.com/tiangolo/fastapi)** — 驱动 Basjoo 后端 API 的 Web 框架。
+- **[Next.js](https://github.com/vercel/next.js)** — 驱动 Basjoo 管理后台的 React 框架。
+- **[pgvector](https://github.com/pgvector/pgvector)** — PostgreSQL 开源向量相似性搜索，被 R2R 使用。
+
+## 贡献者
+
+<a href="https://github.com/haoyiyin/basjoo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=haoyiyin/basjoo" />
+</a>
+
+## Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=haoyiyin/basjoo&type=Date)](https://star-history.com/#haoyiyin/basjoo&Date)
 
 ## 当前说明
 

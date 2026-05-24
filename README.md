@@ -1,5 +1,15 @@
 # Basjoo
 
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Next.js](https://img.shields.io/badge/Next.js-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
+[![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![R2R](https://img.shields.io/badge/R2R-Vector_Search-blue)](https://r2r-docs.sciphi.ai/)
+[![Scrapling](https://img.shields.io/badge/Scrapling-Web_Crawling-green)](https://github.com/D4Vinci/Scrapling)
+
 English | [简体中文](README.zh-CN.md)
 
 Basjoo is an AI customer-support platform with three main parts:
@@ -51,7 +61,7 @@ sudo sh install-deploy.sh
 
 - Configurable AI agents with multiple provider settings
 - Independent Embedding API selection for knowledge retrieval: Jina or SiliconFlow
-- URL ingestion and Q&A knowledge management
+- URL ingestion and file knowledge management
 - R2R-backed retrieval and index rebuild jobs
 - Streaming chat responses over Server-Sent Events
 - Embeddable website widget with session persistence
@@ -81,11 +91,17 @@ The Websites page handles URL ingestion, crawling, auto-fetch settings, and retr
 
 ![English website management screenshot](resource/screenshots/admin/en-US/websites.png)
 
-### Q&A knowledge management
+### File knowledge management
 
-The Q&A page is used to create, batch import, edit, and rebuild structured question/answer knowledge.
+The File Upload page lets you drag-and-drop PDF, TXT, CSV, Markdown, DOCX and other files as knowledge sources for AI retrieval.
 
-![English Q&A management screenshot](resource/screenshots/admin/en-US/qa.png)
+![English file upload screenshot](resource/screenshots/admin/en-US/files.png)
+
+### User management
+
+Manage admin accounts with role-based access control — Super Admin, Admin, and Support roles.
+
+![English user management screenshot](resource/screenshots/admin/en-US/users.png)
 
 ### Session operations
 
@@ -294,7 +310,7 @@ Notes:
 
 - auth routes under `/api/admin`
 - v1 APIs under `/api/v1` (chat, agent config, sessions, quotas, task status)
-- admin-only routers: `url_endpoints.py` (URL ingestion, Q&A management, crawling) and `index_endpoints.py` (index rebuild jobs) are protected at the router level via `Depends(get_current_admin)`
+- admin-only routers: `url_endpoints.py` (URL ingestion, crawling), `file_endpoints.py` (file upload), and `index_endpoints.py` (index rebuild jobs) are protected at the router level via `Depends(get_current_admin)`
 - public v1 routes: `/api/v1/chat`, `/api/v1/chat/stream`, `/api/v1/contexts`, `/api/v1/config:public`
 - CORS middleware with a shared `apply_cors_headers()` helper for early responses (rate limit 429, body size 413)
 - i18n middleware
@@ -306,7 +322,7 @@ Notes:
 The main backend domains are:
 
 - **Agent config**: provider/model/system-prompt/widget settings
-- **Knowledge sources**: URLs and Q&A items, with SSRF protection via `backend/services/url_safety.py`
+- **Knowledge sources**: URLs and uploaded files, with SSRF protection via `backend/services/url_safety.py`
 - **Indexing**: chunking content and rebuilding R2R collections; each agent maps to its own R2R collection for data isolation
 - **Chat**: session creation, streaming replies, source citations, quota checks
 - **Admin auth**: dashboard login and registration
@@ -337,7 +353,7 @@ The retrieval/indexing pipeline spans:
 
 The LLM abstraction is in `backend/services/llm_service.py`. Provider selection is driven by `Agent.provider_type`. The current code supports OpenAI-compatible providers plus dedicated paths for OpenAI Native and Google.
 
-Embedding settings are independent from the chat model provider. Admins can choose Jina or SiliconFlow for knowledge-base indexing/retrieval in Playground; the Websites and Q&A pages only require the API key for the currently selected embedding provider. SiliconFlow can use a dedicated SiliconFlow Embedding API key, with legacy fallback to the main SiliconFlow AI key when the AI provider is also SiliconFlow.
+Embedding settings are independent from the chat model provider. Admins can choose Jina or SiliconFlow for knowledge-base indexing/retrieval in Playground; the Websites and File Upload pages only require the API key for the currently selected embedding provider. SiliconFlow can use a dedicated SiliconFlow Embedding API key, with legacy fallback to the main SiliconFlow AI key when the AI provider is also SiliconFlow.
 
 ### Frontend
 
@@ -449,6 +465,26 @@ Examples of backend endpoints present in the codebase:
 - `/api/v1/urls:refetch`
 - `/api/v1/index:rebuild`
 - `/api/v1/index:status`
+
+## Acknowledgments
+
+Basjoo is built on top of these amazing open-source projects:
+
+- **[R2R](https://github.com/SciPhi-AI/R2R)** — RAG to production: vector search, document ingestion, hybrid retrieval (RRF scoring). Powers Basjoo's knowledge base backend with PostgreSQL + pgvector.
+- **[Scrapling](https://github.com/D4Vinci/Scrapling)** — Stealthy web scraping with TLS fingerprint impersonation (curl_cffi). Powers Basjoo's URL content extraction microservice.
+- **[FastAPI](https://github.com/tiangolo/fastapi)** — The web framework powering Basjoo's backend APIs.
+- **[Next.js](https://github.com/vercel/next.js)** — The React framework powering Basjoo's admin dashboard.
+- **[pgvector](https://github.com/pgvector/pgvector)** — Open-source vector similarity search for PostgreSQL, used by R2R.
+
+## Contributors
+
+<a href="https://github.com/haoyiyin/basjoo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=haoyiyin/basjoo" />
+</a>
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=haoyiyin/basjoo&type=Date)](https://star-history.com/#haoyiyin/basjoo&Date)
 
 ## Current status
 
