@@ -83,7 +83,7 @@ async def health():
 
 def _resolve_title(title: str, html: str, url: str) -> str:
     """Resolve a fallback title when the primary extractor returns empty."""
-    if title:
+    if title and title != "[no-title]":
         return title
     soup = BeautifulSoup(html, "lxml")
     # Try <h1> tag

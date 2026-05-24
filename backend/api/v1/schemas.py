@@ -523,7 +523,7 @@ class TokenResponse(BaseModel):
 class ModelsListRequest(BaseModel):
     """获取可用模型列表请求"""
 
-    provider_type: Literal["openai_native", "google"] = Field(
+    provider_type: Literal["openai_native", "google", "deepseek"] = Field(
         ..., description="AI provider type"
     )
     api_key: Optional[str] = Field(None, description="API key (if not using saved key)")
