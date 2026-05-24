@@ -14,6 +14,33 @@ logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+class AuthError(Exception):
+    """Base authentication error."""
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
+class TokenExpiredError(AuthError):
+    """Token has expired."""
+    pass
+
+
+class TokenInvalidError(AuthError):
+    """Token is malformed or has an invalid signature."""
+    pass
+
+
+class AdminNotFoundError(AuthError):
+    """Admin user does not exist."""
+    pass
+
+
+class AdminDeactivatedError(AuthError):
+    """Admin account is deactivated."""
+    pass
+
+
 class AuthService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -51,24 +78,26 @@ class AuthService:
 
     async def authenticate_admin(
         self, email: str, password: str
-    ) -> Optional[AdminUser]:
+    ) -> AdminUser:
         result = await self.db.execute(
             select(AdminUser).where(AdminUser.email == email)
         )
         admin = result.scalar_one_or_none()
 
         if not admin:
-            return None
+            raise AdminNotFoundError("No account found with this email")
 
         if not self.verify_password(password, admin.hashed_password):
-            return None
+            raise AuthError("Incorrect password")
 
         if not admin.is_active:
-            return None
+            raise AdminDeactivatedError("Admin account is deactivated")
 
         return admin
 
-    async def get_current_admin(self, token: str) -> Optional[AdminUser]:
+    async def get_current_admin(self, token: str) -> AdminUser:
+        from jose import ExpiredSignatureError
+
         try:
             payload = jwt.decode(
                 token, settings.secret_key, algorithms=[settings.algorithm]
@@ -76,15 +105,22 @@ class AuthService:
             admin_id = payload.get("sub")
 
             if admin_id is None:
-                return None
+                raise TokenInvalidError("Token missing subject claim")
 
+        except ExpiredSignatureError:
+            raise TokenExpiredError("Token has expired")
         except JWTError:
-            return None
+            raise TokenInvalidError("Invalid token")
 
         result = await self.db.execute(
             select(AdminUser).where(AdminUser.id == int(admin_id))
         )
         admin = result.scalar_one_or_none()
+
+        if admin is None:
+            raise AdminNotFoundError("Admin user not found")
+        if not admin.is_active:
+            raise AdminDeactivatedError("Admin account is deactivated")
 
         return admin
 

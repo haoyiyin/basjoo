@@ -5,6 +5,7 @@ Uses curl_cffi for TLS-impersonated HTTP and readability-lxml for content extrac
 
 import hashlib
 import logging
+import re
 from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
@@ -80,6 +81,26 @@ async def health():
     return {"status": "healthy"}
 
 
+def _resolve_title(title: str, html: str, url: str) -> str:
+    """Resolve a fallback title when the primary extractor returns empty."""
+    if title:
+        return title
+    soup = BeautifulSoup(html, "lxml")
+    # Try <h1> tag
+    if soup.h1:
+        return soup.h1.get_text().strip()
+    # Try first markdown heading in plain-text content
+    text = soup.get_text()
+    m = re.search(r'^\s*#\s+(.+)', text, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    # Last resort: filename from URL path
+    path = urlparse(url).path.rstrip("/")
+    if path:
+        return path.split("/")[-1]
+    return ""
+
+
 def _extract_content(html: str, url: str) -> tuple:
     """Extract title and main content from HTML using readability-lxml."""
     try:
@@ -88,6 +109,7 @@ def _extract_content(html: str, url: str) -> tuple:
         content_html = doc.summary()
         soup = BeautifulSoup(content_html, "lxml")
         content = soup.get_text(separator="\n", strip=True)
+        title = _resolve_title(title, html, url)
         return title, content
     except Exception:
         # Fallback to BeautifulSoup
@@ -102,6 +124,7 @@ def _extract_content(html: str, url: str) -> tuple:
             tag.decompose()
         main = soup.find("main") or soup.find("article") or soup.find("body")
         content = main.get_text(separator="\n", strip=True) if main else soup.get_text(separator="\n", strip=True)
+        title = _resolve_title(title, html, url)
         return title, content
 
 

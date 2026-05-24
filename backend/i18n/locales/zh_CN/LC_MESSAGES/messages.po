@@ -8,6 +8,24 @@ msgstr ""
 msgid "Invalid credentials"
 msgstr "认证失败，请检查邮箱和密码"
 
+msgid "Not logged in"
+msgstr "未登录，请先登录"
+
+msgid "Session expired, please log in again"
+msgstr "登录已过期，请重新登录"
+
+msgid "User not found"
+msgstr "用户不存在"
+
+msgid "Account has been deactivated"
+msgstr "账户已被禁用"
+
+msgid "No account found with this email"
+msgstr "该邮箱未注册"
+
+msgid "Incorrect password"
+msgstr "密码错误"
+
 msgid "Email already registered"
 msgstr "邮箱已被注册"
 

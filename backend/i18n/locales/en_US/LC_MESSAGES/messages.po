@@ -8,6 +8,24 @@ msgstr ""
 msgid "Invalid credentials"
 msgstr "Authentication failed, please check your email and password"
 
+msgid "Not logged in"
+msgstr "Not logged in, please log in first"
+
+msgid "Session expired, please log in again"
+msgstr "Session expired, please log in again"
+
+msgid "User not found"
+msgstr "User not found"
+
+msgid "Account has been deactivated"
+msgstr "Account has been deactivated"
+
+msgid "No account found with this email"
+msgstr "No account found with this email"
+
+msgid "Incorrect password"
+msgstr "Incorrect password"
+
 msgid "Email already registered"
 msgstr "This email is already registered"
 

@@ -8,10 +8,17 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from database import get_db
 from models import AdminUser
-from services.auth_service import AuthService
+from services.auth_service import (
+    AuthService,
+    AuthError,
+    TokenExpiredError,
+    TokenInvalidError,
+    AdminNotFoundError,
+    AdminDeactivatedError,
+)
 from i18n.core import get_locale_from_request, _
-from middleware.rate_limit import check_memory_sliding_window
 
+import time
 from collections import defaultdict, deque
 
 router = APIRouter()
@@ -19,8 +26,22 @@ security = HTTPBearer(auto_error=False)
 
 # In-memory login rate limiter (fallback when Redis is unavailable)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
-_LOGIN_MAX_ATTEMPTS = 5
-_LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def _check_login_rate_limit(ip: str, max_attempts: int, window_seconds: int) -> tuple[bool, int]:
+    """In-memory sliding-window rate limit. Returns (allowed, retry_after_seconds)."""
+    now = time.time()
+    history = _login_attempt_history[ip]
+    while history and now - history[0] >= window_seconds:
+        history.popleft()
+    if not history:
+        _login_attempt_history.pop(ip, None)
+        return True, 0
+    if len(history) >= max_attempts:
+        retry_after = int(window_seconds - (now - history[0])) + 1
+        return False, max(retry_after, 1)
+    history.append(now)
+    return True, 0
 
 # Prevent concurrent first-admin bootstrap from creating multiple super_admin accounts
 _bootstrap_lock = asyncio.Lock()
@@ -86,18 +107,35 @@ async def get_current_admin(
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=_("Invalid credentials", locale=locale),
+            detail=_("Not logged in", locale=locale),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     auth_service = AuthService(db)
-    admin = await auth_service.get_current_admin(credentials.credentials)
-
-    if not admin:
+    try:
+        admin = await auth_service.get_current_admin(credentials.credentials)
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_("Session expired, please log in again", locale=locale),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except TokenInvalidError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_("Invalid credentials", locale=locale),
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    except AdminNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_("User not found", locale=locale),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except AdminDeactivatedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_("Account has been deactivated", locale=locale),
         )
 
     return admin
@@ -330,57 +368,64 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
 
     # Rate-limit login attempts per client IP to prevent brute-force attacks.
     # Redis-first with in-memory fallback so protection never disappears.
+    from config import settings as cfg
+    max_attempts = cfg.login_rate_limit_max_attempts
+    window_seconds = cfg.login_rate_limit_window_seconds
     ip = get_request_client_ip(request)
     redis_svc = await get_redis()
     if redis_svc is not None:
         try:
             login_key = f"login:ip:{ip}"
             allowed, _remaining = await redis_svc.check_rate_limit(
-                login_key, max_requests=5, window_seconds=300
+                login_key, max_requests=max_attempts, window_seconds=window_seconds
             )
             if not allowed:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=_("Too many login attempts. Please try again later.", locale=locale),
+                    headers={"Retry-After": str(window_seconds)},
                 )
         except HTTPException:
             raise
         except Exception:
             # Redis error — fall through to in-memory limiter.
-            allowed, _remaining = check_memory_sliding_window(
-                _login_attempt_history,
-                ip,
-                max_requests=_LOGIN_MAX_ATTEMPTS,
-                window_seconds=_LOGIN_WINDOW_SECONDS,
-            )
+            allowed, retry_after = _check_login_rate_limit(ip, max_attempts, window_seconds)
             if not allowed:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=_("Too many login attempts. Please try again later.", locale=locale),
+                    headers={"Retry-After": str(retry_after)},
                 )
     else:
-        allowed, _remaining = check_memory_sliding_window(
-            _login_attempt_history,
-            ip,
-            max_requests=_LOGIN_MAX_ATTEMPTS,
-            window_seconds=_LOGIN_WINDOW_SECONDS,
-        )
+        allowed, retry_after = _check_login_rate_limit(ip, max_attempts, window_seconds)
         if not allowed:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=_("Too many login attempts. Please try again later.", locale=locale),
+                headers={"Retry-After": str(retry_after)},
             )
 
     auth_service = AuthService(db)
 
-    admin = await auth_service.authenticate_admin(
-        email=req.email, password=req.password
-    )
-
-    if not admin:
+    try:
+        admin = await auth_service.authenticate_admin(
+            email=req.email, password=req.password
+        )
+    except AdminNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=_("Invalid credentials", locale=locale),
+            detail=_("No account found with this email", locale=locale),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except AdminDeactivatedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_("Account has been deactivated", locale=locale),
+        )
+    except AuthError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_("Incorrect password", locale=locale),
             headers={"WWW-Authenticate": "Bearer"},
         )
 

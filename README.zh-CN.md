@@ -60,7 +60,6 @@ sudo sh install-deploy.sh
 - `nginx/` — Docker nginx 配置
 - `r2r-config/` — R2R 向量数据库服务端配置
 - `docker-compose.yml` — 开发/生产风格环境编排入口
-- `frontend/` — 旧版前端，仅作历史参考；当前有效前端是 `frontend-nextjs/`
 
 ## 核心功能
 
@@ -425,7 +424,6 @@ pytest tests/test_api.py::test_name
 
 - `docker-compose.yml` 是当前的主要编排入口。
 - `install-deploy.sh` 是面向 Ubuntu/Debian 的一键生产部署脚本。可自动安装 Docker/Compose、clone 仓库、强制同步远端分支，并在部署前完成 `.env` 初始化。
-- 当前有效前端服务是 `frontend-nextjs`，不是旧的 `frontend/`。
 - nginx 已配置 `client_max_body_size 12m`，这样超大请求可以到达后端并返回 JSON 错误，而不是直接返回 nginx HTML 错误页。
 - 只有当 `./ssl` 中存在可读证书和私钥时，才会启用可选 HTTPS。
 - 当证书存在时，nginx 会在 443 提供 HTTPS，并将 80 上的 HTTP 请求自动重定向到 HTTPS。

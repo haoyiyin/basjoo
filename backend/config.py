@@ -170,6 +170,10 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 1000
     rate_limit_burst_size: int = 200
 
+    # Login rate limit
+    login_rate_limit_max_attempts: int = 5
+    login_rate_limit_window_seconds: int = 300
+
     # 日志
     log_level: str = "info"
 

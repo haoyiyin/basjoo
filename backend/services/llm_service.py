@@ -583,19 +583,22 @@ class OpenAINativeProvider(BaseLLMService):
             return False
 
     @staticmethod
-    async def list_models(api_key: str) -> List[str]:
+    async def list_models(
+        api_key: str,
+        base_url: str = "https://api.openai.com/v1",
+        model_prefixes: tuple[str, ...] = ("gpt-", "o1", "o3", "o4", "chatgpt-"),
+    ) -> List[str]:
         """获取可用模型列表"""
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(
             api_key=api_key,
-            base_url="https://api.openai.com/v1",
+            base_url=base_url,
         )
         models = await client.models.list()
-        # 过滤出聊天模型
         chat_models = [
             m.id for m in models.data
-            if m.id.startswith(("gpt-", "o1", "o3", "o4", "chatgpt-"))
+            if any(m.id.startswith(p) for p in model_prefixes)
         ]
         return sorted(chat_models, reverse=True)
 

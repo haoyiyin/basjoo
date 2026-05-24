@@ -39,7 +39,7 @@ class R2RRAGService:
         agent_id: str,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.3,
+        threshold: float = 0.01,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Retrieve relevant documents from R2R."""

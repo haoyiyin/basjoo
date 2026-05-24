@@ -254,7 +254,7 @@ class R2RClient:
         agent_id: str,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.3,
+        threshold: float = 0.01,
     ) -> list[dict[str, Any]]:
         """Search the agent's collection. Returns results compatible with current format."""
         collection_id = await self.ensure_collection(agent_id)

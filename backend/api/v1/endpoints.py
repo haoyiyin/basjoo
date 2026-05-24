@@ -528,7 +528,10 @@ async def prepare_chat_request(
     if authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
         if token:
-            admin_user = await AuthService(db).get_current_admin(token)
+            try:
+                admin_user = await AuthService(db).get_current_admin(token)
+            except Exception:
+                admin_user = None
 
     enforce_widget_origin_whitelist(agent, http_request, admin_user)
 
@@ -924,6 +927,9 @@ async def chat(
         )
 
     reply = replace_source_placeholders("".join(reply_parts), sources)
+    if not reply or not reply.strip():
+        logger.warning("LLM returned empty response for session %s", session_public_id)
+        reply = get_restricted_reply(_restricted_reply, "抱歉，我暂时无法回答这个问题，请换个方式提问。")
     real_usage = llm.get_last_usage()
     if real_usage:
         logger.info("chat usage from provider: %s", real_usage)
@@ -1133,6 +1139,10 @@ async def chat_stream(
             return
 
         reply = replace_source_placeholders("".join(reply_parts), sources)
+        if not reply or not reply.strip():
+            logger.warning("LLM returned empty stream response for session %s", session_public_id)
+            reply = get_restricted_reply(_restricted_reply, "抱歉，我暂时无法回答这个问题，请换个方式提问。")
+            yield sse_event("content", {"content": reply})
         real_usage = llm.get_last_usage()
         if real_usage:
             logger.info("chat stream usage from provider: %s", real_usage)
@@ -1723,6 +1733,12 @@ async def list_available_models(
     try:
         if request.provider_type == "openai_native":
             models = await OpenAINativeProvider.list_models(api_key)
+        elif request.provider_type == "deepseek":
+            models = await OpenAINativeProvider.list_models(
+                api_key,
+                base_url="https://api.deepseek.com/v1",
+                model_prefixes=("deepseek-",),
+            )
         elif request.provider_type == "google":
             models = await GoogleProvider.list_models(api_key)
         else:
@@ -2300,8 +2316,9 @@ async def admin_websocket(websocket: WebSocket):
 
     async with database.AsyncSessionLocal() as db:
         auth_service = AuthService(db)
-        admin = await auth_service.get_current_admin(token)
-        if not admin:
+        try:
+            admin = await auth_service.get_current_admin(token)
+        except Exception:
             await websocket.close(code=4003, reason="Invalid token")
             return
         if admin.role not in ("super_admin", "admin", "support"):

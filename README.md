@@ -55,7 +55,6 @@ sudo sh install-deploy.sh
 - `nginx/` — Docker nginx config
 - `r2r-config/` — R2R vector database server configuration
 - `docker-compose.yml` — dev/prod orchestration
-- `frontend/` — legacy frontend reference; the active frontend is `frontend-nextjs/`
 
 ## Core features
 
@@ -420,7 +419,6 @@ pytest tests/test_api.py::test_name
 
 - `docker-compose.yml` is the main orchestration entrypoint.
 - `install-deploy.sh` is the one-command production installer/deployer for Ubuntu and Debian. It can auto-install Docker/Compose, clone the repo, and force-sync an existing clone to the chosen remote branch before deploying.
-- The active frontend service is `frontend-nextjs`, not the legacy `frontend/` directory.
 - nginx is configured with `client_max_body_size 12m` so oversized requests can reach the backend and return JSON errors instead of nginx HTML errors.
 - Optional HTTPS is enabled only when readable certificate and key files exist in `./ssl`.
 - When certificates are present, nginx serves HTTPS on port 443 and redirects HTTP requests on port 80 to HTTPS automatically.

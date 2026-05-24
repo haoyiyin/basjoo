@@ -72,7 +72,7 @@ def mock_r2r_client(monkeypatch, request):
         async def delete_document(self, document_id: str) -> bool:
             return True
 
-        async def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = 0.3) -> list[dict]:
+        async def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = 0.01) -> list[dict]:
             chunks = store_data.get(agent_id, [])
             results = []
             query_lower = query.lower()
