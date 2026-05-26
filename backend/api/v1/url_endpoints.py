@@ -11,7 +11,9 @@ import asyncio
 import database
 from database import get_db
 from api.endpoints.auth import require_admin_or_super_admin
+from api.v1.endpoints import require_agent_for_admin
 from models import (
+    AdminUser,
     Agent,
     URLSource,
     WorkspaceQuota,
@@ -61,6 +63,12 @@ async def fetch_url_task(url_source_id: int):
 
             agent_id = url_source.agent_id
             url = url_source.url
+            agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
+            agent = agent_result.scalar_one_or_none()
+            if not agent or getattr(agent, "deleted_at", None):
+                logger.error(f"Agent {agent_id} not found for URL fetch")
+                return
+            workspace_id = agent.workspace_id if agent else 0
 
         success, error = await task_lock.acquire_task(agent_id, TaskType.URL_FETCH, task_id)
         if not success:
@@ -95,7 +103,11 @@ async def fetch_url_task(url_source_id: int):
                 return
 
             agent_scraper = URLScraper()
-            fetch_result = await agent_scraper.fetch(url)
+            fetch_result = await agent_scraper.fetch(
+                url,
+                agent_id=agent_id,
+                workspace_id=workspace_id,
+            )
 
             async with database.AsyncSessionLocal() as db:
                 result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
@@ -189,6 +201,7 @@ async def create_urls(
     request: URLCreateRequest,
     agent_id: str,
     background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -196,14 +209,7 @@ async def create_urls(
 
     根据PRD第8.3节规范
     """
-    # 获取Agent
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # 获取配额并加锁
     quota_result = await db.execute(
@@ -274,6 +280,7 @@ async def list_urls(
     status_filter: str = None,
     skip: int = 0,
     limit: int = 50,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -281,14 +288,7 @@ async def list_urls(
 
     根据PRD第8.3节规范
     """
-    # 获取配额
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     quota_result = await db.execute(
         select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
@@ -329,6 +329,7 @@ async def refetch_urls(
     request: URLRefetchRequest,
     agent_id: str,
     background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -336,6 +337,8 @@ async def refetch_urls(
 
     根据PRD第8.3节规范
     """
+    await require_agent_for_admin(db, agent_id, current_user)
+
     # 获取要重抓的URL
     query = select(URLSource).where(URLSource.agent_id == agent_id)
 
@@ -369,7 +372,10 @@ async def refetch_urls(
 @router.post("/urls:cancel")
 async def cancel_url_tasks(
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
 ):
+    await require_agent_for_admin(db, agent_id, current_user)
     cancelled = await task_lock.cancel_tasks(
         agent_id,
         {TaskType.URL_CRAWL, TaskType.URL_FETCH, TaskType.URL_REFETCH},
@@ -385,8 +391,11 @@ async def cancel_url_tasks(
 async def delete_url(
     url_id: int,
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    agent = await require_agent_for_admin(db, agent_id, current_user)
+
     result = await db.execute(
         select(URLSource).where(URLSource.id == url_id, URLSource.agent_id == agent_id)
     )
@@ -396,9 +405,6 @@ async def delete_url(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"URL {url_id} not found"
         )
-
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
 
     # Unassign R2R document from agent collection; do NOT delete globally (doc may be shared)
     if url_source.r2r_document_id:
@@ -413,7 +419,7 @@ async def delete_url(
             r2r = R2RClient()
             all_docs = await r2r.list_documents(agent_id)
             for doc in all_docs:
-                meta = (doc.get("metadata") or {})
+                meta = doc.get("metadata") or {}
                 if meta.get("source_type") == "url" and meta.get("url_source_id") == url_id:
                     doc_id = doc.get("id", doc.get("document_id", ""))
                     if doc_id:
@@ -423,15 +429,14 @@ async def delete_url(
 
     await db.delete(url_source)
 
-    if agent:
-        quota_result = await db.execute(
-            select(WorkspaceQuota).where(
-                WorkspaceQuota.workspace_id == agent.workspace_id
-            )
+    quota_result = await db.execute(
+        select(WorkspaceQuota).where(
+            WorkspaceQuota.workspace_id == agent.workspace_id
         )
-        quota = quota_result.scalar_one_or_none()
-        if quota:
-            quota.used_urls = max(0, quota.used_urls - 1)
+    )
+    quota = quota_result.scalar_one_or_none()
+    if quota:
+        quota.used_urls = max(0, quota.used_urls - 1)
 
     await db.commit()
 
@@ -445,15 +450,10 @@ async def discover_subpages(
     max_depth: int = 1,
     max_pages: int = 10,
     background_tasks: BackgroundTasks = None,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # Acquire quota lock upfront
     quota_result = await db.execute(
@@ -465,7 +465,11 @@ async def discover_subpages(
 
     agent_scraper = URLScraper()
     discovered_urls = await agent_scraper.discover_subpages(
-        url, max_depth=max_depth, max_pages=max_pages
+        url,
+        max_depth=max_depth,
+        max_pages=max_pages,
+        agent_id=agent_id,
+        workspace_id=agent.workspace_id,
     )
 
     # Deduplicate and filter out already-existing URLs in one pass
@@ -539,7 +543,7 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
         async with database.AsyncSessionLocal() as db:
             agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
             agent = agent_result.scalar_one_or_none()
-            if not agent:
+            if not agent or getattr(agent, "deleted_at", None):
                 logger.error(f"[site_crawl_task] Agent {agent_id} not found for site crawl")
                 return
             workspace_id = agent.workspace_id
@@ -661,6 +665,7 @@ async def crawl_site(
     request: SiteCrawlRequest,
     agent_id: str,
     background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -670,15 +675,7 @@ async def crawl_site(
     """
     logger.info(f"[crawl_site] Received request: agent_id={agent_id}, url={request.url}, depth={request.max_depth}, pages={request.max_pages}")
 
-    # 获取Agent
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        logger.error(f"[crawl_site] Agent {agent_id} not found")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # 检查配额
     quota_result = await db.execute(
@@ -727,19 +724,13 @@ async def crawl_site(
 @router.delete("/urls:clear_all")
 async def clear_all_urls(
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
     清空所有URL
     """
-    # 获取Agent
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # 获取所有URL
     result = await db.execute(

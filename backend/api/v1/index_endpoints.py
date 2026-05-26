@@ -8,7 +8,9 @@ import logging
 import database
 from database import get_db
 from api.endpoints.auth import require_admin_or_super_admin
+from api.v1.endpoints import require_agent_for_admin
 from models import (
+    AdminUser,
     Agent,
     URLSource,
     KnowledgeFile,
@@ -153,16 +155,11 @@ async def rebuild_index(
     request: IndexRebuildRequest,
     agent_id: str,
     background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """重建索引 — re-ingest URL content into R2R"""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    await require_agent_for_admin(db, agent_id, current_user)
 
     import uuid
     job_id = f"job_{uuid.uuid4().hex[:12]}"
@@ -188,9 +185,12 @@ async def rebuild_index(
 @router.get("/index:status")
 async def get_index_status(
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """获取索引任务状态"""
+    await require_agent_for_admin(db, agent_id, current_user)
+
     result = await db.execute(
         select(IndexJob)
         .where(IndexJob.agent_id == agent_id)
@@ -216,16 +216,11 @@ async def get_index_status(
 @router.get("/index:info")
 async def get_index_info(
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """获取索引信息"""
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    await require_agent_for_admin(db, agent_id, current_user)
 
     # Count URLs
     url_result = await db.execute(

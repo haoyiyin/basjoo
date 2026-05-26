@@ -9,7 +9,8 @@ import uuid
 import database
 from database import get_db
 from api.endpoints.auth import require_admin_or_super_admin
-from models import Agent, KnowledgeFile, WorkspaceQuota
+from api.v1.endpoints import require_agent_for_admin
+from models import AdminUser, Agent, KnowledgeFile, WorkspaceQuota
 from api.v1.schemas import FileUploadResponse, FileListResponse, FileItem
 from services.r2r_client import R2RClient
 
@@ -34,14 +35,11 @@ def _get_extension(filename: str) -> str:
 async def upload_files(
     agent_id: str,
     files: list[UploadFile] = File(...),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload file(s) and ingest them into R2R."""
-    # Verify agent exists
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # Check quota
     quota_result = await db.execute(
@@ -151,13 +149,11 @@ async def list_files(
     agent_id: str,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """List uploaded files for an agent."""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # Total count
     total_result = await db.execute(
@@ -168,7 +164,6 @@ async def list_files(
     total = total_result.scalar() or 0
 
     # Get quota
-    from models import WorkspaceQuota
     quota_result = await db.execute(
         select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
     )
@@ -208,9 +203,12 @@ async def list_files(
 async def delete_file(
     agent_id: str,
     file_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a file and its R2R document."""
+    await require_agent_for_admin(db, agent_id, current_user)
+
     result = await db.execute(
         select(KnowledgeFile).where(
             KnowledgeFile.id == file_id,
@@ -238,13 +236,11 @@ async def delete_file(
 @router.delete("/files:clear_all")
 async def clear_all_files(
     agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Clear all files for an agent."""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     # Delete all file records with their R2R documents
     files_result = await db.execute(

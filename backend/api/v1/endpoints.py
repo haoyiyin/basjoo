@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocke
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case, delete
+from sqlalchemy import select, func, case, delete, or_
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import Any, Dict, List, Optional
 import asyncio
@@ -12,7 +12,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import database
 from database import get_db
@@ -27,6 +27,7 @@ from models import (
     Workspace,
     WorkspaceQuota,
     AdminUser,
+    AgentMember,
 )
 from api.v1.schemas import (
     ChatRequest,
@@ -41,7 +42,12 @@ from api.v1.schemas import (
     FileListResponse,
     FileItem,
     AgentConfig,
+    AgentCreateRequest,
+    AgentListResponse,
     AgentUpdateRequest,
+    AgentMemberCreateRequest,
+    AgentMemberItem,
+    AgentMemberListResponse,
     IndexRebuildRequest,
     IndexRebuildResponse,
     ModelsListRequest,
@@ -127,10 +133,16 @@ def build_agent_config(agent: Agent) -> dict:
     api_key = get_agent_plaintext_keys(agent)
     jina_key = decrypt_api_key(agent.jina_api_key)
     siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
+    deleted_at = getattr(agent, "deleted_at", None)
+    is_active = bool(agent.is_active) and not deleted_at
     return {
         "id": agent.id,
+        "workspace_id": agent.workspace_id,
         "name": agent.name,
         "description": agent.description,
+        "agent_type": getattr(agent, "agent_type", None) or "website_support",
+        "channel_mode": getattr(agent, "channel_mode", None) or "web_widget",
+        "avatar": getattr(agent, "avatar", None),
         "system_prompt": agent.system_prompt,
         "model": agent.model,
         "temperature": agent.temperature,
@@ -172,10 +184,81 @@ def build_agent_config(agent: Agent) -> dict:
         "widget_color": agent.widget_color,
         "welcome_message": agent.welcome_message,
         "history_days": agent.history_days,
-        "is_active": agent.is_active,
+        "is_active": is_active,
+        "deleted_at": deleted_at,
+        "purge_after": getattr(agent, "purge_after", None),
+        "status": "deleted" if deleted_at else ("active" if agent.is_active else "inactive"),
+        "url_count": 0,
+        "file_count": 0,
+        "active_session_count": 0,
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
+
+
+def as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+async def build_agent_config_with_stats(agent: Agent, db: AsyncSession) -> dict:
+    config = build_agent_config(agent)
+    url_count = await db.scalar(
+        select(func.count(URLSource.id)).where(URLSource.agent_id == agent.id)
+    )
+    file_count = await db.scalar(
+        select(func.count(KnowledgeFile.id)).where(KnowledgeFile.agent_id == agent.id)
+    )
+    active_session_count = await db.scalar(
+        select(func.count(ChatSession.id)).where(
+            ChatSession.agent_id == agent.id,
+            ChatSession.status != "closed",
+        )
+    )
+    config.update(
+        {
+            "url_count": url_count or 0,
+            "file_count": file_count or 0,
+            "active_session_count": active_session_count or 0,
+        }
+    )
+    return config
+
+
+def ensure_agent_access(agent: Agent, current_user: AdminUser):
+    if getattr(agent, "deleted_at", None):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
+    if current_user.role == "super_admin":
+        return
+    if not any(member.admin_user_id == current_user.id for member in getattr(agent, "members", [])):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent access denied")
+
+
+async def require_agent_for_admin(
+    db: AsyncSession,
+    agent_id: str,
+    current_user: AdminUser,
+    include_deleted: bool = False,
+) -> Agent:
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+    if not include_deleted and getattr(agent, "deleted_at", None):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
+    if current_user.role != "super_admin":
+        member_result = await db.execute(
+            select(AgentMember).where(
+                AgentMember.agent_id == agent.id,
+                AgentMember.admin_user_id == current_user.id,
+            )
+        )
+        if not member_result.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent access denied")
+    return agent
 
 
 # 安全认证
@@ -202,7 +285,7 @@ async def get_current_agent(
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
 
-    if not agent:
+    if not agent or getattr(agent, "deleted_at", None):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
         )
@@ -1338,21 +1421,122 @@ async def get_contexts(
 # ========== Agent Management ==========
 
 
+@router.get("/agents", response_model=AgentListResponse)
+async def list_agents(
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Agent).where(
+        or_(Agent.purge_after.is_(None), Agent.purge_after > datetime.now(timezone.utc))
+    )
+    if current_user.role != "super_admin":
+        query = query.join(AgentMember).where(AgentMember.admin_user_id == current_user.id)
+    result = await db.execute(query.order_by(Agent.deleted_at, Agent.created_at, Agent.id))
+    agents = result.scalars().all()
+    return AgentListResponse(
+        agents=[await build_agent_config_with_stats(agent, db) for agent in agents],
+        total=len(agents),
+    )
+
+
+@router.post("/agents", response_model=AgentConfig, status_code=status.HTTP_201_CREATED)
+async def create_agent(
+    request: AgentCreateRequest,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    workspace = Workspace(
+        name=request.name,
+        owner_email=f"agent:{uuid.uuid4().hex}@basjoo.local",
+    )
+    db.add(workspace)
+    await db.flush()
+
+    quota = WorkspaceQuota(workspace_id=workspace.id)
+    db.add(quota)
+    await db.flush()
+
+    persona_type = request.persona_type or "general"
+    system_prompt = request.system_prompt
+    if not system_prompt and persona_type in PERSONA_PRESETS:
+        system_prompt = PERSONA_PRESETS[persona_type]
+    if not system_prompt:
+        system_prompt = "You are a helpful AI assistant."
+
+    agent = Agent(
+        workspace_id=workspace.id,
+        name=request.name,
+        description=request.description,
+        agent_type=request.agent_type,
+        channel_mode=request.channel_mode,
+        system_prompt=system_prompt,
+        model="deepseek-chat",
+        temperature=0.7,
+        max_tokens=DEFAULT_AGENT_MAX_TOKENS,
+        api_base="https://api.deepseek.com/v1",
+        provider_type="deepseek",
+        top_k=5,
+        similarity_threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
+        enable_context=False,
+        persona_type=persona_type,
+        widget_title=request.widget_title or request.name,
+        welcome_message=request.welcome_message or "您好！我是Basjoo助手，有什么可以帮您的吗？",
+    )
+    if settings.deepseek_api_key:
+        agent.api_key = encrypt_api_key(settings.deepseek_api_key)
+
+    db.add(agent)
+    db.add(AgentMember(agent=agent, admin_user_id=current_user.id, role="admin"))
+    await db.commit()
+    await db.refresh(agent)
+    return await build_agent_config_with_stats(agent, db)
+
+
 @router.get("/agent", response_model=AgentConfig)
 async def get_agent(
     agent_id: str,
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
+    agent = await require_agent_for_admin(db, agent_id, current_user)
+    return await build_agent_config_with_stats(agent, db)
 
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
 
-    return build_agent_config(agent)
+@router.delete("/agents/{agent_id}")
+async def deactivate_agent(
+    agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await require_agent_for_admin(db, agent_id, current_user, include_deleted=True)
+    if getattr(agent, "deleted_at", None):
+        return {"success": True}
+    now = datetime.now(timezone.utc)
+    agent.is_active = False
+    agent.deleted_at = now
+    agent.purge_after = now + timedelta(days=7)
+    agent.updated_at = now
+    await db.commit()
+    return {"success": True, "deleted_at": agent.deleted_at, "purge_after": agent.purge_after}
+
+
+@router.post("/agents/{agent_id}:restore", response_model=AgentConfig)
+async def restore_agent(
+    agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await require_agent_for_admin(db, agent_id, current_user, include_deleted=True)
+    purge_after = as_utc(agent.purge_after)
+    if purge_after and purge_after <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent purge window has expired")
+    agent.is_active = True
+    agent.deleted_at = None
+    agent.purge_after = None
+    agent.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(agent)
+    return await build_agent_config_with_stats(agent, db)
 
 
 @router.put("/agent", response_model=AgentConfig)
@@ -1362,13 +1546,7 @@ async def update_agent(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_for_admin(db, agent_id, current_user)
 
     update_data = request.model_dump(exclude_unset=True)
 
@@ -1409,7 +1587,106 @@ async def update_agent(
     await db.commit()
     await db.refresh(agent)
 
-    return build_agent_config(agent)
+    return await build_agent_config_with_stats(agent, db)
+
+
+@router.get("/agents/{agent_id}/members", response_model=AgentMemberListResponse)
+async def list_agent_members(
+    agent_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_for_admin(db, agent_id, current_user)
+    result = await db.execute(
+        select(AgentMember, AdminUser)
+        .join(AdminUser, AdminUser.id == AgentMember.admin_user_id)
+        .where(AgentMember.agent_id == agent_id)
+        .order_by(AgentMember.id.asc())
+    )
+    members = [
+        AgentMemberItem(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            is_active=user.is_active,
+            role=user.role,
+            member_role=member.role,
+        )
+        for member, user in result.all()
+    ]
+    return AgentMemberListResponse(members=members, total=len(members))
+
+
+@router.post("/agents/{agent_id}/members", response_model=AgentMemberItem, status_code=status.HTTP_201_CREATED)
+async def create_agent_member(
+    agent_id: str,
+    request: AgentMemberCreateRequest,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_for_admin(db, agent_id, current_user)
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super admins can add members")
+
+    result = await db.execute(select(AdminUser).where(AdminUser.email == request.email))
+    user = result.scalar_one_or_none()
+    auth_service = AuthService(db)
+    if not user:
+        if not request.password or len(request.password) < 8:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required for new users")
+        user = await auth_service.create_admin(
+            email=request.email,
+            password=request.password,
+            name=request.name or request.email,
+            role=request.role,
+        )
+    elif request.name:
+        user.name = request.name
+
+    member_result = await db.execute(
+        select(AgentMember).where(
+            AgentMember.agent_id == agent_id,
+            AgentMember.admin_user_id == user.id,
+        )
+    )
+    member = member_result.scalar_one_or_none()
+    if member:
+        member.role = request.role
+    else:
+        member = AgentMember(agent_id=agent_id, admin_user_id=user.id, role=request.role)
+        db.add(member)
+
+    await db.commit()
+    return AgentMemberItem(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        is_active=user.is_active,
+        role=user.role,
+        member_role=member.role,
+    )
+
+
+@router.delete("/agents/{agent_id}/members/{admin_id}")
+async def delete_agent_member(
+    agent_id: str,
+    admin_id: int,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_for_admin(db, agent_id, current_user)
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super admins can remove members")
+    if admin_id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove yourself")
+    await db.execute(
+        delete(AgentMember).where(
+            AgentMember.agent_id == agent_id,
+            AgentMember.admin_user_id == admin_id,
+        )
+    )
+    await db.commit()
+    return {"success": True}
 
 
 @router.get("/agent:jina-key-status")
@@ -1681,13 +1958,22 @@ async def get_quota(
         await db.commit()
         await db.refresh(quota)
 
+    agent_count_result = await db.execute(
+        select(func.count(Agent.id)).where(
+            Agent.workspace_id == agent.workspace_id,
+            Agent.is_active == True,
+            Agent.deleted_at.is_(None),
+        )
+    )
+    used_agents = agent_count_result.scalar() or 0
+
     return QuotaInfo(
         max_agents=quota.max_agents,
         max_urls=quota.max_urls,
         max_files=quota.max_qa_items,
         max_messages_per_day=quota.max_messages_per_day,
         max_total_text_mb=quota.max_total_text_mb,
-        used_agents=1,  # MVP固定为1
+        used_agents=used_agents,
         used_urls=quota.used_urls,
         used_files=quota.used_qa_items,
         used_messages_today=quota.used_messages_today,
@@ -1709,7 +1995,10 @@ async def get_default_agent(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Agent).where(Agent.is_active == True).order_by(Agent.created_at).limit(1)
+        select(Agent)
+        .where(Agent.is_active == True, Agent.deleted_at.is_(None))
+        .order_by(Agent.created_at)
+        .limit(1)
     )
     agent = result.scalar_one_or_none()
 
@@ -2150,6 +2439,7 @@ async def get_public_config(
 
 @router.get("/admin/sessions", response_model=SessionListResponse)
 async def list_sessions(
+    agent_id: Optional[str] = None,
     status: Optional[str] = None,
     keyword: Optional[str] = None,
     skip: int = 0,
@@ -2162,8 +2452,16 @@ async def list_sessions(
 
     支持按状态和关键词过滤
     """
-    # 构建查询
     query = select(ChatSession)
+    if agent_id:
+        await require_agent_for_admin(db, agent_id, current_user)
+        query = query.where(ChatSession.agent_id == agent_id)
+    elif current_user.role != "super_admin":
+        member_agent_ids = await db.execute(
+            select(AgentMember.agent_id).where(AgentMember.admin_user_id == current_user.id)
+        )
+        ids = [row[0] for row in member_agent_ids.all()]
+        query = query.where(ChatSession.agent_id.in_(ids or ["__none__"]))
 
     # 状态过滤
     if status:
@@ -2226,6 +2524,7 @@ async def get_session_messages(
     session = await resolve_admin_chat_session(db, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await require_agent_for_admin(db, session.agent_id, current_user)
 
     result = await db.execute(
         select(ChatMessage)
@@ -2259,6 +2558,7 @@ async def takeover_session(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await require_agent_for_admin(db, session.agent_id, current_user)
 
     session.status = "taken_over"
     await db.commit()
@@ -2286,6 +2586,7 @@ async def send_session_message(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await require_agent_for_admin(db, session.agent_id, current_user)
 
     # 检查会话是否被接管，只有接管状态才能发送人工消息
     if session.status != "taken_over":
