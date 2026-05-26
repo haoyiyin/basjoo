@@ -4,17 +4,19 @@ Uses curl_cffi for TLS-impersonated HTTP and readability-lxml for content extrac
 """
 
 import hashlib
+import ipaddress
 import logging
 import re
+import socket
 from datetime import datetime, timezone
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 
 from bs4 import BeautifulSoup
 import httpx
 from curl_cffi import requests as curl_requests
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from readability import Document
 
 logging.basicConfig(level=logging.INFO)
@@ -30,31 +32,76 @@ DEFAULT_HEADERS = {
 }
 
 
-def _fetch_with_fallback(url: str, timeout: int = 30):
-    """Fetch URL with curl_cffi first, falling back to httpx on failure."""
+def _is_unsafe_ip(host: str) -> bool:
     try:
-        resp = curl_requests.get(
-            url,
-            headers=DEFAULT_HEADERS,
-            timeout=timeout,
-            impersonate="chrome120",
-            allow_redirects=True,
-        )
-        return resp.text, resp.status_code, resp.url, resp.headers.get("content-type", "")
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if addr in ipaddress.ip_network("198.18.0.0/15"):
+        return False
+    return addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_multicast or addr.is_unspecified
+
+
+def _validate_fetch_url_safe(url: str):
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Unsafe redirect target scheme")
+    if parsed.username or parsed.password:
+        raise ValueError("Unsafe redirect target credentials")
+    hostname = parsed.hostname
+    if not hostname or hostname.lower() == "localhost":
+        raise ValueError("Unsafe redirect target host")
+    try:
+        ipaddress.ip_address(hostname)
+        raise ValueError("Unsafe redirect target IP literal")
+    except ValueError as e:
+        if "Unsafe" in str(e):
+            raise
+    for info in socket.getaddrinfo(hostname, None):
+        if _is_unsafe_ip(info[4][0]):
+            raise ValueError("Unsafe redirect target resolved IP")
+
+
+def _curl_get(url: str, timeout: int):
+    return curl_requests.get(
+        url,
+        headers=DEFAULT_HEADERS,
+        timeout=timeout,
+        impersonate="chrome120",
+        allow_redirects=False,
+    )
+
+
+def _httpx_get(url: str, timeout: int):
+    return httpx.get(url, headers=DEFAULT_HEADERS, timeout=timeout, follow_redirects=False)
+
+
+def _fetch_following_safe_redirects(url: str, timeout: int, getter):
+    current_url = url
+    for _ in range(6):
+        _validate_fetch_url_safe(current_url)
+        resp = getter(current_url, timeout)
+        status_code = resp.status_code
+        if status_code not in {301, 302, 303, 307, 308}:
+            return resp.text, status_code, str(resp.url), resp.headers.get("content-type", "")
+        location = resp.headers.get("location")
+        if not location:
+            return resp.text, status_code, str(resp.url), resp.headers.get("content-type", "")
+        current_url = urljoin(str(resp.url), location)
+    raise ValueError("Too many redirects")
+
+
+def _fetch_with_fallback(url: str, timeout: int = 30):
+    try:
+        return _fetch_following_safe_redirects(url, timeout, _curl_get)
     except Exception as e:
         logger.warning(f"curl_cffi failed for {url}: {e}, falling back to httpx")
-        resp = httpx.get(
-            url,
-            headers=DEFAULT_HEADERS,
-            timeout=timeout,
-            follow_redirects=True,
-        )
-        return resp.text, resp.status_code, str(resp.url), resp.headers.get("content-type", "")
+        return _fetch_following_safe_redirects(url, timeout, _httpx_get)
 
 
 class FetchRequest(BaseModel):
-    url: str
-    timeout: int = 60
+    url: str = Field(..., max_length=2048)
+    timeout: int = Field(60, ge=1, le=60)
 
 
 class FetchResponse(BaseModel):
@@ -67,9 +114,9 @@ class FetchResponse(BaseModel):
 
 
 class DiscoverRequest(BaseModel):
-    url: str
-    max_depth: int = 1
-    max_pages: int = 20
+    url: str = Field(..., max_length=2048)
+    max_depth: int = Field(1, ge=1, le=5)
+    max_pages: int = Field(20, ge=1, le=500)
 
 
 class DiscoverResponse(BaseModel):

@@ -1,6 +1,6 @@
 """URL管理API v1"""
 
-from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
@@ -29,24 +29,28 @@ from api.v1.schemas import (
 from services import URLNormalizer, SiteCrawler, TaskType, task_lock
 from services.r2r_client import R2RClient
 from services.scraper import URLScraper
+from services.url_index_cleanup import (
+    acquire_url_mutation_task,
+    cancel_url_tasks_for_agent,
+    cleanup_url_index_documents,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin_or_super_admin)])
 
 
-# ========== URL Management ==========
-
-
 async def _run_tracked_task(agent_id: str, task_id: str, coro):
     task = asyncio.current_task()
     if task:
         await task_lock.register_task_handle(agent_id, task_id, task)
-    await coro
+    try:
+        await coro
+    finally:
+        await task_lock.release_task(agent_id, task_id)
 
 
 async def fetch_url_task(url_source_id: int):
-    """异步抓取URL任务 - 使用短生命周期 DB session"""
     agent_id = None
     task_id = f"fetch_{url_source_id}"
 
@@ -133,6 +137,13 @@ async def fetch_url_task(url_source_id: int):
                     logger.info(f"Successfully fetched {url_source.url}")
 
                     # Auto-ingest into R2R so content is immediately searchable
+                    if task_lock.is_cancelled(agent_id, task_id):
+                        url_source.status = "failed"
+                        url_source.last_error = "Fetch cancelled by user"
+                        url_source.updated_at = func.now()
+                        await db.commit()
+                        return
+
                     try:
                         r2r = R2RClient()
                         # Unassign previous R2R document before re-ingesting changed content
@@ -175,10 +186,26 @@ async def fetch_url_task(url_source_id: int):
                         f"Failed to fetch {url_source.url}: {fetch_result.get('error')}"
                     )
         finally:
-            await task_lock.release_task(agent_id, task_id)
+            pass
 
     except asyncio.CancelledError:
         logger.info(f"fetch_url_task cancelled for URLSource {url_source_id}")
+        if agent_id:
+            try:
+                async with database.AsyncSessionLocal() as db:
+                    result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                    url_source = result.scalar_one_or_none()
+                    if url_source:
+                        try:
+                            await cleanup_url_index_documents(R2RClient(), agent_id, url_source)
+                        except Exception:
+                            logger.warning(f"Failed to clean R2R docs after cancellation for URLSource {url_source_id}")
+                        url_source.status = "failed"
+                        url_source.last_error = "Fetch cancelled by user"
+                        url_source.updated_at = func.now()
+                        await db.commit()
+            except Exception:
+                logger.exception("Failed to update URL fetch cancellation status")
         raise
     except Exception as e:
         logger.exception(f"Error in fetch_url_task: {e}")
@@ -194,6 +221,9 @@ async def fetch_url_task(url_source_id: int):
                         await db.commit()
             except Exception:
                 logger.exception("Failed to update URL fetch failure status")
+    finally:
+        if agent_id:
+            await task_lock.release_task(agent_id, task_id)
 
 
 @router.post("/urls:create")
@@ -204,69 +234,64 @@ async def create_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    创建URL知识源（批量）
-
-    根据PRD第8.3节规范
-    """
     agent = await require_agent_for_admin(db, agent_id, current_user)
+    mutation_task_id = "fetch_create"
+    await acquire_url_mutation_task(agent_id, mutation_task_id)
 
-    # 获取配额并加锁
-    quota_result = await db.execute(
-        select(WorkspaceQuota)
-        .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-        .with_for_update()
-    )
-    quota = quota_result.scalar_one_or_none()
-
-    if not quota:
-        quota = WorkspaceQuota(workspace_id=agent.workspace_id)
-        db.add(quota)
-        await db.flush()
-
-    # 检查配额（在锁保护下）
-    if quota.used_urls + len(request.urls) > quota.max_urls:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"URL quota exceeded. Max: {quota.max_urls}, Used: {quota.used_urls}",
+    try:
+        quota_result = await db.execute(
+            select(WorkspaceQuota)
+            .where(WorkspaceQuota.workspace_id == agent.workspace_id)
+            .with_for_update()
         )
+        quota = quota_result.scalar_one_or_none()
 
-    # 创建URL记录并同步更新配额
-    created_urls = []
-    for url in request.urls:
-        normalized = URLNormalizer.normalize(url)
+        if not quota:
+            quota = WorkspaceQuota(workspace_id=agent.workspace_id)
+            db.add(quota)
+            await db.flush()
 
-        existing = await db.execute(
-            select(URLSource).where(
-                URLSource.agent_id == agent_id, URLSource.normalized_url == normalized
+        if quota.used_urls + len(request.urls) > quota.max_urls:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"URL quota exceeded. Max: {quota.max_urls}, Used: {quota.used_urls}",
             )
-        )
-        if existing.scalar_one_or_none():
-            continue
 
-        url_source = URLSource(
-            agent_id=agent_id,
-            url=url,
-            normalized_url=normalized,
-            status="pending",
-        )
+        created_urls = []
+        for url in request.urls:
+            normalized = URLNormalizer.normalize(url)
+            existing = await db.execute(
+                select(URLSource).where(
+                    URLSource.agent_id == agent_id, URLSource.normalized_url == normalized
+                )
+            )
+            if existing.scalar_one_or_none():
+                continue
 
-        try:
-            async with db.begin_nested():
-                db.add(url_source)
-                await db.flush()
-                created_urls.append(url_source)
-                quota.used_urls += 1
-        except IntegrityError:
-            logger.info(f"URL {url} already exists (concurrent creation), skipping")
-            continue
+            url_source = URLSource(
+                agent_id=agent_id,
+                url=url,
+                normalized_url=normalized,
+                status="pending",
+            )
 
-    await db.commit()
+            try:
+                async with db.begin_nested():
+                    db.add(url_source)
+                    await db.flush()
+                    created_urls.append(url_source)
+                    quota.used_urls += 1
+            except IntegrityError:
+                logger.info(f"URL {url} already exists (concurrent creation), skipping")
+                continue
 
-    # 异步抓取
-    for url_source in created_urls:
-        task_id = f"fetch_{url_source.id}"
-        background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
+        await db.commit()
+
+        for url_source in created_urls:
+            task_id = f"fetch_{url_source.id}"
+            background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
+    finally:
+        await task_lock.release_task(agent_id, mutation_task_id)
 
     return {
         "created": len(created_urls),
@@ -278,16 +303,11 @@ async def create_urls(
 async def list_urls(
     agent_id: str,
     status_filter: str = None,
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    列出URL知识源
-
-    根据PRD第8.3节规范
-    """
     agent = await require_agent_for_admin(db, agent_id, current_user)
 
     quota_result = await db.execute(
@@ -295,7 +315,6 @@ async def list_urls(
     )
     quota = quota_result.scalar_one_or_none()
 
-    # 查询URL列表
     query = select(URLSource).where(URLSource.agent_id == agent_id)
 
     if status_filter:
@@ -306,7 +325,6 @@ async def list_urls(
     result = await db.execute(query)
     urls = result.scalars().all()
 
-    # 获取总数
     count_result = await db.execute(
         select(func.count(URLSource.id)).where(URLSource.agent_id == agent_id)
     )
@@ -332,35 +350,33 @@ async def refetch_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    重新抓取URL
-
-    根据PRD第8.3节规范
-    """
     await require_agent_for_admin(db, agent_id, current_user)
+    mutation_task_id = f"fetch_refetch_{agent_id}"
+    await acquire_url_mutation_task(agent_id, mutation_task_id)
 
-    # 获取要重抓的URL
-    query = select(URLSource).where(URLSource.agent_id == agent_id)
+    try:
+        query = select(URLSource).where(URLSource.agent_id == agent_id)
+        if request.url_ids:
+            query = query.where(URLSource.id.in_(request.url_ids))
 
-    if request.url_ids:
-        query = query.where(URLSource.id.in_(request.url_ids))
+        result = await db.execute(query)
+        urls = result.scalars().all()
 
-    result = await db.execute(query)
-    urls = result.scalars().all()
+        if not urls:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="No URLs found to refetch"
+            )
 
-    if not urls:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No URLs found to refetch"
-        )
+        job_id = f"job_refetch_{agent_id}"
+        for url_source in urls:
+            if request.force or url_source.status != "success":
+                url_source.status = "pending"
+                task_id = f"fetch_{url_source.id}"
+                background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
 
-    # 异步抓取
-    job_id = f"job_refetch_{agent_id}"
-    for url_source in urls:
-        if request.force or url_source.status != "success":
-            url_source.status = "pending"
-            background_tasks.add_task(fetch_url_task, url_source.id)
-
-    await db.commit()
+        await db.commit()
+    finally:
+        await task_lock.release_task(agent_id, mutation_task_id)
 
     return URLRefetchResponse(
         job_id=job_id,
@@ -406,39 +422,39 @@ async def delete_url(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"URL {url_id} not found"
         )
 
-    # Unassign R2R document from agent collection; do NOT delete globally (doc may be shared)
-    if url_source.r2r_document_id:
-        r2r = R2RClient()
-        try:
-            await r2r.unassign_document(agent_id, url_source.r2r_document_id)
-        except Exception as e:
-            logger.warning(f"Failed to unassign R2R doc {url_source.r2r_document_id}: {e}")
-    else:
-        # Best-effort cleanup for pre-migration URLs that lack r2r_document_id
-        try:
-            r2r = R2RClient()
-            all_docs = await r2r.list_documents(agent_id)
-            for doc in all_docs:
-                meta = doc.get("metadata") or {}
-                if meta.get("source_type") == "url" and meta.get("url_source_id") == url_id:
-                    doc_id = doc.get("id", doc.get("document_id", ""))
-                    if doc_id:
-                        await r2r.unassign_document(agent_id, str(doc_id))
-        except Exception as e:
-            logger.warning(f"Best-effort R2R doc cleanup failed for URL {url_id}: {e}")
+    delete_task_id = f"delete_{url_id}"
+    success, error = await task_lock.acquire_task(agent_id, TaskType.URL_DELETE, delete_task_id)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error)
 
-    await db.delete(url_source)
-
-    quota_result = await db.execute(
-        select(WorkspaceQuota).where(
-            WorkspaceQuota.workspace_id == agent.workspace_id
+    try:
+        await cancel_url_tasks_for_agent(agent_id)
+        result = await db.execute(
+            select(URLSource).where(URLSource.id == url_id, URLSource.agent_id == agent_id)
         )
-    )
-    quota = quota_result.scalar_one_or_none()
-    if quota:
-        quota.used_urls = max(0, quota.used_urls - 1)
+        url_source = result.scalar_one_or_none()
+        if not url_source:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"URL {url_id} not found"
+            )
 
-    await db.commit()
+        # Unassign R2R document from agent collection; do NOT delete globally (doc may be shared)
+        await cleanup_url_index_documents(R2RClient(), agent_id, url_source)
+
+        await db.delete(url_source)
+
+        quota_result = await db.execute(
+            select(WorkspaceQuota).where(
+                WorkspaceQuota.workspace_id == agent.workspace_id
+            )
+        )
+        quota = quota_result.scalar_one_or_none()
+        if quota:
+            quota.used_urls = max(0, quota.used_urls - 1)
+
+        await db.commit()
+    finally:
+        await task_lock.release_task(agent_id, delete_task_id)
 
     return {"message": "URL deleted successfully"}
 
@@ -446,76 +462,77 @@ async def delete_url(
 @router.post("/urls:discover")
 async def discover_subpages(
     agent_id: str,
-    url: str,
-    max_depth: int = 1,
-    max_pages: int = 10,
+    url: str = Query(..., max_length=2048),
+    max_depth: int = Query(1, ge=1, le=5),
+    max_pages: int = Query(10, ge=1, le=500),
     background_tasks: BackgroundTasks = None,
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
     agent = await require_agent_for_admin(db, agent_id, current_user)
+    mutation_task_id = "fetch_discover"
+    await acquire_url_mutation_task(agent_id, mutation_task_id)
 
-    # Acquire quota lock upfront
-    quota_result = await db.execute(
-        select(WorkspaceQuota)
-        .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-        .with_for_update()
-    )
-    quota = quota_result.scalar_one_or_none()
-
-    agent_scraper = URLScraper()
-    discovered_urls = await agent_scraper.discover_subpages(
-        url,
-        max_depth=max_depth,
-        max_pages=max_pages,
-        agent_id=agent_id,
-        workspace_id=agent.workspace_id,
-    )
-
-    # Deduplicate and filter out already-existing URLs in one pass
-    normalized_candidates = []
-    for discovered_url, _depth in discovered_urls:
-        normalized = URLNormalizer.normalize(discovered_url)
-        normalized_candidates.append((discovered_url, normalized))
-
-    existing_normalized = {
-        row.normalized_url
-        for row in (await db.execute(
-            select(URLSource.normalized_url).where(URLSource.agent_id == agent_id)
-        )).scalars().all()
-    }
-
-    to_insert = [
-        (url, norm) for url, norm in normalized_candidates
-        if norm not in existing_normalized
-    ]
-
-    # Apply quota cap
-    if quota:
-        remaining = max(0, quota.max_urls - quota.used_urls)
-        to_insert = to_insert[:remaining]
-
-    # Insert only new rows
-    created_urls = []
-    for discovered_url, normalized in to_insert:
-        url_source = URLSource(
-            agent_id=agent_id,
-            url=discovered_url,
-            normalized_url=normalized,
-            status="pending",
+    try:
+        quota_result = await db.execute(
+            select(WorkspaceQuota)
+            .where(WorkspaceQuota.workspace_id == agent.workspace_id)
+            .with_for_update()
         )
-        db.add(url_source)
-        created_urls.append(url_source)
+        quota = quota_result.scalar_one_or_none()
 
-    if quota:
-        quota.used_urls += len(created_urls)
+        agent_scraper = URLScraper()
+        discovered_urls = await agent_scraper.discover_subpages(
+            url,
+            max_depth=max_depth,
+            max_pages=max_pages,
+            agent_id=agent_id,
+            workspace_id=agent.workspace_id,
+        )
 
-    await db.commit()
+        normalized_candidates = []
+        for discovered_url, _depth in discovered_urls:
+            normalized = URLNormalizer.normalize(discovered_url)
+            normalized_candidates.append((discovered_url, normalized))
 
-    if background_tasks:
-        for url_source in created_urls:
-            task_id = f"fetch_{url_source.id}"
-            background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
+        existing_normalized = {
+            row.normalized_url
+            for row in (await db.execute(
+                select(URLSource.normalized_url).where(URLSource.agent_id == agent_id)
+            )).scalars().all()
+        }
+
+        to_insert = [
+            (url, norm) for url, norm in normalized_candidates
+            if norm not in existing_normalized
+        ]
+
+        if quota:
+            remaining = max(0, quota.max_urls - quota.used_urls)
+            to_insert = to_insert[:remaining]
+
+        created_urls = []
+        for discovered_url, normalized in to_insert:
+            url_source = URLSource(
+                agent_id=agent_id,
+                url=discovered_url,
+                normalized_url=normalized,
+                status="pending",
+            )
+            db.add(url_source)
+            created_urls.append(url_source)
+
+        if quota:
+            quota.used_urls += len(created_urls)
+
+        await db.commit()
+
+        if background_tasks:
+            for url_source in created_urls:
+                task_id = f"fetch_{url_source.id}"
+                background_tasks.add_task(_run_tracked_task, agent_id, task_id, fetch_url_task(url_source.id))
+    finally:
+        await task_lock.release_task(agent_id, mutation_task_id)
 
     return {
         "discovered": len(discovered_urls),
@@ -524,11 +541,7 @@ async def discover_subpages(
     }
 
 
-# ========== Site Crawl ==========
-
-
 async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: int):
-    """后台全站爬取任务 - 使用短生命周期 DB session"""
     task_id = f"crawl_{url[:50]}_{max_depth}_{max_pages}"
     logger.info(f"[site_crawl_task] Starting task {task_id} for agent {agent_id}")
 
@@ -624,8 +637,15 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                 logger.info(f"Site crawl completed for {url}: {len(to_insert)} pages added")
 
                 # Auto-ingest into R2R so crawled content is immediately searchable
+                if task_lock.is_cancelled(agent_id, task_id):
+                    logger.info(f"[site_crawl_task] Task {task_id} cancelled before R2R ingest")
+                    return
+
                 r2r = R2RClient()
                 for src in inserted_sources:
+                    if task_lock.is_cancelled(agent_id, task_id):
+                        logger.info(f"[site_crawl_task] Task {task_id} cancelled during R2R ingest")
+                        return
                     if src.content:
                         try:
                             doc = await r2r.ingest_text(
@@ -668,16 +688,10 @@ async def crawl_site(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    全站爬取：输入根URL，自动发现并抓取所有子页面
-
-    使用 URLScraper 发现并抓取站内页面内容
-    """
     logger.info(f"[crawl_site] Received request: agent_id={agent_id}, url={request.url}, depth={request.max_depth}, pages={request.max_pages}")
 
     agent = await require_agent_for_admin(db, agent_id, current_user)
 
-    # 检查配额
     quota_result = await db.execute(
         select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
     )
@@ -690,13 +704,11 @@ async def crawl_site(
             detail=f"URL quota exceeded. Max: {quota.max_urls}, Used: {quota.used_urls}",
         )
 
-    # 生成任务ID
     import uuid
     job_id = f"crawl_{uuid.uuid4().hex[:12]}"
 
     logger.info(f"[crawl_site] Adding background task for {request.url}, job_id={job_id}")
 
-    # 添加后台任务
     task_id = f"crawl_{request.url[:50]}_{request.max_depth}_{request.max_pages}"
     background_tasks.add_task(
         _run_tracked_task,
@@ -727,54 +739,56 @@ async def clear_all_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    清空所有URL
-    """
     agent = await require_agent_for_admin(db, agent_id, current_user)
+    delete_task_id = "delete_all"
+    success, error = await task_lock.acquire_task(agent_id, TaskType.URL_DELETE, delete_task_id)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error)
 
-    # 获取所有URL
-    result = await db.execute(
-        select(URLSource).where(URLSource.agent_id == agent_id)
-    )
-    url_sources = result.scalars().all()
-
-    deleted_count = len(url_sources)
-
-    # Unassign R2R documents from agent collection (docs may be shared, never delete globally)
-    r2r = R2RClient()
-    for url_source in url_sources:
-        if url_source.r2r_document_id:
-            try:
-                await r2r.unassign_document(agent_id, url_source.r2r_document_id)
-            except Exception as e:
-                logger.warning(f"Failed to unassign R2R doc {url_source.r2r_document_id}: {e}")
-    # Best-effort cleanup of pre-migration URL docs without stored r2r_document_id
     try:
-        all_docs = await r2r.list_documents(agent_id)
-        for doc in all_docs:
-            meta = (doc.get("metadata") or {})
-            if meta.get("source_type") == "url":
-                doc_id = doc.get("id", doc.get("document_id", ""))
-                if doc_id:
-                    await r2r.unassign_document(agent_id, str(doc_id))
-    except Exception as e:
-        logger.warning(f"Best-effort R2R URL doc cleanup failed: {e}")
+        await cancel_url_tasks_for_agent(agent_id)
 
-    # 删除所有URL记录
-    for url_source in url_sources:
-        await db.delete(url_source)
-
-    # 更新配额
-    quota_result = await db.execute(
-        select(WorkspaceQuota).where(
-            WorkspaceQuota.workspace_id == agent.workspace_id
+        # 获取所有URL
+        result = await db.execute(
+            select(URLSource).where(URLSource.agent_id == agent_id)
         )
-    )
-    quota = quota_result.scalar_one_or_none()
-    if quota:
-        quota.used_urls = 0
+        url_sources = result.scalars().all()
 
-    await db.commit()
+        deleted_count = len(url_sources)
+
+        # Unassign R2R documents from agent collection (docs may be shared, never delete globally)
+        r2r = R2RClient()
+        all_docs = None
+        cleaned_url_sources = []
+        try:
+            for url_source in url_sources:
+                all_docs = await cleanup_url_index_documents(r2r, agent_id, url_source, all_docs)
+                if url_source.is_indexed:
+                    cleaned_url_sources.append(url_source)
+        except HTTPException:
+            for cleaned_url_source in cleaned_url_sources:
+                cleaned_url_source.is_indexed = False
+                cleaned_url_source.r2r_document_id = None
+            await db.commit()
+            raise
+
+        # 删除所有URL记录
+        for url_source in url_sources:
+            await db.delete(url_source)
+
+        # 更新配额
+        quota_result = await db.execute(
+            select(WorkspaceQuota).where(
+                WorkspaceQuota.workspace_id == agent.workspace_id
+            )
+        )
+        quota = quota_result.scalar_one_or_none()
+        if quota:
+            quota.used_urls = 0
+
+        await db.commit()
+    finally:
+        await task_lock.release_task(agent_id, delete_task_id)
 
     return {
         "message": f"Successfully cleared {deleted_count} URLs",

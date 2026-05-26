@@ -109,6 +109,8 @@ class ContextResponse(BaseModel):
 
 def _validate_safe_ingest_url(url: str) -> str:
     normalized = (url or "").strip()
+    if len(normalized) > 2048:
+        raise ValueError("URL exceeds maximum length")
     safe, reason = validate_url_safe(normalized)
     if not safe:
         raise ValueError(f"Invalid URL: {normalized}")
@@ -154,7 +156,7 @@ class URLRefetchRequest(BaseModel):
     """重新抓取URL请求"""
 
     url_ids: Optional[List[int]] = Field(
-        None, description="要重抓的URL ID列表（不指定则全部重抓）"
+        None, max_length=500, description="要重抓的URL ID列表（不指定则全部重抓）"
     )
     force: bool = Field(False, description="是否强制重抓（忽略内容哈希）")
 
@@ -170,7 +172,7 @@ class URLRefetchResponse(BaseModel):
 class SiteCrawlRequest(BaseModel):
     """全站爬取请求"""
 
-    url: str = Field(..., description="起始URL")
+    url: str = Field(..., max_length=2048, description="起始URL")
     max_depth: int = Field(2, ge=1, le=5, description="最大爬取深度")
     max_pages: int = Field(20, ge=1, le=500, description="最大页面数量")
 
