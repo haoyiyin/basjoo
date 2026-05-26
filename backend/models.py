@@ -209,6 +209,7 @@ class URLSource(Base):
         JSON, nullable=True
     )  # etag, last_modified, content_length等
     is_indexed = Column(Boolean, nullable=False, default=False)  # 是否已训练
+    r2r_document_id = Column(String(100), nullable=True, index=True)  # R2R document id
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

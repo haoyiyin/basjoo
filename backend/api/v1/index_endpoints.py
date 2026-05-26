@@ -55,7 +55,7 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
 
                 # Determine which URL sources need ingestion:
                 # - force=False: only ingest URLs that haven't been indexed yet
-                # - force=True: re-ingest all successful URLs (may create minor duplicates, but safe)
+                # - force=True: re-ingest all successful URLs
                 if force:
                     url_result = await db.execute(
                         select(URLSource).where(
@@ -74,29 +74,46 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
 
                 # Ingest URL content (never delete the collection — files must be preserved)
                 ingested_count = 0
+                failed_count = 0
                 errors = []
                 for url_source in url_sources:
-                    if url_source.content:
-                        try:
-                            await r2r.ingest_text(
-                                agent_id=agent_id,
-                                text=url_source.content,
-                                title=url_source.title or url_source.url,
-                                metadata={
-                                    "url": url_source.url,
-                                    "title": url_source.title,
-                                    "source_type": "url",
-                                    "url_source_id": url_source.id,
-                                },
+                    if not url_source.content:
+                        continue
+                    # Always unassign existing R2R document before re-ingesting to avoid stale content
+                    # This handles both force rebuild and the case where previous refetch failed mid-way
+                    if url_source.r2r_document_id:
+                        unassigned = await r2r.unassign_document(agent_id, url_source.r2r_document_id)
+                        if not unassigned:
+                            failed_count += 1
+                            errors.append(
+                                f"URL {url_source.url}: failed to unassign old R2R doc "
+                                f"{url_source.r2r_document_id}; skipping to avoid stale content"
                             )
-                            ingested_count += 1
-                        except Exception as e:
-                            errors.append(f"URL {url_source.url}: {str(e)[:100]}")
-                            logger.warning(f"Failed to ingest URL {url_source.url}: {e}")
-
-                # Mark ingested URLs as indexed
-                for url_source in url_sources:
-                    url_source.is_indexed = True
+                            continue
+                        url_source.r2r_document_id = None
+                        url_source.is_indexed = False
+                    try:
+                        doc = await r2r.ingest_text(
+                            agent_id=agent_id,
+                            text=url_source.content,
+                            title=url_source.title or url_source.url,
+                            metadata={
+                                "url": url_source.url,
+                                "title": url_source.title,
+                                "source_type": "url",
+                                "url_source_id": url_source.id,
+                            },
+                        )
+                        r2r_doc_id = doc.get("id", doc.get("document_id", ""))
+                        if r2r_doc_id:
+                            url_source.r2r_document_id = str(r2r_doc_id)
+                        url_source.is_indexed = True
+                        ingested_count += 1
+                    except Exception as e:
+                        url_source.is_indexed = False
+                        failed_count += 1
+                        errors.append(f"URL {url_source.url}: {str(e)[:100]}")
+                        logger.warning(f"Failed to ingest URL {url_source.url}: {e}")
                 await db.commit()
 
                 # Update job status
@@ -107,6 +124,7 @@ async def rebuild_index_task(agent_id: str, job_id: str, force: bool = False):
                     job.completed_at = func.now()
                     job.result = {
                         "urls_ingested": ingested_count,
+                        "urls_failed": failed_count,
                         "errors": errors[:10],
                     }
                     await db.commit()

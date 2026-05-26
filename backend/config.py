@@ -133,6 +133,7 @@ class Settings(BaseSettings):
 
     # R2R 配置
     r2r_api_url: str = "http://r2r:7272"
+    r2r_config_dir: str = ""
 
     # JWT 认证
     secret_key: str = ""

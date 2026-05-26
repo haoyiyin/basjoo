@@ -161,7 +161,17 @@ class URLFetchScheduler:
                         try:
                             from services.r2r_client import R2RClient
                             r2r = R2RClient()
-                            await r2r.ingest_text(
+                            # Unassign old R2R document before re-ingesting changed content
+                            if url_source.r2r_document_id:
+                                unassigned = await r2r.unassign_document(agent_id, url_source.r2r_document_id)
+                                if not unassigned:
+                                    raise RuntimeError(
+                                        f"Failed to unassign old R2R document {url_source.r2r_document_id} "
+                                        f"for URL {url_source.url}; cannot re-ingest without removing stale content"
+                                    )
+                                url_source.r2r_document_id = None
+                                url_source.is_indexed = False
+                            doc = await r2r.ingest_text(
                                 agent_id=agent_id,
                                 text=url_source.content,
                                 title=url_source.title or url_source.url,
@@ -172,10 +182,15 @@ class URLFetchScheduler:
                                     "url_source_id": url_source.id,
                                 },
                             )
+                            r2r_doc_id = doc.get("id", doc.get("document_id", ""))
+                            if r2r_doc_id:
+                                url_source.r2r_document_id = str(r2r_doc_id)
                             url_source.is_indexed = True
                             await db.commit()
-                            logger.info(f"R2R ingest OK for changed URL {url_source.url}")
+                            logger.info(f"R2R ingest OK for changed URL {url_source.url} (doc_id={r2r_doc_id})")
                         except Exception as e:
+                            url_source.is_indexed = False
+                            await db.commit()
                             logger.warning(f"R2R ingest failed for changed URL {url_source.url}: {e}")
                 else:
                     url_source.status = "failed"

@@ -41,6 +41,8 @@ def mock_r2r_client(monkeypatch, request):
         return
 
     store_data: dict[str, list[dict]] = {}
+    collection_deleted: set[str] = set()
+    doc_deleted: set[str] = set()
 
     class FakeR2RClient:
         def __init__(self, base_url: str | None = None, timeout: float = 60.0):
@@ -49,28 +51,49 @@ def mock_r2r_client(monkeypatch, request):
         async def ensure_collection(self, agent_id: str) -> str:
             return f"col_{agent_id}"
 
+        async def _collection_id(self, agent_id: str) -> str | None:
+            col_id = f"col_{agent_id}"
+            if col_id in collection_deleted:
+                return None
+            return col_id
+
         async def delete_collection(self, agent_id: str) -> bool:
+            collection_deleted.add(f"col_{agent_id}")
             store_data.pop(agent_id, None)
             return True
 
         async def ingest_file(self, agent_id: str, file_content: bytes, filename: str, metadata: dict | None = None) -> dict:
-            doc_id = f"doc_{len(store_data.get(agent_id, []))}"
+            doc_id = f"doc_file_{len(store_data.get(agent_id, []))}"
             store_data.setdefault(agent_id, []).append({
+                "id": doc_id,
                 "content": f"[file:{filename}]",
                 "metadata": metadata or {},
             })
             return {"id": doc_id}
 
         async def ingest_text(self, agent_id: str, text: str, title: str, metadata: dict | None = None) -> dict:
-            doc_id = f"doc_{len(store_data.get(agent_id, []))}"
+            doc_id = f"doc_url_{len(store_data.get(agent_id, []))}"
             store_data.setdefault(agent_id, []).append({
+                "id": doc_id,
                 "content": text,
                 "metadata": {**(metadata or {}), "title": title},
             })
             return {"id": doc_id}
 
-        async def delete_document(self, document_id: str) -> bool:
+        async def unassign_document(self, agent_id: str, document_id: str) -> bool:
+            doc_deleted.add(document_id)
+            for aid, chunks in list(store_data.items()):
+                store_data[aid] = [c for c in chunks if c.get("id") != document_id]
             return True
+
+        async def delete_document(self, document_id: str) -> bool:
+            doc_deleted.add(document_id)
+            for aid, chunks in list(store_data.items()):
+                store_data[aid] = [c for c in chunks if c.get("id") != document_id]
+            return True
+
+        async def list_documents(self, agent_id: str) -> list[dict]:
+            return store_data.get(agent_id, [])
 
         async def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = 0.01) -> list[dict]:
             chunks = store_data.get(agent_id, [])

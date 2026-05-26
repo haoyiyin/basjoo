@@ -1306,7 +1306,7 @@ async def get_contexts(
             agent_id=agent_id,
             query=request.query,
             top_k=request.top_k,
-            threshold=DEFAULT_AGENT_SIMILARITY_THRESHOLD,
+            threshold=agent.similarity_threshold,
         )
     except Exception as error:
         logger.warning(f"RAG retrieval failed for contexts: {error}")
@@ -1509,7 +1509,35 @@ async def kb_setup(
             detail="SiliconFlow API key is required for siliconflow/custom embedding provider",
         )
 
-    # Save embedding settings
+    # Validate custom embedding provider has a valid base URL
+    if embedding_provider == "custom":
+        base_url = (request.embedding_api_base or "").strip()
+        if not base_url.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
+            )
+
+    # Write R2R config BEFORE persisting any agent changes, so we can fail safely
+    from services.r2r_config_generator import write_r2r_config
+
+    try:
+        write_r2r_config(
+            embedding_provider=embedding_provider,
+            embedding_model=request.embedding_model or "jina-embeddings-v3",
+            embedding_batch_size=request.embedding_batch_size or 16,
+            embedding_api_base=request.embedding_api_base,
+            jina_api_key=request.jina_api_key,
+            siliconflow_api_key=request.siliconflow_api_key,
+        )
+    except Exception as e:
+        logger.exception(f"Failed to write r2r config during kb_setup: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to write R2R configuration: {str(e)}",
+        )
+
+    # Save embedding settings — only after config write succeeded
     agent.embedding_provider = embedding_provider
     if request.embedding_api_base:
         agent.embedding_api_base = request.embedding_api_base
@@ -1525,22 +1553,6 @@ async def kb_setup(
     agent.kb_setup_completed = True
     await db.commit()
     await db.refresh(agent)
-
-    # Generate r2r.toml
-    from services.r2r_config_generator import write_r2r_config
-    jina_key = decrypt_api_key(agent.jina_api_key)
-    sf_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
-    try:
-        write_r2r_config(
-            embedding_provider=agent.embedding_provider,
-            embedding_model=agent.embedding_model,
-            embedding_batch_size=agent.embedding_batch_size,
-            embedding_api_base=agent.embedding_api_base,
-            jina_api_key=jina_key,
-            siliconflow_api_key=sf_key,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to write r2r.toml: {e}")
 
     return {
         **build_agent_config(agent),
@@ -1570,7 +1582,25 @@ async def kb_reset(
             detail="Knowledge base setup not completed yet.",
         )
 
-    # Delete all URLs for this agent
+    # Delete R2R collection FIRST; abort if deletion fails to avoid DB/R2R inconsistency
+    r2r = R2RClient()
+    try:
+        deleted = await r2r.delete_collection(agent_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="R2R collection deletion returned non-success; KB reset aborted to prevent stale content.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"R2R collection deletion failed during reset: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to delete R2R collection: {e}. KB reset aborted.",
+        )
+
+    # Delete all URLs for this agent (only after R2R deletion succeeded)
     await db.execute(
         delete(URLSource).where(URLSource.agent_id == agent_id)
     )
@@ -1586,13 +1616,6 @@ async def kb_reset(
     agent.kb_setup_completed = False
     await db.commit()
     await db.refresh(agent)
-
-    # Delete R2R collection
-    try:
-        r2r = R2RClient()
-        await r2r.delete_collection(agent_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete R2R collection during reset: {e}")
 
     return {
         "message": "Embedding 配置已重置。索引需要重构，所有文件需要重新上传。",

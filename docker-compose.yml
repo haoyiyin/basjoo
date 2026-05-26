@@ -56,8 +56,6 @@ services:
       - ./r2r-config/r2r.env
     environment:
       - R2R_CONFIG_PATH=/app/user_configs/r2r.toml
-      - JINA_API_KEY=${JINA_API_KEY:-}
-      - JINA_AI_API_KEY=${JINA_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
     ports:
       - "127.0.0.1:7272:7272"
@@ -119,12 +117,14 @@ services:
       - JINA_API_KEY=${JINA_API_KEY:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - ENCRYPTION_KEY_FILE=${ENCRYPTION_KEY_FILE:-/app/data/.encryption_key}
+      - R2R_CONFIG_DIR=/app/r2r-config
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=INFO
       - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
     volumes:
       - backend-data:/app/data
+      - ./r2r-config:/app/r2r-config
     depends_on:
       redis:
         condition: service_healthy
@@ -212,6 +212,7 @@ services:
       - JINA_API_KEY=${JINA_API_KEY:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - ENCRYPTION_KEY_FILE=${ENCRYPTION_KEY_FILE:-/app/data/.encryption_key}
+      - R2R_CONFIG_DIR=/app/r2r-config
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-1000}
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=DEBUG
@@ -219,6 +220,7 @@ services:
     volumes:
       - backend-data:/app/data
       - ./backend:/app
+      - ./r2r-config:/app/r2r-config
     depends_on:
       redis:
         condition: service_healthy

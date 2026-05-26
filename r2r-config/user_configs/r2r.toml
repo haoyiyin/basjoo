@@ -3,14 +3,13 @@ provider = "litellm"
 base_model = "jina_ai/jina-embeddings-v3"
 base_dimension = 1024
 batch_size = 16
-concurrent_request_limit = 2
+concurrent_request_limit = 256
 
 [completion_embedding]
 provider = "litellm"
 base_model = "jina_ai/jina-embeddings-v3"
 base_dimension = 1024
 batch_size = 16
-concurrent_request_limit = 2
 
 [ingestion]
 provider = "r2r"
@@ -21,15 +20,7 @@ automatic_extraction = false
 skip_document_summary = true
 
 [completion]
-provider = "litellm"
-concurrent_request_limit = 16
-
-    [completion.generation_config]
-    model = "deepseek/deepseek-chat"
-    temperature = 0.1
-    top_p = 1
-    max_tokens_to_sample = 1024
-    stream = false
+provider = "r2r"
 
 [database]
 provider = "postgres"

@@ -197,7 +197,7 @@ def test_migration_backfills_defaults():
         assert row["embedding_model"] == "jina-embeddings-v3"
         assert row["provider_type"] == "openai"  # inferred from api_base https://api.openai.com/v1
         assert row["top_k"] == 5
-        assert float(row["similarity_threshold"]) == pytest.approx(0.3)
+        assert float(row["similarity_threshold"]) == pytest.approx(0.01)
         assert row["enable_context"] == 0
         assert row["history_days"] == 30
         assert row["rate_limit_per_minute"] == 20

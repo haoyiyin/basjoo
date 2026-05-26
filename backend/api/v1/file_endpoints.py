@@ -221,15 +221,13 @@ async def delete_file(
     if not kf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Delete from R2R if we have the document ID
+    # Unassign from agent collection; do NOT delete globally (doc may be shared)
     if kf.r2r_document_id:
         r2r = R2RClient()
         try:
-            deleted = await r2r.delete_document(kf.r2r_document_id)
-            if not deleted:
-                logger.warning(f"R2R returned non-success for document deletion {kf.r2r_document_id}")
+            await r2r.unassign_document(agent_id, kf.r2r_document_id)
         except Exception as e:
-            logger.warning(f"Failed to delete R2R document {kf.r2r_document_id}: {e}")
+            logger.warning(f"Failed to unassign R2R doc {kf.r2r_document_id}: {e}")
 
     await db.delete(kf)
     await db.commit()
@@ -248,19 +246,19 @@ async def clear_all_files(
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
-    # Delete R2R collection
-    r2r = R2RClient()
-    try:
-        await r2r.delete_collection(agent_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete R2R collection: {e}")
-
-    # Delete all file records
+    # Delete all file records with their R2R documents
     files_result = await db.execute(
         select(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id)
     )
     files = files_result.scalars().all()
+
+    r2r = R2RClient()
     for f in files:
+        if f.r2r_document_id:
+            try:
+                await r2r.unassign_document(agent_id, f.r2r_document_id)
+            except Exception as e:
+                logger.warning(f"Failed to unassign R2R doc {f.r2r_document_id}: {e}")
         await db.delete(f)
 
     await db.commit()

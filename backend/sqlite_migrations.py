@@ -50,6 +50,9 @@ def _ensure_columns(
 
 
 
+_DEFAULT_SIMILARITY_THRESHOLD = 0.01
+
+
 def run_sqlite_migrations(database_url: str) -> None:
     """Apply all pending SQLite migrations idempotently.
 
@@ -97,6 +100,16 @@ def run_sqlite_migrations(database_url: str) -> None:
                 [
                     ("sender_type", "TEXT"),
                     ("sender_id", "TEXT"),
+                ],
+            )
+
+        # ── url_sources ───────────────────────────────────────────────────
+        if _table_exists(cursor, "url_sources"):
+            _ensure_columns(
+                cursor,
+                "url_sources",
+                [
+                    ("r2r_document_id", "VARCHAR(100)"),
                 ],
             )
 
@@ -202,7 +215,7 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("url_fetch_interval_days", "INTEGER DEFAULT 7"),
         ("enable_auto_fetch", "BOOLEAN DEFAULT 0"),
         ("top_k", "INTEGER DEFAULT 5"),
-        ("similarity_threshold", "FLOAT DEFAULT 0.3"),
+        ("similarity_threshold", f"FLOAT DEFAULT {_DEFAULT_SIMILARITY_THRESHOLD}"),
         ("enable_context", "BOOLEAN DEFAULT 0"),
         # rate-limit / error / widget
         ("restricted_reply", "TEXT DEFAULT '抱歉，当前服务受限，请稍后再试。'"),
@@ -307,9 +320,11 @@ def _backfill_agents(cursor: sqlite3.Cursor):
 
     # ── similarity_threshold ─────────────────────────────────────────────────
     if "similarity_threshold" in col_names:
+        # R2R uses RRF scores (≈0.01–0.05); old default 0.3 filters everything
         cursor.execute(
-            "UPDATE agents SET similarity_threshold = 0.3 "
-            "WHERE similarity_threshold IS NULL"
+            "UPDATE agents SET similarity_threshold = ? "
+            "WHERE similarity_threshold IS NULL OR similarity_threshold = 0.3",
+            (_DEFAULT_SIMILARITY_THRESHOLD,),
         )
 
     # ── rate_limit_per_minute ────────────────────────────────────────────────

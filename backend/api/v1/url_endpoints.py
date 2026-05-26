@@ -123,7 +123,17 @@ async def fetch_url_task(url_source_id: int):
                     # Auto-ingest into R2R so content is immediately searchable
                     try:
                         r2r = R2RClient()
-                        await r2r.ingest_text(
+                        # Unassign previous R2R document before re-ingesting changed content
+                        if url_source.r2r_document_id:
+                            unassigned = await r2r.unassign_document(agent_id, url_source.r2r_document_id)
+                            if not unassigned:
+                                raise RuntimeError(
+                                    f"Failed to unassign old R2R document {url_source.r2r_document_id} "
+                                    f"for URL {url_source.url}; cannot re-ingest without removing stale content"
+                                )
+                            url_source.r2r_document_id = None
+                            url_source.is_indexed = False
+                        doc = await r2r.ingest_text(
                             agent_id=agent_id,
                             text=url_source.content,
                             title=url_source.title or url_source.url,
@@ -134,10 +144,15 @@ async def fetch_url_task(url_source_id: int):
                                 "url_source_id": url_source.id,
                             },
                         )
+                        r2r_doc_id = doc.get("id", doc.get("document_id", ""))
+                        if r2r_doc_id:
+                            url_source.r2r_document_id = str(r2r_doc_id)
                         url_source.is_indexed = True
                         await db.commit()
-                        logger.info(f"R2R ingest OK for URL {url_source.url}")
+                        logger.info(f"R2R ingest OK for URL {url_source.url} (doc_id={r2r_doc_id})")
                     except Exception as e:
+                        url_source.is_indexed = False
+                        await db.commit()
                         logger.warning(f"R2R ingest failed for URL {url_source.url}: {type(e).__name__}: {e}")
                 else:
                     url_source.status = "failed"
@@ -385,6 +400,27 @@ async def delete_url(
     agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = agent_result.scalar_one_or_none()
 
+    # Unassign R2R document from agent collection; do NOT delete globally (doc may be shared)
+    if url_source.r2r_document_id:
+        r2r = R2RClient()
+        try:
+            await r2r.unassign_document(agent_id, url_source.r2r_document_id)
+        except Exception as e:
+            logger.warning(f"Failed to unassign R2R doc {url_source.r2r_document_id}: {e}")
+    else:
+        # Best-effort cleanup for pre-migration URLs that lack r2r_document_id
+        try:
+            r2r = R2RClient()
+            all_docs = await r2r.list_documents(agent_id)
+            for doc in all_docs:
+                meta = (doc.get("metadata") or {})
+                if meta.get("source_type") == "url" and meta.get("url_source_id") == url_id:
+                    doc_id = doc.get("id", doc.get("document_id", ""))
+                    if doc_id:
+                        await r2r.unassign_document(agent_id, str(doc_id))
+        except Exception as e:
+            logger.warning(f"Best-effort R2R doc cleanup failed for URL {url_id}: {e}")
+
     await db.delete(url_source)
 
     if agent:
@@ -398,8 +434,6 @@ async def delete_url(
             quota.used_urls = max(0, quota.used_urls - 1)
 
     await db.commit()
-
-    # Note: R2R content for this URL will be cleaned up on next index rebuild
 
     return {"message": "URL deleted successfully"}
 
@@ -590,7 +624,7 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                 for src in inserted_sources:
                     if src.content:
                         try:
-                            await r2r.ingest_text(
+                            doc = await r2r.ingest_text(
                                 agent_id=agent_id,
                                 text=src.content,
                                 title=src.title or src.url,
@@ -601,8 +635,12 @@ async def site_crawl_task(agent_id: str, url: str, max_depth: int, max_pages: in
                                     "url_source_id": src.id,
                                 },
                             )
+                            r2r_doc_id = doc.get("id", doc.get("document_id", ""))
+                            if r2r_doc_id:
+                                src.r2r_document_id = str(r2r_doc_id)
                             src.is_indexed = True
                         except Exception as e:
+                            src.is_indexed = False
                             logger.warning(f"R2R ingest failed for crawled URL {src.url}: {type(e).__name__}: {e}")
                 await db.commit()
 
@@ -711,6 +749,26 @@ async def clear_all_urls(
 
     deleted_count = len(url_sources)
 
+    # Unassign R2R documents from agent collection (docs may be shared, never delete globally)
+    r2r = R2RClient()
+    for url_source in url_sources:
+        if url_source.r2r_document_id:
+            try:
+                await r2r.unassign_document(agent_id, url_source.r2r_document_id)
+            except Exception as e:
+                logger.warning(f"Failed to unassign R2R doc {url_source.r2r_document_id}: {e}")
+    # Best-effort cleanup of pre-migration URL docs without stored r2r_document_id
+    try:
+        all_docs = await r2r.list_documents(agent_id)
+        for doc in all_docs:
+            meta = (doc.get("metadata") or {})
+            if meta.get("source_type") == "url":
+                doc_id = doc.get("id", doc.get("document_id", ""))
+                if doc_id:
+                    await r2r.unassign_document(agent_id, str(doc_id))
+    except Exception as e:
+        logger.warning(f"Best-effort R2R URL doc cleanup failed: {e}")
+
     # 删除所有URL记录
     for url_source in url_sources:
         await db.delete(url_source)
@@ -726,8 +784,6 @@ async def clear_all_urls(
         quota.used_urls = 0
 
     await db.commit()
-
-    # Note: R2R content will be cleaned up on next index rebuild
 
     return {
         "message": f"Successfully cleared {deleted_count} URLs",
