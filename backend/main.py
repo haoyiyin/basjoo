@@ -13,7 +13,12 @@ from api.v1 import endpoints as v1_endpoints
 from api.v1 import url_endpoints as v1_url_endpoints
 from api.v1 import index_endpoints as v1_index_endpoints
 from api.v1 import file_endpoints as v1_file_endpoints
-from services.scheduler import url_fetch_scheduler, history_cleanup_scheduler, session_auto_close_scheduler
+from services.scheduler import (
+    agent_purge_scheduler,
+    url_fetch_scheduler,
+    history_cleanup_scheduler,
+    session_auto_close_scheduler,
+)
 from services.redis_service import get_redis, close_redis
 from middleware import RateLimitMiddleware, apply_cors_headers, get_request_client_ip
 from middleware.rate_limit import apply_cors_headers as apply_early_cors_headers
@@ -58,6 +63,11 @@ async def lifespan(app: FastAPI):
         logger.info("启动会话自动关闭调度器...")
         session_auto_close_scheduler.start()
         logger.info("会话自动关闭调度器已启动")
+
+        logger.info("启动智能体清理调度器...")
+        await agent_purge_scheduler.purge_expired_agents()
+        agent_purge_scheduler.start()
+        logger.info("智能体清理调度器已启动")
     else:
         logger.info("测试模式已启用，跳过 Redis 和调度器启动")
 
@@ -75,6 +85,10 @@ async def lifespan(app: FastAPI):
         logger.info("停止会话自动关闭调度器...")
         session_auto_close_scheduler.stop()
         logger.info("会话自动关闭调度器已停止")
+
+        logger.info("停止智能体清理调度器...")
+        agent_purge_scheduler.stop()
+        logger.info("智能体清理调度器已停止")
 
         # 关闭 Redis 连接
         logger.info("关闭 Redis 连接...")

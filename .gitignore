@@ -67,6 +67,7 @@ lerna-debug.log*
 dist/
 dist-ssr/
 *.local
+frontend-nextjs/.next/
 frontend/dist/
 widget/dist/
 build/

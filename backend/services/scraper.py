@@ -6,6 +6,7 @@ import logging
 
 from services.url_safety import validate_url_safe
 from services.scrapling_client import get_scrapling_client
+from services.scraping_provider import fetch_with_provider, discover_with_provider
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,12 @@ class URLScraper:
             self._scrapling_client = get_scrapling_client()
         return self._scrapling_client
 
-    async def fetch(self, url: str) -> Dict[str, Any]:
+    async def fetch(
+        self,
+        url: str,
+        agent_id: str | None = None,
+        workspace_id: int | None = None,
+    ) -> Dict[str, Any]:
         """
         抓取URL并提取主要内容
 
@@ -47,8 +53,15 @@ class URLScraper:
             }
 
         try:
-            client = self._get_client()
-            result = await client.fetch(url)
+            if agent_id and workspace_id is not None:
+                result = await fetch_with_provider(
+                    url=url,
+                    agent_id=agent_id,
+                    workspace_id=workspace_id,
+                )
+            else:
+                client = self._get_client()
+                result = await client.fetch(url)
 
             if result.get("success"):
                 logger.info(
@@ -73,7 +86,12 @@ class URLScraper:
             }
 
     async def discover_subpages(
-        self, url: str, max_depth: int = 1, max_pages: int = 20
+        self,
+        url: str,
+        max_depth: int = 1,
+        max_pages: int = 20,
+        agent_id: str | None = None,
+        workspace_id: int | None = None,
     ) -> List[Tuple[str, int]]:
         """
         发现URL的子页面
@@ -93,10 +111,19 @@ class URLScraper:
             return []
 
         try:
-            client = self._get_client()
-            discovered = await client.discover_subpages(
-                url, max_depth=max_depth, max_pages=max_pages
-            )
+            if agent_id and workspace_id is not None:
+                discovered = await discover_with_provider(
+                    url=url,
+                    agent_id=agent_id,
+                    workspace_id=workspace_id,
+                    max_depth=max_depth,
+                    max_pages=max_pages,
+                )
+            else:
+                client = self._get_client()
+                discovered = await client.discover_subpages(
+                    url, max_depth=max_depth, max_pages=max_pages
+                )
             logger.info(f"Discovered {len(discovered)} subpages from {url}")
             return discovered
 

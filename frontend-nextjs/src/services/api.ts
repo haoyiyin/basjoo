@@ -48,11 +48,17 @@ export interface Source {
 export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian' | 'siliconflow';
 
 export type EmbeddingProvider = 'jina' | 'siliconflow' | 'custom' | 'r2r'
+export type AgentType = 'website_support' | 'ai_clone' | 'sales_outreach' | 'custom'
+export type AgentChannelMode = 'web_widget' | 'whatsapp' | 'email' | 'custom'
 
 export interface Agent {
   id: string;
+  workspace_id?: number;
   name: string;
   description?: string;
+  agent_type?: AgentType;
+  channel_mode?: AgentChannelMode;
+  avatar?: string | null;
   system_prompt: string;
   model: string;
   temperature: number;
@@ -102,8 +108,30 @@ export interface Agent {
   history_days?: number;
   allowed_widget_origins?: string[] | null;
   is_active: boolean;
+  deleted_at?: string | null;
+  purge_after?: string | null;
+  status?: 'active' | 'inactive' | 'deleted';
+  url_count?: number;
+  file_count?: number;
+  active_session_count?: number;
   created_at: string;
   updated_at?: string;
+}
+
+export interface AgentMember {
+  id: number;
+  email: string;
+  name: string;
+  is_active: boolean;
+  role: string;
+  member_role: 'admin' | 'support';
+}
+
+export interface AgentMemberCreateInput {
+  email: string;
+  name?: string;
+  password?: string;
+  role: 'admin' | 'support';
 }
 
 export interface URLSource {
@@ -144,6 +172,17 @@ export interface Quota {
   remaining_messages_today: number;
 }
 
+export interface AgentCreateInput {
+  name: string;
+  description?: string;
+  agent_type?: AgentType;
+  channel_mode?: AgentChannelMode;
+  system_prompt?: string;
+  persona_type?: string;
+  widget_title?: string;
+  welcome_message?: string;
+}
+
 export async function parseErrorResponse(response: Response): Promise<string> {
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
 
@@ -173,6 +212,7 @@ export async function parseErrorResponse(response: Response): Promise<string> {
 
 class APIService {
   private baseUrl: string;
+  private selectedAgentStorageKey = 'basjoo_selected_agent_id';
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
@@ -199,6 +239,23 @@ class APIService {
     }
 
     return this.baseUrl;
+  }
+
+  getSelectedAgentId(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(this.selectedAgentStorageKey);
+  }
+
+  setSelectedAgentId(agentId: string) {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(this.selectedAgentStorageKey, agentId);
+    window.dispatchEvent(new CustomEvent('basjoo-agent-changed', { detail: { agentId } }));
+  }
+
+  clearSelectedAgentId() {
+    if (typeof window === 'undefined') return;
+    localStorage.removeItem(this.selectedAgentStorageKey);
+    window.dispatchEvent(new CustomEvent('basjoo-agent-changed', { detail: { agentId: null } }));
   }
 
   private async request<T>(
@@ -429,7 +486,57 @@ class APIService {
   }
 
   // Agent APIs
+  async listAgents(): Promise<{ agents: Agent[]; total: number }> {
+    return this.request<{ agents: Agent[]; total: number }>('/api/v1/agents');
+  }
+
+  async createAgent(input: AgentCreateInput): Promise<Agent> {
+    const agent = await this.request<Agent>('/api/v1/agents', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    this.setSelectedAgentId(agent.id);
+    return agent;
+  }
+
+  async deleteAgent(agentId: string): Promise<{ success: boolean; deleted_at?: string; purge_after?: string }> {
+    return this.request<{ success: boolean; deleted_at?: string; purge_after?: string }>(`/api/v1/agents/${agentId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async restoreAgent(agentId: string): Promise<Agent> {
+    return this.request<Agent>(`/api/v1/agents/${agentId}:restore`, {
+      method: 'POST',
+    });
+  }
+
+  async listAgentMembers(agentId: string): Promise<{ members: AgentMember[]; total: number }> {
+    return this.request<{ members: AgentMember[]; total: number }>(`/api/v1/agents/${agentId}/members`);
+  }
+
+  async createAgentMember(agentId: string, input: AgentMemberCreateInput): Promise<AgentMember> {
+    return this.request<AgentMember>(`/api/v1/agents/${agentId}/members`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteAgentMember(agentId: string, adminId: number): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/api/v1/agents/${agentId}/members/${adminId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async getDefaultAgent(): Promise<Agent> {
+    const selectedAgentId = this.getSelectedAgentId();
+    if (selectedAgentId) {
+      try {
+        return await this.getAgent(selectedAgentId);
+      } catch (error) {
+        this.clearSelectedAgentId();
+      }
+    }
     return this.request<Agent>('/api/v1/agent:default');
   }
 
@@ -715,12 +822,15 @@ class APIService {
   }
 
   // Admin API methods
-  async getAdminSessions(params?: { visitor_id?: string; keyword?: string }): Promise<any[]> {
+  async getAdminSessions(params?: { agent_id?: string; visitor_id?: string; keyword?: string }): Promise<any[]> {
     let url = '/api/v1/admin/sessions?';
+    if (params?.agent_id) {
+      url += `agent_id=${params.agent_id}`;
+    }
     if (params?.visitor_id) {
-      url += `visitor_id=${params.visitor_id}`;
+      url += `${url.endsWith('?') ? '' : '&'}visitor_id=${params.visitor_id}`;
     } else if (params?.keyword) {
-      url += `keyword=${params.keyword}`;
+      url += `${url.endsWith('?') ? '' : '&'}keyword=${params.keyword}`;
     }
     return this.request(url);
   }

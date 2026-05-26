@@ -78,6 +78,38 @@ def run_sqlite_migrations(database_url: str) -> None:
             # Dedicated per-column backfills (after all columns definitely exist)
             _backfill_agents(cursor)
 
+        # ── agent_members ─────────────────────────────────────────────────
+        if _table_exists(cursor, "agents") and _table_exists(cursor, "admin_users"):
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_members (
+                    id INTEGER PRIMARY KEY,
+                    agent_id VARCHAR(50) NOT NULL,
+                    admin_user_id INTEGER NOT NULL,
+                    role VARCHAR(50) NOT NULL DEFAULT 'admin',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id),
+                    FOREIGN KEY(admin_user_id) REFERENCES admin_users(id),
+                    UNIQUE(agent_id, admin_user_id)
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS ix_agent_members_agent_id ON agent_members(agent_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS ix_agent_members_admin_user_id ON agent_members(admin_user_id)"
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO agent_members (agent_id, admin_user_id, role)
+                SELECT agents.id, admin_users.id, 'admin'
+                FROM agents
+                CROSS JOIN admin_users
+                WHERE admin_users.role = 'super_admin'
+                """
+            )
+
         # ── chat_sessions ──────────────────────────────────────────────────
         if _table_exists(cursor, "chat_sessions"):
             _ensure_columns(
@@ -144,6 +176,14 @@ def run_sqlite_migrations(database_url: str) -> None:
         # ── workspace_quotas backfill ──────────────────────────────────────
         if _table_exists(cursor, "workspace_quotas"):
             cursor.execute(
+                "UPDATE workspace_quotas SET max_agents = 10 WHERE max_agents IS NULL OR max_agents < 10"
+            )
+            if cursor.rowcount > 0:
+                print(
+                    f"✓ Backfilled workspace_quotas.max_agents for "
+                    f"{cursor.rowcount} row(s)"
+                )
+            cursor.execute(
                 "UPDATE workspace_quotas SET max_urls = 500 WHERE max_urls = 50"
             )
             if cursor.rowcount > 0:
@@ -193,6 +233,11 @@ def _migrate_agents(cursor: sqlite3.Cursor):
     """
     columns: List[Tuple[str, str]] = [
         # LLM / provider
+        ("agent_type", "VARCHAR(50) DEFAULT 'website_support'"),
+        ("channel_mode", "VARCHAR(50) DEFAULT 'web_widget'"),
+        ("avatar", "VARCHAR(500)"),
+        ("deleted_at", "DATETIME"),
+        ("purge_after", "DATETIME"),
         ("provider_type", "VARCHAR(50)"),
         ("azure_endpoint", "VARCHAR(500)"),
         ("azure_deployment_name", "VARCHAR(100)"),
@@ -310,6 +355,16 @@ def _backfill_agents(cursor: sqlite3.Cursor):
         cursor.execute(
             "UPDATE agents SET persona_type = 'general' "
             "WHERE persona_type IS NULL OR persona_type = ''"
+        )
+    if "agent_type" in col_names:
+        cursor.execute(
+            "UPDATE agents SET agent_type = 'website_support' "
+            "WHERE agent_type IS NULL OR agent_type = ''"
+        )
+    if "channel_mode" in col_names:
+        cursor.execute(
+            "UPDATE agents SET channel_mode = 'web_widget' "
+            "WHERE channel_mode IS NULL OR channel_mode = ''"
         )
 
     # ── top_k ────────────────────────────────────────────────────────────────

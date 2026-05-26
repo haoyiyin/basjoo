@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { useParams } from 'react-router-dom';
 import { api } from '../services/api'
 import type { Agent as ApiAgent, ChatRequest, Source, StreamDoneMeta, UsageInfo } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
@@ -20,6 +21,7 @@ type TabType = 'settings' | 'preview';
 
 export default function Playground() {
   const { t, i18n } = useTranslation('common');
+  const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
   const isMobile = useIsMobile();
   const [agentId, setAgentId] = useState<string | null>(null);
   const [agent, setAgent] = useState<ChatPanelAgent | null>(null);
@@ -43,11 +45,12 @@ export default function Playground() {
 
   useEffect(() => {
     loadDefaultAgent();
-  }, []);
+  }, [routeAgentId]);
 
   const loadDefaultAgent = async () => {
     try {
-      const data = await api.getDefaultAgent();
+      if (!routeAgentId) return;
+      const data = await api.getAgent(routeAgentId);
       setAgent(data);
       setAgentId(data.id);
       setChatParams({
@@ -414,7 +417,7 @@ export default function Playground() {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {activeTab === 'settings' ? (
               <div style={{ height: '100%', overflow: 'auto' }}>
-                <AISettingsForm compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+                <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
               </div>
             ) : (
               <ChatPanel
@@ -503,7 +506,7 @@ export default function Playground() {
             </div>
           </div>
           <div style={{ flex: 1, overflow: 'auto' }}>
-            <AISettingsForm compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+            <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
           </div>
         </div>
 

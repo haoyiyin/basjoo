@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import AdminLayout from '../components/AdminLayout'
 import HelpTooltip from '../components/HelpTooltip'
@@ -21,6 +21,7 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 export default function SystemSettings() {
   const { t, i18n } = useTranslation('common')
   const navigate = useNavigate()
+  const { agentId: routeAgentId } = useParams<{ agentId?: string }>()
   const isMobile = useIsMobile()
   const { theme, setTheme } = useTheme()
   const [loading, setLoading] = useState(true)
@@ -117,7 +118,11 @@ export default function SystemSettings() {
       setLoading(true)
       setError(null)
 
-      const agentData = await api.getDefaultAgent()
+      if (!routeAgentId) {
+        navigate('/')
+        return
+      }
+      const agentData = await api.getAgent(routeAgentId)
       setAgent(agentData)
       setSettings({
         agent_id: agentData.id || '',

@@ -18,6 +18,7 @@ interface ChatParamOverrides {
 }
 
 interface AISettingsFormProps {
+  agentId?: string;
   compact?: boolean;
   refreshSignal?: number;
   onSave?: (updatedAgent?: Agent) => void;
@@ -26,7 +27,7 @@ interface AISettingsFormProps {
   onSaveError?: () => void;
 }
 
-export default function AISettingsForm({ compact = false, refreshSignal, onSave, onChatParamsChange, onSaveBusyChange, onSaveError }: AISettingsFormProps) {
+export default function AISettingsForm({ agentId, compact = false, refreshSignal, onSave, onChatParamsChange, onSaveBusyChange, onSaveError }: AISettingsFormProps) {
   const { t } = useTranslation('common')
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
@@ -82,7 +83,7 @@ export default function AISettingsForm({ compact = false, refreshSignal, onSave,
     try {
       setLoading(true)
       setError(null)
-      const agentData = await api.getDefaultAgent()
+      const agentData = agentId ? await api.getAgent(agentId) : await api.getDefaultAgent()
       suppressAutoSaveRef.current = true
       setAgent(agentData)
 

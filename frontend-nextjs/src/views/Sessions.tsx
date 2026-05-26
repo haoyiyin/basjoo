@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
 import HelpTooltip from '../components/HelpTooltip'
@@ -40,6 +41,7 @@ interface Message {
 
 export default function Sessions() {
   const { t } = useTranslation('common')
+  const { agentId } = useParams<{ agentId?: string }>()
   const { token } = useAuth()
   const isMobile = useIsMobile()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -87,7 +89,7 @@ export default function Sessions() {
       const keywordParam = keyword ? `&keyword=${encodeURIComponent(keyword)}` : ''
 
       const response = await fetch(
-        `/api/v1/admin/sessions?skip=0&limit=50${statusParam}${keywordParam}`,
+        `/api/v1/admin/sessions?skip=0&limit=50${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -108,7 +110,7 @@ export default function Sessions() {
     if (!token) return
 
     const wsBaseUrl = WS_BASE_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-    const wsUrl = `${wsBaseUrl}/api/v1/ws/admin?token=${token}`
+    const wsUrl = `${wsBaseUrl}/api/v1/ws/admin?token=${token}${agentId ? `&agent_id=${agentId}` : ''}`
 
     try {
       wsRef.current = new WebSocket(wsUrl)

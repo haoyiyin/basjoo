@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useParams } from 'react-router-dom';
 import { api } from '../services/api'
 import type { FileItem } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
@@ -18,6 +19,7 @@ interface TaskStatus {
 
 export default function FileUploadManagement() {
   const { t } = useTranslation('common');
+  const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
   const isMobile = useIsMobile();
   const [agentId, setAgentId] = useState<string | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -37,11 +39,12 @@ export default function FileUploadManagement() {
   useEffect(() => {
     loadDefaultAgent();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [routeAgentId]);
 
   const loadDefaultAgent = async () => {
     try {
-      const data = await api.getDefaultAgent();
+      if (!routeAgentId) return;
+      const data = await api.getAgent(routeAgentId);
       setAgentId(data.id);
     } catch (error) {
       alert(`${t('errors.loadAgentFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);

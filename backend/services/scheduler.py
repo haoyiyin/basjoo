@@ -6,13 +6,22 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, delete
 
 from database import AsyncSessionLocal
-from models import Agent, URLSource
+from models import Agent, AgentMember, ChatMessage, ChatSession, KnowledgeFile, URLSource, Workspace, WorkspaceQuota
+from services.r2r_client import R2RClient
 from services.crawler import SiteCrawler
 
 logger = logging.getLogger(__name__)
+
+
+def as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class URLFetchScheduler:
@@ -386,3 +395,64 @@ class SessionAutoCloseScheduler:
 
 
 session_auto_close_scheduler = SessionAutoCloseScheduler()
+
+
+class AgentPurgeScheduler:
+    """Permanently deletes agents after their restore window expires."""
+
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.running = False
+
+    def start(self):
+        if self.running:
+            return
+        self.scheduler.start()
+        self.running = True
+        self.scheduler.add_job(
+            self.purge_expired_agents,
+            trigger=IntervalTrigger(hours=24),
+            id="purge_expired_agents",
+            name="Purge expired soft-deleted agents",
+            replace_existing=True,
+        )
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+
+    async def purge_expired_agents(self):
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Agent).where(Agent.purge_after.is_not(None))
+            )
+            agents = [
+                agent for agent in result.scalars().all()
+                if as_utc(agent.purge_after) and as_utc(agent.purge_after) <= now
+            ]
+            for agent in agents:
+                await self._purge_agent(db, agent)
+            await db.commit()
+
+    async def _purge_agent(self, db: AsyncSession, agent: Agent):
+        session_ids = await db.execute(select(ChatSession.id).where(ChatSession.agent_id == agent.id))
+        ids = [row[0] for row in session_ids.all()]
+        if ids:
+            await db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(ids)))
+        await db.execute(delete(ChatSession).where(ChatSession.agent_id == agent.id))
+        await db.execute(delete(URLSource).where(URLSource.agent_id == agent.id))
+        await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent.id))
+        await db.execute(delete(AgentMember).where(AgentMember.agent_id == agent.id))
+        workspace_id = agent.workspace_id
+        await db.delete(agent)
+        await db.execute(delete(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id))
+        await db.execute(delete(Workspace).where(Workspace.id == workspace_id))
+        try:
+            await R2RClient().delete_collection(agent.id)
+        except Exception as exc:
+            logger.warning("Failed to delete R2R collection for purged agent %s: %s", agent.id, exc)
+
+
+agent_purge_scheduler = AgentPurgeScheduler()

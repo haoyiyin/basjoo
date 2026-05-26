@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useParams } from 'react-router-dom'
 import { api } from '../services/api'
 import type { EmbeddingProvider } from '../services/api'
 import KBSetupWizard from '../components/KBSetupWizard'
@@ -16,7 +17,8 @@ interface KnowledgeBaseSetupProps {
 
 export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComplete }: KnowledgeBaseSetupProps) {
   const { t } = useTranslation('common')
-  const [agentId, setAgentId] = useState<string | null>(agentIdProp || null)
+  const { agentId: routeAgentId } = useParams<{ agentId?: string }>()
+  const [agentId, setAgentId] = useState<string | null>(agentIdProp || routeAgentId || null)
   const [kbStatus, setKbStatus] = useState<KBStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -39,15 +41,14 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
   }, [agentId, t])
 
   useEffect(() => {
-    if (!agentIdProp) {
-      api.getDefaultAgent().then(agent => {
-        setAgentId(agent.id)
-      }).catch(() => {
-        setError(t('errors.loadFailed'))
-        setLoading(false)
-      })
+    const resolvedAgentId = agentIdProp || routeAgentId
+    if (resolvedAgentId) {
+      setAgentId(resolvedAgentId)
+    } else {
+      setError(t('errors.loadFailed'))
+      setLoading(false)
     }
-  }, [agentIdProp, t])
+  }, [agentIdProp, routeAgentId, t])
 
   useEffect(() => {
     if (agentId) {

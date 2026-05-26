@@ -1,6 +1,6 @@
 'use client'
 
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -135,6 +135,7 @@ function StatCard({ stat, idx, isMobile }: { stat: { label: string; value: strin
 export default function Dashboard() {
   const { t } = useTranslation('common')
   const navigate = useNavigate()
+  const { agentId: routeAgentId } = useParams<{ agentId?: string }>()
   const { admin } = useAuth()
   const isMobile = useIsMobile()
   const agentIdCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -160,7 +161,11 @@ export default function Dashboard() {
 
   const loadData = async () => {
     try {
-      const agent = await api.getDefaultAgent()
+      if (!routeAgentId) {
+        navigate('/')
+        return
+      }
+      const agent = await api.getAgent(routeAgentId)
       setAgentId(agent.id)
       const [quotaData, sourcesData] = await Promise.all([
         api.getQuota(agent.id),
@@ -170,6 +175,7 @@ export default function Dashboard() {
       setSourcesSummary(sourcesData)
     } catch (error) {
       console.error('Failed to load data:', error)
+      navigate('/agents')
     }
   }
 

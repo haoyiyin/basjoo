@@ -35,7 +35,7 @@ function SearchParamsProviderFallback({ children }: { children: ReactNode }) {
   return <SearchParamsContext.Provider value={fallback}>{children}</SearchParamsContext.Provider>;
 }
 
-function getSearchParams(): URLSearchParams {
+function useProvidedSearchParams(): URLSearchParams {
   const ctx = useContext(SearchParamsContext);
   return ctx?.searchParams ?? new URLSearchParams();
 }
@@ -62,7 +62,7 @@ export function useNavigate() {
 
 export function useLocation() {
   const pathname = usePathname();
-  const searchParams = getSearchParams();
+  const searchParams = useProvidedSearchParams();
   const search = searchParams?.toString() || '';
 
   return useMemo(() => ({
@@ -76,7 +76,7 @@ export function useParamsTyped<T extends Record<string, string>>() {
 }
 
 export function useSearchParamsState() {
-  const searchParams = getSearchParams();
+  const searchParams = useProvidedSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const safePathname = pathname || '/';

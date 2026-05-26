@@ -232,8 +232,12 @@ class AgentConfig(BaseModel):
     """Agent配置"""
 
     id: str
+    workspace_id: Optional[int] = None
     name: str
     description: Optional[str] = None
+    agent_type: str = Field(default="website_support")
+    channel_mode: str = Field(default="web_widget")
+    avatar: Optional[str] = None
     system_prompt: str
     model: str
     temperature: float = Field(..., ge=0, le=2)
@@ -325,6 +329,12 @@ class AgentConfig(BaseModel):
     embedding_batch_size: int = Field(default=4, ge=1, le=64, description="Embedding batch size")
     kb_setup_completed: bool = Field(default=False, description="Whether the knowledge base setup has been completed")
     is_active: bool
+    deleted_at: Optional[datetime] = None
+    purge_after: Optional[datetime] = None
+    status: Optional[str] = None
+    url_count: int = 0
+    file_count: int = 0
+    active_session_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -334,8 +344,11 @@ class AgentConfig(BaseModel):
 class AgentUpdateRequest(BaseModel):
     """更新Agent配置请求"""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    description: Optional[str] = Field(None, max_length=200)
+    agent_type: Optional[Literal["website_support", "ai_clone", "sales_outreach", "custom"]] = None
+    channel_mode: Optional[Literal["web_widget", "whatsapp", "email", "custom"]] = None
+    avatar: Optional[str] = Field(None, max_length=500)
     system_prompt: Optional[str] = Field(None, min_length=1)
     model: Optional[str] = Field(None, min_length=1)
     temperature: Optional[float] = Field(None, ge=0, le=2)
@@ -415,6 +428,49 @@ class AgentUpdateRequest(BaseModel):
             normalized_origins.append(normalized_origin)
 
         return normalized_origins
+
+
+class AgentCreateRequest(BaseModel):
+    """创建Agent请求"""
+
+    name: str = Field(..., min_length=1, max_length=50)
+    description: Optional[str] = Field(None, max_length=200)
+    agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = "website_support"
+    channel_mode: Literal["web_widget", "whatsapp", "email", "custom"] = "web_widget"
+    system_prompt: Optional[str] = Field(None, min_length=1)
+    persona_type: Optional[str] = "general"
+    widget_title: Optional[str] = Field(None, max_length=100)
+    welcome_message: Optional[str] = None
+
+
+class AgentListResponse(BaseModel):
+    """Agent列表响应"""
+
+    agents: List[AgentConfig]
+    total: int
+
+
+class AgentMemberCreateRequest(BaseModel):
+    """添加智能体成员请求"""
+
+    email: str
+    name: Optional[str] = None
+    password: Optional[str] = None
+    role: Literal["admin", "support"] = "support"
+
+
+class AgentMemberItem(BaseModel):
+    id: int
+    email: str
+    name: str
+    is_active: bool
+    role: str
+    member_role: str
+
+
+class AgentMemberListResponse(BaseModel):
+    members: List[AgentMemberItem]
+    total: int
 
 
 # ========== Index Management Schemas ==========

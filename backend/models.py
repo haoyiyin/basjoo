@@ -58,7 +58,7 @@ class Workspace(Base):
 
 
 class Agent(Base):
-    """Agent模型（MVP: 每工作空间1个Agent）"""
+    """Agent模型"""
 
     __tablename__ = "agents"
 
@@ -72,6 +72,9 @@ class Agent(Base):
     # 基本信息
     name = Column(String(100), nullable=False, default="AI Agent")
     description = Column(Text, nullable=True)
+    agent_type = Column(String(50), nullable=False, default="website_support")
+    channel_mode = Column(String(50), nullable=False, default="web_widget")
+    avatar = Column(String(500), nullable=True)
 
     # LLM配置
     system_prompt = Column(
@@ -162,6 +165,8 @@ class Agent(Base):
 
     # 状态
     is_active = Column(Boolean, default=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    purge_after = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -175,6 +180,9 @@ class Agent(Base):
     )
     chat_sessions = relationship(
         "ChatSession", back_populates="agent", cascade="all, delete-orphan"
+    )
+    members = relationship(
+        "AgentMember", back_populates="agent", cascade="all, delete-orphan"
     )
 
 
@@ -369,8 +377,8 @@ class WorkspaceQuota(Base):
         Integer, ForeignKey("workspaces.id"), nullable=False, unique=True, index=True
     )
 
-    # 配额限制（MVP限制）
-    max_agents = Column(Integer, default=1)
+    # 配额限制
+    max_agents = Column(Integer, default=10)
     max_urls = Column(Integer, default=500)
     max_qa_items = Column(Integer, default=100)
     max_messages_per_day = Column(Integer, default=1500)
@@ -391,6 +399,25 @@ class WorkspaceQuota(Base):
 
     # 关系
     workspace = relationship("Workspace", back_populates="quotas")
+
+
+class AgentMember(Base):
+    """Per-agent admin membership."""
+
+    __tablename__ = "agent_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    admin_user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=False, index=True)
+    role = Column(String(50), default="admin", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    agent = relationship("Agent", back_populates="members")
+    admin_user = relationship("AdminUser", back_populates="agent_members")
+
+    __table_args__ = (
+        UniqueConstraint("agent_id", "admin_user_id", name="uq_agent_member_admin"),
+    )
 
 
 class IndexJob(Base):
@@ -444,3 +471,7 @@ class AdminUser(Base):
     is_active = Column(Boolean, default=True)
     role = Column(String(50), default="admin", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    agent_members = relationship(
+        "AgentMember", back_populates="admin_user", cascade="all, delete-orphan"
+    )

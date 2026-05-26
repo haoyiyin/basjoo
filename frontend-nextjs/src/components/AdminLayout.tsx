@@ -1,7 +1,7 @@
 'use client'
 
 import { ReactNode, useState, useEffect, useRef, useCallback } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from 'react-i18next'
 
@@ -37,6 +37,20 @@ const navItemsConfig: NavItem[] = [
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    )
+  },
+  {
+    path: '/agents',
+    i18nKey: 'navigation.agents',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 2v4" />
+        <path d="M12 18v4" />
+        <rect x="4" y="6" width="16" height="12" rx="3" />
+        <path d="M8 12h.01" />
+        <path d="M16 12h.01" />
+        <path d="M9 16h6" />
       </svg>
     )
   },
@@ -112,14 +126,28 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const { t } = useTranslation('common')
   const location = useLocation()
   const navigate = useNavigate()
+  const { agentId } = useParams<{ agentId?: string }>()
   const { admin, logout } = useAuth()
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const isSupport = admin?.role === 'support'
+  const agentBasePath = agentId ? `/agents/${agentId}` : ''
+  const scopedNavItems = agentId
+    ? navItemsConfig
+        .filter(item => item.path !== '/agents')
+        .map(item => ({
+          ...item,
+          path: item.path === '/' ? `${agentBasePath}/dashboard` : `${agentBasePath}${item.path}`,
+          children: item.children?.map(child => ({
+            ...child,
+            path: `${agentBasePath}${child.path}`,
+          })),
+        }))
+    : navItemsConfig.filter(item => item.path === '/' || item.path === '/agents')
 
   const allowedNav = isSupport
-    ? navItemsConfig.filter(item => item.path === '/sessions')
-    : navItemsConfig
+    ? scopedNavItems.filter(item => item.path === `${agentBasePath}/sessions`)
+    : scopedNavItems
 
   const navItems = allowedNav.map(item => ({
     ...item,
@@ -128,17 +156,19 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
   // Auto-expand knowledge group when child route is active
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
-    if (location.pathname === '/knowledge' || location.pathname === '/urls' || location.pathname === '/files') {
-      return new Set(['/knowledge'])
+    const knowledgePath = agentId ? `${agentBasePath}/knowledge` : '/knowledge'
+    if (location.pathname === knowledgePath || location.pathname === `${agentBasePath}/urls` || location.pathname === `${agentBasePath}/files`) {
+      return new Set([knowledgePath])
     }
     return new Set()
   })
 
   useEffect(() => {
-    if (location.pathname === '/knowledge' || location.pathname === '/urls' || location.pathname === '/files') {
-      setExpandedGroups(prev => new Set([...prev, '/knowledge']))
+    const knowledgePath = agentId ? `${agentBasePath}/knowledge` : '/knowledge'
+    if (location.pathname === knowledgePath || location.pathname === `${agentBasePath}/urls` || location.pathname === `${agentBasePath}/files`) {
+      setExpandedGroups(prev => new Set([...prev, knowledgePath]))
     }
-  }, [location.pathname])
+  }, [agentBasePath, agentId, location.pathname])
 
   const isActive = (item: NavItem) => {
     if (item.path === location.pathname) return true
@@ -200,7 +230,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         borderBottom: '1px solid var(--color-border)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to={isSupport ? "/sessions" : "/"} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }} onClick={handleLogoClick}>
+          <Link to={isSupport && agentId ? `${agentBasePath}/sessions` : "/"} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }} onClick={handleLogoClick}>
             <div style={{
               width: '40px',
               height: '40px',
@@ -244,6 +274,34 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           </Link>
         </div>
       </div>
+
+      {agentId && (
+        <div style={{
+          padding: 'var(--space-4) var(--space-6)',
+          borderBottom: '1px solid var(--color-border)',
+          display: 'grid',
+          gap: 'var(--space-2)',
+        }}>
+          <Link
+            to="/"
+            onClick={handleLogoClick}
+            style={{
+              color: 'var(--color-text-secondary)',
+              textDecoration: 'none',
+              fontSize: 'var(--text-sm)',
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-bg-secondary)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ← {t('agents.panelTitle')}
+          </Link>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav style={{

@@ -29,6 +29,7 @@ os.environ.setdefault("REDIS_URL", "redis://redis:6379/0" if _host_resolves("red
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ["SECRET_KEY_FILE"] = "/tmp/basjoo_test_secret.key"
 os.environ["ENCRYPTION_KEY_FILE"] = "/tmp/basjoo_test_encryption.key"
+os.environ["CREATE_DEFAULT_AGENT_ON_BOOTSTRAP"] = "true"
 
 import database
 from database import configure_database, init_db
@@ -202,10 +203,29 @@ async def setup_test_db(prepare_test_db_dir):
     await init_db()
 
     async with database.AsyncSessionLocal() as session:
-        from models import Agent
+        from models import Agent, Workspace, WorkspaceQuota
         result = await session.execute(select(Agent).where(Agent.is_active))
         agent = result.scalar_one_or_none()
-        if agent and not agent.jina_api_key:
+        if not agent:
+            workspace_result = await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+            workspace = workspace_result.scalar_one_or_none()
+            if not workspace:
+                workspace = Workspace(name="Test Workspace", owner_email="test@example.com")
+                session.add(workspace)
+                await session.flush()
+                session.add(WorkspaceQuota(workspace_id=workspace.id))
+            agent = Agent(
+                workspace_id=workspace.id,
+                name="Test Agent",
+                description="Default test agent",
+                model="deepseek-chat",
+                api_base="https://api.deepseek.com/v1",
+                provider_type="deepseek",
+                jina_api_key="test_jina_key",
+            )
+            session.add(agent)
+            await session.commit()
+        elif not agent.jina_api_key:
             agent.jina_api_key = "test_jina_key"
             await session.commit()
 

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import AdminLayout from '../components/AdminLayout';
-import { parseErrorResponse } from '../services/api';
+import { api, parseErrorResponse } from '../services/api';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
 type AdminRole = 'super_admin' | 'admin' | 'support';
@@ -17,9 +18,11 @@ type AdminUser = {
 };
 
 const roleKeys: AdminRole[] = ['super_admin', 'admin', 'support'];
+const agentRoleKeys: AdminRole[] = ['admin', 'support'];
 
 export const AdminUsers = () => {
   const { t } = useTranslation();
+  const { agentId } = useParams<{ agentId?: string }>();
   const isMobile = useIsMobile();
   const { token, admin } = useAuth();
   const isSuperAdmin = admin?.role === 'super_admin';
@@ -32,12 +35,25 @@ export const AdminUsers = () => {
   const [editData, setEditData] = useState({email: '',name: '',password: '',is_active: true,role: 'admin' as AdminRole});
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const availableRoleKeys = agentId ? agentRoleKeys : roleKeys;
   const authHeaders = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
     const loadUsers = async () => {
+      if (agentId) {
+        const data = await api.listAgentMembers(agentId);
+        setUsers(data.members.map(member => ({
+          id: member.id,
+          email: member.email,
+          name: member.name,
+          is_active: member.is_active,
+          role: member.member_role as AdminRole,
+        })));
+        return;
+      }
+
       if (!isSuperAdmin && admin) {
         setUsers([{
           id: admin.id,
@@ -60,10 +76,31 @@ useEffect(() => {
   loadUsers().catch((err) => setError(err.message));
 }, [token, isSuperAdmin, admin]);
 
+useEffect(() => {
+  if (!agentId) return;
+  if (role === 'super_admin') {
+    setRole('admin');
+  }
+  if (editData.role === 'super_admin') {
+    setEditData(prev => ({ ...prev, role: 'admin' }));
+  }
+}, [agentId, editData.role, role]);
+
   const createUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage('');
     setError('');
+
+    if (agentId) {
+      const data = await api.createAgentMember(agentId, { email, name, password, role: role === 'super_admin' ? 'admin' : role });
+      setMessage(t('users.userCreated', { email: data.email }));
+      setEmail('');
+      setName('');
+      setPassword('');
+      setRole('admin');
+      await loadUsers();
+      return;
+    }
 
     const res = await fetch('/api/admin/users', {
       method: 'POST',
@@ -93,6 +130,19 @@ useEffect(() => {
   const saveEdit = async (id: number) => {
     setMessage('');
     setError('');
+
+    if (agentId) {
+      await api.createAgentMember(agentId, {
+        email: editData.email,
+        name: editData.name,
+        password: editData.password.trim() || undefined,
+        role: editData.role === 'super_admin' ? 'admin' : editData.role,
+      });
+      setEditingId(null);
+      setMessage(t('users.userUpdated'));
+      await loadUsers();
+      return;
+    }
 
     const payload: Record<string, unknown> = {
       email: editData.email,
@@ -124,6 +174,17 @@ useEffect(() => {
 
   const deleteUser = async (id: number) => {
     if (!window.confirm(t('users.confirmDelete'))) return;
+
+    if (agentId) {
+      const res = await api.deleteAgentMember(agentId, id);
+      if (!res.success) {
+        setError(t('users.deleteFailed'));
+        return;
+      }
+      setMessage(t('users.userDeleted'));
+      await loadUsers();
+      return;
+    }
 
     const res = await fetch(`/api/admin/users/${id}`, {
       method: 'DELETE',
@@ -157,7 +218,7 @@ useEffect(() => {
           <label>{t('users.email')}<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label>{t('users.name')}<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
           <label>{t('users.password')}<input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          <label>{t('users.role')}<select value={role} onChange={(e) => setRole(e.target.value as AdminRole)}>{roleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>
+          <label>{t('users.role')}<select value={role} onChange={(e) => setRole(e.target.value as AdminRole)}>{availableRoleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>
     ))}
   </select>
 </label>
@@ -188,7 +249,7 @@ useEffect(() => {
                     </label>
                     <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{t('users.role')}
                       <select value={editData.role} onChange={(e) => setEditData({ ...editData, role: e.target.value as AdminRole })} style={{ width: '100%', marginTop: 'var(--space-1)' }}>
-                        {roleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>))}
+                        {availableRoleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>))}
                       </select>
                     </label>
                     <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
@@ -248,7 +309,7 @@ useEffect(() => {
                     <td style={{ padding: '12px' }}>{editingId === user.id ? <input value={editData.name} onChange={(e) => setEditData({ ...editData, name: e.target.value })} /> : user.name}</td>
                     <td style={{ padding: '12px' }}>{editingId === user.id ? (
                       <select value={editData.role} onChange={(e) => setEditData({ ...editData, role: e.target.value as AdminRole })}>
-                        {roleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>))}
+                        {availableRoleKeys.map((r) => (<option key={r} value={r}>{t(`users.roleLabels.${r}`)}</option>))}
                       </select>
                     ) : t(`users.roleLabels.${user.role}`)}</td>
                     <td style={{ padding: '12px' }}>{editingId === user.id ? <label><input type="checkbox" checked={editData.is_active} onChange={(e) => setEditData({ ...editData, is_active: e.target.checked })} /> {t('users.statusEnabled')}</label> : user.is_active ? t('users.statusEnabled') : t('users.statusDisabled')}</td>

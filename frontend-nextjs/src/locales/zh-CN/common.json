@@ -46,6 +46,7 @@
     "ended": "已结束",
     "all": "全部",
     "established": "已建立",
+    "running": "运行中",
     "notEstablished": "未建立",
     "configured": "已配置",
     "notConfigured": "未配置",
@@ -69,6 +70,7 @@
     "aiSettings": "AI 设置",
     "systemSettings": "系统设置",
     "administrator": "管理员",
+    "agents": "智能体",
     "users": "用户管理"
   },
   "errors": {
@@ -121,11 +123,56 @@
   "time": {
     "goodMorning": "早上好",
     "goodAfternoon": "下午好",
-    "goodEvening": "晚上好"
+    "goodEvening": "晚上好",
+    "day": "天",
+    "days": "天",
+    "hour": "小时",
+    "hours": "小时"
   },
   "roles": {
     "visitor": "访客",
     "agent": "AI/客服"
+  },
+  "agents": {
+    "title": "智能体",
+    "panelTitle": "智能体面板",
+    "panelSubtitle": "查看所有智能体的运行状态，并进入对应的独立后台。",
+    "subtitle": "为不同渠道、任务和知识库创建独立智能体。",
+    "allAgents": "全部智能体",
+    "createTitle": "创建智能体",
+    "create": "创建智能体",
+    "empty": "还没有智能体，请先创建一个。",
+    "open": "打开",
+    "openCurrent": "打开当前智能体",
+    "current": "当前",
+    "switch": "切换",
+    "deactivate": "停用",
+    "restore": "恢复",
+    "autoDeleteCountdown": "将在 {{time}} 后自动删除",
+    "characterCount": "{{count}}/{{max}}",
+    "keepOneAgent": "至少需要保留一个可用智能体。",
+    "noDescription": "暂无描述",
+    "namePlaceholder": "例如：官网客服、WhatsApp 分身、邮件开发顾客",
+    "descriptionPlaceholder": "说明这个智能体负责的业务、渠道或知识范围。",
+    "type": "智能体类型",
+    "types": {
+      "websiteSupport": "网页 AI 客服",
+      "aiClone": "AI 分身",
+      "salesOutreach": "AI 开发顾客",
+      "custom": "自定义"
+    },
+    "typeDescriptions": {
+      "websiteSupport": "对接网页 widget，回答访客问题。",
+      "aiClone": "为 WhatsApp 等渠道预留分身配置。",
+      "salesOutreach": "为邮件或销售触达场景预留配置。",
+      "custom": "从空白用途开始配置。"
+    },
+    "channels": {
+      "webWidget": "网页组件",
+      "whatsapp": "WhatsApp",
+      "email": "邮件",
+      "custom": "自定义"
+    }
   },
   "placeholders": {
     "enterMessage": "输入消息...",
@@ -141,6 +188,7 @@
   },
   "labels": {
     "welcome": "欢迎回到 Basjoo 控制台",
+    "description": "描述",
     "quickStart": "快速开始",
     "systemStatus": "系统状态",
     "urlKnowledgeSource": "网页数量",

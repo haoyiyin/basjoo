@@ -122,6 +122,13 @@ class Settings(BaseSettings):
 
     # Scrapling 微服务
     scrapling_service_url: str = "http://scrapling-service:8001"
+    scraping_provider: str = "local_scrapling"
+    cloud_scraping_api_url: str = ""
+    cloud_scraping_api_key: str = ""
+    scraping_timeout_seconds: int = 60
+    scraping_agent_concurrency: int = 2
+    scraping_workspace_concurrency: int = 6
+    scraping_fallback_to_cloud: bool = False
 
     # 数据库 - SQLite (轻量级MVP方案)
     database_url: str = "sqlite:///./data/basjoo.db"
@@ -140,6 +147,7 @@ class Settings(BaseSettings):
     secret_key_file: str = "/app/data/.secret_key"
     default_agent_id: str = ""
     agent_id_file: str = DEFAULT_AGENT_ID_FILE
+    create_default_agent_on_bootstrap: bool = False
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
 

@@ -116,6 +116,7 @@ async def init_db():
             ChatSession,
             ChatMessage,
             WorkspaceQuota,
+            AgentMember,
             IndexJob,
             AdminUser,
         )
@@ -141,12 +142,15 @@ async def init_db():
             default_quota = WorkspaceQuota(workspace_id=default_workspace.id)
             session.add(default_quota)
 
-            default_agent = _build_default_agent(default_workspace.id)
-            session.add(default_agent)
+            default_agent = None
+            if settings.create_default_agent_on_bootstrap:
+                default_agent = _build_default_agent(default_workspace.id)
+                session.add(default_agent)
             await session.commit()
 
             print(f"✓ 创建默认工作空间(ID={default_workspace.id})")
-            print(f"✓ 创建默认Agent(ID={default_agent.id})")
+            if default_agent:
+                print(f"✓ 创建默认Agent(ID={default_agent.id})")
         else:
             agent_result = await session.execute(
                 select(Agent.id).where(Agent.workspace_id == existing_workspace.id).limit(1)
@@ -156,10 +160,13 @@ async def init_db():
             if existing_agent_id:
                 print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
                 print(f"✓ 默认Agent已存在(ID={existing_agent_id})")
-            else:
+            elif settings.create_default_agent_on_bootstrap:
                 default_agent = _build_default_agent(existing_workspace.id)
                 session.add(default_agent)
                 await session.commit()
 
                 print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
                 print(f"✓ 已为默认工作空间创建Agent(ID={default_agent.id})")
+            else:
+                print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
+                print("✓ 未自动创建Agent，等待管理员在后台创建")

@@ -46,6 +46,7 @@
     "ended": "Ended",
     "all": "All",
     "established": "Established",
+    "running": "Running",
     "notEstablished": "Not Established",
     "configured": "Configured",
     "notConfigured": "Not Configured",
@@ -69,6 +70,7 @@
     "aiSettings": "AI Settings",
     "systemSettings": "System Settings",
     "administrator": "Administrator",
+    "agents": "Agents",
     "users": "Users"
   },
   "errors": {
@@ -121,11 +123,56 @@
   "time": {
     "goodMorning": "Good morning",
     "goodAfternoon": "Good afternoon",
-    "goodEvening": "Good evening"
+    "goodEvening": "Good evening",
+    "day": "day",
+    "days": "days",
+    "hour": "hour",
+    "hours": "hours"
   },
   "roles": {
     "visitor": "Visitor",
     "agent": "AI/Agent"
+  },
+  "agents": {
+    "title": "Agents",
+    "panelTitle": "Agent Panel",
+    "panelSubtitle": "Review all agent statuses and enter each isolated workspace.",
+    "subtitle": "Create separate agents for different channels, jobs, and knowledge bases.",
+    "allAgents": "All agents",
+    "createTitle": "Create agent",
+    "create": "Create agent",
+    "empty": "No agents yet. Create one to start.",
+    "open": "Open",
+    "openCurrent": "Open current agent",
+    "current": "Current",
+    "switch": "Switch",
+    "deactivate": "Deactivate",
+    "restore": "Restore",
+    "autoDeleteCountdown": "Auto-deletes in {{time}}",
+    "characterCount": "{{count}}/{{max}}",
+    "keepOneAgent": "At least one active agent must remain.",
+    "noDescription": "No description",
+    "namePlaceholder": "Example: Website support, WhatsApp clone, email prospecting",
+    "descriptionPlaceholder": "Describe the business, channel, or knowledge scope for this agent.",
+    "type": "Agent type",
+    "types": {
+      "websiteSupport": "Website AI support",
+      "aiClone": "AI clone",
+      "salesOutreach": "AI sales outreach",
+      "custom": "Custom"
+    },
+    "typeDescriptions": {
+      "websiteSupport": "Connect to the website widget and answer visitor questions.",
+      "aiClone": "Reserve clone-style setup for channels like WhatsApp.",
+      "salesOutreach": "Reserve setup for email or sales outreach workflows.",
+      "custom": "Start from a blank purpose."
+    },
+    "channels": {
+      "webWidget": "Web widget",
+      "whatsapp": "WhatsApp",
+      "email": "Email",
+      "custom": "Custom"
+    }
   },
   "placeholders": {
     "enterMessage": "Enter message...",
@@ -141,6 +188,7 @@
   },
   "labels": {
     "welcome": "Welcome back to Basjoo",
+    "description": "Description",
     "quickStart": "Quick Start",
     "systemStatus": "System Status",
     "urlKnowledgeSource": "Web Pages",

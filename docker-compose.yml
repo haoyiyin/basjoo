@@ -53,12 +53,20 @@ services:
     image: sciphiai/r2r:latest
     container_name: basjoo-r2r
     env_file:
-      - ./r2r-config/r2r.env
+      - path: ./r2r-config/r2r.env
+        required: false
     environment:
       - R2R_CONFIG_PATH=/app/user_configs/r2r.toml
+      - R2R_POSTGRES_HOST=postgres
+      - R2R_POSTGRES_PORT=5432
+      - R2R_POSTGRES_USER=postgres
+      - R2R_POSTGRES_PASSWORD=postgres
+      - R2R_POSTGRES_DBNAME=postgres
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - JINA_AI_API_KEY=${JINA_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
     ports:
-      - "127.0.0.1:7272:7272"
+      - "127.0.0.1:7272:8000"
     restart: unless-stopped
     networks:
       - basjoo-network
@@ -66,7 +74,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7272/v3/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v3/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -104,7 +112,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
-      - R2R_API_URL=http://r2r:7272
+      - R2R_API_URL=http://r2r:8000
       - SECRET_KEY=${SECRET_KEY:-}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
       - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
@@ -200,7 +208,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
-      - R2R_API_URL=http://r2r:7272
+      - R2R_API_URL=http://r2r:8000
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
       - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
