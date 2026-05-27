@@ -13,6 +13,7 @@ from api.v1.endpoints import require_agent_for_admin
 from models import AdminUser, Agent, KnowledgeFile, WorkspaceQuota
 from api.v1.schemas import FileUploadResponse, FileListResponse, FileItem
 from services.r2r_client import R2RClient
+from services.file_index_cleanup import cleanup_file_index_documents
 
 logger = logging.getLogger(__name__)
 
@@ -219,14 +220,11 @@ async def delete_file(
     if not kf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Unassign from agent collection; do NOT delete globally (doc may be shared)
-    if kf.r2r_document_id:
-        r2r = R2RClient()
-        try:
-            await r2r.unassign_document(agent_id, kf.r2r_document_id)
-        except Exception as e:
-            logger.warning(f"Failed to unassign R2R doc {kf.r2r_document_id}: {e}")
+    # Clean up R2R documents first; fail closed if cleanup fails
+    r2r = R2RClient()
+    await cleanup_file_index_documents(r2r, agent_id, kf)
 
+    # Only delete SQLite record after R2R cleanup succeeds
     await db.delete(kf)
     await db.commit()
 
@@ -242,19 +240,24 @@ async def clear_all_files(
     """Clear all files for an agent."""
     agent = await require_agent_for_admin(db, agent_id, current_user)
 
-    # Delete all file records with their R2R documents
+    # Load all files
     files_result = await db.execute(
         select(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id)
     )
     files = files_result.scalars().all()
 
+    if not files:
+        return {"message": "Cleared 0 files", "deleted_count": 0}
+
     r2r = R2RClient()
+    all_docs = None
+
+    # Clean up R2R documents for each file, reusing document listing
     for f in files:
-        if f.r2r_document_id:
-            try:
-                await r2r.unassign_document(agent_id, f.r2r_document_id)
-            except Exception as e:
-                logger.warning(f"Failed to unassign R2R doc {f.r2r_document_id}: {e}")
+        all_docs = await cleanup_file_index_documents(r2r, agent_id, f, all_docs)
+
+    # Only delete all SQLite records after all R2R cleanup succeeds
+    for f in files:
         await db.delete(f)
 
     await db.commit()

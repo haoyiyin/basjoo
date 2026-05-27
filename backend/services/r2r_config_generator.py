@@ -164,3 +164,71 @@ def _update_r2r_env(
 
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info(f"Updated r2r.env with {embedding_provider} API key")
+
+
+def snapshot_r2r_config() -> dict:
+    """Snapshot current r2r.toml and r2r.env contents for potential rollback.
+
+    Returns a dict with keys:
+    - "toml_exists": bool
+    - "toml_content": str or None
+    - "env_exists": bool
+    - "env_content": str or None
+    """
+    toml_path, env_path = _r2r_config_paths()
+    snapshot = {}
+
+    snapshot["toml_exists"] = toml_path.exists()
+    snapshot["toml_content"] = toml_path.read_text(encoding="utf-8") if toml_path.exists() else None
+
+    snapshot["env_exists"] = env_path.exists()
+    snapshot["env_content"] = env_path.read_text(encoding="utf-8") if env_path.exists() else None
+
+    return snapshot
+
+
+def restore_r2r_config(snapshot: dict) -> bool:
+    """Restore r2r.toml and r2r.env from a snapshot.
+
+    Returns True if restoration succeeded, False if any file operation failed.
+    """
+    toml_path, env_path = _r2r_config_paths()
+    success = True
+
+    # Restore r2r.toml
+    if snapshot.get("toml_exists"):
+        try:
+            toml_path.parent.mkdir(parents=True, exist_ok=True)
+            toml_path.write_text(snapshot["toml_content"], encoding="utf-8")
+            logger.info(f"Restored r2r.toml from snapshot")
+        except Exception as e:
+            logger.warning(f"Failed to restore r2r.toml: {e}")
+            success = False
+    else:
+        # File did not exist before; remove if created
+        if toml_path.exists():
+            try:
+                toml_path.unlink()
+                logger.info(f"Removed r2r.toml that was created during failed setup")
+            except Exception as e:
+                logger.warning(f"Failed to remove r2r.toml: {e}")
+                success = False
+
+    # Restore r2r.env
+    if snapshot.get("env_exists"):
+        try:
+            env_path.write_text(snapshot["env_content"], encoding="utf-8")
+            logger.info(f"Restored r2r.env from snapshot")
+        except Exception as e:
+            logger.warning(f"Failed to restore r2r.env: {e}")
+            success = False
+    else:
+        if env_path.exists():
+            try:
+                env_path.unlink()
+                logger.info(f"Removed r2r.env that was created during failed setup")
+            except Exception as e:
+                logger.warning(f"Failed to remove r2r.env: {e}")
+                success = False
+
+    return success

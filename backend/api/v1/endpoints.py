@@ -1796,7 +1796,10 @@ async def kb_setup(
             )
 
     # Write R2R config BEFORE persisting any agent changes, so we can fail safely
-    from services.r2r_config_generator import write_r2r_config
+    from services.r2r_config_generator import write_r2r_config, snapshot_r2r_config, restore_r2r_config
+
+    # Snapshot config before write for rollback on DB commit failure
+    config_snapshot = snapshot_r2r_config()
 
     try:
         write_r2r_config(
@@ -1828,7 +1831,23 @@ async def kb_setup(
         agent.siliconflow_api_key = encrypt_api_key(request.siliconflow_api_key)
 
     agent.kb_setup_completed = True
-    await db.commit()
+
+    # Wrap commit to restore config if DB persistence fails
+    try:
+        await db.commit()
+    except Exception as e:
+        logger.exception(f"DB commit failed during kb_setup: {e}")
+        # Rollback DB transaction
+        await db.rollback()
+        # Restore R2R config to pre-setup state
+        restore_success = restore_r2r_config(config_snapshot)
+        if not restore_success:
+            logger.warning("Partial R2R config restoration failure; manual cleanup may be needed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save knowledge base setup: {str(e)}",
+        )
+
     await db.refresh(agent)
 
     return {
