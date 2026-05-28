@@ -613,7 +613,7 @@ class APIService {
     }).then(result => result as { created: number; message: string });
   }
 
-  async listURLs(agentId: string, skip = 0, limit = 500): Promise<{
+  async listURLs(agentId: string, skip = 0, limit = 100): Promise<{
     urls: URLSource[];
     total: number;
     quota: { used: number; max: number };
