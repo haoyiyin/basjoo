@@ -41,7 +41,7 @@ def compute_content_hash(content: str) -> str:
 
 
 class Workspace(Base):
-    """工作空间模型（MVP: 单用户单工作空间）"""
+    """工作空间模型"""
 
     __tablename__ = "workspaces"
 
@@ -55,6 +55,7 @@ class Workspace(Base):
         "Agent", back_populates="workspace", cascade="all, delete-orphan"
     )
     quotas = relationship("WorkspaceQuota", back_populates="workspace", uselist=False)
+    admin_users = relationship("AdminUser", back_populates="workspace")
 
 
 class Agent(Base):
@@ -470,8 +471,10 @@ class AdminUser(Base):
     name = Column(String(100), nullable=False)
     is_active = Column(Boolean, default=True)
     role = Column(String(50), default="admin", nullable=False)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    workspace = relationship("Workspace", back_populates="admin_users")
     agent_members = relationship(
         "AgentMember", back_populates="admin_user", cascade="all, delete-orphan"
     )

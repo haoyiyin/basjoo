@@ -334,3 +334,153 @@ def test_migration_readonly_to_support_is_idempotent():
         assert row["role"] == "support"
     finally:
         os.unlink(db_path)
+
+
+def _create_legacy_workspace_db(db_path: str) -> str:
+    """Create a legacy multi-workspace install with cross-workspace AgentMember records."""
+    conn = sqlite3.connect(db_path)
+    # Create workspaces (legacy: each agent had its own workspace)
+    conn.execute("""
+        CREATE TABLE workspaces (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            owner_email TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("INSERT INTO workspaces (id, name, owner_email) VALUES (1, 'WS1', 'ws1@test.com')")
+    conn.execute("INSERT INTO workspaces (id, name, owner_email) VALUES (2, 'WS2', 'ws2@test.com')")
+
+    # Create workspace_quotas with full schema
+    conn.execute("""
+        CREATE TABLE workspace_quotas (
+            id INTEGER PRIMARY KEY,
+            workspace_id INTEGER NOT NULL UNIQUE,
+            max_agents INTEGER DEFAULT 10,
+            max_urls INTEGER DEFAULT 500,
+            max_qa_items INTEGER DEFAULT 100,
+            max_messages_per_day INTEGER DEFAULT 1500,
+            max_total_text_mb INTEGER DEFAULT 20
+        )
+    """)
+    conn.execute("INSERT INTO workspace_quotas (workspace_id, max_urls) VALUES (1, 500)")
+    conn.execute("INSERT INTO workspace_quotas (workspace_id, max_urls) VALUES (2, 500)")
+
+    # Create agents in different workspaces
+    conn.execute(OLD_AGENTS_DDL)
+    conn.execute("INSERT INTO agents (id, workspace_id, name, model, api_base) VALUES ('agt_1', 1, 'Agent1', 'gpt-4o-mini', 'https://api.openai.com/v1')")
+    conn.execute("INSERT INTO agents (id, workspace_id, name, model, api_base) VALUES ('agt_2', 2, 'Agent2', 'gpt-4o-mini', 'https://api.openai.com/v1')")
+
+    # Create admin_users with various roles (no workspace_id column yet)
+    conn.execute("""
+        CREATE TABLE admin_users (
+            id INTEGER PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            hashed_password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'admin',
+            is_active INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("INSERT INTO admin_users (id, email, hashed_password, name, role) VALUES (1, 'super@test.com', 'hash', 'Super Admin', 'super_admin')")
+    conn.execute("INSERT INTO admin_users (id, email, hashed_password, name, role) VALUES (2, 'admin@test.com', 'hash', 'Admin User', 'admin')")
+    conn.execute("INSERT INTO admin_users (id, email, hashed_password, name, role) VALUES (3, 'support@test.com', 'hash', 'Support User', 'support')")
+
+    # Create agent_members with legacy CROSS JOIN pattern (super_admin × all agents)
+    conn.execute("""
+        CREATE TABLE agent_members (
+            id INTEGER PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            admin_user_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'admin',
+            UNIQUE(agent_id, admin_user_id)
+        )
+    """)
+    # Legacy auto-insert: super_admin had membership for ALL agents (cross-workspace!)
+    conn.execute("INSERT INTO agent_members (agent_id, admin_user_id, role) VALUES ('agt_1', 1, 'admin')")
+    conn.execute("INSERT INTO agent_members (agent_id, admin_user_id, role) VALUES ('agt_2', 1, 'admin')")  # cross-workspace
+    # Admin user has membership for agent in workspace 1
+    conn.execute("INSERT INTO agent_members (agent_id, admin_user_id, role) VALUES ('agt_1', 2, 'admin')")
+
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_migration_backfills_workspace_id_for_all_admin_roles():
+    """All admin users (super_admin, admin, support) should get workspace_id backfilled."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_workspace_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = {
+            row["id"]: row["workspace_id"]
+            for row in conn.execute("SELECT id, workspace_id FROM admin_users").fetchall()
+        }
+        conn.close()
+
+        # All users should be assigned to canonical workspace (first workspace = 1)
+        assert rows[1] == 1  # super_admin
+        assert rows[2] == 1  # admin
+        assert rows[3] == 1  # support
+    finally:
+        os.unlink(db_path)
+
+
+def test_migration_consolidates_agents_to_canonical_workspace():
+    """Legacy install agents should be consolidated to canonical workspace."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_workspace_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = {
+            row["id"]: row["workspace_id"]
+            for row in conn.execute("SELECT id, workspace_id FROM agents").fetchall()
+        }
+        conn.close()
+
+        # All agents should be consolidated to canonical workspace (1)
+        assert rows["agt_1"] == 1
+        assert rows["agt_2"] == 1
+    finally:
+        os.unlink(db_path)
+
+
+def test_migration_cleans_cross_workspace_agent_members():
+    """Cross-workspace AgentMember records from legacy auto-insert should be deleted."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_workspace_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        members = conn.execute("SELECT agent_id, admin_user_id FROM agent_members").fetchall()
+        conn.close()
+
+        # After migration, all remaining AgentMember should be within same workspace
+        # (admin.workspace_id == agent.workspace_id)
+        # Since all were consolidated to workspace 1, all remaining memberships are valid
+        # But the logic should have deleted cross-workspace memberships before consolidation
+        # Actually, with consolidation, all agents move to workspace 1, so cross-workspace check
+        # happens BEFORE consolidation and would delete records where agent.workspace != admin.workspace
+        # In our test: admin workspace_id gets backfilled to 1, agent agt_2 was in workspace 2
+        # So the cross-workspace cleanup should have deleted (agt_2, admin_user_id=1)
+        member_pairs = [(m["agent_id"], m["admin_user_id"]) for m in members]
+        # The cross-workspace membership (agt_2, super_admin=1) should be deleted
+        assert ("agt_2", 1) not in member_pairs
+        # The valid memberships should remain
+        assert ("agt_1", 1) in member_pairs  # super_admin → agt_1
+        assert ("agt_1", 2) in member_pairs  # admin → agt_1
+    finally:
+        os.unlink(db_path)

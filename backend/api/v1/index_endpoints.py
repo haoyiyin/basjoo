@@ -8,7 +8,7 @@ import logging
 import database
 from database import get_db
 from api.endpoints.auth import require_admin_or_super_admin
-from api.v1.endpoints import require_agent_for_admin
+from api.v1.endpoints import require_agent_admin
 from models import (
     AdminUser,
     Agent,
@@ -159,7 +159,7 @@ async def rebuild_index(
     db: AsyncSession = Depends(get_db),
 ):
     """重建索引 — re-ingest URL content into R2R"""
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
 
     import uuid
     job_id = f"job_{uuid.uuid4().hex[:12]}"
@@ -189,7 +189,7 @@ async def get_index_status(
     db: AsyncSession = Depends(get_db),
 ):
     """获取索引任务状态"""
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
 
     result = await db.execute(
         select(IndexJob)
@@ -220,7 +220,7 @@ async def get_index_info(
     db: AsyncSession = Depends(get_db),
 ):
     """获取索引信息"""
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
 
     # Count URLs
     url_result = await db.execute(

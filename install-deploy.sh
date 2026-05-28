@@ -339,20 +339,51 @@ print_summary() {
     key_path=1
   fi
 
-  printf '%s\n' ''
-  printf '%s\n' 'Basjoo deployment is ready.'
-  printf 'Project directory: %s\n' "$BASJOO_DIR"
+  # Compute admin URL
+  admin_url=
   if [ -n "$server_domain" ]; then
     if [ -n "$cert_path" ] && [ -n "$key_path" ]; then
-      printf 'Access URL: %s\n' "https://$server_domain"
+      admin_url="https://$server_domain"
     else
-      printf 'Access URL: %s\n' "http://$server_domain"
+      admin_url="http://$server_domain"
     fi
   else
-    printf '%s\n' 'Access URL: http://<server-ip-or-domain>'
+    admin_url="http://<server-ip-or-domain>"
   fi
+
+  printf '%s\n' ''
+  printf '%s\n' '=========================================='
+  printf '%s\n' '   Basjoo deployment is ready!           '
+  printf '%s\n' '=========================================='
+  printf '%s\n' ''
+  printf 'Project directory: %s\n' "$BASJOO_DIR"
+  printf '%s\n' ''
+  printf '%s\n' 'Admin dashboard:'
+  printf '  %s\n' "$admin_url"
+  printf '%s\n' ''
+  printf '%s\n' 'First-time setup:'
+  printf '%s\n' '  1. Open the Admin URL in your browser'
+  printf '%s\n' '  2. Register your admin account (becomes workspace super admin)'
+  printf '%s\n' '  3. Configure your AI agents and API keys'
+  printf '%s\n' ''
   printf 'Status command: %s\n' "$DOCKER_BIN compose --project-directory $BASJOO_DIR --profile prod ps"
   printf 'Log command: %s\n' "$DOCKER_BIN compose --project-directory $BASJOO_DIR --profile prod logs -f backend-prod nginx"
+
+  # Best-effort auto-open in background (skip if BASJOO_AUTO_OPEN=0 or placeholder URL)
+  if [ "${BASJOO_AUTO_OPEN:-1}" != "0" ] && [ "$admin_url" != "http://<server-ip-or-domain>" ]; then
+    if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      if command -v xdg-open >/dev/null 2>&1; then
+        printf '%s\n' ''
+        printf '%s\n' 'Attempting to open admin dashboard in browser...'
+        (xdg-open "$admin_url" >/dev/null 2>&1 || true) &
+      fi
+    elif command -v open >/dev/null 2>&1; then
+      # macOS fallback (unlikely on Ubuntu/Debian but harmless)
+      printf '%s\n' ''
+      printf '%s\n' 'Attempting to open admin dashboard in browser...'
+      (open "$admin_url" >/dev/null 2>&1 || true) &
+    fi
+  fi
 }
 
 deploy_repo() {

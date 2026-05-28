@@ -155,6 +155,11 @@
     "namePlaceholder": "例如：官网客服、WhatsApp 分身、邮件开发顾客",
     "descriptionPlaceholder": "说明这个智能体负责的业务、渠道或知识范围。",
     "type": "智能体类型",
+    "selectAgent": "选择智能体",
+    "selectForSessions": "选择一个智能体来管理对话。",
+    "selectForDashboard": "选择一个智能体来访问其后台。",
+    "noAssigned": "未分配智能体",
+    "contactSuperAdmin": "请联系工作区超级管理员以获得智能体分配。",
     "types": {
       "websiteSupport": "网页 AI 客服",
       "aiClone": "AI 分身",

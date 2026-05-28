@@ -100,15 +100,9 @@ def run_sqlite_migrations(database_url: str) -> None:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS ix_agent_members_admin_user_id ON agent_members(admin_user_id)"
             )
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO agent_members (agent_id, admin_user_id, role)
-                SELECT agents.id, admin_users.id, 'admin'
-                FROM agents
-                CROSS JOIN admin_users
-                WHERE admin_users.role = 'super_admin'
-                """
-            )
+            # Note: we no longer auto-insert AgentMember for super_admins on all agents
+            # Super admins now use workspace-based auth (agent.workspace_id == admin.workspace_id)
+            # This avoids cross-workspace membership that would bypass workspace isolation
 
         # ── chat_sessions ──────────────────────────────────────────────────
         if _table_exists(cursor, "chat_sessions"):
@@ -202,6 +196,98 @@ def run_sqlite_migrations(database_url: str) -> None:
                 print(
                     f"✓ Migrated {cursor.rowcount} admin_user(s) from readonly to support"
                 )
+
+        # ── admin_users workspace_id migration ──────────────────────────────
+        if _table_exists(cursor, "admin_users") and _table_exists(cursor, "workspaces"):
+            _ensure_columns(
+                cursor,
+                "admin_users",
+                [("workspace_id", "INTEGER REFERENCES workspaces(id)")]
+            )
+            # Create index if not exists
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS ix_admin_users_workspace_id ON admin_users(workspace_id)"
+            )
+
+            # Ensure at least one workspace exists
+            cursor.execute("SELECT id FROM workspaces ORDER BY id LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                canonical_workspace_id = row[0]
+            else:
+                # Create default workspace if none exists
+                cursor.execute(
+                    "INSERT INTO workspaces (name, owner_email, created_at) VALUES ('Default Workspace', 'admin@basjoo.local', CURRENT_TIMESTAMP)"
+                )
+                canonical_workspace_id = cursor.lastrowid
+                print(f"✓ Created default workspace with id={canonical_workspace_id}")
+
+                # Ensure quota for this workspace
+                if _table_exists(cursor, "workspace_quotas"):
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO workspace_quotas (workspace_id, max_agents, max_urls, max_qa_items, max_messages_per_day, max_total_text_mb) VALUES (?, 10, 500, 100, 1500, 20)",
+                        (canonical_workspace_id,)
+                    )
+                    if cursor.rowcount > 0:
+                        print(f"✓ Created workspace_quotas for workspace {canonical_workspace_id}")
+
+            # Backfill null workspace_id for ALL admin users (super_admin, admin, support)
+            # Legacy installs had no workspace_id column; all users need to be assigned to canonical workspace
+            cursor.execute(
+                "UPDATE admin_users SET workspace_id = ? WHERE workspace_id IS NULL",
+                (canonical_workspace_id,)
+            )
+            admin_backfill_count = cursor.rowcount
+            if admin_backfill_count > 0:
+                print(f"✓ Backfilled workspace_id for {admin_backfill_count} admin user(s)")
+
+            # Clean up old cross-workspace AgentMember records BEFORE consolidating agents
+            # (agents still have their original workspace assignments at this point)
+            # Old code did CROSS JOIN for super_admin × all agents, which now violates workspace isolation
+            # Only delete super_admin memberships - admin/support assignments should be preserved
+            if _table_exists(cursor, "agent_members") and _table_exists(cursor, "agents"):
+                # Delete AgentMember rows for super_admin where workspace mismatch
+                # These were created by legacy CROSS JOIN and would bypass workspace isolation after role downgrade
+                cursor.execute(
+                    """
+                    DELETE FROM agent_members
+                    WHERE id IN (
+                        SELECT am.id
+                        FROM agent_members am
+                        JOIN admin_users au ON am.admin_user_id = au.id
+                        JOIN agents a ON am.agent_id = a.id
+                        WHERE au.role = 'super_admin'
+                          AND au.workspace_id IS NOT NULL
+                          AND a.workspace_id IS NOT NULL
+                          AND au.workspace_id != a.workspace_id
+                    )
+                    """
+                )
+                cross_workspace_members_deleted = cursor.rowcount
+                if cross_workspace_members_deleted > 0:
+                    print(f"✓ Cleaned up {cross_workspace_members_deleted} super_admin cross-workspace AgentMember record(s) from legacy install")
+
+            # Agent workspace_id handling
+            if _table_exists(cursor, "agents"):
+                # Legacy installs (pre-workspace-scoped super_admin) had one workspace per agent.
+                # If we just backfilled admin workspace_id, consolidate agents to canonical workspace.
+                # Newer installs with existing workspace assignments are preserved.
+                if admin_backfill_count > 0:
+                    # This is likely a legacy install - consolidate all agents to canonical workspace
+                    cursor.execute(
+                        "UPDATE agents SET workspace_id = ?",
+                        (canonical_workspace_id,)
+                    )
+                    if cursor.rowcount > 0:
+                        print(f"✓ Consolidated {cursor.rowcount} agent(s) to workspace {canonical_workspace_id} (legacy install migration)")
+                else:
+                    # Newer install - only backfill NULL workspace_ids, preserve existing assignments
+                    cursor.execute(
+                        "UPDATE agents SET workspace_id = ? WHERE workspace_id IS NULL",
+                        (canonical_workspace_id,)
+                    )
+                    if cursor.rowcount > 0:
+                        print(f"✓ Backfilled workspace_id for {cursor.rowcount} agent(s) with NULL workspace_id")
 
         conn.commit()
 

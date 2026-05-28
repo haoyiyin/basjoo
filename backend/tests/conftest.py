@@ -155,10 +155,20 @@ async def reset_quota():
 
 
 async def ensure_test_admin_token() -> str:
-    from models import AdminUser
+    from models import AdminUser, Workspace, WorkspaceQuota
     from services.auth_service import AuthService
 
     async with database.AsyncSessionLocal() as session:
+        # Ensure workspace exists
+        workspace_result = await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+        workspace = workspace_result.scalar_one_or_none()
+        if not workspace:
+            workspace = Workspace(name="Test Workspace", owner_email="test@example.com")
+            session.add(workspace)
+            await session.flush()
+            session.add(WorkspaceQuota(workspace_id=workspace.id))
+            await session.commit()
+
         result = await session.execute(select(AdminUser).order_by(AdminUser.id).limit(1))
         admin = result.scalar_one_or_none()
         auth_service = AuthService(session)
@@ -169,7 +179,11 @@ async def ensure_test_admin_token() -> str:
                 password="testpassword123",
                 name="Test Admin",
                 role="super_admin",
+                workspace_id=workspace.id,
             )
+        elif admin.workspace_id is None:
+            admin.workspace_id = workspace.id
+            await session.commit()
 
         return auth_service.create_access_token({"sub": str(admin.id)})
 
@@ -254,12 +268,24 @@ async def public_client(setup_test_db):
         yield ac
 
 
-async def _ensure_test_admin_with_role(role: str) -> str:
+async def _ensure_test_admin_with_role(role: str, workspace_id: int | None = None) -> str:
     """Create an admin with a specific role and return a valid JWT token."""
-    from models import AdminUser
+    from models import AdminUser, Workspace, WorkspaceQuota
     from services.auth_service import AuthService
 
     async with database.AsyncSessionLocal() as session:
+        # Ensure workspace exists if not provided
+        if workspace_id is None:
+            workspace_result = await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+            workspace = workspace_result.scalar_one_or_none()
+            if not workspace:
+                workspace = Workspace(name="Test Workspace", owner_email="test@example.com")
+                session.add(workspace)
+                await session.flush()
+                session.add(WorkspaceQuota(workspace_id=workspace.id))
+                await session.commit()
+            workspace_id = workspace.id
+
         auth_service = AuthService(session)
         result = await session.execute(
             select(AdminUser).where(AdminUser.email == f"test_{role}@example.com")
@@ -272,7 +298,11 @@ async def _ensure_test_admin_with_role(role: str) -> str:
                 password="testpassword123",
                 name=f"Test {role.replace('_', ' ').title()}",
                 role=role,
+                workspace_id=workspace_id,
             )
+        elif admin.workspace_id is None:
+            admin.workspace_id = workspace_id
+            await session.commit()
 
         return auth_service.create_access_token({"sub": str(admin.id)})
 

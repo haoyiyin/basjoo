@@ -9,7 +9,7 @@ import uuid
 import database
 from database import get_db
 from api.endpoints.auth import require_admin_or_super_admin
-from api.v1.endpoints import require_agent_for_admin
+from api.v1.endpoints import require_agent_admin
 from models import AdminUser, Agent, KnowledgeFile, WorkspaceQuota
 from api.v1.schemas import FileUploadResponse, FileListResponse, FileItem
 from services.r2r_client import R2RClient
@@ -40,7 +40,7 @@ async def upload_files(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload file(s) and ingest them into R2R."""
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     # Check quota
     quota_result = await db.execute(
@@ -154,7 +154,7 @@ async def list_files(
     db: AsyncSession = Depends(get_db),
 ):
     """List uploaded files for an agent."""
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     # Total count
     total_result = await db.execute(
@@ -208,7 +208,7 @@ async def delete_file(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a file and its R2R document."""
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
 
     result = await db.execute(
         select(KnowledgeFile).where(
@@ -238,7 +238,7 @@ async def clear_all_files(
     db: AsyncSession = Depends(get_db),
 ):
     """Clear all files for an agent."""
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     # Load all files
     files_result = await db.execute(

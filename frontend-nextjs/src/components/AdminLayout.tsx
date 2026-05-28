@@ -130,8 +130,11 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const { admin, logout } = useAuth()
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const isSuperAdmin = admin?.role === 'super_admin'
   const isSupport = admin?.role === 'support'
   const agentBasePath = agentId ? `/agents/${agentId}` : ''
+
+  // Build nav items based on role and context
   const scopedNavItems = agentId
     ? navItemsConfig
         .filter(item => item.path !== '/agents')
@@ -143,9 +146,11 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             path: `${agentBasePath}${child.path}`,
           })),
         }))
-    : navItemsConfig.filter(item => item.path === '/' || item.path === '/agents')
+    : isSuperAdmin
+      ? navItemsConfig.filter(item => item.path === '/' || item.path === '/agents')
+      : [] // Non-super users at root level should redirect, show no nav
 
-  const allowedNav = isSupport
+  const allowedNav = isSupport && agentId
     ? scopedNavItems.filter(item => item.path === `${agentBasePath}/sessions`)
     : scopedNavItems
 
@@ -230,7 +235,17 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         borderBottom: '1px solid var(--color-border)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to={isSupport && agentId ? `${agentBasePath}/sessions` : "/"} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }} onClick={handleLogoClick}>
+          <Link
+            to={
+              isSuperAdmin
+                ? '/'
+                : agentId
+                  ? (isSupport ? `${agentBasePath}/sessions` : `${agentBasePath}/dashboard`)
+                  : '/agent-selector'
+            }
+            style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}
+            onClick={handleLogoClick}
+          >
             <div style={{
               width: '40px',
               height: '40px',

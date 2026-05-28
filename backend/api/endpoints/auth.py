@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from database import get_db
-from models import AdminUser
+from models import AdminUser, Workspace, WorkspaceQuota, AgentMember
 from services.auth_service import (
     AuthService,
     AuthError,
@@ -212,8 +212,24 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
                 detail=_("Password too short", locale=locale),
             )
 
+        # Create default workspace and quota for first admin
+        workspace = Workspace(
+            name="Default Workspace",
+            owner_email=req.email,
+        )
+        db.add(workspace)
+        await db.flush()
+
+        quota = WorkspaceQuota(workspace_id=workspace.id)
+        db.add(quota)
+        await db.flush()
+
         admin = await auth_service.create_admin(
-            email=req.email, password=req.password, name=req.name, role="super_admin"
+            email=req.email,
+            password=req.password,
+            name=req.name,
+            role="super_admin",
+            workspace_id=workspace.id,
         )
 
     return AdminResponse(id=admin.id, email=admin.email, name=admin.name, role=admin.role)
@@ -257,6 +273,12 @@ async def create_admin_user(
     locale = get_locale_from_request(request)
     auth_service = AuthService(db)
 
+    if not current_admin.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current admin has no workspace assigned",
+        )
+
     result = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
     existing_admin = result.scalar_one_or_none()
 
@@ -277,6 +299,7 @@ async def create_admin_user(
         password=req.password,
         name=req.name,
         role=req.role,
+        workspace_id=current_admin.workspace_id,
     )
 
     return AdminResponse(id=admin.id, email=admin.email, name=admin.name, role=admin.role)
@@ -287,7 +310,16 @@ async def list_admin_users(
     db: AsyncSession = Depends(get_db),
 ):
     require_super_admin(current_admin)
-    result = await db.execute(select(AdminUser).order_by(AdminUser.id.asc()))
+    if not current_admin.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current admin has no workspace assigned",
+        )
+    result = await db.execute(
+        select(AdminUser)
+        .where(AdminUser.workspace_id == current_admin.workspace_id)
+        .order_by(AdminUser.id.asc())
+    )
     return result.scalars().all()
 
 
@@ -299,11 +331,21 @@ async def update_admin_user(
     db: AsyncSession = Depends(get_db),
 ):
     require_super_admin(current_admin)
-    result = await db.execute(select(AdminUser).where(AdminUser.id == admin_id))
+    if not current_admin.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current admin has no workspace assigned",
+        )
+    result = await db.execute(
+        select(AdminUser).where(
+            AdminUser.id == admin_id,
+            AdminUser.workspace_id == current_admin.workspace_id,
+        )
+    )
     admin = result.scalar_one_or_none()
 
     if not admin:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found in your workspace")
 
     if req.email and req.email != admin.email:
         existing = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
@@ -325,6 +367,13 @@ async def update_admin_user(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="You cannot remove your own super admin role",
+            )
+        # When downgrading from super_admin, delete ALL AgentMember records
+        # Super admins use workspace-based auth (no membership needed)
+        # After downgrade, agent access must be explicitly re-assigned via /agents/{id}/members
+        if admin.role == "super_admin" and req.role != "super_admin":
+            await db.execute(
+                delete(AgentMember).where(AgentMember.admin_user_id == admin.id)
             )
         admin.role = req.role
 
@@ -348,11 +397,22 @@ async def delete_admin_user(
     if admin_id == current_admin.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete yourself")
 
-    result = await db.execute(select(AdminUser).where(AdminUser.id == admin_id))
+    if not current_admin.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current admin has no workspace assigned",
+        )
+
+    result = await db.execute(
+        select(AdminUser).where(
+            AdminUser.id == admin_id,
+            AdminUser.workspace_id == current_admin.workspace_id,
+        )
+    )
     admin = result.scalar_one_or_none()
 
     if not admin:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found in your workspace")
 
     await db.delete(admin)
     await db.commit()

@@ -46,6 +46,10 @@ If you already have this repository checked out locally, you can also run:
 sudo sh install-deploy.sh
 ```
 
+After deployment completes, the script prints a prominent summary with the admin dashboard URL. On local desktop environments (with `DISPLAY` or `WAYLAND_DISPLAY` set), it may automatically open the URL in your browser. On headless servers, copy the printed link into a browser.
+
+The first registered admin becomes the workspace super administrator, who can create and manage multiple isolated AI agents within the same workspace.
+
 ## Repository structure
 
 - `backend/` — FastAPI app, data models, chat APIs, auth, ingestion, indexing, tests

@@ -11,7 +11,7 @@ import asyncio
 import database
 from database import get_db
 from api.endpoints.auth import require_admin_or_super_admin
-from api.v1.endpoints import require_agent_for_admin
+from api.v1.endpoints import require_agent_admin
 from models import (
     AdminUser,
     Agent,
@@ -234,7 +234,7 @@ async def create_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
     mutation_task_id = "fetch_create"
     await acquire_url_mutation_task(agent_id, mutation_task_id)
 
@@ -308,7 +308,7 @@ async def list_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     quota_result = await db.execute(
         select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
@@ -350,7 +350,7 @@ async def refetch_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
     mutation_task_id = f"fetch_refetch_{agent_id}"
     await acquire_url_mutation_task(agent_id, mutation_task_id)
 
@@ -391,7 +391,7 @@ async def cancel_url_tasks(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
     cancelled = await task_lock.cancel_tasks(
         agent_id,
         {TaskType.URL_CRAWL, TaskType.URL_FETCH, TaskType.URL_REFETCH},
@@ -410,7 +410,7 @@ async def delete_url(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     result = await db.execute(
         select(URLSource).where(URLSource.id == url_id, URLSource.agent_id == agent_id)
@@ -469,7 +469,7 @@ async def discover_subpages(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
     mutation_task_id = "fetch_discover"
     await acquire_url_mutation_task(agent_id, mutation_task_id)
 
@@ -690,7 +690,7 @@ async def crawl_site(
 ):
     logger.info(f"[crawl_site] Received request: agent_id={agent_id}, url={request.url}, depth={request.max_depth}, pages={request.max_pages}")
 
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     quota_result = await db.execute(
         select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == agent.workspace_id)
@@ -739,7 +739,7 @@ async def clear_all_urls(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
     delete_task_id = "delete_all"
     success, error = await task_lock.acquire_task(agent_id, TaskType.URL_DELETE, delete_task_id)
     if not success:

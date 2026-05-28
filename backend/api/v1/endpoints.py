@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 import database
 from database import get_db
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
-from api.endpoints.auth import get_current_admin, require_admin_or_super_admin, require_chat_operator
+from api.endpoints.auth import get_current_admin, require_admin_or_super_admin, require_chat_operator, require_super_admin
 from models import (
     Agent,
     URLSource,
@@ -242,22 +242,99 @@ async def require_agent_for_admin(
     agent_id: str,
     current_user: AdminUser,
     include_deleted: bool = False,
+    allowed_member_roles: tuple[str, ...] | None = None,
 ) -> Agent:
+    """Load agent and check access permission.
+
+    Permission hierarchy:
+    - Workspace super admin: requires matching workspace_id, no membership fallback
+    - Agent member: requires AgentMember row with role in allowed_member_roles (default: any role)
+
+    Args:
+        allowed_member_roles: tuple of allowed AgentMember.role values. Default None means any member role.
+    """
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
     if not include_deleted and getattr(agent, "deleted_at", None):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
-    if current_user.role != "super_admin":
-        member_result = await db.execute(
-            select(AgentMember).where(
-                AgentMember.agent_id == agent.id,
-                AgentMember.admin_user_id == current_user.id,
+
+    # Workspace super admin: must match workspace, no membership fallback
+    if current_user.role == "super_admin":
+        if not current_user.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current admin has no workspace assigned",
             )
+        if current_user.workspace_id != agent.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Agent not in your workspace",
+            )
+        return agent
+
+    # Non-super admin: require membership
+    member_result = await db.execute(
+        select(AgentMember).where(
+            AgentMember.agent_id == agent.id,
+            AgentMember.admin_user_id == current_user.id,
         )
-        if not member_result.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent access denied")
+    )
+    member = member_result.scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent access denied")
+
+    # Check member role if allowed_member_roles specified
+    if allowed_member_roles is not None and member.role not in allowed_member_roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role for this agent")
+
+    return agent
+
+
+async def require_agent_admin(
+    db: AsyncSession,
+    agent_id: str,
+    current_user: AdminUser,
+    include_deleted: bool = False,
+) -> Agent:
+    """Require agent admin or workspace super admin access."""
+    return await require_agent_for_admin(
+        db, agent_id, current_user, include_deleted, allowed_member_roles=("admin",)
+    )
+
+
+async def require_agent_operator(
+    db: AsyncSession,
+    agent_id: str,
+    current_user: AdminUser,
+    include_deleted: bool = False,
+) -> Agent:
+    """Require agent operator (admin or support) or workspace super admin access."""
+    return await require_agent_for_admin(
+        db, agent_id, current_user, include_deleted, allowed_member_roles=("admin", "support")
+    )
+
+
+async def require_workspace_super_for_agent(
+    db: AsyncSession,
+    agent_id: str,
+    current_user: AdminUser,
+    include_deleted: bool = False,
+) -> Agent:
+    """Require workspace super admin for agent lifecycle management."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+    if not include_deleted and getattr(agent, "deleted_at", None):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
+
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only workspace super admin can manage agents")
+    if current_user.workspace_id != agent.workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent not in your workspace")
+
     return agent
 
 
@@ -1429,8 +1506,21 @@ async def list_agents(
     query = select(Agent).where(
         or_(Agent.purge_after.is_(None), Agent.purge_after > datetime.now(timezone.utc))
     )
-    if current_user.role != "super_admin":
-        query = query.join(AgentMember).where(AgentMember.admin_user_id == current_user.id)
+    if current_user.role == "super_admin":
+        # Super admin: require workspace_id and filter by workspace
+        if not current_user.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current admin has no workspace assigned",
+            )
+        query = query.where(Agent.workspace_id == current_user.workspace_id)
+    else:
+        # Agent admin/support: filter by membership AND only show active non-deleted agents
+        query = query.join(AgentMember).where(
+            AgentMember.admin_user_id == current_user.id,
+            Agent.is_active == True,
+            Agent.deleted_at.is_(None),
+        )
     result = await db.execute(query.order_by(Agent.deleted_at, Agent.created_at, Agent.id))
     agents = result.scalars().all()
     return AgentListResponse(
@@ -1442,19 +1532,42 @@ async def list_agents(
 @router.post("/agents", response_model=AgentConfig, status_code=status.HTTP_201_CREATED)
 async def create_agent(
     request: AgentCreateRequest,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    workspace = Workspace(
-        name=request.name,
-        owner_email=f"agent:{uuid.uuid4().hex}@basjoo.local",
-    )
-    db.add(workspace)
-    await db.flush()
+    # Only workspace super admins can create agents
+    require_super_admin(current_user)
 
-    quota = WorkspaceQuota(workspace_id=workspace.id)
-    db.add(quota)
-    await db.flush()
+    if not current_user.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current admin has no workspace assigned",
+        )
+
+    # Load workspace quota and enforce max_agents
+    quota_result = await db.execute(
+        select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == current_user.workspace_id)
+    )
+    quota = quota_result.scalar_one_or_none()
+    if not quota:
+        quota = WorkspaceQuota(workspace_id=current_user.workspace_id)
+        db.add(quota)
+        await db.flush()
+
+    # Count active, non-deleted agents in workspace
+    agent_count_result = await db.execute(
+        select(func.count(Agent.id)).where(
+            Agent.workspace_id == current_user.workspace_id,
+            Agent.is_active == True,
+            Agent.deleted_at.is_(None),
+        )
+    )
+    used_agents = agent_count_result.scalar() or 0
+    if used_agents >= quota.max_agents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Workspace agent limit reached (max {quota.max_agents})",
+        )
 
     persona_type = request.persona_type or "general"
     system_prompt = request.system_prompt
@@ -1464,7 +1577,7 @@ async def create_agent(
         system_prompt = "You are a helpful AI assistant."
 
     agent = Agent(
-        workspace_id=workspace.id,
+        workspace_id=current_user.workspace_id,
         name=request.name,
         description=request.description,
         agent_type=request.agent_type,
@@ -1486,7 +1599,9 @@ async def create_agent(
         agent.api_key = encrypt_api_key(settings.deepseek_api_key)
 
     db.add(agent)
-    db.add(AgentMember(agent=agent, admin_user_id=current_user.id, role="admin"))
+    # Note: we no longer create AgentMember for super_admin automatically
+    # Super admins use workspace-based auth (agent.workspace_id == admin.workspace_id)
+    # Agent membership must be explicitly assigned via /agents/{id}/members endpoint
     await db.commit()
     await db.refresh(agent)
     return await build_agent_config_with_stats(agent, db)
@@ -1498,17 +1613,18 @@ async def get_agent(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
     return await build_agent_config_with_stats(agent, db)
 
 
 @router.delete("/agents/{agent_id}")
 async def deactivate_agent(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user, include_deleted=True)
+    # Only workspace super admin can delete agents
+    agent = await require_workspace_super_for_agent(db, agent_id, current_user, include_deleted=True)
     if getattr(agent, "deleted_at", None):
         return {"success": True}
     now = datetime.now(timezone.utc)
@@ -1523,10 +1639,11 @@ async def deactivate_agent(
 @router.post("/agents/{agent_id}:restore", response_model=AgentConfig)
 async def restore_agent(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user, include_deleted=True)
+    # Only workspace super admin can restore agents
+    agent = await require_workspace_super_for_agent(db, agent_id, current_user, include_deleted=True)
     purge_after = as_utc(agent.purge_after)
     if purge_after and purge_after <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent purge window has expired")
@@ -1543,10 +1660,11 @@ async def restore_agent(
 async def update_agent(
     agent_id: str,
     request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_for_admin(db, agent_id, current_user)
+    # Agent admin or workspace super admin can update agent settings
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     update_data = request.model_dump(exclude_unset=True)
 
@@ -1596,7 +1714,7 @@ async def list_agent_members(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_for_admin(db, agent_id, current_user)
+    await require_agent_admin(db, agent_id, current_user)
     result = await db.execute(
         select(AgentMember, AdminUser)
         .join(AdminUser, AdminUser.id == AgentMember.admin_user_id)
@@ -1621,12 +1739,11 @@ async def list_agent_members(
 async def create_agent_member(
     agent_id: str,
     request: AgentMemberCreateRequest,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_for_admin(db, agent_id, current_user)
-    if current_user.role != "super_admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super admins can add members")
+    # Only workspace super admin can add members
+    agent = await require_workspace_super_for_agent(db, agent_id, current_user)
 
     result = await db.execute(select(AdminUser).where(AdminUser.email == request.email))
     user = result.scalar_one_or_none()
@@ -1634,14 +1751,19 @@ async def create_agent_member(
     if not user:
         if not request.password or len(request.password) < 8:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required for new users")
+        # Create user in the same workspace as the agent
         user = await auth_service.create_admin(
             email=request.email,
             password=request.password,
             name=request.name or request.email,
             role=request.role,
+            workspace_id=agent.workspace_id,
         )
     elif request.name:
         user.name = request.name
+    # Ensure user is in the same workspace
+    if user.workspace_id != agent.workspace_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is not in the same workspace as agent")
 
     member_result = await db.execute(
         select(AgentMember).where(
@@ -1671,12 +1793,11 @@ async def create_agent_member(
 async def delete_agent_member(
     agent_id: str,
     admin_id: int,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_for_admin(db, agent_id, current_user)
-    if current_user.role != "super_admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only super admins can remove members")
+    # Only workspace super admin can remove members
+    await require_workspace_super_for_agent(db, agent_id, current_user)
     if admin_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove yourself")
     await db.execute(
@@ -1692,16 +1813,10 @@ async def delete_agent_member(
 @router.get("/agent:jina-key-status")
 async def get_jina_key_status(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     jina_key = decrypt_api_key(agent.jina_api_key)
     siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
@@ -1718,17 +1833,11 @@ async def get_jina_key_status(
 @router.get("/agent:kb-status")
 async def kb_status(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Get knowledge base setup status."""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     jina_key = decrypt_api_key(agent.jina_api_key)
     siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
@@ -1748,17 +1857,11 @@ async def kb_status(
 async def kb_setup(
     agent_id: str,
     request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """One-time knowledge base embedding initialization."""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     if agent.kb_setup_completed:
         raise HTTPException(
@@ -1860,17 +1963,11 @@ async def kb_setup(
 @router.post("/agent:kb-reset")
 async def kb_reset(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Reset knowledge base embedding configuration."""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     if not agent.kb_setup_completed:
         raise HTTPException(
@@ -1923,16 +2020,10 @@ async def kb_reset(
 async def update_jina_key(
     agent_id: str,
     request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     if not request.jina_api_key:
         raise HTTPException(
@@ -1952,18 +2043,11 @@ async def update_jina_key(
 @router.get("/quota", response_model=QuotaInfo)
 async def get_quota(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """获取配额信息"""
-    # 获取Agent
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     # 获取配额
     quota_result = await db.execute(
@@ -2013,17 +2097,29 @@ async def get_default_agent(
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Agent)
-        .where(Agent.is_active == True, Agent.deleted_at.is_(None))
-        .order_by(Agent.created_at)
-        .limit(1)
-    )
+    query = select(Agent).where(Agent.is_active == True, Agent.deleted_at.is_(None))
+
+    # Workspace super admin: require workspace_id, no membership fallback
+    if current_user.role == "super_admin":
+        if not current_user.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current admin has no workspace assigned",
+            )
+        query = query.where(Agent.workspace_id == current_user.workspace_id)
+    else:
+        # Agent admin: filter by membership with admin role
+        query = query.join(AgentMember).where(
+            AgentMember.admin_user_id == current_user.id,
+            AgentMember.role == "admin",
+        )
+
+    result = await db.execute(query.order_by(Agent.created_at).limit(1))
     agent = result.scalar_one_or_none()
 
     if not agent:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No active agent found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="No active agent found in your workspace or assignments"
         )
 
     return build_agent_config(agent)
@@ -2040,19 +2136,18 @@ async def list_available_models(
 ):
     """
     获取可用模型列表
-    
+
     根据提供商类型和API Key获取可用的模型列表
     """
     from api.v1.schemas import ModelsListRequest, ModelsListResponse
     from services.llm_service import OpenAINativeProvider, GoogleProvider
-    
+
     api_key = request.api_key
-    
-    # 如果提供了agent_id，尝试使用已保存的API Key
+
+    # 如果提供了agent_id，校验权限后使用已保存的API Key
     if not api_key and request.agent_id:
-        result = await db.execute(select(Agent).where(Agent.id == request.agent_id))
-        agent = result.scalar_one_or_none()
-        if agent and agent.api_key:
+        agent = await require_agent_admin(db, request.agent_id, current_user)
+        if agent.api_key:
             api_key = decrypt_api_key(agent.api_key)
     
     if not api_key:
@@ -2091,19 +2186,22 @@ async def list_available_models(
 @router.get("/tasks:status")
 async def get_tasks_status(
     agent_id: str,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取当前Agent的任务状态
-    
+
     用于前端判断是否可以执行索引修改操作
     """
+    await require_agent_admin(db, agent_id, current_user)
+
     active_tasks = task_lock.get_active_tasks(agent_id)
     is_crawling = task_lock.is_task_running(agent_id, TaskType.URL_CRAWL)
     is_fetching = task_lock.is_task_running(agent_id, TaskType.URL_FETCH)
     is_refetching = task_lock.is_task_running(agent_id, TaskType.URL_REFETCH)
     is_rebuilding = task_lock.is_task_running(agent_id, TaskType.INDEX_REBUILD)
-    
+
     return {
         "agent_id": agent_id,
         "is_crawling": is_crawling or is_fetching or is_refetching,
@@ -2117,17 +2215,11 @@ async def get_tasks_status(
 async def test_ai_api(
     agent_id: str,
     payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """测试AI API是否可用"""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     raw_api_key = payload.api_key if payload and payload.api_key is not None else agent.api_key
     if not raw_api_key:
@@ -2173,17 +2265,11 @@ async def test_ai_api(
 async def test_embedding_api(
     agent_id: str,
     payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """测试当前 Embedding 配置是否可用"""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     # Build provider config from payload overrides without mutating ORM object
     embedding_provider_raw = (payload.embedding_provider if payload and payload.embedding_provider is not None else getattr(agent, "embedding_provider", None))
@@ -2265,17 +2351,11 @@ async def test_embedding_api(
 async def test_jina_api(
     agent_id: str,
     payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """测试Jina Embedding API是否可用"""
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one_or_none()
-
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+    agent = await require_agent_admin(db, agent_id, current_user)
 
     raw_jina_key = payload.jina_api_key if payload and payload.jina_api_key is not None else agent.jina_api_key
     agent_jina_api_key = decrypt_api_key(raw_jina_key)
@@ -2337,6 +2417,9 @@ async def get_sources_summary(
 
     返回URL和QA的总数、已训练数、待训练数等统计
     """
+    # Check agent access permission before reading stats
+    await require_agent_admin(db, agent_id, current_user)
+
     # 统计URL
     url_total_result = await db.execute(
         select(func.count()).select_from(URLSource).where(
@@ -2475,7 +2558,18 @@ async def list_sessions(
     if agent_id:
         await require_agent_for_admin(db, agent_id, current_user)
         query = query.where(ChatSession.agent_id == agent_id)
-    elif current_user.role != "super_admin":
+    elif current_user.role == "super_admin":
+        # Super admin: require workspace_id and filter by workspace
+        if not current_user.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current admin has no workspace assigned",
+            )
+        query = query.join(Agent, Agent.id == ChatSession.agent_id).where(
+            Agent.workspace_id == current_user.workspace_id
+        )
+    else:
+        # Agent admin/support: filter by membership
         member_agent_ids = await db.execute(
             select(AgentMember.agent_id).where(AgentMember.admin_user_id == current_user.id)
         )

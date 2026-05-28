@@ -155,6 +155,11 @@
     "namePlaceholder": "Example: Website support, WhatsApp clone, email prospecting",
     "descriptionPlaceholder": "Describe the business, channel, or knowledge scope for this agent.",
     "type": "Agent type",
+    "selectAgent": "Select Agent",
+    "selectForSessions": "Choose an agent to manage conversations.",
+    "selectForDashboard": "Choose an agent to access its dashboard.",
+    "noAssigned": "No Agent Assigned",
+    "contactSuperAdmin": "Contact your workspace super administrator to get assigned to an agent.",
     "types": {
       "websiteSupport": "Website AI support",
       "aiClone": "AI clone",

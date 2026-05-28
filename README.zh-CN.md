@@ -51,6 +51,10 @@ curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy
 sudo sh install-deploy.sh
 ```
 
+部署完成后，脚本会打印包含后台管理链接的醒目提示。在本地桌面环境（设置了 `DISPLAY` 或 `WAYLAND_DISPLAY`）下，脚本可能会自动在浏览器中打开链接。在无图形界面的服务器上，请将打印的链接复制到浏览器中访问。
+
+第一个注册的管理员将成为工作区超级管理员，可以在同一工作区内创建和管理多个相互隔离的 AI 智能体。
+
 ## 仓库结构
 
 - `backend/` — FastAPI 应用、数据模型、聊天 API、认证、数据导入、索引、测试
