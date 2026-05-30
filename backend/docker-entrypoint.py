@@ -66,6 +66,58 @@ def ensure_data_directory():
     return uid, gid
 
 
+def ensure_r2r_config_directory():
+    """Ensure r2r-config volume mount (and user_configs subdir) is writable by basjoo user.
+
+    This fixes the EACCES when write_r2r_config() runs as non-root after privilege drop.
+    Safe on read-only mounts: PermissionError is caught and logged as warning.
+    """
+    r2r_dir = "/app/r2r-config"
+    user_configs_dir = os.path.join(r2r_dir, "user_configs")
+
+    # Create if missing (covers first-run before any volume or when host dir absent)
+    if not os.path.exists(r2r_dir):
+        print(f"Creating r2r config directory: {r2r_dir}")
+        os.makedirs(r2r_dir, exist_ok=True)
+    os.makedirs(user_configs_dir, exist_ok=True)
+
+    try:
+        user_info = pwd.getpwnam("basjoo")
+        uid = user_info.pw_uid
+        gid = user_info.pw_gid
+
+        print(f"Fixing permissions for {r2r_dir} (UID={uid})")
+        for root, dirs, files in os.walk(r2r_dir):
+            try:
+                os.chown(root, uid, gid)
+                os.chmod(root, 0o755)
+            except PermissionError:
+                print(f"Warning: cannot chown {root} (read-only mount or insufficient caps)")
+                # continue walking — some subpaths may still be fixable
+            except Exception as exc:
+                print(f"Warning: chown error on {root}: {exc}")
+
+            for dirname in dirs:
+                path = os.path.join(root, dirname)
+                try:
+                    os.chown(path, uid, gid)
+                    os.chmod(path, 0o755)
+                except Exception:
+                    pass
+
+            for filename in files:
+                path = os.path.join(root, filename)
+                try:
+                    os.chown(path, uid, gid)
+                except Exception:
+                    pass
+    except KeyError:
+        print("Warning: basjoo user not found, skipping r2r-config chown")
+    except Exception as exc:
+        print(f"Warning: r2r-config permission fix failed: {exc}")
+
+
+
 def apply_lenient_defaults():
     """Apply permissive defaults so first-run deployments succeed without a populated .env."""
     secret_key_file = os.environ.get("SECRET_KEY_FILE", "").strip() or DEFAULT_SECRET_KEY_FILE
