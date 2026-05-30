@@ -1,3 +1,6 @@
+import hashlib
+import uuid
+
 from sqlalchemy import (
     Column,
     String,
@@ -15,10 +18,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from database import Base
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
-import hashlib
-import uuid
 
 
 def normalize_url(url: str) -> str:
@@ -539,6 +541,8 @@ class KnowledgeBase(Base):
     is_locked = Column(
         Boolean, nullable=False, default=False
     )  # 有 chunk 后锁定 embedding 配置
+    chunk_size = Column(Integer, nullable=False, default=512)
+    chunk_overlap = Column(Integer, nullable=False, default=64)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     tenant = relationship("Tenant", back_populates="knowledge_bases")
@@ -568,6 +572,8 @@ class KbDocument(Base):
         index=True,
     )
     chunk_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    file_size = Column(Integer, nullable=True)
     storage_path = Column(String(1000), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
