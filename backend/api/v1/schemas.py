@@ -227,6 +227,39 @@ class FileUploadResponse(BaseModel):
     errors: List[str] = Field(default_factory=list, description="错误信息")
 
 
+# ========== KB Document Schemas ==========
+
+
+class KbDocumentItem(BaseModel):
+    """KB 文档项"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    filename: str
+    file_type: Optional[str] = None
+    status: Literal["pending", "processing", "ready", "error"] = "pending"
+    chunk_count: int = 0
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class KbDocumentUploadResponse(BaseModel):
+    """KB 文档上传响应"""
+
+    uploaded: int = 0
+    failed: int = 0
+    documents: List[KbDocumentItem] = Field(default_factory=list)
+
+
+class KbDocumentProgressResponse(BaseModel):
+    """KB 文档索引进度响应"""
+
+    status: str
+    chunk_count: int = 0
+    error_message: Optional[str] = None
+
+
 # ========== Agent Management Schemas ==========
 
 
