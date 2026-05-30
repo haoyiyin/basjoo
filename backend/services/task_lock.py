@@ -16,6 +16,7 @@ class TaskType(str, Enum):
     URL_FETCH = "url_fetch"
     URL_REFETCH = "url_refetch"
     URL_DELETE = "url_delete"
+    KB_RESET = "kb_reset"
 
 
 class TaskLock:
