@@ -73,3 +73,60 @@ class KbService:
             )
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
+
+    async def get_kb_config(self, tenant_id: str, kb_id: str) -> dict:
+        """Return KB embedding configuration (read-only)."""
+        kb = await self.get_knowledge_base(tenant_id, kb_id)
+        if not kb:
+            raise ValueError("KB not found")
+        return {
+            "id": kb.id,
+            "name": kb.name,
+            "embedding_model": kb.embedding_model,
+            "embedding_base_url": kb.embedding_base_url,
+            "vector_backend": kb.vector_backend,
+            "chunk_size": kb.chunk_size,
+            "chunk_overlap": kb.chunk_overlap,
+            "is_locked": kb.is_locked,
+            "status": kb.status,
+        }
+
+    async def update_kb_config(
+        self, tenant_id: str, kb_id: str, updates: dict
+    ) -> KnowledgeBase:
+        """Update KB config. Embedding fields blocked when is_locked=True."""
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        async with await self._get_session() as session:
+            stmt = (
+                select(KnowledgeBase)
+                .where(
+                    KnowledgeBase.id == kb_id,
+                    KnowledgeBase.tenant_id == tenant_id,
+                )
+                .with_for_update()
+            )
+            res = await session.execute(stmt)
+            kb = res.scalar_one_or_none()
+            if not kb:
+                raise ValueError("KB not found")
+            kb_status = str(getattr(kb, "status", "active"))
+            if kb_status == "resetting":
+                from fastapi import HTTPException
+                raise HTTPException(423, "KB is resetting, config changes locked")
+            # embedding fields: only allowed when not locked
+            embedding_fields = {"embedding_model", "embedding_base_url"}
+            kb_is_locked = bool(getattr(kb, "is_locked", False))
+            for f in embedding_fields:
+                if f in updates and kb_is_locked:
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        409,
+                        "Embedding config locked (has chunks). Use reset first.",
+                    )
+            for k, v in updates.items():
+                if hasattr(kb, k) and k not in {"id", "tenant_id", "created_at"}:
+                    object.__setattr__(kb, k, v)
+            await session.commit()
+            await session.refresh(kb)
+            return kb

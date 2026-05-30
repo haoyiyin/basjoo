@@ -65,3 +65,24 @@ def test_knowledge_base_has_status_and_error_message():
     kb = KnowledgeBase(tenant_id="t1", name="test", qdrant_collection="kb_test")
     assert hasattr(kb, "status")
     assert hasattr(kb, "error_message")
+
+
+def test_kb_service_has_get_config_method():
+    svc = KbService()
+    assert hasattr(svc, "get_kb_config")
+    import inspect
+    sig = inspect.signature(svc.get_kb_config)
+    param_names = list(sig.parameters.keys())
+    assert "tenant_id" in param_names
+    assert "kb_id" in param_names
+
+
+def test_kb_service_has_update_config_method():
+    svc = KbService()
+    assert hasattr(svc, "update_kb_config")
+    import inspect
+    sig = inspect.signature(svc.update_kb_config)
+    param_names = list(sig.parameters.keys())
+    assert "tenant_id" in param_names
+    assert "kb_id" in param_names
+    assert "updates" in param_names
