@@ -16,3 +16,12 @@ def test_new_models_import():
 async def test_agent_kb_id_column_present():
     # This will be used in integration tests after migration
     pass
+
+
+# @pytest.mark.asyncio
+# async def test_ensure_collection_idempotent():
+#     svc = QdrantKbService()
+#     coll = await svc.ensure_collection("test-kb-uuid", "BAAI/bge-m3")
+#     assert coll.startswith("kb_")
+#     coll2 = await svc.ensure_collection("test-kb-uuid", "BAAI/bge-m3")
+#     assert coll == coll2
