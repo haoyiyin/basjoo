@@ -117,6 +117,9 @@ temp/
 *.tmp
 *.bak
 
+# Git worktrees (superpowers)
+.worktrees/
+
 # 上传的文件（仅仓库根目录）
 /uploads/
 /files/
