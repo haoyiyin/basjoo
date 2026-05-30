@@ -120,6 +120,7 @@ async def cors_for_file_protocol(request, call_next):
     response = await call_next(request)
     return apply_early_cors_headers(request, response)
 
+
 app.add_middleware(I18nMiddleware)
 
 app.add_middleware(
@@ -153,7 +154,9 @@ async def log_requests(request, call_next):
     logger.info(f"REQUEST: {request.method} {request.url.path}")
     try:
         response = await call_next(request)
-        logger.info(f"RESPONSE: {response.status_code} {request.method} {request.url.path}")
+        logger.info(
+            f"RESPONSE: {response.status_code} {request.method} {request.url.path}"
+        )
         return response
     except Exception as e:
         logger.exception(f"ERROR processing {request.method} {request.url.path}: {e}")
@@ -164,7 +167,9 @@ async def log_requests(request, call_next):
 async def unhandled_exception_handler(request, exc):
     """Return JSON for unhandled exceptions instead of plain-text 500."""
     logger = logging.getLogger("uvicorn")
-    logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+    logger.exception(
+        f"Unhandled exception on {request.method} {request.url.path}: {exc}"
+    )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},

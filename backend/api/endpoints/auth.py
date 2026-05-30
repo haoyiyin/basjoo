@@ -28,7 +28,9 @@ security = HTTPBearer(auto_error=False)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
 
 
-def _check_login_rate_limit(ip: str, max_attempts: int, window_seconds: int) -> tuple[bool, int]:
+def _check_login_rate_limit(
+    ip: str, max_attempts: int, window_seconds: int
+) -> tuple[bool, int]:
     """In-memory sliding-window rate limit. Returns (allowed, retry_after_seconds)."""
     now = time.time()
     history = _login_attempt_history[ip]
@@ -42,6 +44,7 @@ def _check_login_rate_limit(ip: str, max_attempts: int, window_seconds: int) -> 
         return False, max(retry_after, 1)
     history.append(now)
     return True, 0
+
 
 # Prevent concurrent first-admin bootstrap from creating multiple super_admin accounts
 _bootstrap_lock = asyncio.Lock()
@@ -57,12 +60,14 @@ class RegisterRequest(BaseModel):
     password: str
     name: str
 
+
 class CreateAdminRequest(BaseModel):
     email: str
     password: str
     name: str
     role: str = "admin"
-    
+
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -74,6 +79,7 @@ class AdminResponse(BaseModel):
     email: str
     name: str
     role: str
+
 
 class AdminUserOut(BaseModel):
     id: int
@@ -89,7 +95,8 @@ class UpdateAdminRequest(BaseModel):
     password: Optional[str] = None
     is_active: Optional[bool] = None
     role: Optional[str] = None
-    
+
+
 class RegistrationSettingsResponse(BaseModel):
     public_registration_enabled: bool
     bootstrap_required: bool
@@ -97,6 +104,8 @@ class RegistrationSettingsResponse(BaseModel):
 
 class RegistrationSettingsUpdate(BaseModel):
     public_registration_enabled: bool
+
+
 async def get_current_admin(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -139,6 +148,7 @@ async def get_current_admin(
         )
 
     return admin
+
 
 VALID_ADMIN_ROLES = {"super_admin", "admin", "support"}
 
@@ -196,8 +206,11 @@ def validate_admin_role(role: str):
             detail="Invalid role",
         )
 
+
 @router.post("/register", response_model=AdminResponse)
-async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(
+    request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)
+):
     locale = get_locale_from_request(request)
     auth_service = AuthService(db)
 
@@ -219,7 +232,8 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
 
         if existing_admin:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=_("Email already registered", locale=locale)
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_("Email already registered", locale=locale),
             )
 
         if len(req.password) < 8:
@@ -248,7 +262,10 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
             workspace_id=workspace.id,
         )
 
-    return AdminResponse(id=admin.id, email=admin.email, name=admin.name, role=admin.role)
+    return AdminResponse(
+        id=admin.id, email=admin.email, name=admin.name, role=admin.role
+    )
+
 
 @router.get("/registration-settings", response_model=RegistrationSettingsResponse)
 async def get_registration_settings(db: AsyncSession = Depends(get_db)):
@@ -276,6 +293,7 @@ async def update_registration_settings(
         public_registration_enabled=False,
         bootstrap_required=admin_count == 0,
     )
+
 
 @router.post("/users", response_model=AdminResponse)
 async def create_admin_user(
@@ -318,7 +336,10 @@ async def create_admin_user(
         workspace_id=current_admin.workspace_id,
     )
 
-    return AdminResponse(id=admin.id, email=admin.email, name=admin.name, role=admin.role)
+    return AdminResponse(
+        id=admin.id, email=admin.email, name=admin.name, role=admin.role
+    )
+
 
 @router.get("/users", response_model=list[AdminUserOut])
 async def list_admin_users(
@@ -361,12 +382,20 @@ async def update_admin_user(
     admin = result.scalar_one_or_none()
 
     if not admin:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found in your workspace")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Admin user not found in your workspace",
+        )
 
     if req.email and req.email != admin.email:
-        existing = await db.execute(select(AdminUser).where(AdminUser.email == req.email))
+        existing = await db.execute(
+            select(AdminUser).where(AdminUser.email == req.email)
+        )
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered",
+            )
         admin.email = req.email
 
     if req.name is not None:
@@ -374,9 +403,11 @@ async def update_admin_user(
 
     if req.password:
         if len(req.password) < 8:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password too short")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Password too short"
+            )
         admin.hashed_password = AuthService.hash_password(req.password)
-        
+
     if req.role is not None:
         validate_admin_role(req.role)
         if admin.id == current_admin.id and req.role != "super_admin":
@@ -395,7 +426,10 @@ async def update_admin_user(
 
     if req.is_active is not None:
         if admin.id == current_admin.id and req.is_active is False:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot disable yourself")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot disable yourself",
+            )
         admin.is_active = req.is_active
 
     await db.commit()
@@ -411,7 +445,9 @@ async def delete_admin_user(
 ):
     require_super_admin(current_admin)
     if admin_id == current_admin.id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete yourself")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete yourself"
+        )
 
     if not current_admin.workspace_id:
         raise HTTPException(
@@ -428,7 +464,10 @@ async def delete_admin_user(
     admin = result.scalar_one_or_none()
 
     if not admin:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found in your workspace")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Admin user not found in your workspace",
+        )
 
     await db.delete(admin)
     await db.commit()
@@ -436,7 +475,9 @@ async def delete_admin_user(
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)
+):
     from middleware.rate_limit import get_request_client_ip
     from services.redis_service import get_redis
 
@@ -445,6 +486,7 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     # Rate-limit login attempts per client IP to prevent brute-force attacks.
     # Redis-first with in-memory fallback so protection never disappears.
     from config import settings as cfg
+
     max_attempts = cfg.login_rate_limit_max_attempts
     window_seconds = cfg.login_rate_limit_window_seconds
     ip = get_request_client_ip(request)
@@ -458,18 +500,26 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
             if not allowed:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=_("Too many login attempts. Please try again later.", locale=locale),
+                    detail=_(
+                        "Too many login attempts. Please try again later.",
+                        locale=locale,
+                    ),
                     headers={"Retry-After": str(window_seconds)},
                 )
         except HTTPException:
             raise
         except Exception:
             # Redis error — fall through to in-memory limiter.
-            allowed, retry_after = _check_login_rate_limit(ip, max_attempts, window_seconds)
+            allowed, retry_after = _check_login_rate_limit(
+                ip, max_attempts, window_seconds
+            )
             if not allowed:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=_("Too many login attempts. Please try again later.", locale=locale),
+                    detail=_(
+                        "Too many login attempts. Please try again later.",
+                        locale=locale,
+                    ),
                     headers={"Retry-After": str(retry_after)},
                 )
     else:
@@ -477,7 +527,9 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
         if not allowed:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=_("Too many login attempts. Please try again later.", locale=locale),
+                detail=_(
+                    "Too many login attempts. Please try again later.", locale=locale
+                ),
                 headers={"Retry-After": str(retry_after)},
             )
 
@@ -509,7 +561,12 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
 
     return LoginResponse(
         access_token=access_token,
-        admin={"id": admin.id, "email": admin.email, "name": admin.name,"role": admin.role},
+        admin={
+            "id": admin.id,
+            "email": admin.email,
+            "name": admin.name,
+            "role": admin.role,
+        },
     )
 
 
@@ -519,5 +576,5 @@ async def get_me(current_admin: AdminUser = Depends(get_current_admin)):
         id=current_admin.id,
         email=current_admin.email,
         name=current_admin.name,
-        role=current_admin.role
+        role=current_admin.role,
     )

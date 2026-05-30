@@ -98,9 +98,7 @@ class QdrantKbService:
         """Delete all points for a doc_id using filter. Returns deleted count (best-effort)."""
         collection_name = get_kb_collection_name(kb_id)
         flt = Filter(
-            must=[
-                FieldCondition(key="doc_id", match=MatchValue(value=doc_id))
-            ]
+            must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
         )
         try:
             await self.client.delete(

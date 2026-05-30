@@ -111,7 +111,7 @@ class DocumentParser:
                 return self.parse(storage_path, file_type)
             except Exception as e:
                 last_exc = e
-                logger.warning(f"Parse attempt {attempt+1} failed: {e}")
+                logger.warning(f"Parse attempt {attempt + 1} failed: {e}")
         if last_exc is not None:
             raise last_exc
         raise RuntimeError("parse_with_retry: no attempts made")

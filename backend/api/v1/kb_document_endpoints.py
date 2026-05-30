@@ -42,7 +42,7 @@ async def upload_kb_documents(
     tenant_id: str = Path(...),
     kb_id: str = Path(...),
     files: list[UploadFile] = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
+    background_tasks: BackgroundTasks = BackgroundTasks(),  # default is overridden by FastAPI injection
     current_user: AdminUser = Depends(require_admin_or_super_admin),
     db: AsyncSession = Depends(get_db),
     _tenant: str = Depends(require_tenant_access),
@@ -73,9 +73,7 @@ async def upload_kb_documents(
         uploaded_items.append(
             KbDocumentItem(id=doc.id, filename=doc.filename, status=doc.status)
         )
-        background_tasks.add_task(
-            processor.process_document, doc.id, tenant_id, kb_id
-        )
+        background_tasks.add_task(processor.process_document, doc.id, tenant_id, kb_id)
     await db.commit()
     return KbDocumentUploadResponse(
         uploaded=len(uploaded_items),

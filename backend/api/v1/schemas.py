@@ -40,9 +40,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(
         None, max_length=200, description="会话ID（用于多轮对话）"
     )
-    visitor_id: Optional[str] = Field(
-        None, max_length=100, description="访客标识"
-    )
+    visitor_id: Optional[str] = Field(None, max_length=100, description="访客标识")
     # 客户端传送的地理信息（用于无法从IP获取的情况）
     timezone: Optional[str] = Field(None, description="客户端时区")
     params: Optional[Dict[str, Any]] = Field(
@@ -287,9 +285,7 @@ class AgentConfig(BaseModel):
     jina_api_key_set: bool = Field(
         default=False, description="Whether Jina API key is configured"
     )
-    jina_api_key_masked: Optional[str] = Field(
-        None, description="Masked Jina API key"
-    )
+    jina_api_key_masked: Optional[str] = Field(None, description="Masked Jina API key")
     siliconflow_api_key_set: bool = Field(
         default=False, description="Whether SiliconFlow embedding API key is configured"
     )
@@ -297,7 +293,20 @@ class AgentConfig(BaseModel):
         None, description="Masked SiliconFlow embedding API key"
     )
     provider_type: Optional[
-        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
+        Literal[
+            "openai",
+            "openai_native",
+            "google",
+            "anthropic",
+            "xai",
+            "openrouter",
+            "zai",
+            "deepseek",
+            "volcengine",
+            "moonshot",
+            "aliyun_bailian",
+            "siliconflow",
+        ]
     ] = Field("openai", description="AI provider type")
     azure_endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
     azure_deployment_name: Optional[str] = Field(
@@ -318,16 +327,24 @@ class AgentConfig(BaseModel):
         "r2r",
         description="Embedding provider: r2r, jina, siliconflow, or custom",
     )
-    embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
+    embedding_api_base: Optional[str] = Field(
+        None, description="Embedding API base URL"
+    )
     embedding_api_key_set: bool = Field(
-        default=False, description="Whether the selected embedding provider has an effective API key configured"
+        default=False,
+        description="Whether the selected embedding provider has an effective API key configured",
     )
     embedding_model: str
     configuration_error: Optional[str] = Field(
-        None, description="Non-fatal configuration problem (e.g. invalid custom embedding base); present only when the backend degraded gracefully so the admin can fix it"
+        None,
+        description="Non-fatal configuration problem (e.g. invalid custom embedding base); present only when the backend degraded gracefully so the admin can fix it",
     )
-    crawl_max_depth: int = Field(default=2, ge=0, le=5, description="Crawl depth for site crawling")
-    crawl_max_pages: int = Field(default=20, ge=1, le=500, description="Max pages for site crawling")
+    crawl_max_depth: int = Field(
+        default=2, ge=0, le=5, description="Crawl depth for site crawling"
+    )
+    crawl_max_pages: int = Field(
+        default=20, ge=1, le=500, description="Max pages for site crawling"
+    )
     top_k: int = Field(..., ge=1, le=20)
     similarity_threshold: float = Field(..., ge=0, le=1)
     enable_context: bool = Field(
@@ -350,7 +367,8 @@ class AgentConfig(BaseModel):
     last_error_message: Optional[str] = None
     last_error_at: Optional[str] = None
     persona_type: Optional[str] = Field(
-        default="general", description="Persona type: general, customer-service, sales, custom"
+        default="general",
+        description="Persona type: general, customer-service, sales, custom",
     )
     widget_title: Optional[str] = Field(default="AI 客服", description="Widget title")
     widget_color: Optional[str] = Field(
@@ -361,8 +379,12 @@ class AgentConfig(BaseModel):
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: int = Field(default=30, description="Chat history retention days")
-    embedding_batch_size: int = Field(default=4, ge=1, le=64, description="Embedding batch size")
-    kb_setup_completed: bool = Field(default=False, description="Whether the knowledge base setup has been completed")
+    embedding_batch_size: int = Field(
+        default=4, ge=1, le=64, description="Embedding batch size"
+    )
+    kb_setup_completed: bool = Field(
+        default=False, description="Whether the knowledge base setup has been completed"
+    )
     is_active: bool
     deleted_at: Optional[datetime] = None
     purge_after: Optional[datetime] = None
@@ -381,7 +403,9 @@ class AgentUpdateRequest(BaseModel):
 
     name: Optional[str] = Field(None, min_length=1, max_length=50)
     description: Optional[str] = Field(None, max_length=200)
-    agent_type: Optional[Literal["website_support", "ai_clone", "sales_outreach", "custom"]] = None
+    agent_type: Optional[
+        Literal["website_support", "ai_clone", "sales_outreach", "custom"]
+    ] = None
     channel_mode: Optional[Literal["web_widget", "whatsapp", "email", "custom"]] = None
     avatar: Optional[str] = Field(None, max_length=500)
     system_prompt: Optional[str] = Field(None, min_length=1)
@@ -392,7 +416,20 @@ class AgentUpdateRequest(BaseModel):
     jina_api_key: Optional[str] = Field(None, min_length=0)
     siliconflow_api_key: Optional[str] = Field(None, min_length=0)
     provider_type: Optional[
-        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
+        Literal[
+            "openai",
+            "openai_native",
+            "google",
+            "anthropic",
+            "xai",
+            "openrouter",
+            "zai",
+            "deepseek",
+            "volcengine",
+            "moonshot",
+            "aliyun_bailian",
+            "siliconflow",
+        ]
     ] = Field(None, description="AI provider type")
     azure_endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
     azure_deployment_name: Optional[str] = Field(
@@ -405,13 +442,23 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Optional[Literal["jina", "siliconflow", "custom", "r2r"]] = Field(None, description="Embedding provider: r2r, jina, siliconflow, or custom")
-    embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
+    embedding_provider: Optional[Literal["jina", "siliconflow", "custom", "r2r"]] = (
+        Field(None, description="Embedding provider: r2r, jina, siliconflow, or custom")
+    )
+    embedding_api_base: Optional[str] = Field(
+        None, description="Embedding API base URL"
+    )
     embedding_model: Optional[str] = Field(None, min_length=1)
-    crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
-    crawl_max_pages: Optional[int] = Field(None, ge=1, le=500, description="Max pages for site crawling")
+    crawl_max_depth: Optional[int] = Field(
+        None, ge=0, le=5, description="Crawl depth for site crawling"
+    )
+    crawl_max_pages: Optional[int] = Field(
+        None, ge=1, le=500, description="Max pages for site crawling"
+    )
     top_k: Optional[int] = Field(None, ge=1, le=20)
-    similarity_threshold: Optional[float] = Field(None, ge=0, le=1, description="Minimum similarity score for retrieval results")
+    similarity_threshold: Optional[float] = Field(
+        None, ge=0, le=1, description="Minimum similarity score for retrieval results"
+    )
     enable_context: Optional[bool] = Field(
         None, description="Enable conversation context"
     )
@@ -443,8 +490,13 @@ class AgentUpdateRequest(BaseModel):
         None, description="Allowed widget embed origins"
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
-    history_days: Optional[int] = Field(None, ge=1, le=365, description="Chat history retention days")
-    embedding_batch_size: Optional[int] = Field(None, ge=1, le=64, description="Embedding batch size")
+    history_days: Optional[int] = Field(
+        None, ge=1, le=365, description="Chat history retention days"
+    )
+    embedding_batch_size: Optional[int] = Field(
+        None, ge=1, le=64, description="Embedding batch size"
+    )
+
     @field_validator("allowed_widget_origins")
     @classmethod
     def validate_allowed_widget_origins(
@@ -470,7 +522,9 @@ class AgentCreateRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=50)
     description: Optional[str] = Field(None, max_length=200)
-    agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = "website_support"
+    agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = (
+        "website_support"
+    )
     channel_mode: Literal["web_widget", "whatsapp", "email", "custom"] = "web_widget"
     system_prompt: Optional[str] = Field(None, min_length=1)
     persona_type: Optional[str] = "general"
@@ -632,6 +686,7 @@ class ModelsListResponse(BaseModel):
 
 class SourcesURLSummary(BaseModel):
     """URL知识源统计"""
+
     total: int = Field(..., description="URL总数")
     indexed: int = Field(..., description="已训练数量")
     pending: int = Field(..., description="待训练数量")
@@ -640,6 +695,7 @@ class SourcesURLSummary(BaseModel):
 
 class SourcesFileSummary(BaseModel):
     """文件知识源统计"""
+
     total: int = Field(..., description="文件总数")
     ready: int = Field(..., description="就绪数量")
     processing: int = Field(..., description="处理中数量")
@@ -648,6 +704,7 @@ class SourcesFileSummary(BaseModel):
 
 class SourcesSummaryResponse(BaseModel):
     """知识源统计响应"""
+
     urls: SourcesURLSummary
     files: SourcesFileSummary
     has_pending: bool = Field(..., description="是否有待处理内容")
