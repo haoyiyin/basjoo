@@ -64,6 +64,7 @@ from core.encryption import encrypt_api_key, decrypt_api_key
 from api.v1.provider_helpers import get_agent_r2r_client
 from services.llm_service import get_llm_service
 from services.auth_service import AuthService
+from services.kb_retrieval_service import KbRetrievalService
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -818,9 +819,43 @@ async def prepare_chat_request(
     if retrieval_results and current_rag_service:
         context = current_rag_service.build_context(retrieval_results, locale=request.locale)
 
+    # KB retrieval (direct Qdrant pipeline, tenant-isolated)
+    kb_context = ""
+    if getattr(agent, 'kb_id', None):
+        try:
+            kb_retriever = KbRetrievalService()
+            # Resolve tenant_id from agent's KB (agent -> kb -> tenant_id)
+            from sqlalchemy import select as sa_select
+            from models import KnowledgeBase
+            kb_stmt = sa_select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
+            kb_result = await db.execute(kb_stmt)
+            kb_obj = kb_result.scalar_one_or_none()
+            if kb_obj:
+                kb_results = await kb_retriever.retrieve(
+                    tenant_id=kb_obj.tenant_id,
+                    agent_id=agent_id,
+                    query=request.message,
+                    top_k=agent_top_k or 5,
+                )
+                if kb_results:
+                    texts = [
+                        f"[{r.get('filename', 'doc')}#{r['chunk_index']}] {r['text']}"
+                        for r in kb_results
+                    ]
+                    kb_context = "\n\n".join(texts)
+        except Exception as e:
+            logger.warning(f"KB retrieval in chat skipped: {e}")
+
     messages: List[Dict[str, str]] = []
     system_content = agent_system_prompt or "You are a helpful AI assistant."
-    if context:
+    if kb_context:
+        # KB context takes priority (direct Qdrant pipeline)
+        system_content += (
+            f"\n\n以下是相关背景资料：\n\n{kb_context}\n\n"
+            "请基于以上资料回答用户问题。"
+        )
+    elif context:
+        # Fallback to old R2R RAG context
         system_content += (
             f"\n\nKnowledge base:\n{context}\n\n"
             "Please answer based on the above knowledge base content. "
