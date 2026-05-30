@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 创建非root用户和数据目录
 RUN groupadd -r basjoo && useradd -r -g basjoo basjoo \
-    && mkdir -p /app/data /app/.cache \
-    && chown -R basjoo:basjoo /app/data /app/.cache
+    && mkdir -p /app/data /app/.cache /app/r2r-config/user_configs \
+    && chown -R basjoo:basjoo /app/data /app/.cache /app/r2r-config /app/r2r-config/user_configs
 
 # 设置环境变量
 ENV HOME=/app
