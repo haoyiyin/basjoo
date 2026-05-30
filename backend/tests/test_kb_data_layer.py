@@ -33,3 +33,19 @@ async def test_list_kbs_requires_tenant_filter():
     svc = KbService()
     with pytest.raises(ValueError, match="tenant_id"):
         await svc.list_knowledge_bases(tenant_id=None)
+
+
+def test_search_kb_method_exists():
+    """QdrantKbService should have search_kb with double isolation filter."""
+    from services.qdrant_service import QdrantKbService
+
+    assert hasattr(QdrantKbService, "search_kb")
+    # Verify signature: (kb_id, tenant_id, query_vector, top_k)
+    import inspect
+
+    sig = inspect.signature(QdrantKbService.search_kb)
+    param_names = list(sig.parameters.keys())
+    assert "kb_id" in param_names
+    assert "tenant_id" in param_names
+    assert "query_vector" in param_names
+    assert "top_k" in param_names

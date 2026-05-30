@@ -118,3 +118,38 @@ class QdrantKbService:
             return True
         except Exception:
             return False
+
+    async def search_kb(
+        self,
+        kb_id: str,
+        tenant_id: str,
+        query_vector: list[float],
+        top_k: int = 5,
+    ) -> list[dict]:
+        """Search with double isolation: collection (physical) + payload filter (logical).
+
+        Returns list of {id, score, payload}. Vector data is not returned.
+        """
+        collection_name = get_kb_collection_name(kb_id)
+        qfilter = Filter(
+            must=[
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
+            ]
+        )
+        try:
+            response = await self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=qfilter,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return [
+                {"id": h.id, "score": h.score, "payload": h.payload or {}}
+                for h in response.points
+            ]
+        except Exception as e:
+            logger.warning(f"Qdrant search failed for kb={kb_id}: {e}")
+            return []
