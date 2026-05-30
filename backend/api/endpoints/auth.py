@@ -173,6 +173,22 @@ async def require_chat_operator(
     return current_admin
 
 
+async def require_tenant_access(
+    tenant_id: str,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+) -> str:
+    """Lightweight tenant check (exists + user context). Extend with membership later."""
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id required")
+    from models import Tenant
+
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return tenant_id
+
+
 def validate_admin_role(role: str):
     if role not in VALID_ADMIN_ROLES:
         raise HTTPException(
