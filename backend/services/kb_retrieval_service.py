@@ -23,7 +23,7 @@ class KbRetrievalService:
 
     async def retrieve(
         self,
-        tenant_id: str,
+        tenant_id: str | None,
         agent_id: str,
         query: str,
         top_k: int = 5,
@@ -31,10 +31,14 @@ class KbRetrievalService:
     ) -> list[dict[str, Any]]:
         """Retrieve top-K chunks from agent's bound KB with double isolation.
 
+        If tenant_id is None (chat path), the effective tenant for the Qdrant
+        payload filter is derived from the agent's KB (ensuring isolation is still
+        enforced by the specific KB's tenant_id).
+
         Returns: [{"text":, "doc_id":, "chunk_index":, "score":, "filename":?}, ...]
         Returns [] if agent has no kb_id bound or validation fails.
         """
-        if not tenant_id or not agent_id:
+        if not agent_id:
             return []
 
         async with AsyncSessionLocal() as session:
@@ -52,7 +56,9 @@ class KbRetrievalService:
             agent, kb = row[0], row[1]
 
             if not agent.kb_id or not kb:
-                logger.info(f"Agent {agent_id} has no kb_id bound, returning empty retrieval")
+                logger.info(
+                    f"Agent {agent_id} has no kb_id bound, returning empty retrieval"
+                )
                 return []
 
             # 2. Enforce tenant match on KB (logical ownership check)
@@ -75,15 +81,20 @@ class KbRetrievalService:
                 return []
 
             # 4. Search with double isolation (collection + payload filter)
+            # Use provided tenant_id or fall back to the KB's own tenant_id
+            # (chat path passes None; admin retrieve path passes explicit tenant_id)
+            effective_tenant = tenant_id or kb.tenant_id
             raw_hits = await self.qdrant.search_kb(
                 kb_id=kb.id,
-                tenant_id=tenant_id,
+                tenant_id=effective_tenant,
                 query_vector=query_vec,
                 top_k=top_k * 2,  # fetch extra for threshold filtering
             )
 
             # 5. Post-filter by threshold and cap at top_k
-            eff_threshold = threshold if threshold is not None else self.default_threshold
+            eff_threshold = (
+                threshold if threshold is not None else self.default_threshold
+            )
             results = []
             for h in raw_hits:
                 p = h.get("payload", {})
