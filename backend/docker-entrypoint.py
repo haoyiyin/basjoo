@@ -256,6 +256,7 @@ def main():
     """Main entrypoint function."""
     if os.getuid() == 0:
         uid, gid = ensure_data_directory()
+        ensure_r2r_config_directory()
 
         if uid is not None:
             print("Switching to basjoo user...")
