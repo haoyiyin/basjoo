@@ -1,7 +1,8 @@
 """Tests for multi-tenant KB data layer: models, tenant enforcement, Qdrant collection ensure."""
 
-from models import Agent, KbChunk, KbDocument, KnowledgeBase, Tenant
 import pytest
+from models import Agent, KbChunk, KbDocument, KnowledgeBase, Tenant
+from services.kb_service import KbService
 
 
 def test_new_models_import():
@@ -25,3 +26,10 @@ async def test_agent_kb_id_column_present():
 #     assert coll.startswith("kb_")
 #     coll2 = await svc.ensure_collection("test-kb-uuid", "BAAI/bge-m3")
 #     assert coll == coll2
+
+
+@pytest.mark.asyncio
+async def test_list_kbs_requires_tenant_filter():
+    svc = KbService()
+    with pytest.raises(ValueError, match="tenant_id"):
+        await svc.list_knowledge_bases(tenant_id=None)
