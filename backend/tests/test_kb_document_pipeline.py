@@ -1,6 +1,6 @@
 """Tests for KB document pipeline: model fields, parser, processor, endpoints."""
 
-from models import KnowledgeBase, KbDocument
+from models import KbDocument, KnowledgeBase
 from services.document_parser import DocumentParser
 from services.kb_document_processor import KbDocumentProcessor
 
@@ -61,3 +61,13 @@ def test_kb_document_processor_imports():
     assert proc.parser is not None
     assert proc.qdrant is not None
     assert proc.kb_svc is not None
+
+
+def test_kb_retrieval_service_imports():
+    from services.kb_retrieval_service import KbRetrievalService
+    svc = KbRetrievalService()
+    assert svc is not None
+    assert svc.parser is not None
+    assert svc.qdrant is not None
+    assert svc.kb_svc is not None
+    assert svc.default_threshold == 0.6
