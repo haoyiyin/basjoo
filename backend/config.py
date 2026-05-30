@@ -18,7 +18,9 @@ INSECURE_SECRET_VALUES = {
 
 DEFAULT_AGENT_ID_FILE = "/app/data/.agent_id"
 DEFAULT_AGENT_MAX_TOKENS = 1024
-DEFAULT_AGENT_SIMILARITY_THRESHOLD = 0.01  # R2R hybrid search uses RRF scores (~10%-50%), default 10% (0.01)
+DEFAULT_AGENT_SIMILARITY_THRESHOLD = (
+    0.01  # R2R hybrid search uses RRF scores (~10%-50%), default 10% (0.01)
+)
 
 
 def _is_missing_or_insecure_secret(value: str | None) -> bool:
@@ -66,7 +68,6 @@ def _is_valid_agent_id(value: str | None) -> bool:
     return len(suffix) == 12 and all(char in "0123456789abcdef" for char in suffix)
 
 
-
 def _load_agent_id_from_file(agent_id_file: str) -> str | None:
     try:
         path = Path(agent_id_file)
@@ -78,7 +79,6 @@ def _load_agent_id_from_file(agent_id_file: str) -> str | None:
     except Exception as exc:
         logger.warning("Failed to load agent id from %s: %s", agent_id_file, exc)
         return None
-
 
 
 def _save_agent_id(agent_id_file: str, agent_id: str) -> None:
@@ -94,7 +94,6 @@ def _save_agent_id(agent_id_file: str, agent_id: str) -> None:
             agent_id_file,
             exc,
         )
-
 
 
 def _generate_and_save_agent_id(agent_id_file: str) -> str:
@@ -205,7 +204,11 @@ class Settings(BaseSettings):
             object.__setattr__(self, "allowed_methods", "GET,POST,PUT,DELETE,OPTIONS")
 
         if not self.allowed_headers.strip():
-            object.__setattr__(self, "allowed_headers", "Content-Type,Authorization,X-Requested-With,Accept")
+            object.__setattr__(
+                self,
+                "allowed_headers",
+                "Content-Type,Authorization,X-Requested-With,Accept",
+            )
 
         if _is_missing_or_insecure_secret(self.secret_key):
             resolved_secret = _load_secret_key_from_file(secret_key_file)
@@ -235,19 +238,36 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         """将逗号分隔的字符串转换为列表"""
-        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+        return [
+            origin.strip()
+            for origin in self.allowed_origins.split(",")
+            if origin.strip()
+        ]
 
     @property
     def cors_methods_list(self) -> list[str]:
         """将逗号分隔的HTTP方法转换为列表"""
-        methods = [method.strip() for method in self.allowed_methods.split(",") if method.strip()]
+        methods = [
+            method.strip()
+            for method in self.allowed_methods.split(",")
+            if method.strip()
+        ]
         return methods or ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 
     @property
     def cors_headers_list(self) -> list[str]:
         """将逗号分隔的请求头转换为列表"""
-        headers = [header.strip() for header in self.allowed_headers.split(",") if header.strip()]
-        return headers or ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
+        headers = [
+            header.strip()
+            for header in self.allowed_headers.split(",")
+            if header.strip()
+        ]
+        return headers or [
+            "Content-Type",
+            "Authorization",
+            "X-Requested-With",
+            "Accept",
+        ]
 
 
 @lru_cache

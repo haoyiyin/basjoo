@@ -19,7 +19,7 @@ def _sqlite_db_path(database_url: str) -> str | None:
     raw = (database_url or "").strip()
     for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
         if raw.startswith(prefix):
-            rest = raw[len(prefix):]
+            rest = raw[len(prefix) :]
             # Strip query strings like ?cache=shared
             path = rest.split("?", 1)[0]
             # Resolve relative paths against CWD
@@ -46,7 +46,6 @@ def _ensure_columns(
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
             added += 1
     return added
-
 
 
 _DEFAULT_SIMILARITY_THRESHOLD = 0.01
@@ -187,7 +186,11 @@ def run_sqlite_migrations(database_url: str) -> None:
 
         # ── admin_users role migration ─────────────────────────────────────
         if _table_exists(cursor, "admin_users"):
-            _ensure_columns(cursor, "admin_users", [("role", "VARCHAR(50) NOT NULL DEFAULT 'admin'")])
+            _ensure_columns(
+                cursor,
+                "admin_users",
+                [("role", "VARCHAR(50) NOT NULL DEFAULT 'admin'")],
+            )
             cursor.execute(
                 "UPDATE admin_users SET role = 'support' WHERE role = 'readonly'"
             )
@@ -201,7 +204,7 @@ def run_sqlite_migrations(database_url: str) -> None:
             _ensure_columns(
                 cursor,
                 "admin_users",
-                [("workspace_id", "INTEGER REFERENCES workspaces(id)")]
+                [("workspace_id", "INTEGER REFERENCES workspaces(id)")],
             )
             # Create index if not exists
             cursor.execute(
@@ -225,26 +228,32 @@ def run_sqlite_migrations(database_url: str) -> None:
                 if _table_exists(cursor, "workspace_quotas"):
                     cursor.execute(
                         "INSERT OR IGNORE INTO workspace_quotas (workspace_id, max_agents, max_urls, max_qa_items, max_messages_per_day, max_total_text_mb) VALUES (?, 10, 500, 100, 1500, 20)",
-                        (canonical_workspace_id,)
+                        (canonical_workspace_id,),
                     )
                     if cursor.rowcount > 0:
-                        print(f"✓ Created workspace_quotas for workspace {canonical_workspace_id}")
+                        print(
+                            f"✓ Created workspace_quotas for workspace {canonical_workspace_id}"
+                        )
 
             # Backfill null workspace_id for ALL admin users (super_admin, admin, support)
             # Legacy installs had no workspace_id column; all users need to be assigned to canonical workspace
             cursor.execute(
                 "UPDATE admin_users SET workspace_id = ? WHERE workspace_id IS NULL",
-                (canonical_workspace_id,)
+                (canonical_workspace_id,),
             )
             admin_backfill_count = cursor.rowcount
             if admin_backfill_count > 0:
-                print(f"✓ Backfilled workspace_id for {admin_backfill_count} admin user(s)")
+                print(
+                    f"✓ Backfilled workspace_id for {admin_backfill_count} admin user(s)"
+                )
 
             # Clean up old cross-workspace AgentMember records BEFORE consolidating agents
             # (agents still have their original workspace assignments at this point)
             # Old code did CROSS JOIN for super_admin × all agents, which now violates workspace isolation
             # Only delete super_admin memberships - admin/support assignments should be preserved
-            if _table_exists(cursor, "agent_members") and _table_exists(cursor, "agents"):
+            if _table_exists(cursor, "agent_members") and _table_exists(
+                cursor, "agents"
+            ):
                 # Delete AgentMember rows for super_admin where workspace mismatch
                 # These were created by legacy CROSS JOIN and would bypass workspace isolation after role downgrade
                 cursor.execute(
@@ -264,7 +273,9 @@ def run_sqlite_migrations(database_url: str) -> None:
                 )
                 cross_workspace_members_deleted = cursor.rowcount
                 if cross_workspace_members_deleted > 0:
-                    print(f"✓ Cleaned up {cross_workspace_members_deleted} super_admin cross-workspace AgentMember record(s) from legacy install")
+                    print(
+                        f"✓ Cleaned up {cross_workspace_members_deleted} super_admin cross-workspace AgentMember record(s) from legacy install"
+                    )
 
             # Agent workspace_id handling
             if _table_exists(cursor, "agents"):
@@ -274,19 +285,22 @@ def run_sqlite_migrations(database_url: str) -> None:
                 if admin_backfill_count > 0:
                     # This is likely a legacy install - consolidate all agents to canonical workspace
                     cursor.execute(
-                        "UPDATE agents SET workspace_id = ?",
-                        (canonical_workspace_id,)
+                        "UPDATE agents SET workspace_id = ?", (canonical_workspace_id,)
                     )
                     if cursor.rowcount > 0:
-                        print(f"✓ Consolidated {cursor.rowcount} agent(s) to workspace {canonical_workspace_id} (legacy install migration)")
+                        print(
+                            f"✓ Consolidated {cursor.rowcount} agent(s) to workspace {canonical_workspace_id} (legacy install migration)"
+                        )
                 else:
                     # Newer install - only backfill NULL workspace_ids, preserve existing assignments
                     cursor.execute(
                         "UPDATE agents SET workspace_id = ? WHERE workspace_id IS NULL",
-                        (canonical_workspace_id,)
+                        (canonical_workspace_id,),
                     )
                     if cursor.rowcount > 0:
-                        print(f"✓ Backfilled workspace_id for {cursor.rowcount} agent(s) with NULL workspace_id")
+                        print(
+                            f"✓ Backfilled workspace_id for {cursor.rowcount} agent(s) with NULL workspace_id"
+                        )
 
         conn.commit()
 
@@ -357,7 +371,10 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("persona_type", "VARCHAR(20) DEFAULT 'general'"),
         ("widget_title", "VARCHAR(100) DEFAULT 'AI 客服'"),
         ("widget_color", "VARCHAR(20) DEFAULT '#06B6D4'"),
-        ("welcome_message", "TEXT DEFAULT '您好！我是Basjoo助手，有什么可以帮您的吗？'"),
+        (
+            "welcome_message",
+            "TEXT DEFAULT '您好！我是Basjoo助手，有什么可以帮您的吗？'",
+        ),
         ("history_days", "INTEGER DEFAULT 30"),
     ]
 
@@ -455,9 +472,7 @@ def _backfill_agents(cursor: sqlite3.Cursor):
 
     # ── top_k ────────────────────────────────────────────────────────────────
     if "top_k" in col_names:
-        cursor.execute(
-            "UPDATE agents SET top_k = 5 WHERE top_k IS NULL"
-        )
+        cursor.execute("UPDATE agents SET top_k = 5 WHERE top_k IS NULL")
 
     # ── similarity_threshold ─────────────────────────────────────────────────
     if "similarity_threshold" in col_names:
@@ -477,16 +492,12 @@ def _backfill_agents(cursor: sqlite3.Cursor):
 
     # ── history_days ─────────────────────────────────────────────────────────
     if "history_days" in col_names:
-        cursor.execute(
-            "UPDATE agents SET history_days = 30 WHERE history_days IS NULL"
-        )
+        cursor.execute("UPDATE agents SET history_days = 30 WHERE history_days IS NULL")
 
     # ── boolean flags that should default to false ───────────────────────────
     for flag_col in ("enable_auto_fetch", "enable_context"):
         if flag_col in col_names:
-            cursor.execute(
-                f"UPDATE agents SET {flag_col} = 0 WHERE {flag_col} IS NULL"
-            )
+            cursor.execute(f"UPDATE agents SET {flag_col} = 0 WHERE {flag_col} IS NULL")
 
     # ── crawl defaults ───────────────────────────────────────────────────────
     if "crawl_max_depth" in col_names:
