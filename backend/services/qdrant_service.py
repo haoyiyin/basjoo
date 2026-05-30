@@ -23,6 +23,12 @@ def get_embedding_dimension(model: str) -> int:
     return 1024  # safe default
 
 
+def get_kb_collection_name(kb_id: str) -> str:
+    """生成知识库对应的 Qdrant collection 名称（kb_ + 前12位无连字符ID）。"""
+    short = kb_id.replace("-", "")[:12] if "-" in kb_id else kb_id[:12]
+    return f"kb_{short}"
+
+
 class QdrantKbService:
     def __init__(self):
         self.client = AsyncQdrantClient(
@@ -33,14 +39,17 @@ class QdrantKbService:
 
     async def ensure_collection(self, kb_id: str, embedding_model: str) -> str:
         """幂等创建 collection。已存在则返回名称。"""
-        short = kb_id.replace("-", "")[:12] if "-" in kb_id else kb_id[:12]
-        collection_name = f"kb_{short}"
+        collection_name = get_kb_collection_name(kb_id)
         dim = get_embedding_dimension(embedding_model)
 
         try:
-            info: CollectionInfo | None = await self.client.get_collection(collection_name)
+            info: CollectionInfo | None = await self.client.get_collection(
+                collection_name
+            )
             if info:
-                logger.info(f"Qdrant collection '{collection_name}' already exists (dim={dim})")
+                logger.info(
+                    f"Qdrant collection '{collection_name}' already exists (dim={dim})"
+                )
                 return collection_name
         except Exception:
             pass  # not found → create
@@ -49,5 +58,7 @@ class QdrantKbService:
             collection_name=collection_name,
             vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
         )
-        logger.info(f"Created Qdrant collection '{collection_name}' (dim={dim}, Cosine)")
+        logger.info(
+            f"Created Qdrant collection '{collection_name}' (dim={dim}, Cosine)"
+        )
         return collection_name

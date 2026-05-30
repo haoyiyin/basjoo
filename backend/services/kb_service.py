@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal
 from models import KnowledgeBase
-from services.qdrant_service import QdrantKbService
+from services.qdrant_service import QdrantKbService, get_kb_collection_name
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +34,14 @@ class KbService:
                 name=name,
                 embedding_model=embedding_model,
                 qdrant_collection="",  # will set after
-                **kwargs
+                **kwargs,
             )
             session.add(kb)
             await session.flush()  # get id
 
             # set collection name using kb.id
             kb_id_str = str(kb.id)
-            short = kb_id_str.replace("-", "")[:12]
-            setattr(kb, "qdrant_collection", f"kb_{short}")
+            setattr(kb, "qdrant_collection", get_kb_collection_name(kb_id_str))
 
             # ensure Qdrant (幂等)
             await self.qdrant.ensure_collection(kb_id_str, embedding_model)
