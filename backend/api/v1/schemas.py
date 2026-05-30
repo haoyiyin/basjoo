@@ -258,6 +258,55 @@ class KbDocumentProgressResponse(BaseModel):
     error_message: Optional[str] = None
 
 
+# ========== KB Config/Reset Schemas ==========
+
+
+class KbConfigResponse(BaseModel):
+    """KB embedding configuration response"""
+
+    id: str
+    name: str
+    embedding_model: str
+    embedding_base_url: Optional[str] = None
+    vector_backend: str
+    chunk_size: int
+    chunk_overlap: int
+    is_locked: bool
+    status: str
+
+
+class KbConfigUpdate(BaseModel):
+    """KB config update request (embedding fields blocked when locked)"""
+
+    name: Optional[str] = None
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    embedding_model: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+
+
+class KbResetRequest(BaseModel):
+    """KB reset request (change embedding model + reindex)"""
+
+    new_embedding_model: str
+    new_embedding_base_url: Optional[str] = None
+
+
+class KbDetailResponse(KbConfigResponse):
+    """KB detail with document/chunk counts"""
+
+    document_count: int = 0
+    ready_document_count: int = 0
+    total_chunks: int = 0
+
+
+class KbDeleteResponse(BaseModel):
+    """KB delete response"""
+
+    deleted: bool = True
+    message: Optional[str] = None
+
+
 # ========== Agent Management Schemas ==========
 
 
@@ -394,9 +443,7 @@ class AgentConfig(BaseModel):
     active_session_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
-    kb_id: Optional[str] = Field(
-        None, description="Bound knowledge base ID (optional)"
-    )
+    kb_id: Optional[str] = Field(None, description="Bound knowledge base ID (optional)")
 
     model_config = ConfigDict(from_attributes=True)
 
