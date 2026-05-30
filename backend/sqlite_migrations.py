@@ -10,12 +10,11 @@ are fully loaded.
 
 import os
 import sqlite3
-from typing import List, Optional, Tuple
 
 # ---- URL parsing ------------------------------------------------------------
 
 
-def _sqlite_db_path(database_url: str) -> Optional[str]:
+def _sqlite_db_path(database_url: str) -> str | None:
     """Extract the filesystem path from a SQLite database URL."""
     raw = (database_url or "").strip()
     for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
@@ -36,7 +35,7 @@ def _sqlite_db_path(database_url: str) -> Optional[str]:
 def _ensure_columns(
     cursor: sqlite3.Cursor,
     table: str,
-    columns: List[Tuple[str, str]],
+    columns: list[tuple[str, str]],
 ) -> int:
     """Add any missing columns to *table* (idempotent).  Returns count of columns added."""
     cursor.execute(f"PRAGMA table_info({table})")
@@ -317,7 +316,7 @@ def _migrate_agents(cursor: sqlite3.Cursor):
     The column list mirrors the current ``models.py:Agent`` definition and must
     be kept in sync when the model gains new fields.
     """
-    columns: List[Tuple[str, str]] = [
+    columns: list[tuple[str, str]] = [
         # LLM / provider
         ("agent_type", "VARCHAR(50) DEFAULT 'website_support'"),
         ("channel_mode", "VARCHAR(50) DEFAULT 'web_widget'"),
@@ -340,6 +339,7 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("embedding_batch_size", "INTEGER DEFAULT 4"),
         # kb setup state
         ("kb_setup_completed", "BOOLEAN DEFAULT 0"),
+        ("kb_id", "VARCHAR(36)"),
         # crawl / retrieval
         ("crawl_max_depth", "INTEGER DEFAULT 2"),
         ("crawl_max_pages", "INTEGER DEFAULT 500"),
