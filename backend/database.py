@@ -111,12 +111,12 @@ async def init_db():
         from models import (
             Workspace,
             Agent,
-            URLSource,
-            KnowledgeFile,
-            ChatSession,
-            ChatMessage,
             WorkspaceQuota,
             AgentMember,
+            Tenant,
+            KnowledgeBase,
+            KbDocument,
+            KbChunk,
             IndexJob,
             AdminUser,
         )
