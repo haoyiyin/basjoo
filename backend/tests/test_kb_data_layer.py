@@ -6,11 +6,11 @@ from services.kb_service import KbService
 
 
 def test_new_models_import():
-    assert hasattr(Tenant, '__tablename__')
-    assert hasattr(KnowledgeBase, '__tablename__')
-    assert hasattr(KbDocument, '__tablename__')
-    assert hasattr(KbChunk, '__tablename__')
-    assert hasattr(Agent, 'kb_id')  # new column present
+    assert hasattr(Tenant, "__tablename__")
+    assert hasattr(KnowledgeBase, "__tablename__")
+    assert hasattr(KbDocument, "__tablename__")
+    assert hasattr(KbChunk, "__tablename__")
+    assert hasattr(Agent, "kb_id")  # new column present
 
 
 @pytest.mark.asyncio
