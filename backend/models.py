@@ -543,6 +543,19 @@ class KnowledgeBase(Base):
     )  # 有 chunk 后锁定 embedding 配置
     chunk_size = Column(Integer, nullable=False, default=512)
     chunk_overlap = Column(Integer, nullable=False, default=64)
+    status = Column(
+        SQLEnum(
+            "active",
+            "resetting",
+            "processing",
+            "error",
+            name="kb_status",
+        ),
+        default="active",
+        nullable=False,
+        index=True,
+    )
+    error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     tenant = relationship("Tenant", back_populates="knowledge_bases")

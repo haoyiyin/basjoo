@@ -49,3 +49,19 @@ def test_search_kb_method_exists():
     assert "tenant_id" in param_names
     assert "query_vector" in param_names
     assert "top_k" in param_names
+
+
+def test_knowledge_base_has_status_and_error_message():
+    from sqlalchemy import inspect as sa_inspect
+    mapper = sa_inspect(KnowledgeBase)
+    # status column exists with correct default
+    assert "status" in mapper.columns
+    assert mapper.columns["status"].default.arg == "active"
+    assert mapper.columns["status"].nullable is False
+    # error_message column exists
+    assert "error_message" in mapper.columns
+    assert mapper.columns["error_message"].nullable is True
+    # Python object instantiation works
+    kb = KnowledgeBase(tenant_id="t1", name="test", qdrant_collection="kb_test")
+    assert hasattr(kb, "status")
+    assert hasattr(kb, "error_message")
