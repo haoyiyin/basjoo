@@ -132,6 +132,9 @@ class KbDocumentProcessor:
                 session.add_all(chunk_records)
                 doc.status = "ready"
                 doc.chunk_count = len(chunks)
+                # Lock KB embedding config after first successful index
+                if not bool(getattr(kb, "is_locked", False)):
+                    object.__setattr__(kb, "is_locked", True)
                 await session.commit()
                 logger.info(f"Doc {doc_id} indexed: {len(chunks)} chunks")
 
