@@ -13,6 +13,7 @@ from api.v1 import endpoints as v1_endpoints
 from api.v1 import url_endpoints as v1_url_endpoints
 from api.v1 import index_endpoints as v1_index_endpoints
 from api.v1 import file_endpoints as v1_file_endpoints
+from api.v1 import kb_document_endpoints as v1_kb_doc_endpoints
 from services.scheduler import (
     agent_purge_scheduler,
     url_fetch_scheduler,
@@ -178,6 +179,7 @@ app.include_router(v1_endpoints.router, tags=["v1"])
 app.include_router(v1_url_endpoints.router, tags=["v1"])
 app.include_router(v1_index_endpoints.router, tags=["v1"])
 app.include_router(v1_file_endpoints.router, tags=["v1"])
+app.include_router(v1_kb_doc_endpoints.router, tags=["kb-documents"])
 
 
 # SDK.js 路由 - 用于嵌入 widget
