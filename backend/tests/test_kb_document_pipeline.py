@@ -71,3 +71,12 @@ def test_kb_retrieval_service_imports():
     assert svc.qdrant is not None
     assert svc.kb_svc is not None
     assert svc.default_threshold == 0.6
+
+
+def test_retrieve_endpoint_registered():
+    from api.v1.kb_document_endpoints import router
+    from fastapi.routing import APIRoute
+    retrieve_routes = [r for r in router.routes if isinstance(r, APIRoute) and "retrieve" in r.path]
+    assert len(retrieve_routes) == 1
+    route = retrieve_routes[0]
+    assert "POST" in route.methods
