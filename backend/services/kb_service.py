@@ -40,8 +40,11 @@ class KbService:
             await session.flush()  # get id
 
             # set collection name using kb.id
+            # SQLAlchemy Column assignment is a false positive for pyright
             kb_id_str = str(kb.id)
-            setattr(kb, "qdrant_collection", get_kb_collection_name(kb_id_str))
+            object.__setattr__(
+                kb, "qdrant_collection", get_kb_collection_name(kb_id_str)
+            )
 
             # ensure Qdrant (幂等)
             await self.qdrant.ensure_collection(kb_id_str, embedding_model)
@@ -57,3 +60,16 @@ class KbService:
             stmt = select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
             result = await session.execute(stmt)
             return list(result.scalars().all())
+
+    async def get_knowledge_base(
+        self, tenant_id: str, kb_id: str
+    ) -> KnowledgeBase | None:
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        async with await self._get_session() as session:
+            stmt = select(KnowledgeBase).where(
+                KnowledgeBase.id == kb_id,
+                KnowledgeBase.tenant_id == tenant_id,
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
