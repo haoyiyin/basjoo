@@ -177,7 +177,11 @@
       "whatsapp": "WhatsApp",
       "email": "邮件",
       "custom": "自定义"
-    }
+    },
+    "kbOnboardingTitle": "设置知识库",
+    "kbOnboardingDescription": "配置嵌入服务，让智能体基于你的数据回答问题。稍后也可以在知识库设置中完成。",
+    "kbOnboardingSkip": "暂时跳过",
+    "kbOnboardingContinue": "进入仪表盘"
   },
   "placeholders": {
     "enterMessage": "输入消息...",

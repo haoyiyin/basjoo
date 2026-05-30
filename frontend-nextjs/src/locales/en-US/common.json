@@ -177,7 +177,11 @@
       "whatsapp": "WhatsApp",
       "email": "Email",
       "custom": "Custom"
-    }
+    },
+    "kbOnboardingTitle": "Set up your Knowledge Base",
+    "kbOnboardingDescription": "Configure embeddings to let your agent answer from your data. You can finish this later from Knowledge settings.",
+    "kbOnboardingSkip": "Skip for now",
+    "kbOnboardingContinue": "Go to Dashboard"
   },
   "placeholders": {
     "enterMessage": "Enter message...",
