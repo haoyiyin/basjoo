@@ -394,6 +394,9 @@ class AgentConfig(BaseModel):
     active_session_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
+    kb_id: Optional[str] = Field(
+        None, description="Bound knowledge base ID (optional)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -708,3 +711,29 @@ class SourcesSummaryResponse(BaseModel):
     urls: SourcesURLSummary
     files: SourcesFileSummary
     has_pending: bool = Field(..., description="是否有待处理内容")
+
+
+# ========== KB Retrieval Schemas ==========
+
+
+class RetrieveRequest(BaseModel):
+    """Retrieval request body"""
+
+    query: str = Field(..., min_length=1, max_length=1000)
+    top_k: int = Field(5, ge=1, le=20)
+
+
+class RetrieveChunk(BaseModel):
+    """Single retrieval result (no vector_id or collection exposed)"""
+
+    text: str
+    doc_id: str
+    chunk_index: int
+    score: float
+    filename: Optional[str] = None
+
+
+class RetrieveResponse(BaseModel):
+    """Wrapper for consistency"""
+
+    results: List[RetrieveChunk] = []
