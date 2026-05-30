@@ -4,7 +4,6 @@ import stat
 import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,12 +21,12 @@ DEFAULT_AGENT_MAX_TOKENS = 1024
 DEFAULT_AGENT_SIMILARITY_THRESHOLD = 0.01  # R2R hybrid search uses RRF scores (~10%-50%), default 10% (0.01)
 
 
-def _is_missing_or_insecure_secret(value: Optional[str]) -> bool:
+def _is_missing_or_insecure_secret(value: str | None) -> bool:
     normalized = (value or "").strip()
     return not normalized or normalized in INSECURE_SECRET_VALUES
 
 
-def _load_secret_key_from_file(secret_key_file: str) -> Optional[str]:
+def _load_secret_key_from_file(secret_key_file: str) -> str | None:
     try:
         path = Path(secret_key_file)
         if not path.exists():
@@ -59,7 +58,7 @@ def _generate_and_save_secret_key(secret_key_file: str) -> str:
     return secret_key
 
 
-def _is_valid_agent_id(value: Optional[str]) -> bool:
+def _is_valid_agent_id(value: str | None) -> bool:
     normalized = (value or "").strip()
     if not normalized.startswith("agt_"):
         return False
@@ -68,7 +67,7 @@ def _is_valid_agent_id(value: Optional[str]) -> bool:
 
 
 
-def _load_agent_id_from_file(agent_id_file: str) -> Optional[str]:
+def _load_agent_id_from_file(agent_id_file: str) -> str | None:
     try:
         path = Path(agent_id_file)
         if not path.exists():
@@ -141,6 +140,11 @@ class Settings(BaseSettings):
     # R2R 配置
     r2r_api_url: str = "http://r2r:7272"
     r2r_config_dir: str = ""
+
+    # Qdrant 向量数据库配置
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_timeout: float = 30.0
 
     # JWT 认证
     secret_key: str = ""
@@ -246,7 +250,7 @@ class Settings(BaseSettings):
         return headers or ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """获取配置单例"""
     return Settings()
