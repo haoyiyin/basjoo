@@ -5,18 +5,18 @@ This is the primary reference for AI coding agents (Pi, Claude, Cursor, Aider, e
 
 ## Project overview
 Docker-oriented AI customer support platform:
-- FastAPI backend with R2R-backed RAG, streaming chat (SSE), knowledge ingestion, admin auth, quotas.
+- FastAPI backend with self-developed multi-tenant KB (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, quotas.
 - Next.js 14 (App Router) admin dashboard in `frontend-nextjs/`.
 - Embeddable TypeScript widget in `widget/` (localStorage sessions, SSE, human takeover).
-- Supporting: Scrapling microservice, R2R (pgvector), Redis, PostgreSQL, nginx.
-All LLM calls to external providers; embeddings via R2R (Jina/SiliconFlow).
+- Supporting: Scrapling microservice, Qdrant (vector DB), Redis, PostgreSQL, nginx.
+All LLM calls to external providers; embeddings via self-KB (Jina/SiliconFlow/OpenAI-compatible).
 
 ## Repository layout
 - `backend/` — FastAPI app, `services/` (logic), `api/` (thin routers), `models.py`, `tests/`.
 - `frontend-nextjs/` — `app/` (routes), `src/views/`, `src/components/`, `src/hooks/`, `src/services/api.ts`.
 - `widget/` — `src/BasjooWidget.tsx`, esbuild bundles, example/.
 - `scrapling-service/` — standalone stealth scraper (curl_cffi + readability).
-- `docker-compose.yml` — dev/prod profiles; `nginx/`, `r2r-config/`.
+- `docker-compose.yml` — dev/prod profiles; `nginx/`.
 - `tests/e2e/` — Playwright specs.
 - `openspec/` — capability specs + change proposals (see its AGENTS.md).
 
@@ -46,23 +46,23 @@ All LLM calls to external providers; embeddings via R2R (Jina/SiliconFlow).
 
 ## Architecture boundaries
 - `backend/main.py` owns app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`), scheduler/Redis startup.
-- R2R integration (`r2r_client.py`): form-data for `/v3/documents` (JSON-encode collection_ids/metadata), JSON for search; handle 409 Conflict by extracting doc ID, delete, retry. Per-agent collections. Hybrid search (RRF); default similarity_threshold 0.01. Cache collections in-process only.
+- Self-KB integration (`kb_service.py`, `qdrant_service.py`, `kb_document_processor.py`): tenant-scoped document upload/parse/chunk/embed via Qdrant. Per-tenant collections. Similarity search; default similarity_threshold 0.01.
 - Task concurrency guarded by shared TaskLock in URL/index endpoints.
 - Widget auto-detects `apiBase` from `<script src>`; persists visitor/session in localStorage; polls for human takeover.
 
 ## When changing areas
 - **New LLM provider**: Extend `backend/services/llm_service.py`, update Agent model/config, expose in Playground UI.
-- **New knowledge source type**: Extend ingestion in `backend/api/v1/{file,url}_endpoints.py`, R2R ingest path, admin dashboard views.
+- **New knowledge source type**: Extend ingestion via `backend/api/v1/kb_document_endpoints.py` + `services/kb_document_processor.py` + `services/document_parser.py` (local storage + Qdrant, tenant-scoped).
   - For multi-tenant KB documents: use the new direct pipeline in `backend/api/v1/kb_document_endpoints.py` + `services/kb_document_processor.py` + `services/document_parser.py` (local storage + Qdrant, tenant-scoped).
 - **UI change**: Update `src/views/` or `src/components/`; add i18n strings in `src/locales/`; verify responsiveness.
 - **Post-agent-creation KB onboarding**: In `src/views/Agents.tsx`, after `api.createAgent` success set `onboardingAgentId`. Triggers `KBSetupWizard` (via `useAgentKbStatus` hook + `kbStatus` API + `kb_setup_completed` flag). On complete/skip call `recheck()` then `navigate("/agents/{id}/dashboard")`.
 - **Chat streaming issues**: Inspect SSE in `backend/api/v1/endpoints.py`, widget parser, error middleware.
-- **Indexing/retrieval problems**: Check `r2r_client.py`, collection cache, threshold, task locks, `is_indexed` flag on URLSource.
+- **Indexing/retrieval problems**: Check `kb_retrieval_service.py`, `qdrant_service.py`, collection cache, threshold, `is_indexed` flag on URLSource.
 - **Large exploration/analysis**: Use `ctx_*` tools (ctx_batch_execute, ctx_execute_file, ctx_search) first.
 
 ## Testing and verification (mandatory before claiming done)
 - Frontend changes: always `cd frontend-nextjs && npm run build && npm run typecheck && npm run test`.
-- Backend changes: `cd backend && pytest` for affected tests (use `conftest.py` fixtures: `client`, `public_client`, `FakeR2RClient`).
+- Backend changes: `cd backend && pytest` for affected tests (use `conftest.py` fixtures: `client`, `public_client`).
 - Use `verification-before-completion` skill; run `lsp_diagnostics` before builds.
 - Docker changes: `docker compose --profile dev up --build`.
 - E2E or widget: relevant `npm run test:e2e:*`.
@@ -71,7 +71,7 @@ All LLM calls to external providers; embeddings via R2R (Jina/SiliconFlow).
 
 ## Subsystem-specific
 ### Backend RAG / ingestion
-- URL pipeline: `create_urls` → pending DB → background fetch (Scrapling) → success → `r2r.ingest_text()` → `is_indexed`. Rebuild picks up `is_indexed=False`.
+- URL pipeline: `create_urls` → pending DB → background fetch (Scrapling) → success → content updated. Self-KB handles indexing via document pipeline.
 - Force rebuild vs incremental controlled by `force` param in index endpoints.
 - Similarity scores are RRF (0.01–0.05 range); frontend % slider maps 0–100 → 0.00–0.10.
 
@@ -95,7 +95,7 @@ All LLM calls to external providers; embeddings via R2R (Jina/SiliconFlow).
 - Persistent volumes (`/app/data`, redis-data, postgres-data) critical; `install-deploy.sh` preserves them.
 - `Origin: null` CORS only when `cors_allow_null_origin=true`; missing Origin gets no wildcard.
 - Ask before destructive ops (full DB reset, prod deploy, archive changes without `--yes`).
-- R2R collection IDs and task locks are process-scoped or Redis-backed; do not assume cross-restart persistence for caches.
+- Qdrant collection IDs and task locks are process-scoped or Redis-backed; do not assume cross-restart persistence for caches.
 
 ## Pull request checklist
 - Run targeted verification commands and include output.

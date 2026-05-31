@@ -7,7 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)](https://redis.io/)
-[![R2R](https://img.shields.io/badge/R2R-Vector_Search-blue)](https://r2r-docs.sciphi.ai/)
+[![Qdrant](https://img.shields.io/badge/Qdrant-Vector_Search-blue)](https://qdrant.tech/)
 [![Scrapling](https://img.shields.io/badge/Scrapling-Web_Crawling-green)](https://github.com/D4Vinci/Scrapling)
 
 English | [简体中文](README.zh-CN.md)
@@ -18,7 +18,7 @@ Basjoo is an AI customer-support platform with three main parts:
 - a **Next.js admin/dashboard frontend** in `frontend-nextjs/`
 - an **embeddable chat widget** in `widget/` that talks to the backend over HTTP and SSE
 
-The stack also uses **SQLite** for application data, **Redis** for rate limiting, **R2R** (with PostgreSQL + pgvector) for vector search and document indexing, a **Scrapling microservice** for web content fetching, and **nginx** for Docker-based reverse proxying.
+The stack also uses **SQLite** for application data, **Redis** for rate limiting, **Qdrant** for vector search and document indexing, **PostgreSQL** for relational data, a **Scrapling microservice** for web content fetching, and **nginx** for Docker-based reverse proxying.
 
 ## System requirements
 
@@ -57,7 +57,7 @@ The first registered admin becomes the workspace super administrator, who can cr
 - `widget/` — embeddable chat widget bundle
 - `scrapling-service/` — standalone microservice for web content fetching (curl_cffi + readability)
 - `nginx/` — Docker nginx config
-- `r2r-config/` — R2R vector database server configuration
+- (removed: r2r-config/)
 - `docker-compose.yml` — dev/prod orchestration
 
 ## Core features
@@ -65,7 +65,7 @@ The first registered admin becomes the workspace super administrator, who can cr
 - Configurable AI agents with multiple provider settings
 - Independent Embedding API selection for knowledge retrieval: Jina or SiliconFlow
 - URL ingestion and file knowledge management
-- R2R-backed retrieval and index rebuild jobs
+- Self-KB retrieval (Qdrant-backed) and document indexing via KB pipeline
 - Streaming chat responses over Server-Sent Events
 - Embeddable website widget with session persistence
 - Widget copy auto-translation by visitor locale
@@ -131,8 +131,8 @@ The widget provides the visitor-facing chat window with persisted sessions, mult
 - FastAPI
 - SQLAlchemy async + SQLite
 - Redis (rate limiting, caching)
-- R2R REST API v3 (vector search, document ingestion, hybrid retrieval)
-- PostgreSQL + pgvector (R2R persistence)
+- Qdrant REST API (vector search, document ingestion, hybrid retrieval)
+- PostgreSQL (application data persistence)
 - Scrapling microservice (curl_cffi + readability-lxml web content extraction)
 - APScheduler
 - Provider SDKs for OpenAI-compatible APIs, Anthropic, and Google Gemini
@@ -178,7 +178,7 @@ Default dev ports:
 
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:8000`
-- R2R: `http://localhost:7272`
+- Qdrant: `http://localhost:6333`
 - PostgreSQL: `127.0.0.1:5432`
 - Redis: `127.0.0.1:6379`
 
@@ -278,7 +278,7 @@ Important runtime settings used in the current codebase include:
 
 - `DATABASE_URL`
 - `REDIS_URL`
-- `R2R_API_URL`
+- `QDRANT_URL`
 - `SECRET_KEY`
 - `SECRET_KEY_FILE`
 - `DEFAULT_AGENT_ID`
@@ -326,7 +326,7 @@ The main backend domains are:
 
 - **Agent config**: provider/model/system-prompt/widget settings
 - **Knowledge sources**: URLs and uploaded files, with SSRF protection via `backend/services/url_safety.py`
-- **Indexing**: chunking content and rebuilding R2R collections; each agent maps to its own R2R collection for data isolation
+- **Indexing**: chunking content and storing in per-tenant Qdrant collections for data isolation
 - **Chat**: session creation, streaming replies, source citations, quota checks
 - **Admin auth**: dashboard login and registration
 - **Scheduling**: URL fetch scheduler, history cleanup, session auto-close (30-min inactivity timeout)
@@ -349,8 +349,8 @@ The retrieval/indexing pipeline spans:
 
 - `backend/api/v1/url_endpoints.py`
 - `backend/api/v1/index_endpoints.py`
-- `backend/services/r2r_client.py`
-- `backend/services/rag_r2r.py`
+- `backend/services/kb_service.py`
+- `backend/services/qdrant_service.py`
 - `backend/services/scraper.py`
 - `backend/services/crawler.py`
 
@@ -397,8 +397,8 @@ Key testing behavior from `backend/tests/conftest.py`:
 
 - sets `BASJOO_TEST_MODE=1`
 - uses isolated SQLite databases under `backend/.pytest_dbs/`
-- monkeypatches R2R/Jina/LLM integrations for many tests
-- falls back between Docker hostnames and localhost for Redis/R2R where needed
+- monkeypatches LLM integrations for many tests
+- falls back between Docker hostnames and localhost for Redis where needed
 
 Run all tests:
 
@@ -472,11 +472,11 @@ Examples of backend endpoints present in the codebase:
 
 Basjoo is built on top of these amazing open-source projects:
 
-- **[R2R](https://github.com/SciPhi-AI/R2R)** — RAG to production: vector search, document ingestion, hybrid retrieval (RRF scoring). Powers Basjoo's knowledge base backend with PostgreSQL + pgvector.
+- **[Qdrant](https://qdrant.tech/)** — High-performance vector similarity search engine. Powers Basjoo's self-developed multi-tenant knowledge base.
 - **[Scrapling](https://github.com/D4Vinci/Scrapling)** — Stealthy web scraping with TLS fingerprint impersonation (curl_cffi). Powers Basjoo's URL content extraction microservice.
 - **[FastAPI](https://github.com/tiangolo/fastapi)** — The web framework powering Basjoo's backend APIs.
 - **[Next.js](https://github.com/vercel/next.js)** — The React framework powering Basjoo's admin dashboard.
-- **[pgvector](https://github.com/pgvector/pgvector)** — Open-source vector similarity search for PostgreSQL, used by R2R.
+- **[pgvector](https://github.com/pgvector/pgvector)** — Open-source vector similarity search for PostgreSQL.
 
 ## Contributors
 
