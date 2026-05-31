@@ -242,7 +242,6 @@ class URLSource(Base):
         JSON, nullable=True
     )  # etag, last_modified, content_length等
     is_indexed = Column(Boolean, nullable=False, default=False)  # 是否已训练
-    r2r_document_id = Column(String(100), nullable=True, index=True)  # R2R document id
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -257,7 +256,7 @@ class URLSource(Base):
 
 
 class KnowledgeFile(Base):
-    """知识文件模型（通过 R2R 管理）"""
+    """知识文件模型"""
 
     __tablename__ = "knowledge_files"
 
@@ -270,10 +269,6 @@ class KnowledgeFile(Base):
     filename = Column(String(500), nullable=False)
     file_size = Column(Integer, nullable=True)  # bytes
     file_type = Column(String(50), nullable=True)  # pdf, txt, csv, etc.
-
-    # R2R document ID
-    r2r_document_id = Column(String(100), nullable=True, index=True)
-    r2r_collection_id = Column(String(100), nullable=True)
 
     # 状态
     status = Column(
