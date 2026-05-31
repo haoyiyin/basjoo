@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 class TaskType(str, Enum):
     """任务类型"""
+
     INDEX_REBUILD = "index_rebuild"
     URL_CRAWL = "url_crawl"
     URL_FETCH = "url_fetch"
@@ -56,12 +57,9 @@ class TaskLock:
             if agent_id not in self._locks:
                 self._locks[agent_id] = asyncio.Lock()
             return self._locks[agent_id]
-    
+
     async def acquire_task(
-        self,
-        agent_id: str,
-        task_type: TaskType,
-        task_id: str
+        self, agent_id: str, task_type: TaskType, task_id: str
     ) -> tuple[bool, Optional[str]]:
         """尝试获取任务锁
 
@@ -83,36 +81,55 @@ class TaskLock:
             # 检查冲突
             if task_type == TaskType.INDEX_REBUILD:
                 # 索引重建时，检查是否有正在进行的抓取任务
-                crawl_tasks = [t for t in active.keys() if t.startswith(("crawl_", "fetch_", "refetch_", "delete_"))]
+                crawl_tasks = [
+                    t
+                    for t in active.keys()
+                    if t.startswith(("crawl_", "fetch_", "refetch_", "delete_"))
+                ]
                 if crawl_tasks:
-                    return False, f"有正在进行的抓取任务: {crawl_tasks[0]}，请等待完成后再重建索引"
+                    return (
+                        False,
+                        f"有正在进行的抓取任务: {crawl_tasks[0]}，请等待完成后再重建索引",
+                    )
 
                 # 检查是否已有索引重建任务
                 rebuild_tasks = [t for t in active.keys() if t.startswith("rebuild_")]
                 if rebuild_tasks:
                     return False, f"索引重建任务已在进行中: {rebuild_tasks[0]}"
 
-            elif task_type in (TaskType.URL_CRAWL, TaskType.URL_FETCH, TaskType.URL_REFETCH):
+            elif task_type in (
+                TaskType.URL_CRAWL,
+                TaskType.URL_FETCH,
+                TaskType.URL_REFETCH,
+            ):
                 # 抓取任务时，检查是否有正在进行的索引重建或删除
-                blocking_tasks = [t for t in active.keys() if t.startswith(("rebuild_", "delete_"))]
+                blocking_tasks = [
+                    t for t in active.keys() if t.startswith(("rebuild_", "delete_"))
+                ]
                 if blocking_tasks:
-                    return False, f"任务正在进行中: {blocking_tasks[0]}，请等待完成后再开始抓取"
+                    return (
+                        False,
+                        f"任务正在进行中: {blocking_tasks[0]}，请等待完成后再开始抓取",
+                    )
 
             elif task_type == TaskType.URL_DELETE:
                 blocking_tasks = [
-                    t
-                    for t in active.keys()
-                    if t.startswith(("rebuild_", "delete_"))
+                    t for t in active.keys() if t.startswith(("rebuild_", "delete_"))
                 ]
                 if blocking_tasks:
-                    return False, f"任务正在进行中: {blocking_tasks[0]}，请等待完成后再删除"
+                    return (
+                        False,
+                        f"任务正在进行中: {blocking_tasks[0]}，请等待完成后再删除",
+                    )
 
             # 注册任务
             active[task_id] = datetime.now(timezone.utc)
             logger.info(f"Task acquired: {task_id} for agent {agent_id}")
             return True, None
 
-    async def register_task_handle(self, agent_id: str, task_id: str, task: asyncio.Task):
+    async def register_task_handle(
+        self, agent_id: str, task_id: str, task: asyncio.Task
+    ):
         """记录正在运行的 asyncio Task 句柄，以便真正取消。"""
         lock = await self._get_or_create_lock(agent_id)
         async with lock:
@@ -141,7 +158,9 @@ class TaskLock:
                     del self._task_handles[agent_id]
 
             # 检查是否需要触发待处理的索引重建
-            if agent_id in self._pending_rebuild and not self._active_tasks.get(agent_id):
+            if agent_id in self._pending_rebuild and not self._active_tasks.get(
+                agent_id
+            ):
                 self._pending_rebuild.discard(agent_id)
                 return True  # 表示需要触发重建
         return False
@@ -155,12 +174,14 @@ class TaskLock:
         lock = await self._get_or_create_lock(agent_id)
         async with lock:
             self._pending_rebuild.add(agent_id)
-            logger.info(f"Scheduled index rebuild after current tasks for agent {agent_id}")
-    
+            logger.info(
+                f"Scheduled index rebuild after current tasks for agent {agent_id}"
+            )
+
     def has_pending_rebuild(self, agent_id: str) -> bool:
         """检查是否有待处理的索引重建"""
         return agent_id in self._pending_rebuild
-    
+
     def get_active_tasks(self, agent_id: str) -> Dict[str, datetime]:
         """获取Agent的活动任务列表"""
         return self._active_tasks.get(agent_id, {}).copy()
@@ -173,7 +194,7 @@ class TaskLock:
         """检查特定类型的任务是否正在运行"""
         if agent_id not in self._active_tasks:
             return False
-        
+
         prefix_map = {
             TaskType.INDEX_REBUILD: "rebuild_",
             TaskType.URL_CRAWL: "crawl_",
@@ -183,12 +204,14 @@ class TaskLock:
         }
         prefix = prefix_map.get(task_type, "")
         return any(t.startswith(prefix) for t in self._active_tasks[agent_id])
-    
+
     def has_any_active_task(self, agent_id: str) -> bool:
         """检查是否有任何活动任务"""
         return bool(self._active_tasks.get(agent_id))
 
-    async def cancel_tasks(self, agent_id: str, task_types: Optional[Set[TaskType]] = None) -> list[str]:
+    async def cancel_tasks(
+        self, agent_id: str, task_types: Optional[Set[TaskType]] = None
+    ) -> list[str]:
         """标记指定 agent 的活动任务为已取消。"""
         lock = await self._get_or_create_lock(agent_id)
         async with lock:

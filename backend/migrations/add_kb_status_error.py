@@ -12,9 +12,7 @@ def run_migration(db_url: str = "sqlite:///data/basjoo.db"):
                 "ADD COLUMN status VARCHAR(20) DEFAULT 'active' NOT NULL"
             )
         )
-        conn.execute(
-            text("ALTER TABLE knowledge_bases ADD COLUMN error_message TEXT")
-        )
+        conn.execute(text("ALTER TABLE knowledge_bases ADD COLUMN error_message TEXT"))
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_knowledge_bases_status "

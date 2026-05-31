@@ -33,6 +33,7 @@ from models import AdminUser
 from services.kb_document_processor import KbDocumentProcessor
 from services.kb_retrieval_service import KbRetrievalService
 from services.kb_service import KbService
+from typing import Literal, cast
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +84,18 @@ async def upload_kb_documents(
             tenant_id, kb_id, filename, len(content), db
         )
         storage_path = processor.save_uploaded_file(doc, content, ext)
-        doc.storage_path = storage_path
-        doc.file_type = ext
-        uploaded_items.append(
-            KbDocumentItem(id=doc.id, filename=doc.filename, status=doc.status)
+        object.__setattr__(doc, "storage_path", storage_path)
+        object.__setattr__(doc, "file_type", ext)
+        doc_id = cast(str, getattr(doc, "id", ""))
+        filename = cast(str, getattr(doc, "filename", ""))
+        status_val = cast(
+            Literal["pending", "processing", "ready", "error"],
+            getattr(doc, "status", "pending"),
         )
-        background_tasks.add_task(processor.process_document, doc.id, tenant_id, kb_id)
+        uploaded_items.append(
+            KbDocumentItem(id=doc_id, filename=filename, status=status_val)
+        )
+        background_tasks.add_task(processor.process_document, doc_id, tenant_id, kb_id)
     await db.commit()
     return KbDocumentUploadResponse(
         uploaded=len(uploaded_items),

@@ -1,15 +1,17 @@
 """KB document upload processor: save, background process (parse→chunk→embed→Qdrant), delete, progress."""
 
+import contextlib
 import logging
 import os
 import uuid
 from pathlib import Path
+from typing import cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal
-from models import KbChunk, KbDocument, KnowledgeBase
+from models import KbChunk, KbDocument
 from services.document_parser import DocumentParser
 from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
@@ -54,8 +56,12 @@ class KbDocumentProcessor:
 
     def save_uploaded_file(self, doc: KbDocument, content: bytes, ext: str) -> str:
         """Save bytes to disk, return storage_path."""
-        d = self._ensure_upload_dir(doc.tenant_id, doc.kb_id, doc.id)
-        safe_name = "".join(c for c in doc.filename if c.isalnum() or c in "._-")[:200]
+        tenant_id = str(getattr(doc, "tenant_id", ""))
+        kb_id = str(getattr(doc, "kb_id", ""))
+        doc_id = str(getattr(doc, "id", ""))
+        filename = str(getattr(doc, "filename", ""))
+        d = self._ensure_upload_dir(tenant_id, kb_id, doc_id)
+        safe_name = "".join(c for c in filename if c.isalnum() or c in "._-")[:200]
         path = d / safe_name
         with open(path, "wb") as f:
             f.write(content)
@@ -70,10 +76,10 @@ class KbDocumentProcessor:
             )
             res = await session.execute(stmt)
             doc = res.scalar_one_or_none()
-            if not doc or doc.status != "pending":
+            if not doc or getattr(doc, "status", None) != "pending":
                 return
 
-            doc.status = "processing"
+            object.__setattr__(doc, "status", "processing")
             await session.commit()
 
             try:
@@ -83,28 +89,32 @@ class KbDocumentProcessor:
                     raise ValueError("KB not found")
 
                 # parse (with retry)
-                text = self.parser.parse_with_retry(
-                    doc.storage_path, doc.file_type or ""
-                )
+                storage_path = str(getattr(doc, "storage_path", ""))
+                file_type = str(getattr(doc, "file_type", "") or "")
+                text = self.parser.parse_with_retry(storage_path, file_type)
                 if not text.strip():
                     raise ValueError("Empty text after parse")
 
-                # chunk
-                chunks = self.parser.chunk_text(text, kb.chunk_size, kb.chunk_overlap)
+                # chunk (use getattr + cast to satisfy static type checker on SA models)
+                chunk_size = cast(int, getattr(kb, "chunk_size", 512))
+                chunk_overlap = cast(int, getattr(kb, "chunk_overlap", 64))
+                chunks = self.parser.chunk_text(text, chunk_size, chunk_overlap)
                 if not chunks:
                     raise ValueError("No chunks generated")
 
                 # embed (retry inside or simple)
-                embeddings = await self.parser.embed_texts(
-                    chunks, kb.embedding_model, kb.embedding_base_url
-                )
+                model = cast(str, getattr(kb, "embedding_model", "BAAI/bge-m3"))
+                base_url = cast(str | None, getattr(kb, "embedding_base_url", None))
+                embeddings = await self.parser.embed_texts(chunks, model, base_url)
                 if len(embeddings) != len(chunks):
                     raise ValueError("Embedding count mismatch")
 
                 # prepare Qdrant points (batch)
                 points = []
                 chunk_records = []
-                for idx, (chunk_text, emb) in enumerate(zip(chunks, embeddings)):
+                for idx, (chunk_text, emb) in enumerate(
+                    zip(chunks, embeddings, strict=True)
+                ):
                     point_id = str(uuid.uuid4())
                     payload = {
                         "tenant_id": tenant_id,
@@ -112,7 +122,7 @@ class KbDocumentProcessor:
                         "doc_id": doc_id,
                         "chunk_index": idx,
                         "text": chunk_text[:2000],  # cap
-                        "filename": doc.filename,
+                        "filename": getattr(doc, "filename", ""),
                     }
                     points.append({"id": point_id, "vector": emb, "payload": payload})
 
@@ -130,8 +140,8 @@ class KbDocumentProcessor:
 
                 # insert chunks
                 session.add_all(chunk_records)
-                doc.status = "ready"
-                doc.chunk_count = len(chunks)
+                object.__setattr__(doc, "status", "ready")
+                object.__setattr__(doc, "chunk_count", len(chunks))
                 # Lock KB embedding config after first successful index
                 if not bool(getattr(kb, "is_locked", False)):
                     object.__setattr__(kb, "is_locked", True)
@@ -140,8 +150,8 @@ class KbDocumentProcessor:
 
             except Exception as e:
                 logger.exception(f"Processing failed for doc {doc_id}: {e}")
-                doc.status = "error"
-                doc.error_message = str(e)[:500]
+                object.__setattr__(doc, "status", "error")
+                object.__setattr__(doc, "error_message", str(e)[:500])
                 await session.commit()
 
     async def get_document_progress(
@@ -155,9 +165,9 @@ class KbDocumentProcessor:
         if not doc:
             return {"status": "not_found"}
         return {
-            "status": doc.status,
-            "chunk_count": doc.chunk_count,
-            "error_message": doc.error_message,
+            "status": getattr(doc, "status", None),
+            "chunk_count": getattr(doc, "chunk_count", 0),
+            "error_message": getattr(doc, "error_message", None),
         }
 
     async def delete_document(
@@ -180,11 +190,10 @@ class KbDocumentProcessor:
         )
         res = await db.execute(stmt)
         doc = res.scalar_one_or_none()
-        if doc and doc.storage_path and os.path.exists(doc.storage_path):
-            try:
-                os.remove(doc.storage_path)
-            except Exception:
-                pass
+        storage_path = str(getattr(doc, "storage_path", "")) if doc else ""
+        if doc and storage_path and os.path.exists(storage_path):
+            with contextlib.suppress(Exception):
+                os.remove(storage_path)
         if doc:
             await db.delete(doc)
         await db.commit()

@@ -115,6 +115,7 @@ class KbService:
             kb_status = str(getattr(kb, "status", "active"))
             if kb_status == "resetting":
                 from fastapi import HTTPException
+
                 raise HTTPException(423, "KB is resetting, config changes locked")
             # embedding fields: only allowed when not locked
             embedding_fields = {"embedding_model", "embedding_base_url"}
@@ -122,6 +123,7 @@ class KbService:
             for f in embedding_fields:
                 if f in updates and kb_is_locked:
                     from fastapi import HTTPException
+
                     raise HTTPException(
                         409,
                         "Embedding config locked (has chunks). Use reset first.",
@@ -172,11 +174,13 @@ class KbService:
         async with await self._get_session() as session:
             # Check agent references
             from models import Agent
+
             agent_ref = await session.scalar(
                 select(Agent.id).where(Agent.kb_id == kb_id).limit(1)
             )
             if agent_ref:
                 from fastapi import HTTPException
+
                 raise HTTPException(400, "KB referenced by agent(s). Unbind first.")
             kb = await session.get(KnowledgeBase, kb_id)
             if not kb:
@@ -196,6 +200,7 @@ class KbService:
             )
             # Physical files
             import shutil
+
             upload_dir = Path("/app/data/kb_uploads") / tenant_id / kb_id
             if upload_dir.exists():
                 shutil.rmtree(upload_dir, ignore_errors=True)
@@ -233,6 +238,7 @@ class KbService:
                 raise ValueError("KB not found")
             if str(getattr(kb, "status", "active")) == "resetting":
                 from fastapi import HTTPException
+
                 raise HTTPException(423, "Reset already in progress")
             # Mark as resetting
             object.__setattr__(kb, "status", "resetting")
@@ -244,6 +250,7 @@ class KbService:
         acquired, err = await task_lock.acquire_task(kb_id, TaskType.KB_RESET, task_id)
         if not acquired:
             from fastapi import HTTPException
+
             # Rollback status
             async with await self._get_session() as session:
                 kb = await session.get(KnowledgeBase, kb_id)

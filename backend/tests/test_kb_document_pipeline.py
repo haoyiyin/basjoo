@@ -65,6 +65,7 @@ def test_kb_document_processor_imports():
 
 def test_kb_retrieval_service_imports():
     from services.kb_retrieval_service import KbRetrievalService
+
     svc = KbRetrievalService()
     assert svc is not None
     assert svc.parser is not None
@@ -76,7 +77,10 @@ def test_kb_retrieval_service_imports():
 def test_retrieve_endpoint_registered():
     from api.v1.kb_document_endpoints import router
     from fastapi.routing import APIRoute
-    retrieve_routes = [r for r in router.routes if isinstance(r, APIRoute) and "retrieve" in r.path]
+
+    retrieve_routes = [
+        r for r in router.routes if isinstance(r, APIRoute) and "retrieve" in r.path
+    ]
     assert len(retrieve_routes) == 1
     route = retrieve_routes[0]
     assert "POST" in route.methods
