@@ -372,9 +372,9 @@ class AgentConfig(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Literal["jina", "siliconflow", "custom", "r2r"] = Field(
-        "r2r",
-        description="Embedding provider: r2r, jina, siliconflow, or custom",
+    embedding_provider: Literal["jina", "siliconflow", "custom"] = Field(
+        "jina",
+        description="Embedding provider: jina, siliconflow, or custom",
     )
     embedding_api_base: Optional[str] = Field(
         None, description="Embedding API base URL"
@@ -492,8 +492,8 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Optional[Literal["jina", "siliconflow", "custom", "r2r"]] = (
-        Field(None, description="Embedding provider: r2r, jina, siliconflow, or custom")
+    embedding_provider: Optional[Literal["jina", "siliconflow", "custom"]] = (
+        Field(None, description="Embedding provider: jina, siliconflow, or custom")
     )
     embedding_api_base: Optional[str] = Field(
         None, description="Embedding API base URL"

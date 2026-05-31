@@ -72,9 +72,8 @@ from api.v1.schemas import (
     SessionListResponse,
     normalize_widget_origin,
 )
-from services import URLNormalizer, TaskType, task_lock, R2RClient, R2RRAGService
+from services import URLNormalizer, TaskType, task_lock
 from core.encryption import encrypt_api_key, decrypt_api_key
-from api.v1.provider_helpers import get_agent_r2r_client
 from services.llm_service import get_llm_service
 from services.auth_service import AuthService
 from services.kb_retrieval_service import KbRetrievalService
@@ -176,7 +175,7 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": agent.embedding_provider or "r2r",
+        "embedding_provider": agent.embedding_provider or "jina",
         "embedding_api_base": agent.embedding_api_base,
         "embedding_api_key_set": bool(jina_key or siliconflow_key),
         "embedding_model": agent.embedding_model,
@@ -381,15 +380,6 @@ async def require_workspace_super_for_agent(
 security = HTTPBearer()
 
 # 全局服务实例
-rag_service = None
-
-
-def ensure_rag_service() -> R2RRAGService:
-    """Create a fresh per-request RAG service instance backed by R2R."""
-    r2r_client = R2RClient()
-    return R2RRAGService(r2r_client)
-
-
 # ========== 依赖注入 ==========
 
 
@@ -840,29 +830,6 @@ async def prepare_chat_request(
         max_tokens,
     )
 
-    current_rag_service = None
-    retrieval_results: List[Dict[str, Any]] = []
-    try:
-        current_rag_service = ensure_rag_service()
-        retrieval_results = await current_rag_service.retrieve_async(
-            agent_id=agent_id,
-            query=request.message,
-            top_k=agent_top_k,
-            threshold=agent_similarity_threshold,
-        )
-    except Exception as error:
-        error_str = str(error)
-        if "429" in error_str or "rate" in error_str.lower():
-            logger.info(f"RAG retrieval delayed due to API rate limit")
-        else:
-            logger.warning(f"RAG retrieval skipped: {error}")
-
-    context = ""
-    if retrieval_results and current_rag_service:
-        context = current_rag_service.build_context(
-            retrieval_results, locale=request.locale
-        )
-
     # KB retrieval (direct Qdrant pipeline, tenant-isolated)
     kb_context = ""
     if getattr(agent, "kb_id", None):
@@ -888,18 +855,8 @@ async def prepare_chat_request(
     messages: List[Dict[str, str]] = []
     system_content = agent_system_prompt or "You are a helpful AI assistant."
     if kb_context:
-        # KB context takes priority (direct Qdrant pipeline)
         system_content += (
             f"\n\n以下是相关背景资料：\n\n{kb_context}\n\n请基于以上资料回答用户问题。"
-        )
-    elif context:
-        # Fallback to old R2R RAG context
-        system_content += (
-            f"\n\nKnowledge base:\n{context}\n\n"
-            "Please answer based on the above knowledge base content. "
-            "When you cite a source in the reply body, use markdown links with placeholders like "
-            "[keyword](#source-1) and only use the source numbers provided in the knowledge base. "
-            "Do not invent any external URLs."
         )
     else:
         system_content += (
@@ -929,7 +886,7 @@ async def prepare_chat_request(
         "use_mock_llm": use_mock_llm,
         "llm": llm,
         "messages": messages,
-        "sources": build_chat_sources(retrieval_results),
+        "sources": [],
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -1551,41 +1508,26 @@ async def get_contexts(
 
     agent_id = agent.id
 
-    # 检索 via R2R
-    results = []
+    # KB retrieval (direct Qdrant pipeline)
+    contexts = []
     try:
-        rag_service = ensure_rag_service()
-        results = await rag_service.retrieve_async(
+        kb_retriever = KbRetrievalService()
+        kb_results = await kb_retriever.retrieve(
+            tenant_id=None,
             agent_id=agent_id,
             query=request.query,
-            top_k=request.top_k,
-            threshold=agent.similarity_threshold,
+            top_k=request.top_k or 5,
         )
-    except Exception as error:
-        logger.warning(f"RAG retrieval failed for contexts: {error}")
-
-    # 转换为响应格式
-    contexts = []
-    for r in results:
-        if r["type"] == "url":
-            contexts.append(
-                {
-                    "type": "url",
-                    "url": r["metadata"].get("url", ""),
-                    "title": r["metadata"].get("title", ""),
-                    "score": r["score"],
-                }
-            )
-        elif r["type"] == "file":
+        for r in (kb_results or []):
             contexts.append(
                 {
                     "type": "file",
-                    "filename": r["metadata"].get(
-                        "filename", r["metadata"].get("title", "")
-                    ),
-                    "score": r["score"],
+                    "filename": r.get("filename", "doc"),
+                    "score": r.get("score", 0),
                 }
             )
+    except Exception as e:
+        logger.warning(f"KB retrieval failed for contexts: {e}")
 
     return ContextResponse(contexts=contexts)
 
@@ -1797,10 +1739,6 @@ async def update_agent(
     if persona_type and persona_type in PERSONA_PRESETS:
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
-    # Remove "r2r" from embedding_provider before setting (not a valid DB value)
-    if update_data.get("embedding_provider") == "r2r":
-        update_data.pop("embedding_provider")
-
     for field, value in update_data.items():
         if field in ("api_key", "jina_api_key", "siliconflow_api_key") and isinstance(
             value, str
@@ -1957,7 +1895,7 @@ async def get_jina_key_status(
     return {
         "agent_id": agent_id,
         "configured": bool(jina_key or siliconflow_key),
-        "embedding_provider": agent.embedding_provider or "r2r",
+        "embedding_provider": agent.embedding_provider or "jina",
     }
 
 
@@ -1979,7 +1917,7 @@ async def kb_status(
     return {
         "agent_id": agent_id,
         "kb_setup_completed": agent.kb_setup_completed,
-        "embedding_provider": agent.embedding_provider or "r2r",
+        "embedding_provider": agent.embedding_provider or "jina",
         "embedding_model": agent.embedding_model,
         "embedding_api_base": agent.embedding_api_base,
         "embedding_batch_size": agent.embedding_batch_size,
@@ -2035,33 +1973,7 @@ async def kb_setup(
                 detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
             )
 
-    # Write R2R config BEFORE persisting any agent changes, so we can fail safely
-    from services.r2r_config_generator import (
-        write_r2r_config,
-        snapshot_r2r_config,
-        restore_r2r_config,
-    )
-
-    # Snapshot config before write for rollback on DB commit failure
-    config_snapshot = snapshot_r2r_config()
-
-    try:
-        write_r2r_config(
-            embedding_provider=embedding_provider,
-            embedding_model=request.embedding_model or "jina-embeddings-v3",
-            embedding_batch_size=request.embedding_batch_size or 16,
-            embedding_api_base=request.embedding_api_base,
-            jina_api_key=request.jina_api_key,
-            siliconflow_api_key=request.siliconflow_api_key,
-        )
-    except Exception as e:
-        logger.exception(f"Failed to write r2r config during kb_setup: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to write R2R configuration: {str(e)}",
-        )
-
-    # Save embedding settings — only after config write succeeded
+    # Save embedding settings
     agent.embedding_provider = embedding_provider
     if request.embedding_api_base:
         agent.embedding_api_base = request.embedding_api_base
@@ -2076,19 +1988,11 @@ async def kb_setup(
 
     agent.kb_setup_completed = True
 
-    # Wrap commit to restore config if DB persistence fails
     try:
         await db.commit()
     except Exception as e:
         logger.exception(f"DB commit failed during kb_setup: {e}")
-        # Rollback DB transaction
         await db.rollback()
-        # Restore R2R config to pre-setup state
-        restore_success = restore_r2r_config(config_snapshot)
-        if not restore_success:
-            logger.warning(
-                "Partial R2R config restoration failure; manual cleanup may be needed"
-            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save knowledge base setup: {str(e)}",
@@ -2098,8 +2002,7 @@ async def kb_setup(
 
     return {
         **build_agent_config(agent),
-        "message": "知识库初始化完成。请重启 R2R 容器使配置生效：docker compose restart r2r",
-        "r2r_restart_needed": True,
+        "message": "知识库初始化完成。",
     }
 
 
@@ -2118,28 +2021,8 @@ async def kb_reset(
             detail="Knowledge base setup not completed yet.",
         )
 
-    # Delete R2R collection FIRST; abort if deletion fails to avoid DB/R2R inconsistency
-    r2r = R2RClient()
-    try:
-        deleted = await r2r.delete_collection(agent_id)
-        if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="R2R collection deletion returned non-success; KB reset aborted to prevent stale content.",
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"R2R collection deletion failed during reset: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to delete R2R collection: {e}. KB reset aborted.",
-        )
-
-    # Delete all URLs for this agent (only after R2R deletion succeeded)
+    # Delete all URLs and files for this agent
     await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
-
-    # Delete all files for this agent
     await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id))
 
     # Clear embedding keys
@@ -2150,8 +2033,7 @@ async def kb_reset(
     await db.refresh(agent)
 
     return {
-        "message": "Embedding 配置已重置。索引需要重构，所有文件需要重新上传。",
-        "r2r_restart_needed": True,
+        "message": "Embedding 配置已重置。所有文件需要重新上传。",
     }
 
 
@@ -2534,7 +2416,6 @@ async def test_embedding_api(
             return {
                 "success": True,
                 "message": "SiliconFlow embedding API connection successful",
-                "note": "Embedding is managed by R2R. After changing settings, restart the R2R container: docker compose restart r2r",
             }
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
@@ -2601,7 +2482,6 @@ async def test_jina_api(
         return {
             "success": True,
             "message": "Jina API connection successful",
-            "note": "Embedding is managed by R2R. After changing settings, restart the R2R container: docker compose restart r2r",
         }
     except httpx.HTTPStatusError as e:
         logger.error(f"Jina API test failed: {e}")
