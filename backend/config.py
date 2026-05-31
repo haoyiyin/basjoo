@@ -19,7 +19,7 @@ INSECURE_SECRET_VALUES = {
 DEFAULT_AGENT_ID_FILE = "/app/data/.agent_id"
 DEFAULT_AGENT_MAX_TOKENS = 1024
 DEFAULT_AGENT_SIMILARITY_THRESHOLD = (
-    0.01  # R2R hybrid search uses RRF scores (~10%-50%), default 10% (0.01)
+    0.01  # KB hybrid search scores; default 10% (0.01)
 )
 
 
@@ -135,10 +135,6 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     redis_cache_ttl: int = 3600  # 缓存过期时间（秒）
     redis_rate_limit_ttl: int = 60  # 限流窗口（秒）
-
-    # R2R 配置
-    r2r_api_url: str = "http://r2r:7272"
-    r2r_config_dir: str = ""
 
     # Qdrant 向量数据库配置
     qdrant_url: str = "http://localhost:6333"
