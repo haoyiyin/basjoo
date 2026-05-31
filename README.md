@@ -57,7 +57,7 @@ The first registered admin becomes the workspace super administrator, who can cr
 - `widget/` — embeddable chat widget bundle
 - `scrapling-service/` — standalone microservice for web content fetching (curl_cffi + readability)
 - `nginx/` — Docker nginx config
-- (removed: r2r-config/)
+- Qdrant vector database service configuration
 - `docker-compose.yml` — dev/prod orchestration
 
 ## Core features

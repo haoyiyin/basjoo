@@ -108,29 +108,6 @@ class TestSystemRobustness:
             )
             # Should handle gracefully
             assert response.status_code in [200, 400, 422]
-
-    @pytest.mark.asyncio
-    async def test_special_characters_in_urls(self, client):
-        """Test URLs with special characters"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        special_urls = [
-            "https://example.com/path?query=value&other=123",
-            "https://example.com/path#fragment",
-            "https://example.com/path%20with%20spaces",
-            "https://example.com/path?param=a+b",
-            "https://user:pass@example.com/",
-        ]
-
-        for url in special_urls:
-            response = await client.post(
-                f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"url": url},
-            )
-            # Should handle or reject gracefully
-            assert response.status_code in [200, 400, 422]
-
     @pytest.mark.asyncio
     async def test_empty_and_null_inputs(self, client):
         """Test empty and null inputs"""

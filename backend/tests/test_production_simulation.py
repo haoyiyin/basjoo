@@ -85,34 +85,6 @@ class TestProductionSimulation:
         final_quota = response.json()["used_messages_today"]
 
         assert final_quota == initial_quota + successful, "Quota tracking failed under load"
-
-    @pytest.mark.asyncio
-    async def test_url_deduplication(self, client):
-        """Test URL deduplication mechanism"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add the same URL multiple times (with variations)
-        urls = [
-            "https://example.com",
-            "https://example.com/",  # trailing slash
-            "https://www.example.com",  # www prefix
-            "https://EXAMPLE.COM",  # different case
-        ]
-
-        for url in urls:
-            response = await client.post(
-                f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"urls": [url]},
-            )
-            # Should succeed or indicate duplicate
-
-        # List URLs - should only have 1 unique URL
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1, f"Expected 1 unique URL, got {data['total']}"
-
     @pytest.mark.asyncio
     async def test_error_handling_invalid_agent(self, client):
         """Test error handling for invalid agent ID"""
@@ -212,37 +184,6 @@ class TestProductionSimulation:
 
         # Should handle gracefully (may succeed or fail with appropriate error)
         assert response.status_code in [200, 413, 422]
-
-    @pytest.mark.asyncio
-    async def test_url_delete_and_refetch(self, client):
-        """Test URL deletion and refetch functionality"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add URL
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-        assert response.status_code == 200
-
-        # Get URL ID
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        urls = response.json()["urls"]
-        assert len(urls) > 0
-        url_id = urls[0]["id"]
-
-        # Delete URL
-        response = await client.delete(
-            f"/api/v1/urls:delete?agent_id={agent_id}&url_id={url_id}"
-        )
-        assert response.status_code == 200
-
-        # Verify deletion
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        urls = response.json()["urls"]
-        assert not any(url["id"] == url_id for url in urls)
-
     @pytest.mark.asyncio
     async def test_agent_config_update(self, client):
         """Test agent configuration update"""

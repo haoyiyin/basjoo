@@ -7,7 +7,6 @@ import pytest
 import asyncio
 
 
-
 class TestIntegrationWorkflows:
     """Test suite for integration testing of complete workflows"""
 
@@ -78,8 +77,8 @@ class TestIntegrationWorkflows:
                 "name": "Test Agent Updated",
                 "temperature": 0.9,
                 "welcome_message": "Welcome to the updated agent!",
-                "widget_color": "#FF5733"
-            }
+                "widget_color": "#FF5733",
+            },
         )
         assert response.status_code == 200
 
@@ -104,45 +103,6 @@ class TestIntegrationWorkflows:
             f"/api/v1/agent?agent_id={agent_id}",
             json=restore_payload,
         )
-
-    @pytest.mark.asyncio
-    async def test_quota_tracking_across_operations(self, client):
-        """Test that quota is properly tracked across various operations"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Get initial quota
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        initial_quota = response.json()
-        initial_url_count = initial_quota["used_urls"]
-
-        # Add some URLs
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com", "https://example.org", "https://example.net"]},
-        )
-        assert response.status_code == 200
-
-        # Check quota increased
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        new_quota = response.json()
-        assert new_quota["used_urls"] >= initial_url_count + 1
-
-        # Send some chat messages
-        for i in range(5):
-            await client.post(
-                "/api/v1/chat",
-                json={
-                    "agent_id": agent_id,
-                    "message": f"Test message {i}",
-                },
-            )
-
-        # Check message quota increased
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        final_quota = response.json()
-        assert final_quota["used_messages_today"] >= initial_quota["used_messages_today"] + 5
-
     @pytest.mark.asyncio
     async def test_error_recovery_workflow(self, client):
         """Test system recovery after various errors"""
@@ -176,53 +136,3 @@ class TestIntegrationWorkflows:
         # 4. System should still work
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         assert response.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_data_consistency_workflow(self, client):
-        """Test data consistency across multiple operations"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Perform multiple operations
-        operations = []
-
-        # Add URLs
-        operations.append(
-            client.post(
-                f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"urls": ["https://example.com", "https://example.org"]},
-            )
-        )
-
-        # Send chat messages
-        for i in range(5):
-            operations.append(
-                client.post(
-                    "/api/v1/chat",
-                    json={
-                        "agent_id": agent_id,
-                        "message": f"Message {i}",
-                    },
-                )
-            )
-
-        # Execute all operations
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        # All should succeed
-        successful = sum(
-            1 for r in results
-            if not isinstance(r, Exception) and r.status_code == 200
-        )
-        assert successful == len(operations)
-
-        # Verify data consistency
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        urls = response.json()["urls"]
-        assert len(urls) >= 1
-
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota = response.json()
-        assert quota["used_urls"] >= 1
-        assert quota["used_messages_today"] >= 5

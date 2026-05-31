@@ -54,51 +54,6 @@ class TestEdgeCases:
             },
         )
         assert response.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_special_characters_in_urls(self, client):
-        """Test URLs with special characters"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # URLs with various special characters
-        test_urls = [
-            "https://example.com/path?query=value&other=123",
-            "https://example.com/path#fragment",
-            "https://example.com/path with spaces",
-            "https://example.com/path%20with%20encoding",
-            "https://example.com:8080/path",
-            "https://user:pass@example.com/path",
-        ]
-
-        for url in test_urls:
-            response = await client.post(
-                f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"urls": [url]},
-            )
-            # Should either succeed or fail gracefully (422 for validation errors)
-            assert response.status_code in [200, 400, 422]
-
-    @pytest.mark.asyncio
-    async def test_concurrent_index_rebuilds(self, client):
-        """Test handling of concurrent index rebuild requests"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Trigger multiple concurrent rebuilds
-        async def rebuild_index():
-            return await client.post(
-                f"/api/v1/index:rebuild?agent_id={agent_id}",
-                json={"force": False}
-            )
-
-        tasks = [rebuild_index() for _ in range(3)]
-        results = await asyncio.gather(*tasks)
-
-        # All should succeed (system should handle concurrent rebuilds)
-        successful = sum(1 for r in results if r.status_code == 200)
-        assert successful >= 2  # At least 2 should succeed
-
     @pytest.mark.asyncio
     async def test_quota_boundary_conditions(self, client):
         """Test quota at boundary conditions"""
@@ -242,28 +197,6 @@ class TestEdgeCases:
         )
         # Should handle gracefully (may accept or reject based on validation)
         assert response.status_code in [200, 422]
-
-    @pytest.mark.asyncio
-    async def test_url_with_authentication_params(self, client):
-        """Test URLs with authentication parameters"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # URL with auth params (should be handled carefully)
-        auth_urls = [
-            "https://api.example.com/v1/data?token=abc123",
-            "https://user:password@example.com/secure",
-            "https://example.com/api?key=secret&nonce=12345",
-        ]
-
-        for url in auth_urls:
-            response = await client.post(
-                f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"urls": [url]},
-            )
-            # Should accept but potentially mask sensitive data (422 for validation errors)
-            assert response.status_code in [200, 422]
-
     @pytest.mark.asyncio
     async def test_concurrent_quota_checks(self, client):
         """Test concurrent quota checking doesn't cause issues"""

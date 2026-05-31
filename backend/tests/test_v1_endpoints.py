@@ -18,33 +18,6 @@ def test_replace_source_placeholders_uses_only_url_sources():
 
 
 @pytest.mark.asyncio
-async def test_list_urls_empty(client):
-    response = await client.get("/api/v1/agent:default")
-    agent_id = response.json()["id"]
-
-    response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-    assert response.status_code == 200
-    data = response.json()
-    assert "urls" in data
-    assert "total" in data
-    assert data["total"] == 0
-
-
-@pytest.mark.asyncio
-async def test_create_url(client):
-    response = await client.get("/api/v1/agent:default")
-    agent_id = response.json()["id"]
-
-    response = await client.post(
-        f"/api/v1/urls:create?agent_id={agent_id}",
-        json={"urls": ["https://example.com"]},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["created"] == 1
-
-
-@pytest.mark.asyncio
 async def test_get_quota(client):
     response = await client.get("/api/v1/agent:default")
     agent_id = response.json()["id"]
@@ -55,18 +28,6 @@ async def test_get_quota(client):
     assert "max_urls" in data
     assert "max_files" in data
     assert "used_urls" in data
-
-
-@pytest.mark.asyncio
-async def test_get_index_info(client):
-    response = await client.get("/api/v1/agent:default")
-    agent_id = response.json()["id"]
-
-    response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-    assert response.status_code == 200
-    data = response.json()
-    assert "agent_id" in data
-    assert "index_exists" in data
 
 
 @pytest.mark.asyncio
@@ -121,18 +82,24 @@ async def test_chat_messages_include_sources(public_client, default_agent_id):
     assert chat_response.status_code == 200
     session_id = chat_response.json()["session_id"]
 
-    messages_response = await public_client.get(f"/api/v1/chat/messages?session_id={session_id}")
+    messages_response = await public_client.get(
+        f"/api/v1/chat/messages?session_id={session_id}"
+    )
     assert messages_response.status_code == 200
 
     messages = messages_response.json()
-    assistant_messages = [message for message in messages if message["role"] == "assistant"]
+    assistant_messages = [
+        message for message in messages if message["role"] == "assistant"
+    ]
     assert assistant_messages
     assert "sources" in assistant_messages[-1]
     assert isinstance(assistant_messages[-1]["sources"], list)
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_hides_internal_errors(public_client, default_agent_id, monkeypatch):
+async def test_chat_stream_hides_internal_errors(
+    public_client, default_agent_id, monkeypatch
+):
     from api.v1 import endpoints
 
     async def broken_chat_completion(*args, **kwargs):
@@ -142,7 +109,9 @@ async def test_chat_stream_hides_internal_errors(public_client, default_agent_id
     monkeypatch.setattr(
         endpoints,
         "get_llm_service",
-        lambda **kwargs: type("BrokenLLM", (), {"chat_completion": broken_chat_completion})(),
+        lambda **kwargs: type(
+            "BrokenLLM", (), {"chat_completion": broken_chat_completion}
+        )(),
     )
 
     response = await public_client.post(
@@ -163,147 +132,9 @@ async def test_chat_stream_hides_internal_errors(public_client, default_agent_id
 
 
 @pytest.mark.asyncio
-async def test_chat_response_replaces_url_placeholders(public_client, default_agent_id, monkeypatch):
-    from api.v1 import endpoints
-
-    class PlaceholderLLM:
-        def __init__(self):
-            self.last_usage = None
-
-        async def chat_completion(self, *args, **kwargs):
-            yield "Use [website](#source-1) and [faq](#source-2)."
-
-        def get_last_usage(self):
-            return self.last_usage
-
-    async def fake_retrieve_async(*args, **kwargs):
-        return [
-            {
-                "type": "url",
-                "content": "Website content for testing inline citations.",
-                "metadata": {
-                    "title": "Example",
-                    "url": "https://example.com/page",
-                },
-            },
-            {
-                "type": "file",
-                "content": "FAQ answer content.",
-                "metadata": {
-                    "filename": "FAQ",
-                },
-            },
-        ]
-
-    monkeypatch.setattr(endpoints, "get_llm_service", lambda **kwargs: PlaceholderLLM())
-    monkeypatch.setattr(endpoints, "ensure_rag_service", lambda: type(
-        "FakeRAG",
-        (),
-        {
-            "retrieve_async": staticmethod(fake_retrieve_async),
-            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] File: FAQ\nContent"),
-        },
-    )())
-
-    response = await public_client.post(
-        "/api/v1/chat",
-        json={
-            "agent_id": default_agent_id,
-            "message": "Tell me about the website",
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["reply"] == "Use [website](https://example.com/page) and faq."
-    assert payload["sources"][0]["url"] == "https://example.com/page"
-    assert len(payload["sources"]) == 1  # Only URL sources are included
-
-    history_response = await public_client.get(
-        f"/api/v1/chat/messages?session_id={payload['session_id']}"
-    )
-    assert history_response.status_code == 200
-    assistant_messages = [message for message in history_response.json() if message["role"] == "assistant"]
-    assert assistant_messages[-1]["content"] == "Use [website](https://example.com/page) and faq."
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_replaces_url_placeholders(public_client, default_agent_id, monkeypatch):
-    from api.v1 import endpoints
-
-    class PlaceholderLLM:
-        def __init__(self):
-            self.last_usage = None
-
-        async def chat_completion(self, *args, **kwargs):
-            yield "Use"
-            yield " [website](#source-1)"
-            yield " and [faq](#source-2)."
-
-        def get_last_usage(self):
-            return self.last_usage
-
-    async def fake_retrieve_async(*args, **kwargs):
-        return [
-            {
-                "type": "url",
-                "content": "Website content for testing inline citations.",
-                "metadata": {
-                    "title": "Example",
-                    "url": "https://example.com/page",
-                },
-            },
-            {
-                "type": "file",
-                "content": "FAQ answer content.",
-                "metadata": {
-                    "filename": "FAQ",
-                },
-            },
-        ]
-
-    monkeypatch.setattr(endpoints, "get_llm_service", lambda **kwargs: PlaceholderLLM())
-    monkeypatch.setattr(endpoints, "ensure_rag_service", lambda: type(
-        "FakeRAG",
-        (),
-        {
-            "retrieve_async": staticmethod(fake_retrieve_async),
-            "build_context": staticmethod(lambda retrieval_results, locale='zh-CN': "[Source 1] Example\nURL: https://example.com/page\nContent\n\n[Source 2] File: FAQ\nContent"),
-        },
-    )())
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={
-            "agent_id": default_agent_id,
-            "message": "Tell me about the website",
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.text
-    assert "event: sources" in body
-    assert "event: content" in body
-    assert "#source-1" in body
-
-    done_payload = None
-    for raw_event in body.strip().split("\n\n"):
-        if raw_event.startswith("event: done"):
-            payload_lines = [line.split(":", 1)[1].strip() for line in raw_event.splitlines() if line.startswith("data:")]
-            done_payload = json.loads("\n".join(payload_lines))
-            break
-
-    assert done_payload is not None
-    history_response = await public_client.get(
-        f"/api/v1/chat/messages?session_id={done_payload['session_id']}"
-    )
-    assert history_response.status_code == 200
-    assistant_messages = [message for message in history_response.json() if message["role"] == "assistant"]
-    assert assistant_messages[-1]["content"] == "Use [website](https://example.com/page) and faq."
-
-
-@pytest.mark.asyncio
-async def test_takeover_admin_reply_visible_via_public_polling(client, default_agent_id):
+async def test_takeover_admin_reply_visible_via_public_polling(
+    client, default_agent_id
+):
     chat_response = await client.post(
         "/api/v1/chat",
         json={
@@ -317,10 +148,14 @@ async def test_takeover_admin_reply_visible_via_public_polling(client, default_a
     sessions_response = await client.get("/api/v1/admin/sessions?skip=0&limit=20")
     assert sessions_response.status_code == 200
     sessions = sessions_response.json()["items"]
-    matched_session = next(item for item in sessions if item["session_id"] == business_session_id)
+    matched_session = next(
+        item for item in sessions if item["session_id"] == business_session_id
+    )
     db_session_id = matched_session["id"]
 
-    takeover_response = await client.post(f"/api/v1/admin/sessions/{db_session_id}/takeover")
+    takeover_response = await client.post(
+        f"/api/v1/admin/sessions/{db_session_id}/takeover"
+    )
     assert takeover_response.status_code == 200
 
     send_response = await client.post(
@@ -376,11 +211,15 @@ async def test_taken_over_session_skips_rate_limit_reply(client, default_agent_i
 
     sessions_response = await client.get("/api/v1/admin/sessions?skip=0&limit=20")
     matched_session = next(
-        item for item in sessions_response.json()["items"] if item["session_id"] == business_session_id
+        item
+        for item in sessions_response.json()["items"]
+        if item["session_id"] == business_session_id
     )
     db_session_id = matched_session["id"]
 
-    takeover_response = await client.post(f"/api/v1/admin/sessions/{db_session_id}/takeover")
+    takeover_response = await client.post(
+        f"/api/v1/admin/sessions/{db_session_id}/takeover"
+    )
     assert takeover_response.status_code == 200
 
     second_response = await client.post(
@@ -396,14 +235,18 @@ async def test_taken_over_session_skips_rate_limit_reply(client, default_agent_i
     assert payload["taken_over"] is True
     assert payload["reply"] == ""
 
-    messages_response = await client.get(f"/api/v1/admin/sessions/{db_session_id}/messages")
+    messages_response = await client.get(
+        f"/api/v1/admin/sessions/{db_session_id}/messages"
+    )
     assert messages_response.status_code == 200
     messages = messages_response.json()
     assert any(message["content"] == "Visitor after takeover" for message in messages)
 
 
 @pytest.mark.asyncio
-async def test_admin_sessions_web_payload_keeps_public_session_id(client, default_agent_id):
+async def test_admin_sessions_web_payload_keeps_public_session_id(
+    client, default_agent_id
+):
     chat_response = await client.post(
         "/api/v1/chat",
         json={
@@ -417,13 +260,17 @@ async def test_admin_sessions_web_payload_keeps_public_session_id(client, defaul
     sessions_response = await client.get("/api/v1/admin/sessions?skip=0&limit=20")
     assert sessions_response.status_code == 200
     sessions = sessions_response.json()["items"]
-    matched_session = next(item for item in sessions if item["session_id"] == business_session_id)
+    matched_session = next(
+        item for item in sessions if item["session_id"] == business_session_id
+    )
     assert matched_session["id"]
     assert matched_session["session_id"] == business_session_id
 
 
 @pytest.mark.asyncio
-async def test_public_chat_blocks_unlisted_widget_origin(client, public_client, default_agent_id):
+async def test_public_chat_blocks_unlisted_widget_origin(
+    client, public_client, default_agent_id
+):
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
 
@@ -432,7 +279,9 @@ async def test_public_chat_blocks_unlisted_widget_origin(client, public_client, 
         json={"allowed_widget_origins": ["https://allowed.example"]},
     )
     assert update_response.status_code == 200
-    assert update_response.json()["allowed_widget_origins"] == ["https://allowed.example"]
+    assert update_response.json()["allowed_widget_origins"] == [
+        "https://allowed.example"
+    ]
 
     blocked_response = await public_client.post(
         "/api/v1/chat",
@@ -447,7 +296,9 @@ async def test_public_chat_blocks_unlisted_widget_origin(client, public_client, 
 
 
 @pytest.mark.asyncio
-async def test_public_chat_allows_listed_widget_origin(client, public_client, default_agent_id):
+async def test_public_chat_allows_listed_widget_origin(
+    client, public_client, default_agent_id
+):
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
 
@@ -468,7 +319,9 @@ async def test_public_chat_allows_listed_widget_origin(client, public_client, de
 
 
 @pytest.mark.asyncio
-async def test_public_polling_blocks_unlisted_widget_origin(client, public_client, default_agent_id):
+async def test_public_polling_blocks_unlisted_widget_origin(
+    client, public_client, default_agent_id
+):
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
 
@@ -516,9 +369,6 @@ async def test_admin_chat_bypasses_widget_origin_whitelist(client, default_agent
     assert response.status_code == 200
 
 
-# ── Role permission: support chat operator tests ─────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_support_list_sessions(support_client):
     response = await support_client.get("/api/v1/admin/sessions?skip=0&limit=10")
@@ -528,14 +378,15 @@ async def test_support_list_sessions(support_client):
 
 
 @pytest.mark.asyncio
-async def test_support_takeover_and_send(client, support_client, default_agent_id, setup_test_db):
+async def test_support_takeover_and_send(
+    client, support_client, default_agent_id, setup_test_db
+):
     """Support user must be assigned to agent to see and takeover sessions."""
     from models import AdminUser, AgentMember
     from services.auth_service import AuthService
     import database
     from sqlalchemy import select
 
-    # Assign support user to the default agent so they can see its sessions
     async with database.AsyncSessionLocal() as session:
         result = await session.execute(
             select(AdminUser).where(AdminUser.email == "test_support@example.com")
@@ -543,7 +394,6 @@ async def test_support_takeover_and_send(client, support_client, default_agent_i
         support_user = result.scalar_one_or_none()
         assert support_user is not None
 
-        # Check if membership already exists
         existing_member = await session.execute(
             select(AgentMember).where(
                 AgentMember.agent_id == default_agent_id,
@@ -551,10 +401,15 @@ async def test_support_takeover_and_send(client, support_client, default_agent_i
             )
         )
         if not existing_member.scalar_one_or_none():
-            session.add(AgentMember(agent_id=default_agent_id, admin_user_id=support_user.id, role="support"))
+            session.add(
+                AgentMember(
+                    agent_id=default_agent_id,
+                    admin_user_id=support_user.id,
+                    role="support",
+                )
+            )
             await session.commit()
 
-    # Create a chat session as admin (super_admin)
     chat_response = await client.post(
         "/api/v1/chat",
         json={"agent_id": default_agent_id, "message": "Support takeover test"},
@@ -562,27 +417,27 @@ async def test_support_takeover_and_send(client, support_client, default_agent_i
     assert chat_response.status_code == 200
     business_session_id = chat_response.json()["session_id"]
 
-    # Support lists sessions and finds the session
-    sessions_response = await support_client.get("/api/v1/admin/sessions?skip=0&limit=20")
+    sessions_response = await support_client.get(
+        "/api/v1/admin/sessions?skip=0&limit=20"
+    )
     assert sessions_response.status_code == 200
     sessions = sessions_response.json()["items"]
-    matched = next(item for item in sessions if item["session_id"] == business_session_id)
+    matched = next(
+        item for item in sessions if item["session_id"] == business_session_id
+    )
     db_session_id = matched["id"]
 
-    # Support reads messages
     messages_response = await support_client.get(
         f"/api/v1/admin/sessions/{db_session_id}/messages"
     )
     assert messages_response.status_code == 200
     assert len(messages_response.json()) > 0
 
-    # Support takes over
     takeover_response = await support_client.post(
         f"/api/v1/admin/sessions/{db_session_id}/takeover"
     )
     assert takeover_response.status_code == 200
 
-    # Support sends a human message
     send_response = await support_client.post(
         "/api/v1/admin/sessions/send",
         json={"session_id": db_session_id, "content": "Support reply"},

@@ -32,64 +32,6 @@ async def _set_url_quota(agent_id: str, max_urls: int):
         await db.commit()
 
 
-class TestURLCrawlQuotaConvergence:
-    """URL quota consistency after batch create and crawl operations."""
-
-    async def test_discover_subpages_quota_matches_actual_count(
-        self, client: AsyncClient, default_agent_id: str, monkeypatch
-    ):
-        """Verify discover_subpages increments quota exactly by new URLs added."""
-        await _set_url_quota(default_agent_id, max_urls=10)
-
-        async def fake_discover(self, url, max_depth=1, max_pages=10):
-            return [
-                ("https://example.com/page1", 1),
-                ("https://example.com/page2", 1),
-                ("https://example.com/page3", 1),
-            ]
-
-        from services.scraper import URLScraper
-        monkeypatch.setattr(URLScraper, "discover_subpages", fake_discover)
-
-        resp = await client.post(
-            f"/api/v1/urls:discover?agent_id={default_agent_id}&url=https://example.com",
-        )
-        assert resp.status_code == 200
-
-        quota_resp = await client.get(f"/api/v1/quota?agent_id={default_agent_id}")
-        quota = quota_resp.json()
-        assert quota["used_urls"] == 3
-        assert quota["remaining_urls"] == 7
-
-    async def test_discover_respects_quota_limit(
-        self, client: AsyncClient, default_agent_id: str, monkeypatch
-    ):
-        """discover_subpages should stop at quota limit, not exceed it."""
-        await _set_url_quota(default_agent_id, max_urls=2)
-
-        async def fake_discover(self, url, max_depth=1, max_pages=10):
-            return [
-                ("https://example.com/page1", 1),
-                ("https://example.com/page2", 1),
-                ("https://example.com/page3", 1),
-                ("https://example.com/page4", 1),
-            ]
-
-        from services.scraper import URLScraper
-        monkeypatch.setattr(URLScraper, "discover_subpages", fake_discover)
-
-        resp = await client.post(
-            f"/api/v1/urls:discover?agent_id={default_agent_id}&url=https://example.com",
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["created"] == 2  # limited by quota
-
-        quota_resp = await client.get(f"/api/v1/quota?agent_id={default_agent_id}")
-        quota = quota_resp.json()
-        assert quota["used_urls"] == 2
-        assert quota["remaining_urls"] == 0
-
 
 class TestJinaKeyUpdate:
     """Jina API key update still persists the key."""

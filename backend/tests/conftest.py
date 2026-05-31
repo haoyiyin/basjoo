@@ -24,7 +24,10 @@ def _host_resolves(host: str) -> bool:
         return False
 
 
-os.environ.setdefault("REDIS_URL", "redis://redis:6379/0" if _host_resolves("redis") else "redis://localhost:6379/0")
+os.environ.setdefault(
+    "REDIS_URL",
+    "redis://redis:6379/0" if _host_resolves("redis") else "redis://localhost:6379/0",
+)
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ["SECRET_KEY_FILE"] = "/tmp/basjoo_test_secret.key"
 os.environ["ENCRYPTION_KEY_FILE"] = "/tmp/basjoo_test_encryption.key"
@@ -72,7 +75,9 @@ async def ensure_test_admin_token() -> str:
 
     async with database.AsyncSessionLocal() as session:
         # Ensure workspace exists
-        workspace_result = await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+        workspace_result = await session.execute(
+            select(Workspace).order_by(Workspace.id).limit(1)
+        )
         workspace = workspace_result.scalar_one_or_none()
         if not workspace:
             workspace = Workspace(name="Test Workspace", owner_email="test@example.com")
@@ -81,7 +86,9 @@ async def ensure_test_admin_token() -> str:
             session.add(WorkspaceQuota(workspace_id=workspace.id))
             await session.commit()
 
-        result = await session.execute(select(AdminUser).order_by(AdminUser.id).limit(1))
+        result = await session.execute(
+            select(AdminUser).order_by(AdminUser.id).limit(1)
+        )
         admin = result.scalar_one_or_none()
         auth_service = AuthService(session)
 
@@ -115,13 +122,18 @@ async def setup_test_db(prepare_test_db_dir):
 
     async with database.AsyncSessionLocal() as session:
         from models import Agent, Workspace, WorkspaceQuota
+
         result = await session.execute(select(Agent).where(Agent.is_active))
         agent = result.scalar_one_or_none()
         if not agent:
-            workspace_result = await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+            workspace_result = await session.execute(
+                select(Workspace).order_by(Workspace.id).limit(1)
+            )
             workspace = workspace_result.scalar_one_or_none()
             if not workspace:
-                workspace = Workspace(name="Test Workspace", owner_email="test@example.com")
+                workspace = Workspace(
+                    name="Test Workspace", owner_email="test@example.com"
+                )
                 session.add(workspace)
                 await session.flush()
                 session.add(WorkspaceQuota(workspace_id=workspace.id))
@@ -148,8 +160,12 @@ async def setup_test_db(prepare_test_db_dir):
 async def default_agent_id(setup_test_db):
     async with database.AsyncSessionLocal() as session:
         from models import Agent
+
         result = await session.execute(
-            select(Agent).where(Agent.is_active == True).order_by(Agent.created_at).limit(1)
+            select(Agent)
+            .where(Agent.is_active == True)
+            .order_by(Agent.created_at)
+            .limit(1)
         )
         agent = result.scalar_one_or_none()
         assert agent is not None
@@ -161,11 +177,15 @@ async def public_client(setup_test_db):
     from main import app
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", timeout=30.0
+    ) as ac:
         yield ac
 
 
-async def _ensure_test_admin_with_role(role: str, workspace_id: int | None = None) -> str:
+async def _ensure_test_admin_with_role(
+    role: str, workspace_id: int | None = None
+) -> str:
     """Create an admin with a specific role and return a valid JWT token."""
     from models import AdminUser, Workspace, WorkspaceQuota
     from services.auth_service import AuthService
@@ -173,10 +193,14 @@ async def _ensure_test_admin_with_role(role: str, workspace_id: int | None = Non
     async with database.AsyncSessionLocal() as session:
         # Ensure workspace exists if not provided
         if workspace_id is None:
-            workspace_result = await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+            workspace_result = await session.execute(
+                select(Workspace).order_by(Workspace.id).limit(1)
+            )
             workspace = workspace_result.scalar_one_or_none()
             if not workspace:
-                workspace = Workspace(name="Test Workspace", owner_email="test@example.com")
+                workspace = Workspace(
+                    name="Test Workspace", owner_email="test@example.com"
+                )
                 session.add(workspace)
                 await session.flush()
                 session.add(WorkspaceQuota(workspace_id=workspace.id))
@@ -210,7 +234,9 @@ async def client(setup_test_db):
 
     token = await ensure_test_admin_token()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", timeout=30.0
+    ) as ac:
         ac.headers.update({"Authorization": f"Bearer {token}"})
         yield ac
 
@@ -221,7 +247,9 @@ async def support_client(setup_test_db):
 
     token = await _ensure_test_admin_with_role("support")
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", timeout=30.0
+    ) as ac:
         ac.headers.update({"Authorization": f"Bearer {token}"})
         yield ac
 
@@ -251,6 +279,8 @@ async def readonly_client(setup_test_db):
         token = auth_service.create_access_token({"sub": str(admin.id)})
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", timeout=30.0
+    ) as ac:
         ac.headers.update({"Authorization": f"Bearer {token}"})
         yield ac
