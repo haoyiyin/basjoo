@@ -203,7 +203,7 @@ async def test_patch_registration_settings_noop(client):
 
 
 @pytest.mark.asyncio
-async def test_jina_key_status_returns_r2r(client):
+async def test_jina_key_status_returns_jina(client):
     """Embedding status should report the agent's configured provider."""
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]

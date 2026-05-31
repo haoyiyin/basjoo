@@ -18,9 +18,7 @@ INSECURE_SECRET_VALUES = {
 
 DEFAULT_AGENT_ID_FILE = "/app/data/.agent_id"
 DEFAULT_AGENT_MAX_TOKENS = 1024
-DEFAULT_AGENT_SIMILARITY_THRESHOLD = (
-    0.01  # KB hybrid search scores; default 10% (0.01)
-)
+DEFAULT_AGENT_SIMILARITY_THRESHOLD = 0.01  # KB hybrid search scores; default 10% (0.01)
 
 
 def _is_missing_or_insecure_secret(value: str | None) -> bool:

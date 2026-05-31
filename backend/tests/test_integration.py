@@ -6,96 +6,10 @@ This suite tests complete end-to-end workflows and multi-step operations
 import pytest
 import asyncio
 
-from tests.conftest import wait_for_index_job
 
 
 class TestIntegrationWorkflows:
     """Test suite for integration testing of complete workflows"""
-
-    @pytest.mark.asyncio
-    async def test_complete_rag_workflow(self, client):
-        """Test complete RAG workflow: import → index → chat → verify"""
-        # 1. Get agent
-        response = await client.get("/api/v1/agent:default")
-        assert response.status_code == 200
-        agent_id = response.json()["id"]
-
-        # 2. Add URL knowledge
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-        assert response.status_code == 200
-
-        # 3. Build index
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-        job_id = response.json()["job_id"]
-
-        # 4. Wait for index rebuild to complete
-        await wait_for_index_job(client, agent_id, job_id)
-
-        # 5. Verify index info endpoint works
-        response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-        assert response.status_code == 200
-        index_info = response.json()
-        assert "urls_indexed" in index_info
-        assert "r2r_healthy" in index_info
-
-        # 6. Chat and verify RAG is working
-        response = await client.post(
-            "/api/v1/chat",
-            json={
-                "agent_id": agent_id,
-                "message": "What is your refund policy?",
-            },
-        )
-        assert response.status_code == 200
-        chat_response = response.json()
-        assert "reply" in chat_response
-        assert len(chat_response["reply"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_url_to_chat_workflow(self, client):
-        """Test complete workflow: add URL → fetch → index → chat"""
-        # 1. Get agent
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # 2. Add URL
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-        assert response.status_code == 200
-
-        # 3. Check URL status
-        # URL fetching may still be in progress; endpoint should remain usable
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        urls = response.json()["urls"]
-        assert len(urls) > 0
-
-        # 5. Build index
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-
-        # 6. Chat with the agent
-        response = await client.post(
-            "/api/v1/chat",
-            json={
-                "agent_id": agent_id,
-                "message": "Tell me about the content",
-            },
-        )
-        # Should succeed even if URL content isn't fully processed yet
-        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_multi_turn_conversation(self, client):
@@ -228,55 +142,6 @@ class TestIntegrationWorkflows:
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         final_quota = response.json()
         assert final_quota["used_messages_today"] >= initial_quota["used_messages_today"] + 5
-
-    @pytest.mark.asyncio
-    async def test_index_operations_workflow(self, client):
-        """Test complete index management workflow"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # 1. Add knowledge via URL
-        await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-
-        # 2. Check initial index state
-        response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-        assert response.status_code == 200
-        initial_info = response.json()
-
-        # 3. Rebuild index
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-        job_id = response.json()["job_id"]
-
-        # 4. Monitor job status
-        max_wait = 10
-        job_completed = False
-        for i in range(max_wait):
-            response = await client.get(
-                f"/api/v1/index:status?agent_id={agent_id}&job_id={job_id}"
-            )
-            job_data = response.json()
-            if job_data.get("status") == "completed":
-                job_completed = True
-                break
-            elif job_data.get("status") == "failed":
-                break
-            await asyncio.sleep(1)
-
-        assert job_completed, "Index rebuild job did not complete"
-
-        # 5. Verify index info remains queryable after rebuild
-        response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-        final_info = response.json()
-        assert "agent_id" in final_info
-        assert "urls_indexed" in final_info
-        assert "r2r_healthy" in final_info
 
     @pytest.mark.asyncio
     async def test_error_recovery_workflow(self, client):

@@ -1518,7 +1518,7 @@ async def get_contexts(
             query=request.query,
             top_k=request.top_k or 5,
         )
-        for r in (kb_results or []):
+        for r in kb_results or []:
             contexts.append(
                 {
                     "type": "file",

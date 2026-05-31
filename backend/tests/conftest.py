@@ -24,7 +24,6 @@ def _host_resolves(host: str) -> bool:
         return False
 
 
-os.environ.setdefault("R2R_API_URL", "http://r2r:7272" if _host_resolves("r2r") else "http://localhost:7272")
 os.environ.setdefault("REDIS_URL", "redis://redis:6379/0" if _host_resolves("redis") else "redis://localhost:6379/0")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ["SECRET_KEY_FILE"] = "/tmp/basjoo_test_secret.key"
@@ -33,93 +32,6 @@ os.environ["CREATE_DEFAULT_AGENT_ON_BOOTSTRAP"] = "true"
 
 import database
 from database import configure_database, init_db
-
-
-@pytest.fixture(autouse=True)
-def mock_r2r_client(monkeypatch, request):
-    integration_fixtures = {"client", "public_client", "default_agent_id"}
-    if not integration_fixtures.intersection(set(request.fixturenames)):
-        return
-
-    store_data: dict[str, list[dict]] = {}
-    collection_deleted: set[str] = set()
-    doc_deleted: set[str] = set()
-
-    class FakeR2RClient:
-        def __init__(self, base_url: str | None = None, timeout: float = 60.0):
-            pass
-
-        async def ensure_collection(self, agent_id: str) -> str:
-            return f"col_{agent_id}"
-
-        async def _collection_id(self, agent_id: str) -> str | None:
-            col_id = f"col_{agent_id}"
-            if col_id in collection_deleted:
-                return None
-            return col_id
-
-        async def delete_collection(self, agent_id: str) -> bool:
-            collection_deleted.add(f"col_{agent_id}")
-            store_data.pop(agent_id, None)
-            return True
-
-        async def ingest_file(self, agent_id: str, file_content: bytes, filename: str, metadata: dict | None = None) -> dict:
-            doc_id = f"doc_file_{len(store_data.get(agent_id, []))}"
-            store_data.setdefault(agent_id, []).append({
-                "id": doc_id,
-                "content": f"[file:{filename}]",
-                "metadata": metadata or {},
-            })
-            return {"id": doc_id}
-
-        async def ingest_text(self, agent_id: str, text: str, title: str, metadata: dict | None = None) -> dict:
-            doc_id = f"doc_url_{len(store_data.get(agent_id, []))}"
-            store_data.setdefault(agent_id, []).append({
-                "id": doc_id,
-                "content": text,
-                "metadata": {**(metadata or {}), "title": title},
-            })
-            return {"id": doc_id}
-
-        async def unassign_document(self, agent_id: str, document_id: str) -> bool:
-            doc_deleted.add(document_id)
-            for aid, chunks in list(store_data.items()):
-                store_data[aid] = [c for c in chunks if c.get("id") != document_id]
-            return True
-
-        async def delete_document(self, document_id: str) -> bool:
-            doc_deleted.add(document_id)
-            for aid, chunks in list(store_data.items()):
-                store_data[aid] = [c for c in chunks if c.get("id") != document_id]
-            return True
-
-        async def list_documents(self, agent_id: str) -> list[dict]:
-            return store_data.get(agent_id, [])
-
-        async def search(self, agent_id: str, query: str, top_k: int = 5, threshold: float = 0.01) -> list[dict]:
-            chunks = store_data.get(agent_id, [])
-            results = []
-            query_lower = query.lower()
-            for chunk in chunks:
-                content = chunk.get("content", "")
-                metadata = chunk.get("metadata", {})
-                haystacks = [content.lower(), str(metadata.get("title", "")).lower()]
-                if any(query_lower in hay for hay in haystacks):
-                    results.append({
-                        "content": content,
-                        "score": 0.95,
-                        "metadata": metadata,
-                    })
-            return results[:top_k]
-
-        async def health(self) -> bool:
-            return True
-
-    monkeypatch.setattr("services.R2RClient", FakeR2RClient)
-    monkeypatch.setattr("services.r2r_client.R2RClient", FakeR2RClient)
-    monkeypatch.setattr("api.v1.endpoints.R2RClient", FakeR2RClient)
-    monkeypatch.setattr("api.v1.index_endpoints.R2RClient", FakeR2RClient)
-    monkeypatch.setattr("api.v1.file_endpoints.R2RClient", FakeR2RClient)
 
 
 @pytest.fixture(autouse=True)
@@ -186,21 +98,6 @@ async def ensure_test_admin_token() -> str:
             await session.commit()
 
         return auth_service.create_access_token({"sub": str(admin.id)})
-
-
-async def wait_for_index_job(client: AsyncClient, agent_id: str, job_id: str, timeout_seconds: int = 20):
-    import asyncio
-    import time
-
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        response = await client.get(f"/api/v1/index:status?agent_id={agent_id}&job_id={job_id}")
-        response.raise_for_status()
-        data = response.json()
-        if data.get("status") in {"completed", "failed"}:
-            return data
-        await asyncio.sleep(0.2)
-    raise AssertionError(f"Index job {job_id} did not finish within {timeout_seconds}s")
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)

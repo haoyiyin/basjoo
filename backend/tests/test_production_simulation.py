@@ -7,7 +7,6 @@ import pytest
 import asyncio
 import time
 
-from tests.conftest import wait_for_index_job
 from datetime import datetime, timezone
 from typing import List
 import httpx
@@ -175,39 +174,6 @@ class TestProductionSimulation:
 
         # Verify session was created (message_count should be >= 2)
         # Note: This would require a session list endpoint to fully verify
-
-    @pytest.mark.asyncio
-    async def test_index_rebuild_after_url_update(self, client):
-        """Test index rebuild workflow after URL addition"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add a URL
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-        assert response.status_code == 200
-
-        # Trigger index rebuild
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "job_id" in data
-
-        # Check job status
-        job_id = data["job_id"]
-        await wait_for_index_job(client, agent_id, job_id)
-
-        # Verify index info endpoint works (no data expected since Scrapling isn't available in tests)
-        response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert "urls_indexed" in data
-        assert "r2r_healthy" in data
 
     @pytest.mark.asyncio
     async def test_quota_daily_reset(self, client):
