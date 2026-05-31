@@ -8,6 +8,9 @@ from fastapi import (
     Request,
     WebSocket,
     WebSocketDisconnect,
+    UploadFile,
+    File,
+    BackgroundTasks,
 )
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -41,6 +44,7 @@ from models import (
     WorkspaceQuota,
     AdminUser,
     AgentMember,
+    normalize_url,
 )
 from api.v1.schemas import (
     ChatRequest,
@@ -51,6 +55,7 @@ from api.v1.schemas import (
     URLListResponse,
     URLRefetchRequest,
     URLRefetchResponse,
+    URLItem,
     FileUploadResponse,
     FileListResponse,
     FileItem,
@@ -73,6 +78,18 @@ from api.v1.schemas import (
     normalize_widget_origin,
 )
 from services import URLNormalizer, TaskType, task_lock
+from services.url_service import (
+    list_urls as svc_list_urls,
+    create_urls as svc_create_urls,
+    delete_url as svc_delete_url,
+    clear_all_urls as svc_clear_all_urls,
+)
+from services.file_service import (
+    list_files as svc_list_files,
+    upload_files as svc_upload_files,
+    delete_file as svc_delete_file,
+    clear_all_files as svc_clear_all_files,
+)
 from core.encryption import encrypt_api_key, decrypt_api_key
 from services.llm_service import get_llm_service
 from services.auth_service import AuthService
@@ -2840,6 +2857,188 @@ async def send_session_message(
         }
     )
 
+    return {"success": True}
+
+
+# ========== URL & File KB Management Endpoints (restore missing routes) ==========
+
+
+@router.get("/urls:list", response_model=URLListResponse)
+async def list_urls(
+    agent_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    stmt = (
+        select(URLSource)
+        .where(URLSource.agent_id == agent_id)
+        .order_by(URLSource.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    url_sources = result.scalars().all()
+    total = (
+        await db.execute(
+            select(func.count(URLSource.id)).where(URLSource.agent_id == agent_id)
+        )
+    ).scalar() or 0
+    quota = {"used": total, "max": 500}
+    items = [URLItem.model_validate(u) for u in url_sources]
+    return {"urls": items, "total": total, "quota": quota}
+
+
+@router.post("/urls:create", response_model=URLListResponse)
+async def create_urls(
+    agent_id: str,
+    payload: URLCreateRequest,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    for url_str in payload.urls:
+        normalized = normalize_url(url_str)
+        exists = (
+            await db.execute(
+                select(URLSource).where(
+                    URLSource.agent_id == agent_id,
+                    URLSource.normalized_url == normalized,
+                )
+            )
+        ).scalar_one_or_none()
+        if exists:
+            continue
+        us = URLSource(
+            agent_id=agent_id, url=url_str, normalized_url=normalized, status="pending"
+        )
+        db.add(us)
+    await db.commit()
+    return await list_urls(agent_id, 0, 100, current_user, db)
+
+
+@router.delete("/urls:delete")
+async def delete_url(
+    agent_id: str,
+    url_id: int,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    us = await db.get(URLSource, url_id)
+    if not us or us.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="URL not found")
+    await db.delete(us)
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/urls:clear_all")
+async def clear_all_urls(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
+    await db.commit()
+    return {"success": True}
+
+
+@router.get("/files:list", response_model=FileListResponse)
+async def list_files(
+    agent_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    stmt = (
+        select(KnowledgeFile)
+        .where(KnowledgeFile.agent_id == agent_id)
+        .order_by(KnowledgeFile.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    files = result.scalars().all()
+    total = (
+        await db.execute(
+            select(func.count(KnowledgeFile.id)).where(
+                KnowledgeFile.agent_id == agent_id
+            )
+        )
+    ).scalar() or 0
+    quota = {"used": total, "max": 500}
+    items = [FileItem.model_validate(f) for f in files]
+    return {"files": items, "total": total, "quota": quota}
+
+
+@router.post("/files:upload", response_model=FileUploadResponse)
+async def upload_files(
+    agent_id: str,
+    files: List[UploadFile] = File(...),
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    uploaded = 0
+    failed = 0
+    errors: List[str] = []
+    items: List[FileItem] = []
+    for f in files:
+        try:
+            kf = KnowledgeFile(
+                agent_id=agent_id,
+                filename=f.filename or "unknown",
+                file_size=getattr(f, "size", None),
+                file_type=getattr(f, "content_type", None),
+                status="pending",
+            )
+            db.add(kf)
+            await db.commit()
+            await db.refresh(kf)
+            items.append(FileItem.model_validate(kf))
+            uploaded += 1
+        except Exception as e:
+            failed += 1
+            errors.append(str(e))
+    return {
+        "uploaded": uploaded,
+        "failed": failed,
+        "files": items,
+        "errors": errors,
+    }
+
+
+@router.delete("/files:delete")
+async def delete_file(
+    agent_id: str,
+    file_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    kf = await db.get(KnowledgeFile, file_id)
+    if not kf or kf.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="File not found")
+    await db.delete(kf)
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/files:clear_all")
+async def clear_all_files(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_agent_admin(db, agent_id, current_user)
+    await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id))
+    await db.commit()
     return {"success": True}
 
 
