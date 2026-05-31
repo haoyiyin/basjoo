@@ -47,7 +47,7 @@ export interface Source {
 
 export type ProviderType = 'openai' | 'openai_native' | 'google' | 'anthropic' | 'xai' | 'openrouter' | 'zai' | 'deepseek' | 'volcengine' | 'moonshot' | 'aliyun_bailian' | 'siliconflow';
 
-export type EmbeddingProvider = 'jina' | 'siliconflow' | 'custom' | 'r2r'
+export type EmbeddingProvider = 'jina' | 'siliconflow' | 'custom'
 export type AgentType = 'website_support' | 'ai_clone' | 'sales_outreach' | 'custom'
 export type AgentChannelMode = 'web_widget' | 'whatsapp' | 'email' | 'custom'
 
@@ -599,7 +599,7 @@ class APIService {
     })
   }
 
-  async kbReset(agentId: string): Promise<{ message: string; r2r_restart_needed: boolean }> {
+  async kbReset(agentId: string): Promise<{ message: string }> {
     return this.request(`/api/v1/agent:kb-reset?agent_id=${agentId}`, {
       method: 'POST',
     })
@@ -760,7 +760,6 @@ class APIService {
     agent_id: string;
     urls_indexed: number;
     index_exists: boolean;
-    r2r_healthy: boolean;
     status: string;
   }> {
     return this.request(`/api/v1/index:info?agent_id=${agentId}`);

@@ -6,7 +6,6 @@ import { api } from '../services/api'
 import type { EmbeddingProvider } from '../services/api'
 
 const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
-  r2r: 'jina-embeddings-v3',
   jina: 'jina-embeddings-v3',
   siliconflow: 'BAAI/bge-m3',
   custom: 'text-embedding-v4',

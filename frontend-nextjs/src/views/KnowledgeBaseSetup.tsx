@@ -74,8 +74,6 @@ export default function KnowledgeBaseSetup({ agentId: agentIdProp, onSetupComple
 
   const getProviderLabel = (p: EmbeddingProvider): string => {
     switch (p) {
-      case 'r2r':
-        return 'R2R'
       case 'jina':
         return t('labels.embeddingProviderJina')
       case 'siliconflow':
