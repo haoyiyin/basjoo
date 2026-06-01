@@ -153,6 +153,7 @@ export default function Dashboard() {
     has_pending: boolean
   } | null>(null)
   const [agentId, setAgentId] = useState<string | null>(null)
+  const [agentName, setAgentName] = useState<string>('')
   const [agentIdCopied, setAgentIdCopied] = useState(false)
 
   useEffect(() => {
@@ -167,6 +168,7 @@ export default function Dashboard() {
       }
       const agent = await api.getAgent(routeAgentId)
       setAgentId(agent.id)
+      setAgentName(agent.name)
       const [quotaData, sourcesData] = await Promise.all([
         api.getQuota(agent.id),
         api.getSourcesSummary(agent.id),
@@ -255,7 +257,7 @@ export default function Dashboard() {
             fontSize: isMobile ? 'var(--text-base)' : 'var(--text-lg)',
             color: 'var(--color-text-secondary)',
           }}>
-            {t('labels.welcome')}
+            {t('labels.welcome', { agentName: agentName || t('appName') })}
           </p>
         </header>
 
@@ -289,7 +291,7 @@ export default function Dashboard() {
             {quickActionsConfig.map((action, idx) => (
               <button
                 key={action.path}
-                onClick={() => navigate(action.path)}
+                onClick={() => navigate(routeAgentId ? `/agents/${routeAgentId}${action.path}` : action.path)}
                 className="liquid-glass-card"
                 style={{
                   display: 'flex',

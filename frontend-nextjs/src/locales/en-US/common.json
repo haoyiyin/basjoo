@@ -196,7 +196,7 @@
     "csvFormat": "Question,Answer\nHow to reset password?,Click forgot password button..."
   },
   "labels": {
-    "welcome": "Welcome back to Basjoo",
+    "welcome": "Welcome back to {{agentName}} Console",
     "description": "Description",
     "quickStart": "Quick Start",
     "systemStatus": "System Status",

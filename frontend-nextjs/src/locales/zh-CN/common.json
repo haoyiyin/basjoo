@@ -196,7 +196,7 @@
     "csvFormat": "问题,答案\n如何重置密码?,点击忘记密码按钮..."
   },
   "labels": {
-    "welcome": "欢迎回到 Basjoo 控制台",
+    "welcome": "欢迎回到 {{agentName}} 控制台",
     "description": "描述",
     "quickStart": "快速开始",
     "systemStatus": "系统状态",
