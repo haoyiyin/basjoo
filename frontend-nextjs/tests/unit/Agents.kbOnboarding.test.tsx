@@ -114,6 +114,8 @@ describe("Agents onboarding and lifecycle actions", () => {
 		fireEvent.click(screen.getByText("agents.create"));
 
 		const modal = await screen.findByTestId("kb-onboarding-modal");
+		const modalButtons = within(modal).getAllByRole("button");
+		expect(modalButtons).toHaveLength(2);
 		expect(within(modal).queryByTestId("kb-wizard")).not.toBeInTheDocument();
 		expect(
 			within(modal).getByRole("button", { name: "agents.kbOnboardingSkip" }),
@@ -123,6 +125,8 @@ describe("Agents onboarding and lifecycle actions", () => {
 				name: "agents.kbOnboardingContinue",
 			}),
 		).toBeInTheDocument();
+		expect(within(modal).queryByRole("button", { name: "buttons.cancel" })).not.toBeInTheDocument();
+		expect(within(modal).queryByRole("button", { name: "kb.initButton" })).not.toBeInTheDocument();
 
 		fireEvent.click(
 			within(modal).getByRole("button", { name: "agents.kbOnboardingSkip" }),
@@ -208,6 +212,8 @@ describe("Agents onboarding and lifecycle actions", () => {
 
 		await screen.findByText("Inactive Agent");
 
-		expect(screen.queryByRole("button", { name: "agents.open" })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "agents.open" }),
+		).not.toBeInTheDocument();
 	});
 });
