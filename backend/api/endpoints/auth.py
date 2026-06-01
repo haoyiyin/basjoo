@@ -207,7 +207,7 @@ def validate_admin_role(role: str):
         )
 
 
-@router.post("/register", response_model=AdminResponse)
+@router.post("/register", response_model=LoginResponse)
 async def register(
     request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)
 ):
@@ -262,8 +262,16 @@ async def register(
             workspace_id=workspace.id,
         )
 
-    return AdminResponse(
-        id=admin.id, email=admin.email, name=admin.name, role=admin.role
+    access_token = auth_service.create_access_token(data={"sub": str(admin.id)})
+    return LoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        admin={
+            "id": admin.id,
+            "email": admin.email,
+            "name": admin.name,
+            "role": admin.role,
+        },
     )
 
 

@@ -102,9 +102,11 @@ async def test_register_first_admin(public_client):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["email"] == "test@example.com"
-    assert data["name"] == "Test Admin"
-    assert data["role"] == "super_admin"
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    assert data["admin"]["email"] == "test@example.com"
+    assert data["admin"]["name"] == "Test Admin"
+    assert data["admin"]["role"] == "super_admin"
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,11 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const TOKEN_STORAGE_KEY = 'token'
 const ADMIN_STORAGE_KEY = 'admin'
 
+interface LoginResponseData {
+  access_token: string
+  admin: Admin
+}
+
 /** All expected JWT claims plus room for extras from the backend. */
 export interface JwtPayload {
   exp?: number
@@ -57,6 +62,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [admin, setAdmin] = useState<Admin | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+
+  const persistSession = useCallback((data: LoginResponseData) => {
+    setToken(data.access_token)
+    setAdmin(data.admin)
+    localStorage.setItem(TOKEN_STORAGE_KEY, data.access_token)
+    localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(data.admin))
+  }, [])
 
   const logout = useCallback(() => {
     setToken(null)
@@ -160,11 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const data = await response.json()
 
-    setToken(data.access_token)
-    setAdmin(data.admin)
-
-    localStorage.setItem(TOKEN_STORAGE_KEY, data.access_token)
-    localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(data.admin))
+    persistSession(data)
   }
 
   const register = async (email: string, password: string, name: string) => {
@@ -179,7 +187,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(message || '注册失败')
     }
 
-    // 注册后自动登录
+    const data = await response.json()
+    if (data.access_token && data.admin) {
+      persistSession(data)
+      return
+    }
+
     await login(email, password)
   }
 
