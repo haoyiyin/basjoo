@@ -4,81 +4,160 @@ import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { AuthProvider } from "../../src/context/AuthContext";
 import { Register } from "../../src/views/Register";
 
-const registerMock = vi.fn();
+// Provide a fake localStorage for jsdom
+const fakeLocalStorage = (() => {
+	let store: Record<string, string> = {};
+	return {
+		getItem: (key: string) => store[key] ?? null,
+		setItem: (key: string, value: string) => { store[key] = value; },
+		removeItem: (key: string) => { delete store[key]; },
+		clear: () => { store = {}; },
+		get length() { return Object.keys(store).length; },
+		key: (index: number) => Object.keys(store)[index] ?? null,
+	};
+})();
 
-vi.mock("../../src/context/AuthContext", () => ({
-	useAuth: () => ({ register: registerMock }),
-}));
+Object.defineProperty(globalThis, "localStorage", {
+	value: fakeLocalStorage,
+	writable: true,
+	configurable: true,
+});
 
 vi.mock("react-i18next", () => ({
 	useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+// A realistic JWT token expiring ~24h from now so setTimeout works (no 32-bit overflow)
+// payload: {"exp":1780395198,"sub":"1"}
+const TEST_TOKEN =
+	"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODAzOTUxOTgsInN1YiI6IjEifQ.fakesignature";
+const TEST_ADMIN = {
+	id: 1,
+	email: "owner@example.com",
+	name: "Owner",
+	role: "super_admin",
+};
+
+interface FetchEntry {
+	url: string;
+	method: string;
+}
+
 beforeEach(() => {
 	vi.clearAllMocks();
-	registerMock.mockResolvedValue(undefined);
-	global.fetch = vi.fn().mockResolvedValue({
-		ok: true,
-		json: async () => ({ bootstrap_required: true }),
-	}) as any;
+	localStorage.clear();
 });
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	localStorage.clear();
 });
 
-describe("Register bootstrap flow", () => {
-	it("registers the first super admin and enters the agent panel route", async () => {
+describe("Register bootstrap flow (real AuthProvider)", () => {
+	it("registers a super admin and persists the session in localStorage without calling /login", async () => {
+		const fetchCalls: FetchEntry[] = [];
+
+		global.fetch = vi.fn().mockImplementation(
+			(url: string, options?: RequestInit) => {
+				fetchCalls.push({ url, method: options?.method || "GET" });
+
+				// Order matters: check the longer path first to avoid partial matches
+				if (url.includes("/api/admin/registration-settings")) {
+					return Promise.resolve({
+						ok: true,
+						json: async () => ({ bootstrap_required: true }),
+					});
+				}
+
+				if (url.includes("/api/admin/register")) {
+					return Promise.resolve({
+						ok: true,
+						json: async () => ({
+							access_token: TEST_TOKEN,
+							admin: TEST_ADMIN,
+						}),
+					});
+				}
+
+				if (url.includes("/api/admin/me")) {
+					return Promise.resolve({
+						ok: true,
+						json: async () => TEST_ADMIN,
+					});
+				}
+
+				return Promise.resolve({
+					ok: false,
+					status: 404,
+					json: async () => ({ detail: "Not found" }),
+				});
+			},
+		) as any;
+
 		const router = createMemoryRouter(
 			[
 				{ path: "/register", element: <Register /> },
-				{ path: "/", element: <div>agents.panelTitle</div> },
-				{ path: "/login", element: <div>login page</div> },
+				{ path: "/", element: <div>Home page</div> },
 			],
 			{ initialEntries: ["/register"] },
 		);
 
-		render(<RouterProvider router={router} />);
+		render(
+			<AuthProvider>
+				<RouterProvider router={router} />
+			</AuthProvider>,
+		);
 
+		// Wait for registration-settings check to complete and form to render
 		await screen.findByText("initialSetup.name");
+		expect(fetchCalls.some((f) => f.url.includes("registration-settings"))).toBe(
+			true,
+		);
+
+		// Fill the form
 		fireEvent.change(
 			screen.getByPlaceholderText("initialSetup.namePlaceholder"),
-			{
-				target: { value: "Owner" },
-			},
+			{ target: { value: "Owner" } },
 		);
 		fireEvent.change(
 			screen.getByPlaceholderText("initialSetup.emailPlaceholder"),
-			{
-				target: { value: "owner@example.com" },
-			},
+			{ target: { value: "owner@example.com" } },
 		);
 		fireEvent.change(
 			screen.getByPlaceholderText("initialSetup.passwordPlaceholder"),
-			{
-				target: { value: "password123" },
-			},
+			{ target: { value: "password123" } },
 		);
 		fireEvent.change(
 			screen.getByPlaceholderText("initialSetup.confirmPasswordPlaceholder"),
-			{
-				target: { value: "password123" },
-			},
+			{ target: { value: "password123" } },
 		);
 
+		// Submit the form
 		fireEvent.click(
 			screen.getByRole("button", { name: "initialSetup.registerButton" }),
 		);
 
+		// Wait for navigation to /
 		await waitFor(() => {
-			expect(registerMock).toHaveBeenCalledWith(
-				"owner@example.com",
-				"password123",
-				"Owner",
-			);
 			expect(router.state.location.pathname).toBe("/");
 		});
+
+		// Verify localStorage has the persisted session
+		expect(localStorage.getItem("token")).toBe(TEST_TOKEN);
+		expect(JSON.parse(localStorage.getItem("admin") || "{}")).toEqual(
+			TEST_ADMIN,
+		);
+
+		// Verify no call was made to /api/admin/login
+		const loginCalls = fetchCalls.filter((f) =>
+			f.url.includes("/api/admin/login"),
+		);
+		expect(loginCalls).toHaveLength(0);
+
+		// Verify the home page content is shown
+		expect(screen.getByText("Home page")).toBeInTheDocument();
 	});
 });
