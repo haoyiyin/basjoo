@@ -541,19 +541,30 @@ class APIService {
 	async deleteAgent(
 		agentId: string,
 	): Promise<{ success: boolean; deleted_at?: string; purge_after?: string }> {
-		return this.request<{
+		const result = await this.request<{
 			success: boolean;
 			deleted_at?: string;
 			purge_after?: string;
 		}>(`/api/v1/agents/${agentId}`, {
 			method: "DELETE",
 		});
+
+		if (this.getSelectedAgentId() === agentId) {
+			this.clearSelectedAgentId();
+		}
+
+		return result;
 	}
 
 	async restoreAgent(agentId: string): Promise<Agent> {
-		return this.request<Agent>(`/api/v1/agents/${agentId}:restore`, {
-			method: "POST",
-		});
+		const agent = await this.request<Agent>(
+			`/api/v1/agents/${agentId}:restore`,
+			{
+				method: "POST",
+			},
+		);
+		this.setSelectedAgentId(agent.id);
+		return agent;
 	}
 
 	async listAgentMembers(
@@ -618,9 +629,7 @@ class APIService {
 		);
 	}
 
-	async getJinaKeyStatus(
-		agentId: string,
-	): Promise<{
+	async getJinaKeyStatus(agentId: string): Promise<{
 		agent_id: string;
 		configured: boolean;
 		embedding_provider?: EmbeddingProvider;

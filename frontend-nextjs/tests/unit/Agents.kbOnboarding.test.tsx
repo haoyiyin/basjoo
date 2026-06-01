@@ -125,8 +125,12 @@ describe("Agents onboarding and lifecycle actions", () => {
 				name: "agents.kbOnboardingContinue",
 			}),
 		).toBeInTheDocument();
-		expect(within(modal).queryByRole("button", { name: "buttons.cancel" })).not.toBeInTheDocument();
-		expect(within(modal).queryByRole("button", { name: "kb.initButton" })).not.toBeInTheDocument();
+		expect(
+			within(modal).queryByRole("button", { name: "buttons.cancel" }),
+		).not.toBeInTheDocument();
+		expect(
+			within(modal).queryByRole("button", { name: "kb.initButton" }),
+		).not.toBeInTheDocument();
 
 		fireEvent.click(
 			within(modal).getByRole("button", { name: "agents.kbOnboardingSkip" }),

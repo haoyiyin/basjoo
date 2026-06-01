@@ -82,6 +82,11 @@ All LLM calls to external providers; embeddings via self-KB (Jina/SiliconFlow/Op
 - Delete: Qdrant filter delete → `kb_chunks` → `kb_documents` → physical file.
 - All queries enforce `tenant_id`; use `require_tenant_access` + `KbService.get_knowledge_base`.
 
+**Legacy agent-scoped KB sources (URL / File)**
+- Use `backend/services/url_service.py` and `backend/services/file_service.py`.
+- Endpoints in `backend/api/v1/endpoints.py` must remain thin (delegate only; no DB logic).
+- The multi-tenant KB document pipeline is the preferred path for new work.
+
 ### Frontend
 - Centralized API/SSE + `kbStatus` helper in `src/services/api.ts`.
 - Auth state in `src/context/AuthContext.tsx` (localStorage).
