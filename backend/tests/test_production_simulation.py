@@ -3,13 +3,11 @@ Comprehensive Production Environment Simulation Tests
 This suite tests the entire system under realistic production conditions
 """
 
-import pytest
 import asyncio
 import time
-
 from datetime import datetime, timezone
-from typing import List
-import httpx
+
+import pytest
 
 
 class TestProductionSimulation:
@@ -46,7 +44,9 @@ class TestProductionSimulation:
 
         # All requests should succeed
         success_count = sum(1 for r in results if r is True)
-        assert success_count >= 8, f"Expected at least 8/10 success, got {success_count}"
+        assert success_count >= 8, (
+            f"Expected at least 8/10 success, got {success_count}"
+        )
 
     @pytest.mark.asyncio
     async def test_quota_concurrent_safety(self, client):
@@ -84,7 +84,10 @@ class TestProductionSimulation:
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         final_quota = response.json()["used_messages_today"]
 
-        assert final_quota == initial_quota + successful, "Quota tracking failed under load"
+        assert final_quota == initial_quota + successful, (
+            "Quota tracking failed under load"
+        )
+
     @pytest.mark.asyncio
     async def test_error_handling_invalid_agent(self, client):
         """Test error handling for invalid agent ID"""
@@ -93,7 +96,11 @@ class TestProductionSimulation:
         # Try to chat with invalid agent
         response = await client.post(
             "/api/v1/chat",
-            json={"agent_id": invalid_agent_id, "session_id": "test", "message": "Hello"},
+            json={
+                "agent_id": invalid_agent_id,
+                "session_id": "test",
+                "message": "Hello",
+            },
         )
         assert response.status_code == 404
 
@@ -184,6 +191,7 @@ class TestProductionSimulation:
 
         # Should handle gracefully (may succeed or fail with appropriate error)
         assert response.status_code in [200, 413, 422]
+
     @pytest.mark.asyncio
     async def test_agent_config_update(self, client):
         """Test agent configuration update"""
@@ -194,10 +202,10 @@ class TestProductionSimulation:
         response = await client.put(
             f"/api/v1/agent?agent_id={agent_id}",
             json={
-                "name": "Updated Agent Name",
+                "name": "Agent Upd",
                 "temperature": 0.5,
-                "welcome_message": "Welcome to updated agent!"
-            }
+                "welcome_message": "Welcome to updated agent!",
+            },
         )
         assert response.status_code == 200
 
@@ -205,6 +213,6 @@ class TestProductionSimulation:
         response = await client.get(f"/api/v1/agent?agent_id={agent_id}")
         assert response.status_code == 200
         data = response.json()
-        assert data["name"] == "Updated Agent Name"
+        assert data["name"] == "Agent Upd"
         assert data["temperature"] == 0.5
         assert data["max_tokens"] == 1024

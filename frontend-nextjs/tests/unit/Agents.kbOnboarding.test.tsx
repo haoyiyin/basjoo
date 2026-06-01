@@ -220,4 +220,34 @@ describe("Agents onboarding and lifecycle actions", () => {
 			screen.queryByRole("button", { name: "agents.open" }),
 		).not.toBeInTheDocument();
 	});
+
+	it("limits created agent names to ten display units", async () => {
+		renderAgents([activeAgent]);
+		await screen.findByText("Active Agent");
+
+		const input = screen.getByPlaceholderText("agents.namePlaceholder");
+		fireEvent.change(input, { target: { value: "客服助手一二" } });
+
+		expect(input).toHaveValue("客服助手一");
+		// count text depends on i18n mock; input value verifies the trim limit
+	});
+
+	it("submits a ten ASCII character agent name", async () => {
+		renderAgents([activeAgent]);
+		await screen.findByText("Active Agent");
+
+		fireEvent.change(screen.getByPlaceholderText("agents.namePlaceholder"), {
+			target: { value: "AgentName1" },
+		});
+		fireEvent.click(screen.getByText("agents.create"));
+
+		await waitFor(() => {
+			expect(mockedApi.createAgent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					name: "AgentName1",
+					widget_title: "AgentName1",
+				}),
+			);
+		});
+	});
 });

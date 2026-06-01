@@ -58,7 +58,7 @@ async def test_get_default_agent(client):
     [
         ("GET", "/api/v1/agent:default", None),
         ("GET", "/api/v1/agent?agent_id={agent_id}", None),
-        ("PUT", "/api/v1/agent?agent_id={agent_id}", {"name": "Unauthorized Update"}),
+        ("PUT", "/api/v1/agent?agent_id={agent_id}", {"name": "NoAuth"}),
         ("GET", "/api/v1/agent:jina-key-status?agent_id={agent_id}", None),
         (
             "PUT",

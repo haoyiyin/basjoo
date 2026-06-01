@@ -4,7 +4,6 @@ This suite tests complete end-to-end workflows and multi-step operations
 """
 
 import pytest
-import asyncio
 
 
 class TestIntegrationWorkflows:
@@ -74,7 +73,7 @@ class TestIntegrationWorkflows:
         response = await client.put(
             f"/api/v1/agent?agent_id={agent_id}",
             json={
-                "name": "Test Agent Updated",
+                "name": "Agent Upd",
                 "temperature": 0.9,
                 "welcome_message": "Welcome to the updated agent!",
                 "widget_color": "#FF5733",
@@ -86,7 +85,7 @@ class TestIntegrationWorkflows:
         response = await client.get(f"/api/v1/agent?agent_id={agent_id}")
         updated_config = response.json()
 
-        assert updated_config["name"] == "Test Agent Updated"
+        assert updated_config["name"] == "Agent Upd"
         assert updated_config["temperature"] == 0.9
         assert updated_config["welcome_message"] == "Welcome to the updated agent!"
         assert updated_config["widget_color"] == "#FF5733"
@@ -103,6 +102,7 @@ class TestIntegrationWorkflows:
             f"/api/v1/agent?agent_id={agent_id}",
             json=restore_payload,
         )
+
     @pytest.mark.asyncio
     async def test_error_recovery_workflow(self, client):
         """Test system recovery after various errors"""

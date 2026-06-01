@@ -451,7 +451,13 @@ class AgentConfig(BaseModel):
 class AgentUpdateRequest(BaseModel):
     """更新Agent配置请求"""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=10)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> Any:
+        return _validate_agent_name(value)
+
     description: Optional[str] = Field(None, max_length=200)
     agent_type: Optional[
         Literal["website_support", "ai_clone", "sales_outreach", "custom"]
@@ -567,25 +573,57 @@ class AgentUpdateRequest(BaseModel):
         return normalized_origins
 
 
+AGENT_NAME_MAX_DISPLAY_WIDTH = 10
+
+
+def _agent_name_display_width(value: str) -> int:
+    import unicodedata
+
+    return sum(
+        2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1 for char in value
+    )
+
+
+def _validate_agent_name(value: Any) -> Any:
+    if value is None or not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Agent name cannot be empty")
+    width = _agent_name_display_width(stripped)
+    if width > AGENT_NAME_MAX_DISPLAY_WIDTH:
+        raise ValueError(
+            f"Agent name must be at most {AGENT_NAME_MAX_DISPLAY_WIDTH} display units "
+            "(10 ASCII characters or 5 Chinese characters)"
+        )
+    return stripped
+
+
 class AgentCreateRequest(BaseModel):
     """创建Agent请求"""
 
-    name: str = Field(..., min_length=1, max_length=50)
-    description: Optional[str] = Field(None, max_length=200)
+    name: str = Field(..., min_length=1, max_length=10)
+    description: str | None = Field(None, max_length=200)
     agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = (
         "website_support"
     )
     channel_mode: Literal["web_widget", "whatsapp", "email", "custom"] = "web_widget"
-    system_prompt: Optional[str] = Field(None, min_length=1)
-    persona_type: Optional[str] = "general"
-    widget_title: Optional[str] = Field(None, max_length=100)
-    welcome_message: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> Any:
+        return _validate_agent_name(value)
+
+    system_prompt: str | None = Field(None, min_length=1)
+    persona_type: str | None = "general"
+    widget_title: str | None = Field(None, max_length=100)
+    welcome_message: str | None = None
 
 
 class AgentListResponse(BaseModel):
     """Agent列表响应"""
 
-    agents: List[AgentConfig]
+    agents: list[AgentConfig]
     total: int
 
 
@@ -593,8 +631,8 @@ class AgentMemberCreateRequest(BaseModel):
     """添加智能体成员请求"""
 
     email: str
-    name: Optional[str] = None
-    password: Optional[str] = None
+    name: str | None = None
+    password: str | None = None
     role: Literal["admin", "support"] = "support"
 
 
@@ -608,7 +646,7 @@ class AgentMemberItem(BaseModel):
 
 
 class AgentMemberListResponse(BaseModel):
-    members: List[AgentMemberItem]
+    members: list[AgentMemberItem]
     total: int
 
 
@@ -658,20 +696,20 @@ class SessionListItem(BaseModel):
 
     id: str
     session_id: str
-    visitor_id: Optional[str] = None
-    visitor_country: Optional[str] = None
-    visitor_city: Optional[str] = None
+    visitor_id: str | None = None
+    visitor_country: str | None = None
+    visitor_city: str | None = None
     status: str = "active"
     message_count: int = 0
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    last_message: Optional[str] = None
+    updated_at: datetime | None = None
+    last_message: str | None = None
 
 
 class SessionListResponse(BaseModel):
     """会话列表响应"""
 
-    items: List[SessionListItem]
+    items: list[SessionListItem]
     total: int
 
 
@@ -721,14 +759,14 @@ class ModelsListRequest(BaseModel):
     provider_type: Literal["openai_native", "google", "deepseek"] = Field(
         ..., description="AI provider type"
     )
-    api_key: Optional[str] = Field(None, description="API key (if not using saved key)")
-    agent_id: Optional[str] = Field(None, description="Agent ID (to use saved API key)")
+    api_key: str | None = Field(None, description="API key (if not using saved key)")
+    agent_id: str | None = Field(None, description="Agent ID (to use saved API key)")
 
 
 class ModelsListResponse(BaseModel):
     """获取可用模型列表响应"""
 
-    models: List[str] = Field(default_factory=list, description="Available models")
+    models: list[str] = Field(default_factory=list, description="Available models")
 
 
 # ========== Sources Summary Schemas ==========

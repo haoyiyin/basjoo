@@ -146,7 +146,7 @@ async def test_super_admin_create_agent_no_membership(client, setup_test_db):
     response = await client.post(
         "/api/v1/agents",
         json={
-            "name": "Test Agent No Membership",
+            "name": "Test Agent",
             "description": "Agent to test no auto-membership",
             "model": "deepseek-chat",
             "api_base": "https://api.deepseek.com/v1",

@@ -21,4 +21,8 @@ describe("zh-CN debug area copy", () => {
 			[],
 		);
 	});
+
+	it("uses 仪表盘 for the Chinese dashboard navigation label", () => {
+		expect(zhCN.navigation.dashboard).toBe("仪表盘");
+	});
 });

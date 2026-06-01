@@ -6,6 +6,11 @@ import AdminLayout from "../components/AdminLayout";
 import { Agent, AgentCreateInput, AgentType, api } from "../services/api";
 import { useTranslation } from "react-i18next";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import {
+	AGENT_NAME_MAX_DISPLAY_WIDTH,
+	getAgentNameDisplayWidth,
+	trimToAgentNameMaxDisplayWidth,
+} from "../lib/agentNameLength";
 
 const agentTypeOptions: Array<{
 	value: AgentType;
@@ -34,7 +39,6 @@ const agentTypeOptions: Array<{
 	},
 ];
 
-const AGENT_NAME_MAX_LENGTH = 50;
 const AGENT_DESCRIPTION_MAX_LENGTH = 200;
 
 function formatPurgeCountdown(
@@ -85,6 +89,11 @@ export default function Agents() {
 		? selectedAgent
 		: null;
 
+	const agentNameDisplayWidth = getAgentNameDisplayWidth(form.name.trim());
+	const isAgentNameValid =
+		Boolean(form.name.trim()) &&
+		agentNameDisplayWidth <= AGENT_NAME_MAX_DISPLAY_WIDTH;
+
 	const loadAgents = async () => {
 		setLoading(true);
 		setError(null);
@@ -129,8 +138,7 @@ export default function Agents() {
 		const name = form.name.trim();
 		const description = form.description?.trim() || undefined;
 		if (
-			!name ||
-			name.length > AGENT_NAME_MAX_LENGTH ||
+			!isAgentNameValid ||
 			(description?.length || 0) > AGENT_DESCRIPTION_MAX_LENGTH
 		)
 			return;
@@ -521,10 +529,10 @@ export default function Agents() {
 							onChange={(event) =>
 								setForm((prev) => ({
 									...prev,
-									name: event.target.value.slice(0, AGENT_NAME_MAX_LENGTH),
+									name: trimToAgentNameMaxDisplayWidth(event.target.value),
 								}))
 							}
-							maxLength={AGENT_NAME_MAX_LENGTH}
+							maxLength={AGENT_NAME_MAX_DISPLAY_WIDTH}
 							placeholder={t("agents.namePlaceholder")}
 							style={{
 								width: "100%",
@@ -546,8 +554,8 @@ export default function Agents() {
 							}}
 						>
 							{t("agents.characterCount", {
-								count: form.name.length,
-								max: AGENT_NAME_MAX_LENGTH,
+								count: agentNameDisplayWidth,
+								max: AGENT_NAME_MAX_DISPLAY_WIDTH,
 							})}
 						</div>
 						<label
@@ -658,8 +666,7 @@ export default function Agents() {
 							type="submit"
 							disabled={
 								saving ||
-								!form.name?.trim() ||
-								form.name.trim().length > AGENT_NAME_MAX_LENGTH ||
+								!isAgentNameValid ||
 								(form.description?.trim().length || 0) >
 									AGENT_DESCRIPTION_MAX_LENGTH
 							}
@@ -671,9 +678,8 @@ export default function Agents() {
 								background: "var(--color-accent-gradient)",
 								color: "var(--color-text-inverse)",
 								fontWeight: 700,
-								cursor:
-									saving || !form.name?.trim() ? "not-allowed" : "pointer",
-								opacity: saving || !form.name?.trim() ? 0.6 : 1,
+								cursor: saving || !isAgentNameValid ? "not-allowed" : "pointer",
+								opacity: saving || !isAgentNameValid ? 0.6 : 1,
 							}}
 						>
 							{saving ? t("status.saving") : t("agents.create")}
