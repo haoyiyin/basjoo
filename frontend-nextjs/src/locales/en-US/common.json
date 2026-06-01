@@ -59,7 +59,7 @@
     "successBadge": "Success"
   },
   "navigation": {
-    "dashboard": "Dashboard",
+    "dashboard": "Console",
     "playground": "Playground",
     "knowledge": "Knowledge Base",
     "websites": "Websites",
@@ -181,7 +181,7 @@
     "kbOnboardingTitle": "Set up your Knowledge Base",
     "kbOnboardingDescription": "Configure embeddings to let your agent answer from your data. You can finish this later from Knowledge settings.",
     "kbOnboardingSkip": "Skip for now",
-    "kbOnboardingContinue": "Go to Dashboard"
+    "kbOnboardingContinue": "Initialize Knowledge Base"
   },
   "placeholders": {
     "enterMessage": "Enter message...",

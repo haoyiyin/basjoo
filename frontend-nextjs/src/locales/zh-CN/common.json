@@ -59,8 +59,8 @@
     "successBadge": "成功"
   },
   "navigation": {
-    "dashboard": "仪表盘",
-    "playground": "Playground",
+    "dashboard": "控制台",
+    "playground": "调试区",
     "knowledge": "知识库",
     "websites": "网站",
     "files": "文件",
@@ -136,7 +136,7 @@
   "agents": {
     "title": "智能体",
     "panelTitle": "智能体面板",
-    "panelSubtitle": "查看所有智能体的运行状态，并进入对应的独立后台。",
+    "panelSubtitle": "查看所有智能体的运行状态，并进入对应的独立工作空间。",
     "subtitle": "为不同渠道、任务和知识库创建独立智能体。",
     "allAgents": "全部智能体",
     "createTitle": "创建智能体",
@@ -180,8 +180,8 @@
     },
     "kbOnboardingTitle": "设置知识库",
     "kbOnboardingDescription": "配置嵌入服务，让智能体基于你的数据回答问题。稍后也可以在知识库设置中完成。",
-    "kbOnboardingSkip": "暂时跳过",
-    "kbOnboardingContinue": "进入仪表盘"
+    "kbOnboardingSkip": "跳过",
+    "kbOnboardingContinue": "初始化知识库"
   },
   "placeholders": {
     "enterMessage": "输入消息...",

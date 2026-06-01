@@ -4,6 +4,7 @@ import { ReactNode, useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from 'react-i18next'
+import { api } from '../services/api'
 
 import { useIsMobile } from '../hooks/useMediaQuery'
 
@@ -130,6 +131,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const { admin, logout } = useAuth()
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [agentName, setAgentName] = useState<string | null>(null)
   const isSuperAdmin = admin?.role === 'super_admin'
   const isSupport = admin?.role === 'support'
   const agentBasePath = agentId ? `/agents/${agentId}` : ''
@@ -227,6 +229,32 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     return () => clearTimeout(timer)
   }, [expandedGroups, updateIndicator])
 
+  useEffect(() => {
+    if (!agentId) {
+      setAgentName(null)
+      return
+    }
+
+    let cancelled = false
+    setAgentName(null)
+
+    api.getAgent(agentId)
+      .then(agent => {
+        if (!cancelled) {
+          setAgentName(agent.name)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAgentName(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [agentId])
+
   const SidebarContent = () => (
     <>
       {/* Logo */}
@@ -277,7 +305,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 WebkitTextFillColor: 'transparent',
                 backgroundClip: 'text',
               }}>
-                Basjoo
+                {agentId ? (agentName || t('status.loading')) : t('appName')}
               </h1>
               <span style={{
                 fontSize: 'var(--text-xs)',
