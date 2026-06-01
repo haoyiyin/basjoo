@@ -3,6 +3,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
+import KBSetupWizard from "../components/KBSetupWizard";
+import { useAgentKbStatus } from "../hooks/useAgentKbStatus";
 import { Agent, AgentCreateInput, AgentType, api } from "../services/api";
 import { useTranslation } from "react-i18next";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -81,6 +83,8 @@ export default function Agents() {
 	const [onboardingAgentId, setOnboardingAgentId] = useState<string | null>(
 		null,
 	);
+	const { recheck: recheckOnboardingKbStatus } =
+		useAgentKbStatus(onboardingAgentId);
 	const selectedAgent = useMemo(
 		() => agents.find((agent) => agent.id === selectedAgentId) || null,
 		[agents, selectedAgentId],
@@ -196,20 +200,13 @@ export default function Agents() {
 		}
 	};
 
-	const enterCreatedAgentDashboard = () => {
+	const finishCreatedAgentOnboarding = async () => {
 		if (!onboardingAgentId) return;
 		const agentId = onboardingAgentId;
+		await recheckOnboardingKbStatus();
 		api.setSelectedAgentId(agentId);
 		setOnboardingAgentId(null);
 		navigate(`/agents/${agentId}/dashboard`);
-	};
-
-	const enterCreatedAgentKnowledge = () => {
-		if (!onboardingAgentId) return;
-		const agentId = onboardingAgentId;
-		api.setSelectedAgentId(agentId);
-		setOnboardingAgentId(null);
-		navigate(`/agents/${agentId}/knowledge`);
 	};
 
 	return (
@@ -705,55 +702,20 @@ export default function Agents() {
 					aria-label={t("agents.kbOnboardingTitle")}
 				>
 					<div
-						className="liquid-glass-card"
 						style={{
-							maxWidth: 680,
+							maxWidth: 720,
 							width: "100%",
-							padding: "var(--space-6)",
-							position: "relative",
+							maxHeight: "calc(100vh - 32px)",
+							overflowY: "auto",
 						}}
 					>
-						<div style={{ marginBottom: "var(--space-4)" }}>
-							<h2
-								style={{
-									fontSize: "var(--text-xl)",
-									fontWeight: 700,
-									marginBottom: "var(--space-2)",
-									color: "var(--color-text-primary)",
-								}}
-							>
-								{t("agents.kbOnboardingTitle")}
-							</h2>
-							<p
-								style={{
-									fontSize: "var(--text-sm)",
-									color: "var(--color-text-secondary)",
-								}}
-							>
-								{t("agents.kbOnboardingDescription")}
-							</p>
-						</div>
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "flex-end",
-								gap: "var(--space-3)",
-								marginTop: "var(--space-4)",
-							}}
-						>
-							<button
-								className="btn-secondary"
-								onClick={enterCreatedAgentDashboard}
-							>
-								{t("agents.kbOnboardingSkip")}
-							</button>
-							<button
-								className="btn-primary"
-								onClick={enterCreatedAgentKnowledge}
-							>
-								{t("agents.kbOnboardingContinue")}
-							</button>
-						</div>
+						<KBSetupWizard
+							agentId={onboardingAgentId}
+							containerTestId="kb-wizard"
+							cancelLabel={t("agents.kbOnboardingSkip")}
+							onCancel={finishCreatedAgentOnboarding}
+							onSetupComplete={finishCreatedAgentOnboarding}
+						/>
 					</div>
 				</div>
 			)}

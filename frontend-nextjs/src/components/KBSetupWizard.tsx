@@ -16,14 +16,18 @@ const SILICONFLOW_API_KEY_URL = "https://cloud.siliconflow.cn/";
 
 interface KBSetupWizardProps {
 	agentId: string;
-	onSetupComplete: () => void;
-	onCancel?: () => void;
+	onSetupComplete: () => void | Promise<void>;
+	onCancel?: () => void | Promise<void>;
+	cancelLabel?: string;
+	containerTestId?: string;
 }
 
 export default function KBSetupWizard({
 	agentId,
 	onSetupComplete,
 	onCancel,
+	cancelLabel,
+	containerTestId,
 }: KBSetupWizardProps) {
 	const { t } = useTranslation("common");
 	const [provider, setProvider] = useState<EmbeddingProvider>("jina");
@@ -105,7 +109,7 @@ export default function KBSetupWizard({
 			}
 
 			await api.kbSetup(agentId, config);
-			onSetupComplete();
+			await onSetupComplete();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.saveFailed"));
 		} finally {
@@ -115,6 +119,7 @@ export default function KBSetupWizard({
 
 	return (
 		<div
+			data-testid={containerTestId}
 			style={{
 				display: "flex",
 				flexDirection: "column",
@@ -388,7 +393,7 @@ export default function KBSetupWizard({
 								className="btn-secondary"
 								style={{ flex: 1 }}
 							>
-								{t("buttons.cancel")}
+								{cancelLabel ?? t("buttons.cancel")}
 							</button>
 						)}
 						<button

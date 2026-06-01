@@ -23,6 +23,10 @@ vi.mock("../../src/services/api", () => ({
 		setSelectedAgentId: vi.fn(),
 		clearSelectedAgentId: vi.fn(),
 		getSelectedAgentId: vi.fn(),
+		kbStatus: vi.fn(),
+		kbSetup: vi.fn(),
+		testJinaApi: vi.fn(),
+		testEmbeddingApi: vi.fn(),
 	},
 }));
 
@@ -101,10 +105,28 @@ beforeEach(() => {
 	mockedApi.createAgent.mockResolvedValue(newAgent as any);
 	mockedApi.deleteAgent.mockResolvedValue({ success: true } as any);
 	mockedApi.restoreAgent.mockResolvedValue(restoredAgent as any);
+	mockedApi.kbStatus.mockResolvedValue({
+		agent_id: "agt_new",
+		kb_setup_completed: false,
+		embedding_provider: "jina",
+		embedding_model: "jina-embeddings-v3",
+		embedding_api_base: null,
+		embedding_batch_size: null,
+		embedding_api_key_set: false,
+	} as any);
+	mockedApi.kbSetup.mockResolvedValue(newAgent as any);
+	mockedApi.testJinaApi.mockResolvedValue({
+		success: true,
+		message: "ok",
+	} as any);
+	mockedApi.testEmbeddingApi.mockResolvedValue({
+		success: true,
+		message: "ok",
+	} as any);
 });
 
 describe("Agents onboarding and lifecycle actions", () => {
-	it("opens a two-button KB modal after creating an agent and skip enters that agent dashboard", async () => {
+	it("opens the full KB setup wizard after creating an agent and skip enters that agent dashboard", async () => {
 		const router = renderAgents([activeAgent]);
 		await screen.findByText("Active Agent");
 
@@ -114,22 +136,20 @@ describe("Agents onboarding and lifecycle actions", () => {
 		fireEvent.click(screen.getByText("agents.create"));
 
 		const modal = await screen.findByTestId("kb-onboarding-modal");
-		const modalButtons = within(modal).getAllByRole("button");
-		expect(modalButtons).toHaveLength(2);
-		expect(within(modal).queryByTestId("kb-wizard")).not.toBeInTheDocument();
+		expect(within(modal).getByTestId("kb-wizard")).toBeInTheDocument();
 		expect(
 			within(modal).getByRole("button", { name: "agents.kbOnboardingSkip" }),
 		).toBeInTheDocument();
 		expect(
-			within(modal).getByRole("button", {
+			within(modal).getByRole("button", { name: "kb.initButton" }),
+		).toBeDisabled();
+		expect(
+			within(modal).queryByRole("button", {
 				name: "agents.kbOnboardingContinue",
 			}),
-		).toBeInTheDocument();
-		expect(
-			within(modal).queryByRole("button", { name: "buttons.cancel" }),
 		).not.toBeInTheDocument();
 		expect(
-			within(modal).queryByRole("button", { name: "kb.initButton" }),
+			within(modal).queryByRole("button", { name: "buttons.cancel" }),
 		).not.toBeInTheDocument();
 
 		fireEvent.click(
@@ -139,9 +159,11 @@ describe("Agents onboarding and lifecycle actions", () => {
 		await waitFor(() => {
 			expect(router.state.location.pathname).toBe("/agents/agt_new/dashboard");
 		});
+		expect(mockedApi.setSelectedAgentId).toHaveBeenCalledWith("agt_new");
+		expect(mockedApi.kbSetup).not.toHaveBeenCalled();
 	});
 
-	it("initializing knowledge base from the two-button modal enters the created agent knowledge page", async () => {
+	it("initializes the knowledge base inside the onboarding modal and enters the created agent dashboard", async () => {
 		const router = renderAgents([activeAgent]);
 		await screen.findByText("Active Agent");
 
@@ -151,15 +173,30 @@ describe("Agents onboarding and lifecycle actions", () => {
 		fireEvent.click(screen.getByText("agents.create"));
 
 		const modal = await screen.findByTestId("kb-onboarding-modal");
+		fireEvent.change(within(modal).getByPlaceholderText("jina_..."), {
+			target: { value: "jina_test_key" },
+		});
 		fireEvent.click(
-			within(modal).getByRole("button", {
-				name: "agents.kbOnboardingContinue",
-			}),
+			within(modal).getByRole("button", { name: "kb.initButton" }),
 		);
 
 		await waitFor(() => {
-			expect(router.state.location.pathname).toBe("/agents/agt_new/knowledge");
+			expect(mockedApi.kbSetup).toHaveBeenCalledWith(
+				"agt_new",
+				expect.objectContaining({
+					embedding_provider: "jina",
+					embedding_model: "jina-embeddings-v3",
+					jina_api_key: "jina_test_key",
+				}),
+			);
 		});
+		await waitFor(() => {
+			expect(router.state.location.pathname).toBe("/agents/agt_new/dashboard");
+		});
+		expect(mockedApi.setSelectedAgentId).toHaveBeenCalledWith("agt_new");
+		expect(
+			mockedApi.kbStatus.mock.calls.some((call) => call[0] === "agt_new"),
+		).toBe(true);
 	});
 
 	it("hides open actions for deactivated agents", async () => {
