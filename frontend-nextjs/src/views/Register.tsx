@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from 'react-i18next';
+import { API_BASE_URL } from '../lib/env';
 
 export const Register = () => {
     const { t } = useTranslation('auth');
@@ -19,7 +20,7 @@ export const Register = () => {
     const navigate = useNavigate();
 
     useEffect(() => {
-        fetch('/api/admin/registration-settings')
+        fetch(`${API_BASE_URL}/api/admin/registration-settings`)
             .then((res) => res.json())
             .then((data) => {
                 if (!data.bootstrap_required) {
@@ -52,7 +53,7 @@ export const Register = () => {
         setLoading(true);
         try {
             await register(email, password, name);
-            navigate('/');
+            navigate('/', { replace: true });
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : t('errors.setupFailed');
             setError(message);
