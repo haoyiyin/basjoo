@@ -31,7 +31,7 @@ export default function AgentPanel() {
 
   useEffect(() => {
     api.listAgents()
-      .then(data => setAgents(data.agents.filter(agent => !agent.deleted_at)))
+      .then(data => setAgents(data.agents.filter(agent => agent.is_active === true && !agent.deleted_at)))
       .catch(err => setError(err instanceof Error ? err.message : t('errors.networkError')))
       .finally(() => setLoading(false))
   }, [t])

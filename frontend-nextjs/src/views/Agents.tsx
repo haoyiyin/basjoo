@@ -1,13 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState, useCallback } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
 import { Agent, AgentCreateInput, AgentType, api } from "../services/api";
 import { useTranslation } from "react-i18next";
 import { useIsMobile } from "../hooks/useMediaQuery";
-import KBSetupWizard from "../components/KBSetupWizard";
-import { useAgentKbStatus } from "../hooks/useAgentKbStatus";
 
 const agentTypeOptions: Array<{
 	value: AgentType;
@@ -56,6 +54,10 @@ function formatPurgeCountdown(
 	return `${days} ${dayLabel} ${hours} ${hourLabel}`;
 }
 
+function isOpenableAgent(agent: Agent | null) {
+	return Boolean(agent && agent.is_active === true && !agent.deleted_at);
+}
+
 export default function Agents() {
 	const { t } = useTranslation("common");
 	const navigate = useNavigate();
@@ -75,16 +77,13 @@ export default function Agents() {
 	const [onboardingAgentId, setOnboardingAgentId] = useState<string | null>(
 		null,
 	);
-	const {
-		kbSetupCompleted,
-		loading: _kbLoading,
-		recheck,
-	} = useAgentKbStatus(onboardingAgentId);
-
 	const selectedAgent = useMemo(
 		() => agents.find((agent) => agent.id === selectedAgentId) || null,
 		[agents, selectedAgentId],
 	);
+	const selectedOpenableAgent = isOpenableAgent(selectedAgent)
+		? selectedAgent
+		: null;
 
 	const loadAgents = async () => {
 		setLoading(true);
@@ -92,11 +91,16 @@ export default function Agents() {
 		try {
 			const data = await api.listAgents();
 			setAgents(data.agents);
-			const nextSelected =
-				data.agents.find((agent) => !agent.deleted_at)?.id ||
-				data.agents[0]?.id ||
-				null;
-			setSelectedAgentId(nextSelected);
+			setSelectedAgentId((current) => {
+				if (current && data.agents.some((agent) => agent.id === current)) {
+					return current;
+				}
+				return (
+					data.agents.find((agent) => isOpenableAgent(agent))?.id ||
+					data.agents[0]?.id ||
+					null
+				);
+			});
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.networkError"));
 		} finally {
@@ -174,6 +178,7 @@ export default function Agents() {
 		setError(null);
 		try {
 			const restored = await api.restoreAgent(agent.id);
+			api.setSelectedAgentId(restored.id);
 			await loadAgents();
 			setSelectedAgentId(restored.id);
 		} catch (err) {
@@ -183,13 +188,21 @@ export default function Agents() {
 		}
 	};
 
-	const finishOnboarding = useCallback(async () => {
-		await recheck();
-		if (kbSetupCompleted || !onboardingAgentId) {
-			navigate(`/agents/${onboardingAgentId}/dashboard`);
-			setOnboardingAgentId(null);
-		}
-	}, [kbSetupCompleted, navigate, onboardingAgentId, recheck]);
+	const enterCreatedAgentDashboard = () => {
+		if (!onboardingAgentId) return;
+		const agentId = onboardingAgentId;
+		api.setSelectedAgentId(agentId);
+		setOnboardingAgentId(null);
+		navigate(`/agents/${agentId}/dashboard`);
+	};
+
+	const enterCreatedAgentKnowledge = () => {
+		if (!onboardingAgentId) return;
+		const agentId = onboardingAgentId;
+		api.setSelectedAgentId(agentId);
+		setOnboardingAgentId(null);
+		navigate(`/agents/${agentId}/knowledge`);
+	};
 
 	return (
 		<AdminLayout>
@@ -229,9 +242,11 @@ export default function Agents() {
 							{t("agents.subtitle")}
 						</p>
 					</div>
-					{selectedAgent && (
+					{selectedOpenableAgent && (
 						<button
-							onClick={() => navigate(`/agents/${selectedAgent.id}/dashboard`)}
+							onClick={() =>
+								navigate(`/agents/${selectedOpenableAgent.id}/dashboard`)
+							}
 							style={{
 								border: "1px solid var(--color-border)",
 								background: "var(--color-bg-secondary)",
@@ -422,21 +437,23 @@ export default function Agents() {
 												justifyContent: isMobile ? "flex-start" : "flex-end",
 											}}
 										>
-											<button
-												onClick={() =>
-													navigate(`/agents/${agent.id}/dashboard`)
-												}
-												style={{
-													padding: "var(--space-2) var(--space-3)",
-													borderRadius: "var(--radius-md)",
-													border: "1px solid var(--color-border)",
-													background: "transparent",
-													color: "var(--color-text-primary)",
-													cursor: "pointer",
-												}}
-											>
-												{t("agents.open")}
-											</button>
+											{isOpenableAgent(agent) && (
+												<button
+													onClick={() =>
+														navigate(`/agents/${agent.id}/dashboard`)
+													}
+													style={{
+														padding: "var(--space-2) var(--space-3)",
+														borderRadius: "var(--radius-md)",
+														border: "1px solid var(--color-border)",
+														background: "transparent",
+														color: "var(--color-text-primary)",
+														cursor: "pointer",
+													}}
+												>
+													{t("agents.open")}
+												</button>
+											)}
 											{agent.deleted_at ? (
 												<button
 													onClick={() => handleRestore(agent)}
@@ -710,29 +727,24 @@ export default function Agents() {
 								{t("agents.kbOnboardingDescription")}
 							</p>
 						</div>
-						<KBSetupWizard
-							agentId={onboardingAgentId}
-							onSetupComplete={finishOnboarding}
-							onCancel={() => {
-								setOnboardingAgentId(null);
-							}}
-						/>
 						<div
 							style={{
 								display: "flex",
-								justifyContent: "space-between",
+								justifyContent: "flex-end",
+								gap: "var(--space-3)",
 								marginTop: "var(--space-4)",
 							}}
 						>
 							<button
 								className="btn-secondary"
-								onClick={() => {
-									setOnboardingAgentId(null);
-								}}
+								onClick={enterCreatedAgentDashboard}
 							>
 								{t("agents.kbOnboardingSkip")}
 							</button>
-							<button className="btn-primary" onClick={finishOnboarding}>
+							<button
+								className="btn-primary"
+								onClick={enterCreatedAgentKnowledge}
+							>
 								{t("agents.kbOnboardingContinue")}
 							</button>
 						</div>
