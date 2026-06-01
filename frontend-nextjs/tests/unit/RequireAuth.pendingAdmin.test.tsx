@@ -51,7 +51,7 @@ describe("RequireAuth pending admin state", () => {
 			</RequireAuth>,
 		);
 
-		expect(screen.getByText("Loading...")).toBeInTheDocument();
+		expect(screen.getByText("status.loading")).toBeInTheDocument();
 		expect(screen.queryByText("navigate:/login")).not.toBeInTheDocument();
 		expect(navigateCalls).toEqual([]);
 	});

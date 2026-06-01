@@ -70,13 +70,17 @@ export const RequireAuth = ({ children }: { children: React.ReactNode }) => {
         setMounted(true);
     }, []);
 
-    if (isLoading) {
-        return <div style={{
+    const loadingView = (
+        <div style={{
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
             height: '100vh'
-        }}>{mounted ? t('status.loading') : 'Loading...'}</div>;
+        }}>{mounted ? t('status.loading') : 'Loading...'}</div>
+    );
+
+    if (isLoading || (token && !admin)) {
+        return loadingView;
     }
 
     if (!token) {
