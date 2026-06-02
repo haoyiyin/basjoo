@@ -202,7 +202,9 @@ class FileItem(BaseModel):
     filename: str
     file_size: Optional[int] = None
     file_type: Optional[str] = None
-    status: Literal["uploading", "processing", "ready", "failed", "pending"] = "uploading"
+    status: Literal["uploading", "processing", "ready", "failed", "pending"] = (
+        "uploading"
+    )
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None

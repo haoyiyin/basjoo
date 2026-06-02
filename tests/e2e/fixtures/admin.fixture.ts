@@ -1,32 +1,28 @@
 /**
  * Shared admin authentication fixture for Playwright E2E tests.
+ * Delegates to e2e-context for shared helpers.
  */
-import { Page, expect } from '@playwright/test';
+import { type Page, expect } from "@playwright/test";
+import { adminLogin as sharedAdminLogin, agentRoute } from "./e2e-context";
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
+export { adminLogin as sharedAdminLogin, agentRoute };
 
 /**
- * Login to the admin dashboard and return the page object.
+ * Login to the admin dashboard via the /login page.
  */
 export async function adminLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-  await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  // Wait for redirect after successful login
-  await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
+	await sharedAdminLogin(page);
 }
 
 /**
  * Navigate to a dashboard page with admin auth.
  */
 export async function goToPage(page: Page, path: string): Promise<void> {
-  // Ensure logged in first
-  const token = await page.evaluate(() => localStorage.getItem('token'));
-  if (!token) {
-    await adminLogin(page);
-  }
-  await page.goto(path);
-  await page.waitForLoadState('networkidle');
+	// Ensure logged in first
+	const token = await page.evaluate(() => localStorage.getItem("token"));
+	if (!token) {
+		await adminLogin(page);
+	}
+	await page.goto(path);
+	await page.waitForLoadState("networkidle");
 }
