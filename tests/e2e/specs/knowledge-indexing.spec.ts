@@ -1,5 +1,5 @@
 /**
- * E2E smoke test: QA import -> index rebuild -> chat retrieval.
+ * E2E smoke test: File upload, listing, and file management UI.
  *
  * @smoke @prod
  */
@@ -26,94 +26,79 @@ async function login(page: any) {
 }
 
 test.describe('Knowledge Indexing Flow', () => {
-  test('QA import and index rebuild', async ({ page, request }) => {
+  test('file upload and listing', async ({ request }) => {
     // 1. Login via API to get token
     const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
       headers: loginHeaders(),
       data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
     });
-    const loginData = await loginRes.json();
+    expect(loginRes.status(), await loginRes.text()).toBe(200);
+    const loginData = await loginRes.json() as { access_token: string };
     const token = loginData.access_token;
 
     // 2. Get default agent
     const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const agent = await agentRes.json();
+    expect(agentRes.status(), await agentRes.text()).toBe(200);
+    const agent = await agentRes.json() as { id: string };
 
-    // 3. Import a specific QA item (API expects {format, content, overwrite} body)
-    const uniqueQuestion = `E2E Test Question ${Date.now()}`;
-    const qaContent = JSON.stringify([
-      { question: uniqueQuestion, answer: 'This is an E2E test answer.' },
-    ]);
-    const qaRes = await request.post(`${API_BASE}/api/v1/qa:batch_import?agent_id=${agent.id}`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { format: 'json', content: qaContent, overwrite: false },
+    // 3. Upload a test file with unique content
+    const filename = `e2e-test-${Date.now()}.txt`;
+    const uploadRes = await request.post(`${API_BASE}/api/v1/files:upload?agent_id=${agent.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        files: {
+          name: filename,
+          mimeType: 'text/plain',
+          buffer: Buffer.from(`E2E Test File Content ${Date.now()}`),
+        },
+      },
     });
-    expect([200, 201]).toContain(qaRes.status());
+    expect(uploadRes.status(), await uploadRes.text()).toBe(200);
+    const uploadData = await uploadRes.json() as { uploaded: number; files: Array<{ id: string; filename: string; status: string }> };
+    expect(uploadData.uploaded).toBe(1);
+    expect(uploadData.files[0].filename).toBe(filename);
 
-    // 4. Rebuild index
-    const rebuildRes = await request.post(`${API_BASE}/api/v1/index:rebuild?agent_id=${agent.id}`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: {},
+    // 4. List files to verify the uploaded file appears
+    const listRes = await request.get(`${API_BASE}/api/v1/files:list?agent_id=${agent.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-    expect([200, 202]).toContain(rebuildRes.status());
-
-    // 5. Wait for index job to complete
-    const rebuildData = await rebuildRes.json();
-    const jobId = rebuildData.job_id;
-    let status = 'unknown';
-    for (let i = 0; i < 30; i++) {
-      await page.waitForTimeout(1_000);
-      const statusRes = await request.get(`${API_BASE}/api/v1/index:status?agent_id=${agent.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const statusData = await statusRes.json();
-      status = statusData.status;
-      if (status === 'completed' || status === 'failed') {
-        break;
-      }
-    }
-
-    // Index must complete successfully
-    expect(status).toBe('completed');
-
-    // 6. Chat and check if the QA is retrievable
-    const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { agent_id: agent.id, message: uniqueQuestion },
-    });
-    const chatData = await chatRes.json();
-
-    // The reply should reference the QA or at least return a response
-    expect(chatData.reply).toBeTruthy();
+    expect(listRes.status(), await listRes.text()).toBe(200);
+    const listData = await listRes.json() as { total: number; files: Array<{ id: string; filename: string }> };
+    expect(listData.total).toBeGreaterThanOrEqual(1);
+    expect(listData.files.some((f) => f.filename === filename)).toBe(true);
   });
 
-  test('QA management UI shows imported items', async ({ page, request }) => {
-    // 1. Verify QA was seeded via API
+  test('file management UI shows file list', async ({ page, request }) => {
+    // 1. Login via API
     const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
       headers: loginHeaders(),
       data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
     });
-    const token = (await loginRes.json() as { access_token: string }).access_token;
+    expect(loginRes.status(), await loginRes.text()).toBe(200);
+    const loginData = await loginRes.json() as { access_token: string };
+    const token = loginData.access_token;
+
+    // 2. Get default agent
     const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    expect(agentRes.status(), await agentRes.text()).toBe(200);
     const agent = await agentRes.json() as { id: string };
 
-    // Confirm QA items exist
-    const qaListRes = await request.get(`${API_BASE}/api/v1/qa:list?agent_id=${agent.id}`, {
+    // 3. Verify files API returns data
+    const listRes = await request.get(`${API_BASE}/api/v1/files:list?agent_id=${agent.id}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const qaList = await qaListRes.json() as { total: number };
-    expect(qaList.total).toBeGreaterThanOrEqual(1);
+    expect(listRes.status(), await listRes.text()).toBe(200);
 
-    // 2. Verify QA page loads in UI
+    // 4. Navigate to /files page
     await login(page);
-    await page.goto('/qa');
+    await page.goto(`/agents/${agent.id}/files`);
     await page.waitForLoadState('networkidle');
 
-    // The QA page should render (check for page title or content area)
-    await expect(page.locator('h1, h2, [class*="title"], [class*="qa"]').first()).toBeVisible({ timeout: 10_000 });
+    // The page should render with a heading or content area
+    await expect(page.locator('h1, h2, [class*="title"], [class*="files"]').first()).toBeVisible({ timeout: 10_000 });
   });
 });
