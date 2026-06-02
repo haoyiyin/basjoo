@@ -1,50 +1,14 @@
 /**
- * Unit tests for SystemSettings allowed_widget_origins parsing and validation.
+ * Unit tests for AgentSettings allowed_widget_origins parsing and validation.
  *
- * Run with: vitest run tests/unit/system-settings-origin-parser.test.ts
+ * Run with: vitest run tests/unit/agent-settings-origin-parser.test.ts
  */
 
 import { describe, it, expect } from 'vitest';
-
-/**
- * Extracted from SystemSettings.tsx
- */
-function parseAllowedWidgetOriginsText(value: string): string[] {
-  return value
-    .split(/[\n,]/)
-    .map(origin => origin.trim())
-    .filter(Boolean);
-}
-
-function validateAllowedWidgetOriginsText(value: string): {
-  normalizedOrigins: string[];
-  invalidOrigins: string[];
-} {
-  const normalizedOrigins: string[] = [];
-  const invalidOrigins: string[] = [];
-  const seenOrigins = new Set<string>();
-
-  for (const origin of parseAllowedWidgetOriginsText(value)) {
-    try {
-      const url = new URL(origin);
-      const protocol = url.protocol.toLowerCase();
-      if ((protocol !== 'http:' && protocol !== 'https:') || !url.host || url.username || url.password) {
-        invalidOrigins.push(origin);
-        continue;
-      }
-
-      const normalizedOrigin = `${protocol}//${url.host.toLowerCase()}`;
-      if (!seenOrigins.has(normalizedOrigin)) {
-        seenOrigins.add(normalizedOrigin);
-        normalizedOrigins.push(normalizedOrigin);
-      }
-    } catch {
-      invalidOrigins.push(origin);
-    }
-  }
-
-  return { normalizedOrigins, invalidOrigins };
-}
+import {
+  parseAllowedWidgetOriginsText,
+  validateAllowedWidgetOriginsText,
+} from '../../src/lib/widgetOrigins';
 
 describe('parseAllowedWidgetOriginsText', () => {
   it('splits by newlines', () => {
@@ -100,6 +64,12 @@ describe('validateAllowedWidgetOriginsText', () => {
   it('strips path from origin', () => {
     const result = validateAllowedWidgetOriginsText('https://example.com/path/page');
     expect(result.normalizedOrigins).toEqual(['https://example.com']);
+  });
+
+  it('strips query and fragment from origin', () => {
+    const result = validateAllowedWidgetOriginsText('https://example.com/path?x=1#top');
+    expect(result.normalizedOrigins).toEqual(['https://example.com']);
+    expect(result.invalidOrigins).toEqual([]);
   });
 
   it('rejects origins without scheme', () => {

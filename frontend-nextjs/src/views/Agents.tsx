@@ -1,13 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState, useCallback } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
+import KBSetupWizard from "../components/KBSetupWizard";
+import { useAgentKbStatus } from "../hooks/useAgentKbStatus";
 import { Agent, AgentCreateInput, AgentType, api } from "../services/api";
 import { useTranslation } from "react-i18next";
 import { useIsMobile } from "../hooks/useMediaQuery";
-import KBSetupWizard from "../components/KBSetupWizard";
-import { useAgentKbStatus } from "../hooks/useAgentKbStatus";
+import {
+	AGENT_NAME_MAX_DISPLAY_WIDTH,
+	getAgentNameDisplayWidth,
+	trimToAgentNameMaxDisplayWidth,
+} from "../lib/agentNameLength";
 
 const agentTypeOptions: Array<{
 	value: AgentType;
@@ -36,7 +41,6 @@ const agentTypeOptions: Array<{
 	},
 ];
 
-const AGENT_NAME_MAX_LENGTH = 50;
 const AGENT_DESCRIPTION_MAX_LENGTH = 200;
 
 function formatPurgeCountdown(
@@ -54,6 +58,10 @@ function formatPurgeCountdown(
 	const dayLabel = days === 1 ? t("time.day") : t("time.days");
 	const hourLabel = hours === 1 ? t("time.hour") : t("time.hours");
 	return `${days} ${dayLabel} ${hours} ${hourLabel}`;
+}
+
+function isOpenableAgent(agent: Agent | null) {
+	return Boolean(agent && agent.is_active === true && !agent.deleted_at);
 }
 
 export default function Agents() {
@@ -75,16 +83,20 @@ export default function Agents() {
 	const [onboardingAgentId, setOnboardingAgentId] = useState<string | null>(
 		null,
 	);
-	const {
-		kbSetupCompleted,
-		loading: _kbLoading,
-		recheck,
-	} = useAgentKbStatus(onboardingAgentId);
-
+	const { recheck: recheckOnboardingKbStatus } =
+		useAgentKbStatus(onboardingAgentId);
 	const selectedAgent = useMemo(
 		() => agents.find((agent) => agent.id === selectedAgentId) || null,
 		[agents, selectedAgentId],
 	);
+	const selectedOpenableAgent = isOpenableAgent(selectedAgent)
+		? selectedAgent
+		: null;
+
+	const agentNameDisplayWidth = getAgentNameDisplayWidth(form.name.trim());
+	const isAgentNameValid =
+		Boolean(form.name.trim()) &&
+		agentNameDisplayWidth <= AGENT_NAME_MAX_DISPLAY_WIDTH;
 
 	const loadAgents = async () => {
 		setLoading(true);
@@ -92,11 +104,16 @@ export default function Agents() {
 		try {
 			const data = await api.listAgents();
 			setAgents(data.agents);
-			const nextSelected =
-				data.agents.find((agent) => !agent.deleted_at)?.id ||
-				data.agents[0]?.id ||
-				null;
-			setSelectedAgentId(nextSelected);
+			setSelectedAgentId((current) => {
+				if (current && data.agents.some((agent) => agent.id === current)) {
+					return current;
+				}
+				return (
+					data.agents.find((agent) => isOpenableAgent(agent))?.id ||
+					data.agents[0]?.id ||
+					null
+				);
+			});
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.networkError"));
 		} finally {
@@ -125,8 +142,7 @@ export default function Agents() {
 		const name = form.name.trim();
 		const description = form.description?.trim() || undefined;
 		if (
-			!name ||
-			name.length > AGENT_NAME_MAX_LENGTH ||
+			!isAgentNameValid ||
 			(description?.length || 0) > AGENT_DESCRIPTION_MAX_LENGTH
 		)
 			return;
@@ -174,6 +190,7 @@ export default function Agents() {
 		setError(null);
 		try {
 			const restored = await api.restoreAgent(agent.id);
+			api.setSelectedAgentId(restored.id);
 			await loadAgents();
 			setSelectedAgentId(restored.id);
 		} catch (err) {
@@ -183,13 +200,14 @@ export default function Agents() {
 		}
 	};
 
-	const finishOnboarding = useCallback(async () => {
-		await recheck();
-		if (kbSetupCompleted || !onboardingAgentId) {
-			navigate(`/agents/${onboardingAgentId}/dashboard`);
-			setOnboardingAgentId(null);
-		}
-	}, [kbSetupCompleted, navigate, onboardingAgentId, recheck]);
+	const finishCreatedAgentOnboarding = async () => {
+		if (!onboardingAgentId) return;
+		const agentId = onboardingAgentId;
+		await recheckOnboardingKbStatus();
+		api.setSelectedAgentId(agentId);
+		setOnboardingAgentId(null);
+		navigate(`/agents/${agentId}/dashboard`);
+	};
 
 	return (
 		<AdminLayout>
@@ -229,9 +247,11 @@ export default function Agents() {
 							{t("agents.subtitle")}
 						</p>
 					</div>
-					{selectedAgent && (
+					{selectedOpenableAgent && (
 						<button
-							onClick={() => navigate(`/agents/${selectedAgent.id}/dashboard`)}
+							onClick={() =>
+								navigate(`/agents/${selectedOpenableAgent.id}/dashboard`)
+							}
 							style={{
 								border: "1px solid var(--color-border)",
 								background: "var(--color-bg-secondary)",
@@ -422,21 +442,23 @@ export default function Agents() {
 												justifyContent: isMobile ? "flex-start" : "flex-end",
 											}}
 										>
-											<button
-												onClick={() =>
-													navigate(`/agents/${agent.id}/dashboard`)
-												}
-												style={{
-													padding: "var(--space-2) var(--space-3)",
-													borderRadius: "var(--radius-md)",
-													border: "1px solid var(--color-border)",
-													background: "transparent",
-													color: "var(--color-text-primary)",
-													cursor: "pointer",
-												}}
-											>
-												{t("agents.open")}
-											</button>
+											{isOpenableAgent(agent) && (
+												<button
+													onClick={() =>
+														navigate(`/agents/${agent.id}/dashboard`)
+													}
+													style={{
+														padding: "var(--space-2) var(--space-3)",
+														borderRadius: "var(--radius-md)",
+														border: "1px solid var(--color-border)",
+														background: "transparent",
+														color: "var(--color-text-primary)",
+														cursor: "pointer",
+													}}
+												>
+													{t("agents.open")}
+												</button>
+											)}
 											{agent.deleted_at ? (
 												<button
 													onClick={() => handleRestore(agent)}
@@ -504,10 +526,10 @@ export default function Agents() {
 							onChange={(event) =>
 								setForm((prev) => ({
 									...prev,
-									name: event.target.value.slice(0, AGENT_NAME_MAX_LENGTH),
+									name: trimToAgentNameMaxDisplayWidth(event.target.value),
 								}))
 							}
-							maxLength={AGENT_NAME_MAX_LENGTH}
+							maxLength={AGENT_NAME_MAX_DISPLAY_WIDTH}
 							placeholder={t("agents.namePlaceholder")}
 							style={{
 								width: "100%",
@@ -529,8 +551,8 @@ export default function Agents() {
 							}}
 						>
 							{t("agents.characterCount", {
-								count: form.name.length,
-								max: AGENT_NAME_MAX_LENGTH,
+								count: agentNameDisplayWidth,
+								max: AGENT_NAME_MAX_DISPLAY_WIDTH,
 							})}
 						</div>
 						<label
@@ -641,8 +663,7 @@ export default function Agents() {
 							type="submit"
 							disabled={
 								saving ||
-								!form.name?.trim() ||
-								form.name.trim().length > AGENT_NAME_MAX_LENGTH ||
+								!isAgentNameValid ||
 								(form.description?.trim().length || 0) >
 									AGENT_DESCRIPTION_MAX_LENGTH
 							}
@@ -654,9 +675,8 @@ export default function Agents() {
 								background: "var(--color-accent-gradient)",
 								color: "var(--color-text-inverse)",
 								fontWeight: 700,
-								cursor:
-									saving || !form.name?.trim() ? "not-allowed" : "pointer",
-								opacity: saving || !form.name?.trim() ? 0.6 : 1,
+								cursor: saving || !isAgentNameValid ? "not-allowed" : "pointer",
+								opacity: saving || !isAgentNameValid ? 0.6 : 1,
 							}}
 						>
 							{saving ? t("status.saving") : t("agents.create")}
@@ -682,60 +702,20 @@ export default function Agents() {
 					aria-label={t("agents.kbOnboardingTitle")}
 				>
 					<div
-						className="liquid-glass-card"
 						style={{
-							maxWidth: 680,
+							maxWidth: 720,
 							width: "100%",
-							padding: "var(--space-6)",
-							position: "relative",
+							maxHeight: "calc(100vh - 32px)",
+							overflowY: "auto",
 						}}
 					>
-						<div style={{ marginBottom: "var(--space-4)" }}>
-							<h2
-								style={{
-									fontSize: "var(--text-xl)",
-									fontWeight: 700,
-									marginBottom: "var(--space-2)",
-									color: "var(--color-text-primary)",
-								}}
-							>
-								{t("agents.kbOnboardingTitle")}
-							</h2>
-							<p
-								style={{
-									fontSize: "var(--text-sm)",
-									color: "var(--color-text-secondary)",
-								}}
-							>
-								{t("agents.kbOnboardingDescription")}
-							</p>
-						</div>
 						<KBSetupWizard
 							agentId={onboardingAgentId}
-							onSetupComplete={finishOnboarding}
-							onCancel={() => {
-								setOnboardingAgentId(null);
-							}}
+							containerTestId="kb-wizard"
+							cancelLabel={t("agents.kbOnboardingSkip")}
+							onCancel={finishCreatedAgentOnboarding}
+							onSetupComplete={finishCreatedAgentOnboarding}
 						/>
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "space-between",
-								marginTop: "var(--space-4)",
-							}}
-						>
-							<button
-								className="btn-secondary"
-								onClick={() => {
-									setOnboardingAgentId(null);
-								}}
-							>
-								{t("agents.kbOnboardingSkip")}
-							</button>
-							<button className="btn-primary" onClick={finishOnboarding}>
-								{t("agents.kbOnboardingContinue")}
-							</button>
-						</div>
 					</div>
 				</div>
 			)}

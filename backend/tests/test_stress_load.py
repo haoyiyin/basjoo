@@ -8,69 +8,9 @@ import asyncio
 import time
 from datetime import datetime
 
-from tests.conftest import wait_for_index_job
-
 
 class TestStressLoad:
     """Test suite for stress and load testing"""
-
-    @pytest.mark.asyncio
-    async def test_high_concurrent_requests(self, client):
-        """Test system with 50 concurrent requests"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Build index
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-        job_id = response.json()["job_id"]
-        await wait_for_index_job(client, agent_id, job_id)
-
-        # Send 50 concurrent chat requests
-        async def send_request(req_id: int):
-            try:
-                start_time = time.time()
-                response = await client.post(
-                    "/api/v1/chat",
-                    json={
-                        "agent_id": agent_id,
-                        "session_id": f"stress_test_{req_id}",
-                        "message": f"Question {req_id}: What is Basjoo?",
-                    },
-                    timeout=10.0
-                )
-                elapsed = time.time() - start_time
-                return {
-                    "success": response.status_code == 200,
-                    "status": response.status_code,
-                    "time": elapsed
-                }
-            except Exception as e:
-                return {"success": False, "error": str(e), "time": -1}
-
-        # Run 50 concurrent requests
-        tasks = [send_request(i) for i in range(50)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Analyze results
-        successful = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
-        failed = len(results) - successful
-
-        # Calculate response times
-        response_times = [r["time"] for r in results if isinstance(r, dict) and r.get("time") > 0]
-        avg_response_time = sum(response_times) / len(response_times) if response_times else 0
-
-        # Assertions
-        assert successful >= 45, f"Expected at least 45/50 successful requests, got {successful}"
-        assert avg_response_time < 10.0, f"Average response time too high: {avg_response_time:.2f}s"
-
-        print(f"\n✓ Load Test Results:")
-        print(f"  - Successful: {successful}/50")
-        print(f"  - Failed: {failed}/50")
-        print(f"  - Avg Response Time: {avg_response_time:.2f}s")
 
     @pytest.mark.asyncio
     async def test_rapid_sequential_requests(self, client):
@@ -126,58 +66,6 @@ class TestStressLoad:
         print(f"\n✓ Quota Status:")
         print(f"  - Used: {quota['used_messages_today']}/{quota['max_messages_per_day']}")
         print(f"  - Remaining: {remaining}")
-
-    @pytest.mark.asyncio
-    async def test_mixed_workload(self, client):
-        """Test system with mixed workload (chat, quota checks, list operations)"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Define different types of operations
-        async def chat_op():
-            return await client.post(
-                "/api/v1/chat",
-                json={
-                    "agent_id": agent_id,
-                    "message": "Test message",
-                },
-            )
-
-        async def quota_op():
-            return await client.get(f"/api/v1/quota?agent_id={agent_id}")
-
-        async def list_files_op():
-            return await client.get(f"/api/v1/files:list?agent_id={agent_id}")
-
-        async def agent_info_op():
-            return await client.get(f"/api/v1/agent?agent_id={agent_id}")
-
-        # Create mixed workload
-        operations = []
-        for i in range(30):
-            if i % 4 == 0:
-                operations.append(chat_op())
-            elif i % 4 == 1:
-                operations.append(quota_op())
-            elif i % 4 == 2:
-                operations.append(list_files_op())
-            else:
-                operations.append(agent_info_op())
-
-        # Execute all operations concurrently
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        # Verify results
-        successful = sum(
-            1 for r in results
-            if not isinstance(r, Exception) and r.status_code == 200
-        )
-
-        assert successful >= 28, f"Expected at least 28/30 successful, got {successful}"
-
-        print(f"\n✓ Mixed Workload Test:")
-        print(f"  - Successful: {successful}/30")
-
     @pytest.mark.asyncio
     async def test_error_recovery(self, client):
         """Test system recovery from errors"""

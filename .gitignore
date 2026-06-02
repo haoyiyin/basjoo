@@ -120,6 +120,10 @@ temp/
 # Git worktrees (superpowers)
 .worktrees/
 
+# Local AI/code intelligence caches
+.pi-lens/cache/
+**/.pi-lens/cache/
+
 # 上传的文件（仅仓库根目录）
 /uploads/
 /files/

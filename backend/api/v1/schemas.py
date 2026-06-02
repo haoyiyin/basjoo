@@ -40,9 +40,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(
         None, max_length=200, description="会话ID（用于多轮对话）"
     )
-    visitor_id: Optional[str] = Field(
-        None, max_length=100, description="访客标识"
-    )
+    visitor_id: Optional[str] = Field(None, max_length=100, description="访客标识")
     # 客户端传送的地理信息（用于无法从IP获取的情况）
     timezone: Optional[str] = Field(None, description="客户端时区")
     params: Optional[Dict[str, Any]] = Field(
@@ -227,6 +225,88 @@ class FileUploadResponse(BaseModel):
     errors: List[str] = Field(default_factory=list, description="错误信息")
 
 
+# ========== KB Document Schemas ==========
+
+
+class KbDocumentItem(BaseModel):
+    """KB 文档项"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    filename: str
+    file_type: Optional[str] = None
+    status: Literal["pending", "processing", "ready", "error"] = "pending"
+    chunk_count: int = 0
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class KbDocumentUploadResponse(BaseModel):
+    """KB 文档上传响应"""
+
+    uploaded: int = 0
+    failed: int = 0
+    documents: List[KbDocumentItem] = Field(default_factory=list)
+
+
+class KbDocumentProgressResponse(BaseModel):
+    """KB 文档索引进度响应"""
+
+    status: str
+    chunk_count: int = 0
+    error_message: Optional[str] = None
+
+
+# ========== KB Config/Reset Schemas ==========
+
+
+class KbConfigResponse(BaseModel):
+    """KB embedding configuration response"""
+
+    id: str
+    name: str
+    embedding_model: str
+    embedding_base_url: Optional[str] = None
+    vector_backend: str
+    chunk_size: int
+    chunk_overlap: int
+    is_locked: bool
+    status: str
+
+
+class KbConfigUpdate(BaseModel):
+    """KB config update request (embedding fields blocked when locked)"""
+
+    name: Optional[str] = None
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    embedding_model: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+
+
+class KbResetRequest(BaseModel):
+    """KB reset request (change embedding model + reindex)"""
+
+    new_embedding_model: str
+    new_embedding_base_url: Optional[str] = None
+
+
+class KbDetailResponse(KbConfigResponse):
+    """KB detail with document/chunk counts"""
+
+    document_count: int = 0
+    ready_document_count: int = 0
+    total_chunks: int = 0
+
+
+class KbDeleteResponse(BaseModel):
+    """KB delete response"""
+
+    deleted: bool = True
+    message: Optional[str] = None
+
+
 # ========== Agent Management Schemas ==========
 
 
@@ -254,9 +334,7 @@ class AgentConfig(BaseModel):
     jina_api_key_set: bool = Field(
         default=False, description="Whether Jina API key is configured"
     )
-    jina_api_key_masked: Optional[str] = Field(
-        None, description="Masked Jina API key"
-    )
+    jina_api_key_masked: Optional[str] = Field(None, description="Masked Jina API key")
     siliconflow_api_key_set: bool = Field(
         default=False, description="Whether SiliconFlow embedding API key is configured"
     )
@@ -264,7 +342,20 @@ class AgentConfig(BaseModel):
         None, description="Masked SiliconFlow embedding API key"
     )
     provider_type: Optional[
-        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
+        Literal[
+            "openai",
+            "openai_native",
+            "google",
+            "anthropic",
+            "xai",
+            "openrouter",
+            "zai",
+            "deepseek",
+            "volcengine",
+            "moonshot",
+            "aliyun_bailian",
+            "siliconflow",
+        ]
     ] = Field("openai", description="AI provider type")
     azure_endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
     azure_deployment_name: Optional[str] = Field(
@@ -281,20 +372,28 @@ class AgentConfig(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Literal["jina", "siliconflow", "custom", "r2r"] = Field(
-        "r2r",
-        description="Embedding provider: r2r, jina, siliconflow, or custom",
+    embedding_provider: Literal["jina", "siliconflow", "custom"] = Field(
+        "jina",
+        description="Embedding provider: jina, siliconflow, or custom",
     )
-    embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
+    embedding_api_base: Optional[str] = Field(
+        None, description="Embedding API base URL"
+    )
     embedding_api_key_set: bool = Field(
-        default=False, description="Whether the selected embedding provider has an effective API key configured"
+        default=False,
+        description="Whether the selected embedding provider has an effective API key configured",
     )
     embedding_model: str
     configuration_error: Optional[str] = Field(
-        None, description="Non-fatal configuration problem (e.g. invalid custom embedding base); present only when the backend degraded gracefully so the admin can fix it"
+        None,
+        description="Non-fatal configuration problem (e.g. invalid custom embedding base); present only when the backend degraded gracefully so the admin can fix it",
     )
-    crawl_max_depth: int = Field(default=2, ge=0, le=5, description="Crawl depth for site crawling")
-    crawl_max_pages: int = Field(default=20, ge=1, le=500, description="Max pages for site crawling")
+    crawl_max_depth: int = Field(
+        default=2, ge=0, le=5, description="Crawl depth for site crawling"
+    )
+    crawl_max_pages: int = Field(
+        default=20, ge=1, le=500, description="Max pages for site crawling"
+    )
     top_k: int = Field(..., ge=1, le=20)
     similarity_threshold: float = Field(..., ge=0, le=1)
     enable_context: bool = Field(
@@ -317,7 +416,8 @@ class AgentConfig(BaseModel):
     last_error_message: Optional[str] = None
     last_error_at: Optional[str] = None
     persona_type: Optional[str] = Field(
-        default="general", description="Persona type: general, customer-service, sales, custom"
+        default="general",
+        description="Persona type: general, customer-service, sales, custom",
     )
     widget_title: Optional[str] = Field(default="AI 客服", description="Widget title")
     widget_color: Optional[str] = Field(
@@ -328,8 +428,12 @@ class AgentConfig(BaseModel):
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: int = Field(default=30, description="Chat history retention days")
-    embedding_batch_size: int = Field(default=4, ge=1, le=64, description="Embedding batch size")
-    kb_setup_completed: bool = Field(default=False, description="Whether the knowledge base setup has been completed")
+    embedding_batch_size: int = Field(
+        default=4, ge=1, le=64, description="Embedding batch size"
+    )
+    kb_setup_completed: bool = Field(
+        default=False, description="Whether the knowledge base setup has been completed"
+    )
     is_active: bool
     deleted_at: Optional[datetime] = None
     purge_after: Optional[datetime] = None
@@ -339,6 +443,7 @@ class AgentConfig(BaseModel):
     active_session_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
+    kb_id: Optional[str] = Field(None, description="Bound knowledge base ID (optional)")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -346,9 +451,17 @@ class AgentConfig(BaseModel):
 class AgentUpdateRequest(BaseModel):
     """更新Agent配置请求"""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=10)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> Any:
+        return _validate_agent_name(value)
+
     description: Optional[str] = Field(None, max_length=200)
-    agent_type: Optional[Literal["website_support", "ai_clone", "sales_outreach", "custom"]] = None
+    agent_type: Optional[
+        Literal["website_support", "ai_clone", "sales_outreach", "custom"]
+    ] = None
     channel_mode: Optional[Literal["web_widget", "whatsapp", "email", "custom"]] = None
     avatar: Optional[str] = Field(None, max_length=500)
     system_prompt: Optional[str] = Field(None, min_length=1)
@@ -359,7 +472,20 @@ class AgentUpdateRequest(BaseModel):
     jina_api_key: Optional[str] = Field(None, min_length=0)
     siliconflow_api_key: Optional[str] = Field(None, min_length=0)
     provider_type: Optional[
-        Literal["openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow"]
+        Literal[
+            "openai",
+            "openai_native",
+            "google",
+            "anthropic",
+            "xai",
+            "openrouter",
+            "zai",
+            "deepseek",
+            "volcengine",
+            "moonshot",
+            "aliyun_bailian",
+            "siliconflow",
+        ]
     ] = Field(None, description="AI provider type")
     azure_endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
     azure_deployment_name: Optional[str] = Field(
@@ -372,13 +498,23 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Optional[Literal["jina", "siliconflow", "custom", "r2r"]] = Field(None, description="Embedding provider: r2r, jina, siliconflow, or custom")
-    embedding_api_base: Optional[str] = Field(None, description="Embedding API base URL")
+    embedding_provider: Optional[Literal["jina", "siliconflow", "custom"]] = Field(
+        None, description="Embedding provider: jina, siliconflow, or custom"
+    )
+    embedding_api_base: Optional[str] = Field(
+        None, description="Embedding API base URL"
+    )
     embedding_model: Optional[str] = Field(None, min_length=1)
-    crawl_max_depth: Optional[int] = Field(None, ge=0, le=5, description="Crawl depth for site crawling")
-    crawl_max_pages: Optional[int] = Field(None, ge=1, le=500, description="Max pages for site crawling")
+    crawl_max_depth: Optional[int] = Field(
+        None, ge=0, le=5, description="Crawl depth for site crawling"
+    )
+    crawl_max_pages: Optional[int] = Field(
+        None, ge=1, le=500, description="Max pages for site crawling"
+    )
     top_k: Optional[int] = Field(None, ge=1, le=20)
-    similarity_threshold: Optional[float] = Field(None, ge=0, le=1, description="Minimum similarity score for retrieval results")
+    similarity_threshold: Optional[float] = Field(
+        None, ge=0, le=1, description="Minimum similarity score for retrieval results"
+    )
     enable_context: Optional[bool] = Field(
         None, description="Enable conversation context"
     )
@@ -410,8 +546,13 @@ class AgentUpdateRequest(BaseModel):
         None, description="Allowed widget embed origins"
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
-    history_days: Optional[int] = Field(None, ge=1, le=365, description="Chat history retention days")
-    embedding_batch_size: Optional[int] = Field(None, ge=1, le=64, description="Embedding batch size")
+    history_days: Optional[int] = Field(
+        None, ge=1, le=365, description="Chat history retention days"
+    )
+    embedding_batch_size: Optional[int] = Field(
+        None, ge=1, le=64, description="Embedding batch size"
+    )
+
     @field_validator("allowed_widget_origins")
     @classmethod
     def validate_allowed_widget_origins(
@@ -432,23 +573,57 @@ class AgentUpdateRequest(BaseModel):
         return normalized_origins
 
 
+AGENT_NAME_MAX_DISPLAY_WIDTH = 10
+
+
+def _agent_name_display_width(value: str) -> int:
+    import unicodedata
+
+    return sum(
+        2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1 for char in value
+    )
+
+
+def _validate_agent_name(value: Any) -> Any:
+    if value is None or not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Agent name cannot be empty")
+    width = _agent_name_display_width(stripped)
+    if width > AGENT_NAME_MAX_DISPLAY_WIDTH:
+        raise ValueError(
+            f"Agent name must be at most {AGENT_NAME_MAX_DISPLAY_WIDTH} display units "
+            "(10 ASCII characters or 5 Chinese characters)"
+        )
+    return stripped
+
+
 class AgentCreateRequest(BaseModel):
     """创建Agent请求"""
 
-    name: str = Field(..., min_length=1, max_length=50)
-    description: Optional[str] = Field(None, max_length=200)
-    agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = "website_support"
+    name: str = Field(..., min_length=1, max_length=10)
+    description: str | None = Field(None, max_length=200)
+    agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = (
+        "website_support"
+    )
     channel_mode: Literal["web_widget", "whatsapp", "email", "custom"] = "web_widget"
-    system_prompt: Optional[str] = Field(None, min_length=1)
-    persona_type: Optional[str] = "general"
-    widget_title: Optional[str] = Field(None, max_length=100)
-    welcome_message: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> Any:
+        return _validate_agent_name(value)
+
+    system_prompt: str | None = Field(None, min_length=1)
+    persona_type: str | None = "general"
+    widget_title: str | None = Field(None, max_length=100)
+    welcome_message: str | None = None
 
 
 class AgentListResponse(BaseModel):
     """Agent列表响应"""
 
-    agents: List[AgentConfig]
+    agents: list[AgentConfig]
     total: int
 
 
@@ -456,8 +631,8 @@ class AgentMemberCreateRequest(BaseModel):
     """添加智能体成员请求"""
 
     email: str
-    name: Optional[str] = None
-    password: Optional[str] = None
+    name: str | None = None
+    password: str | None = None
     role: Literal["admin", "support"] = "support"
 
 
@@ -471,7 +646,7 @@ class AgentMemberItem(BaseModel):
 
 
 class AgentMemberListResponse(BaseModel):
-    members: List[AgentMemberItem]
+    members: list[AgentMemberItem]
     total: int
 
 
@@ -521,20 +696,20 @@ class SessionListItem(BaseModel):
 
     id: str
     session_id: str
-    visitor_id: Optional[str] = None
-    visitor_country: Optional[str] = None
-    visitor_city: Optional[str] = None
+    visitor_id: str | None = None
+    visitor_country: str | None = None
+    visitor_city: str | None = None
     status: str = "active"
     message_count: int = 0
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    last_message: Optional[str] = None
+    updated_at: datetime | None = None
+    last_message: str | None = None
 
 
 class SessionListResponse(BaseModel):
     """会话列表响应"""
 
-    items: List[SessionListItem]
+    items: list[SessionListItem]
     total: int
 
 
@@ -584,14 +759,14 @@ class ModelsListRequest(BaseModel):
     provider_type: Literal["openai_native", "google", "deepseek"] = Field(
         ..., description="AI provider type"
     )
-    api_key: Optional[str] = Field(None, description="API key (if not using saved key)")
-    agent_id: Optional[str] = Field(None, description="Agent ID (to use saved API key)")
+    api_key: str | None = Field(None, description="API key (if not using saved key)")
+    agent_id: str | None = Field(None, description="Agent ID (to use saved API key)")
 
 
 class ModelsListResponse(BaseModel):
     """获取可用模型列表响应"""
 
-    models: List[str] = Field(default_factory=list, description="Available models")
+    models: list[str] = Field(default_factory=list, description="Available models")
 
 
 # ========== Sources Summary Schemas ==========
@@ -599,6 +774,7 @@ class ModelsListResponse(BaseModel):
 
 class SourcesURLSummary(BaseModel):
     """URL知识源统计"""
+
     total: int = Field(..., description="URL总数")
     indexed: int = Field(..., description="已训练数量")
     pending: int = Field(..., description="待训练数量")
@@ -607,6 +783,7 @@ class SourcesURLSummary(BaseModel):
 
 class SourcesFileSummary(BaseModel):
     """文件知识源统计"""
+
     total: int = Field(..., description="文件总数")
     ready: int = Field(..., description="就绪数量")
     processing: int = Field(..., description="处理中数量")
@@ -615,6 +792,33 @@ class SourcesFileSummary(BaseModel):
 
 class SourcesSummaryResponse(BaseModel):
     """知识源统计响应"""
+
     urls: SourcesURLSummary
     files: SourcesFileSummary
     has_pending: bool = Field(..., description="是否有待处理内容")
+
+
+# ========== KB Retrieval Schemas ==========
+
+
+class RetrieveRequest(BaseModel):
+    """Retrieval request body"""
+
+    query: str = Field(..., min_length=1, max_length=1000)
+    top_k: int = Field(5, ge=1, le=20)
+
+
+class RetrieveChunk(BaseModel):
+    """Single retrieval result (no vector_id or collection exposed)"""
+
+    text: str
+    doc_id: str
+    chunk_index: int
+    score: float
+    filename: Optional[str] = None
+
+
+class RetrieveResponse(BaseModel):
+    """Wrapper for consistency"""
+
+    results: List[RetrieveChunk] = []

@@ -59,7 +59,7 @@
     "successBadge": "Success"
   },
   "navigation": {
-    "dashboard": "Dashboard",
+    "dashboard": "Console",
     "playground": "Playground",
     "knowledge": "Knowledge Base",
     "websites": "Websites",
@@ -68,7 +68,7 @@
     "urlKnowledge": "Website Management",
     "sessions": "Sessions",
     "aiSettings": "AI Settings",
-    "systemSettings": "System Settings",
+    "agentSettings": "Agent Settings",
     "administrator": "Administrator",
     "agents": "Agents",
     "users": "Users"
@@ -181,7 +181,7 @@
     "kbOnboardingTitle": "Set up your Knowledge Base",
     "kbOnboardingDescription": "Configure embeddings to let your agent answer from your data. You can finish this later from Knowledge settings.",
     "kbOnboardingSkip": "Skip for now",
-    "kbOnboardingContinue": "Go to Dashboard"
+    "kbOnboardingContinue": "Initialize Knowledge Base"
   },
   "placeholders": {
     "enterMessage": "Enter message...",
@@ -196,7 +196,7 @@
     "csvFormat": "Question,Answer\nHow to reset password?,Click forgot password button..."
   },
   "labels": {
-    "welcome": "Welcome back to Basjoo",
+    "welcome": "Welcome back to {{agentName}} Console",
     "description": "Description",
     "quickStart": "Quick Start",
     "systemStatus": "System Status",
@@ -228,7 +228,7 @@
     "knowledgeDescription": "Manage AI knowledge sources including web pages and uploaded files",
     "addWebKnowledge": "Add web knowledge base",
     "configModelParams": "Configure model parameters",
-    "configSystemParams": "Configure system settings and embed code",
+    "configAgentSettings": "Configure agent settings and embed code",
     "tips": "Tips",
     "testAgentTip1": "Enter questions to test Agent responses",
     "testAgentTip2": "View citation sources to verify retrieval",

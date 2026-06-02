@@ -1,21 +1,31 @@
 /**
  * Shared admin authentication fixture for Playwright E2E tests.
+ * Re-exports from e2e-context for backwards compatibility.
  */
-import { Page, expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
+// Re-export from shared context for backwards compatibility
+export {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  API_BASE,
+  BASE_URL,
+  type E2EAgentContext,
+  loginHeaders,
+  agentRoute,
+  loginByApi,
+  getDefaultAgent,
+  resolveAgentContext,
+} from './e2e-context';
+
+import { adminLogin as sharedAdminLogin } from './e2e-context';
 
 /**
  * Login to the admin dashboard and return the page object.
+ * Delegates to shared context helper with proper headers.
  */
 export async function adminLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-  await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  // Wait for redirect after successful login
-  await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
+  await sharedAdminLogin(page);
 }
 
 /**

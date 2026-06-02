@@ -67,21 +67,6 @@ class TestSystemObservability:
         ]
         for field in required_fields:
             assert field in quota, f"Missing quota field: {field}"
-
-    @pytest.mark.asyncio
-    async def test_index_endpoint_informative(self, client):
-        """Test index endpoint provides detailed information"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-        assert response.status_code == 200
-        index_info = response.json()
-
-        # Verify index fields
-        assert "agent_id" in index_info
-        assert "index_exists" in index_info
-
     @pytest.mark.asyncio
     async def test_agent_config_complete(self, client):
         """Test agent config endpoint provides complete information"""
@@ -97,23 +82,6 @@ class TestSystemObservability:
         ]
         for field in required_fields:
             assert field in agent, f"Missing agent field: {field}"
-
-    @pytest.mark.asyncio
-    async def test_list_endpoints_paginated(self, client):
-        """Test list endpoints support pagination parameters"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Test URL list with different page sizes
-        for page_size in [5, 10, 20]:
-            response = await client.get(
-                f"/api/v1/urls:list?agent_id={agent_id}&limit={page_size}"
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert "urls" in data
-            assert "total" in data
-
     @pytest.mark.asyncio
     async def test_error_responses_structured(self, client):
         """Test error responses have proper structure"""
@@ -182,30 +150,6 @@ class TestSystemObservability:
 
         # All sessions should work independently
         assert sum(results) == 10
-
-    @pytest.mark.asyncio
-    async def test_index_status_tracking(self, client):
-        """Test index job status is properly tracked"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Trigger index rebuild
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-        job_id = response.json()["job_id"]
-
-        # Check job exists
-        response = await client.get(
-            f"/api/v1/index:status?agent_id={agent_id}&job_id={job_id}"
-        )
-        assert response.status_code == 200
-        job_data = response.json()
-        assert "job_id" in job_data
-        assert "status" in job_data
-
     @pytest.mark.asyncio
     async def test_response_size_reasonable(self, client):
         """Test API responses are reasonably sized"""

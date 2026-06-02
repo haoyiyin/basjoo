@@ -58,17 +58,27 @@ async def test_get_default_agent(client):
     [
         ("GET", "/api/v1/agent:default", None),
         ("GET", "/api/v1/agent?agent_id={agent_id}", None),
-        ("PUT", "/api/v1/agent?agent_id={agent_id}", {"name": "Unauthorized Update"}),
+        ("PUT", "/api/v1/agent?agent_id={agent_id}", {"name": "NoAuth"}),
         ("GET", "/api/v1/agent:jina-key-status?agent_id={agent_id}", None),
-        ("PUT", "/api/v1/agent:jina-key?agent_id={agent_id}", {"jina_api_key": "test_jina_key"}),
+        (
+            "PUT",
+            "/api/v1/agent:jina-key?agent_id={agent_id}",
+            {"jina_api_key": "test_jina_key"},
+        ),
         ("GET", "/api/v1/quota?agent_id={agent_id}", None),
-        ("POST", "/api/v1/models:list", {"provider_type": "google", "api_key": "test-key"}),
+        (
+            "POST",
+            "/api/v1/models:list",
+            {"provider_type": "google", "api_key": "test-key"},
+        ),
         ("GET", "/api/v1/tasks:status?agent_id={agent_id}", None),
         ("POST", "/api/v1/agent:test-ai-api?agent_id={agent_id}", None),
         ("POST", "/api/v1/agent:test-jina-api?agent_id={agent_id}", None),
     ],
 )
-async def test_agent_admin_endpoints_require_auth(public_client, default_agent_id, method, path, payload):
+async def test_agent_admin_endpoints_require_auth(
+    public_client, default_agent_id, method, path, payload
+):
     resolved_path = path.format(agent_id=default_agent_id)
 
     request = getattr(public_client, method.lower())
@@ -92,9 +102,11 @@ async def test_register_first_admin(public_client):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["email"] == "test@example.com"
-    assert data["name"] == "Test Admin"
-    assert data["role"] == "super_admin"
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    assert data["admin"]["email"] == "test@example.com"
+    assert data["admin"]["name"] == "Test Admin"
+    assert data["admin"]["role"] == "super_admin"
 
 
 @pytest.mark.asyncio
@@ -203,7 +215,7 @@ async def test_patch_registration_settings_noop(client):
 
 
 @pytest.mark.asyncio
-async def test_jina_key_status_returns_r2r(client):
+async def test_jina_key_status_returns_jina(client):
     """Embedding status should report the agent's configured provider."""
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
@@ -294,7 +306,9 @@ async def test_support_can_access_own_me(support_client):
 
 
 @pytest.mark.asyncio
-async def test_readonly_denied_on_protected_endpoints(readonly_client, default_agent_id):
+async def test_readonly_denied_on_protected_endpoints(
+    readonly_client, default_agent_id
+):
     """Legacy readonly role should get 403 on protected routes."""
     response = await readonly_client.get(f"/api/v1/agent?agent_id={default_agent_id}")
     assert response.status_code == 403

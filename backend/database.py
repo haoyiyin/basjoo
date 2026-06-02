@@ -8,7 +8,11 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy import event
 import os
 
-from config import settings, DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
+from config import (
+    settings,
+    DEFAULT_AGENT_MAX_TOKENS,
+    DEFAULT_AGENT_SIMILARITY_THRESHOLD,
+)
 from core.encryption import encrypt_api_key
 
 
@@ -99,24 +103,23 @@ async def get_db():
             await session.close()
 
 
-
-
 async def init_db():
     # Run idempotent startup migrations BEFORE create_all so columns exist
     # before SQLAlchemy introspects the database.
     from sqlite_migrations import run_sqlite_migrations
+
     run_sqlite_migrations(settings.database_url)
 
     async with engine.begin() as conn:
         from models import (
             Workspace,
             Agent,
-            URLSource,
-            KnowledgeFile,
-            ChatSession,
-            ChatMessage,
             WorkspaceQuota,
             AgentMember,
+            Tenant,
+            KnowledgeBase,
+            KbDocument,
+            KbChunk,
             IndexJob,
             AdminUser,
         )
@@ -153,7 +156,9 @@ async def init_db():
                 print(f"✓ 创建默认Agent(ID={default_agent.id})")
         else:
             agent_result = await session.execute(
-                select(Agent.id).where(Agent.workspace_id == existing_workspace.id).limit(1)
+                select(Agent.id)
+                .where(Agent.workspace_id == existing_workspace.id)
+                .limit(1)
             )
             existing_agent_id = agent_result.scalar_one_or_none()
 

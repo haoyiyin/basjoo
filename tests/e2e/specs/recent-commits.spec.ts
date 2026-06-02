@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
@@ -56,28 +56,6 @@ async function updateAgent(
   return updateRes.json() as Promise<Agent>;
 }
 
-async function waitForIndex(request: APIRequestContext, token: string, agentId: string): Promise<Record<string, unknown>> {
-  for (let i = 0; i < 60; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    const statusRes = await request.get(`${API_BASE}/api/v1/index:status?agent_id=${agentId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    expect(statusRes.status(), await statusRes.text()).toBe(200);
-    const status = await statusRes.json() as Record<string, unknown>;
-    if (status.status === 'completed' || status.status === 'failed') {
-      return status;
-    }
-  }
-  throw new Error('Index rebuild did not finish within 60 seconds');
-}
-
-async function loginByUi(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-  await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
-}
 
 test.describe.configure({ mode: 'serial' });
 
@@ -143,43 +121,33 @@ test.describe('Recent commit regressions', () => {
     await expect(siliconflowTestRes.json()).resolves.toMatchObject({ success: true });
   });
 
-  test('SiliconFlow embedding can rebuild QA index and retrieve context', async ({ request }) => {
+  test('SiliconFlow embedding key can be saved and validated without legacy QA index', async ({ request }) => {
     test.skip(!SILICONFLOW_API_KEY, 'SiliconFlow test key is required');
 
-    await updateAgent(request, token, agent.id, {
+    const updated = await updateAgent(request, token, agent.id, {
       embedding_provider: 'siliconflow',
       embedding_model: 'BAAI/bge-m3',
       siliconflow_api_key: SILICONFLOW_API_KEY,
     });
+    expect(updated.embedding_provider).toBe('siliconflow');
+    expect(updated.siliconflow_api_key_set).toBe(true);
+    expect(JSON.stringify(updated)).not.toContain(SILICONFLOW_API_KEY);
 
-    const unique = `SiliconFlow E2E ${Date.now()}`;
-    const answer = `The unique SiliconFlow E2E answer is ${unique}.`;
-    const qaRes = await request.post(`${API_BASE}/api/v1/qa:batch_import?agent_id=${agent.id}`, {
+    const testRes = await request.post(`${API_BASE}/api/v1/agent:test-embedding-api?agent_id=${agent.id}`, {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       data: {
-        format: 'json',
-        content: JSON.stringify([{ question: unique, answer }]),
-        overwrite: false,
+        embedding_provider: 'siliconflow',
+        embedding_model: 'BAAI/bge-m3',
+        siliconflow_api_key: SILICONFLOW_API_KEY,
       },
     });
-    expect([200, 201]).toContain(qaRes.status());
+    expect(testRes.status(), await testRes.text()).toBe(200);
+    await expect(testRes.json()).resolves.toMatchObject({ success: true });
 
-    const rebuildRes = await request.post(`${API_BASE}/api/v1/index:rebuild?agent_id=${agent.id}`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { force: true },
+    const summaryRes = await request.get(`${API_BASE}/api/v1/sources:summary?agent_id=${agent.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-    expect([200, 202]).toContain(rebuildRes.status());
-
-    const status = await waitForIndex(request, token, agent.id);
-    expect(status.status, JSON.stringify(status)).toBe('completed');
-
-    const contextRes = await request.post(`${API_BASE}/api/v1/contexts`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { agent_id: agent.id, query: unique, top_k: 5 },
-    });
-    expect(contextRes.status(), await contextRes.text()).toBe(200);
-    const contexts = await contextRes.json() as { contexts: Array<{ type: string; id?: string }> };
-    expect(contexts.contexts.some((item) => item.type === 'qa')).toBe(true);
+    expect(summaryRes.status(), await summaryRes.text()).toBe(200);
   });
 
   test('URL safety rejects SSRF-like URLs without server errors', async ({ request }) => {
@@ -227,8 +195,8 @@ test.describe('Recent commit regressions', () => {
     const htmlAfter = await page.locator('body').innerText();
     expect(htmlAfter).not.toBe(htmlBefore);
 
-    await page.locator('input').first().fill(ADMIN_EMAIL);
-    await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
+    await page.locator('input[type="email"]').or(page.getByLabel(/email|邮箱/i)).first().fill(ADMIN_EMAIL);
+    await page.locator('input[type="password"]').or(page.getByLabel(/password|密码/i)).first().fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
     await page.waitForLoadState('networkidle');
     await expect(page).not.toHaveURL(/\/login/);

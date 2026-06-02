@@ -9,8 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 
 from database import AsyncSessionLocal
-from models import Agent, AgentMember, ChatMessage, ChatSession, KnowledgeFile, URLSource, Workspace, WorkspaceQuota
-from services.r2r_client import R2RClient
+from models import (
+    Agent,
+    AgentMember,
+    ChatMessage,
+    ChatSession,
+    KnowledgeFile,
+    URLSource,
+    Workspace,
+    WorkspaceQuota,
+)
 from services.crawler import SiteCrawler
 
 logger = logging.getLogger(__name__)
@@ -42,8 +50,8 @@ class URLFetchScheduler:
             self.scheduler.add_job(
                 self.check_and_fetch_urls,
                 trigger=IntervalTrigger(hours=1),  # 每小时检查一次
-                id='check_url_fetches',
-                name='Check and fetch URLs periodically',
+                id="check_url_fetches",
+                name="Check and fetch URLs periodically",
                 replace_existing=True,
             )
         else:
@@ -91,11 +99,11 @@ class URLFetchScheduler:
                 select(URLSource).where(
                     and_(
                         URLSource.agent_id == agent.id,
-                        URLSource.status == 'success',
+                        URLSource.status == "success",
                         (
-                            (URLSource.last_fetch_at < threshold_date) |
-                            (URLSource.last_fetch_at.is_(None))
-                        )
+                            (URLSource.last_fetch_at < threshold_date)
+                            | (URLSource.last_fetch_at.is_(None))
+                        ),
                     )
                 )
             )
@@ -127,7 +135,9 @@ class URLFetchScheduler:
         """抓取单个URL，使用短生命周期数据库会话"""
         try:
             async with AsyncSessionLocal() as db:
-                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                result = await db.execute(
+                    select(URLSource).where(URLSource.id == url_source_id)
+                )
                 url_source = result.scalar_one_or_none()
                 if not url_source:
                     return
@@ -140,7 +150,9 @@ class URLFetchScheduler:
             page_result = await crawler.crawl_single_page(url)
 
             async with AsyncSessionLocal() as db:
-                result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                result = await db.execute(
+                    select(URLSource).where(URLSource.id == url_source_id)
+                )
                 url_source = result.scalar_one_or_none()
                 if not url_source:
                     return
@@ -161,60 +173,33 @@ class URLFetchScheduler:
                     else:
                         url_source.status = "success"
                         url_source.last_fetch_at = datetime.now(timezone.utc)
-                        logger.info(f"URL {url_source.url} content unchanged, only updated timestamp")
+                        logger.info(
+                            f"URL {url_source.url} content unchanged, only updated timestamp"
+                        )
 
                     await db.commit()
 
                     if old_hash != new_hash:
-                        logger.info(f"URL content changed, ingesting into R2R for agent {agent_id}")
-                        try:
-                            from services.r2r_client import R2RClient
-                            r2r = R2RClient()
-                            # Unassign old R2R document before re-ingesting changed content
-                            if url_source.r2r_document_id:
-                                unassigned = await r2r.unassign_document(agent_id, url_source.r2r_document_id)
-                                if not unassigned:
-                                    raise RuntimeError(
-                                        f"Failed to unassign old R2R document {url_source.r2r_document_id} "
-                                        f"for URL {url_source.url}; cannot re-ingest without removing stale content"
-                                    )
-                                url_source.r2r_document_id = None
-                                url_source.is_indexed = False
-                            doc = await r2r.ingest_text(
-                                agent_id=agent_id,
-                                text=url_source.content,
-                                title=url_source.title or url_source.url,
-                                metadata={
-                                    "url": url_source.url,
-                                    "title": url_source.title,
-                                    "source_type": "url",
-                                    "url_source_id": url_source.id,
-                                },
-                            )
-                            r2r_doc_id = doc.get("id", doc.get("document_id", ""))
-                            if r2r_doc_id:
-                                url_source.r2r_document_id = str(r2r_doc_id)
-                            url_source.is_indexed = True
-                            await db.commit()
-                            logger.info(f"R2R ingest OK for changed URL {url_source.url} (doc_id={r2r_doc_id})")
-                        except Exception as e:
-                            url_source.is_indexed = False
-                            await db.commit()
-                            logger.warning(f"R2R ingest failed for changed URL {url_source.url}: {e}")
+                        logger.info(
+                            f"URL content changed for {url_source.url} (self-KB handles indexing)"
+                        )
                 else:
                     url_source.status = "failed"
                     url_source.last_error = page_result.error or "Unknown error"
                     await db.commit()
                     logger.error(
-                        f"Failed to refetch URL {url_source.url}: "
-                        f"{page_result.error}"
+                        f"Failed to refetch URL {url_source.url}: {page_result.error}"
                     )
 
         except Exception as e:
-            logger.exception(f"Error in fetch_single_url for URL ID {url_source_id}: {e}")
+            logger.exception(
+                f"Error in fetch_single_url for URL ID {url_source_id}: {e}"
+            )
             try:
                 async with AsyncSessionLocal() as db:
-                    result = await db.execute(select(URLSource).where(URLSource.id == url_source_id))
+                    result = await db.execute(
+                        select(URLSource).where(URLSource.id == url_source_id)
+                    )
                     url_source = result.scalar_one_or_none()
                     if url_source:
                         url_source.status = "failed"
@@ -222,7 +207,6 @@ class URLFetchScheduler:
                         await db.commit()
             except Exception:
                 logger.exception("Failed to persist fetch_single_url error state")
-
 
 
 # 全局实例
@@ -243,11 +227,11 @@ class HistoryCleanupScheduler:
             # 添加每日清理任务（凌晨3点执行）
             self.scheduler.add_job(
                 self.cleanup_expired_sessions,
-                trigger='cron',
+                trigger="cron",
                 hour=3,
                 minute=0,
-                id='cleanup_expired_sessions',
-                name='Cleanup expired chat sessions daily',
+                id="cleanup_expired_sessions",
+                name="Cleanup expired chat sessions daily",
                 replace_existing=True,
             )
             self.running = True
@@ -284,7 +268,9 @@ class HistoryCleanupScheduler:
                     if agent.history_days <= 0:
                         continue  # 跳过不清理的 Agent
 
-                    cutoff_date = datetime.now(timezone.utc) - timedelta(days=agent.history_days)
+                    cutoff_date = datetime.now(timezone.utc) - timedelta(
+                        days=agent.history_days
+                    )
 
                     # 查找过期会话（使用 updated_at，更精确判断活跃会话）
                     expired_result = await db.execute(
@@ -295,9 +281,9 @@ class HistoryCleanupScheduler:
                                     ChatSession.updated_at < cutoff_date,
                                     and_(
                                         ChatSession.updated_at.is_(None),
-                                        ChatSession.created_at < cutoff_date
-                                    )
-                                )
+                                        ChatSession.created_at < cutoff_date,
+                                    ),
+                                ),
                             )
                         )
                     )
@@ -309,7 +295,9 @@ class HistoryCleanupScheduler:
                         total_deleted += 1
 
                 await db.commit()
-                logger.info(f"Cleanup completed. Deleted {total_deleted} expired sessions.")
+                logger.info(
+                    f"Cleanup completed. Deleted {total_deleted} expired sessions."
+                )
 
         except Exception as e:
             logger.exception(f"Error in cleanup_expired_sessions: {e}")
@@ -332,10 +320,10 @@ class SessionAutoCloseScheduler:
             self.scheduler.start()
             self.scheduler.add_job(
                 self.close_inactive_sessions,
-                trigger='interval',
+                trigger="interval",
                 minutes=5,
-                id='close_inactive_sessions',
-                name='Close inactive sessions',
+                id="close_inactive_sessions",
+                name="Close inactive sessions",
                 replace_existing=True,
             )
             self.running = True
@@ -353,10 +341,14 @@ class SessionAutoCloseScheduler:
 
         try:
             async with AsyncSessionLocal() as db:
-                cutoff = datetime.now(timezone.utc) - timedelta(minutes=self.inactivity_timeout_minutes)
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    minutes=self.inactivity_timeout_minutes
+                )
 
                 result = await db.execute(
-                    select(ChatSession).where(ChatSession.status.in_(["active", "taken_over"]))
+                    select(ChatSession).where(
+                        ChatSession.status.in_(["active", "taken_over"])
+                    )
                 )
                 sessions = result.scalars().all()
 
@@ -429,7 +421,8 @@ class AgentPurgeScheduler:
                 select(Agent).where(Agent.purge_after.is_not(None))
             )
             agents = [
-                agent for agent in result.scalars().all()
+                agent
+                for agent in result.scalars().all()
                 if as_utc(agent.purge_after) and as_utc(agent.purge_after) <= now
             ]
             for agent in agents:
@@ -437,22 +430,24 @@ class AgentPurgeScheduler:
             await db.commit()
 
     async def _purge_agent(self, db: AsyncSession, agent: Agent):
-        session_ids = await db.execute(select(ChatSession.id).where(ChatSession.agent_id == agent.id))
+        session_ids = await db.execute(
+            select(ChatSession.id).where(ChatSession.agent_id == agent.id)
+        )
         ids = [row[0] for row in session_ids.all()]
         if ids:
             await db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(ids)))
         await db.execute(delete(ChatSession).where(ChatSession.agent_id == agent.id))
         await db.execute(delete(URLSource).where(URLSource.agent_id == agent.id))
-        await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent.id))
+        await db.execute(
+            delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent.id)
+        )
         await db.execute(delete(AgentMember).where(AgentMember.agent_id == agent.id))
         workspace_id = agent.workspace_id
         await db.delete(agent)
-        await db.execute(delete(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id))
+        await db.execute(
+            delete(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
+        )
         await db.execute(delete(Workspace).where(Workspace.id == workspace_id))
-        try:
-            await R2RClient().delete_collection(agent.id)
-        except Exception as exc:
-            logger.warning("Failed to delete R2R collection for purged agent %s: %s", agent.id, exc)
 
 
 agent_purge_scheduler = AgentPurgeScheduler()

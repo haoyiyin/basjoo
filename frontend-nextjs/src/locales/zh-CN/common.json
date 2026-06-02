@@ -60,7 +60,7 @@
   },
   "navigation": {
     "dashboard": "仪表盘",
-    "playground": "Playground",
+    "playground": "调试区",
     "knowledge": "知识库",
     "websites": "网站",
     "files": "文件",
@@ -68,7 +68,7 @@
     "urlKnowledge": "网站管理",
     "sessions": "会话中心",
     "aiSettings": "AI 设置",
-    "systemSettings": "系统设置",
+    "agentSettings": "智能体设置",
     "administrator": "管理员",
     "agents": "智能体",
     "users": "用户管理"
@@ -136,7 +136,7 @@
   "agents": {
     "title": "智能体",
     "panelTitle": "智能体面板",
-    "panelSubtitle": "查看所有智能体的运行状态，并进入对应的独立后台。",
+    "panelSubtitle": "查看所有智能体的运行状态，并进入对应的独立工作空间。",
     "subtitle": "为不同渠道、任务和知识库创建独立智能体。",
     "allAgents": "全部智能体",
     "createTitle": "创建智能体",
@@ -180,8 +180,8 @@
     },
     "kbOnboardingTitle": "设置知识库",
     "kbOnboardingDescription": "配置嵌入服务，让智能体基于你的数据回答问题。稍后也可以在知识库设置中完成。",
-    "kbOnboardingSkip": "暂时跳过",
-    "kbOnboardingContinue": "进入仪表盘"
+    "kbOnboardingSkip": "跳过",
+    "kbOnboardingContinue": "初始化知识库"
   },
   "placeholders": {
     "enterMessage": "输入消息...",
@@ -196,7 +196,7 @@
     "csvFormat": "问题,答案\n如何重置密码?,点击忘记密码按钮..."
   },
   "labels": {
-    "welcome": "欢迎回到 Basjoo 控制台",
+    "welcome": "欢迎回到 {{agentName}} 控制台",
     "description": "描述",
     "quickStart": "快速开始",
     "systemStatus": "系统状态",
@@ -228,7 +228,7 @@
     "knowledgeDescription": "管理AI的知识来源，包括网页和上传的文件",
     "addWebKnowledge": "添加网页知识库",
     "configModelParams": "配置模型参数",
-    "configSystemParams": "配置系统参数和嵌入代码",
+    "configAgentSettings": "配置智能体设置和嵌入代码",
     "tips": "使用提示",
     "testAgentTip1": "输入问题测试 Agent 响应",
     "testAgentTip2": "查看引用来源验证检索",
@@ -298,9 +298,9 @@
     "jinaUsageTip": "系统会优先使用免费API，失败时自动使用API Key。",
     "jinaGetKey": "获取API Key: jina.ai/reader",
     "jinaEmbeddingApiKey": "Embedding API Key (Jina)",
-    "jinaKeyRequired": "请先在Playground中填写Jina Embedding API Key后再使用知识库功能。可在上方Embedding API下拉框中选择Jina或SiliconFlow。",
+    "jinaKeyRequired": "请先在调试区中填写Jina Embedding API Key后再使用知识库功能。可在上方Embedding API下拉框中选择Jina或SiliconFlow。",
     "embeddingKeyStatusUnavailable": "无法验证 Embedding API Key 状态，请刷新后重试。",
-    "siliconflowKeyRequired": "请先在Playground中填写SiliconFlow Embedding API Key后再使用知识库功能。可在上方Embedding API下拉框中选择Jina或SiliconFlow。",
+    "siliconflowKeyRequired": "请先在调试区中填写SiliconFlow Embedding API Key后再使用知识库功能。可在上方Embedding API下拉框中选择Jina或SiliconFlow。",
     "embedCode": "嵌入代码",
     "widgetEmbedCode": "Widget嵌入代码",
     "embedCodeDesc": "将此代码复制并粘贴到您网站的HTML中。",
@@ -354,7 +354,7 @@
     "modelName": "模型名称",
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
     "modelNamePreferNonThinking": "建议优先配置非思考模型，通常更稳定，也更容易控制最终输出。",
-    "modelNameThinkingAdvice": "如需使用自带思考模型，请先在 Playground 中充分测试后再用于正式场景。",
+    "modelNameThinkingAdvice": "如需使用自带思考模型，请先在调试区中充分测试后再用于正式场景。",
     "modelNameTip1": "不同模型有不同的性能和成本特点。",
     "modelNameTip2": "确保您的API密钥支持所选模型。",
     "temperature": "温度",

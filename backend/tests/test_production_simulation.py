@@ -3,14 +3,11 @@ Comprehensive Production Environment Simulation Tests
 This suite tests the entire system under realistic production conditions
 """
 
-import pytest
 import asyncio
 import time
-
-from tests.conftest import wait_for_index_job
 from datetime import datetime, timezone
-from typing import List
-import httpx
+
+import pytest
 
 
 class TestProductionSimulation:
@@ -47,7 +44,9 @@ class TestProductionSimulation:
 
         # All requests should succeed
         success_count = sum(1 for r in results if r is True)
-        assert success_count >= 8, f"Expected at least 8/10 success, got {success_count}"
+        assert success_count >= 8, (
+            f"Expected at least 8/10 success, got {success_count}"
+        )
 
     @pytest.mark.asyncio
     async def test_quota_concurrent_safety(self, client):
@@ -85,34 +84,9 @@ class TestProductionSimulation:
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         final_quota = response.json()["used_messages_today"]
 
-        assert final_quota == initial_quota + successful, "Quota tracking failed under load"
-
-    @pytest.mark.asyncio
-    async def test_url_deduplication(self, client):
-        """Test URL deduplication mechanism"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add the same URL multiple times (with variations)
-        urls = [
-            "https://example.com",
-            "https://example.com/",  # trailing slash
-            "https://www.example.com",  # www prefix
-            "https://EXAMPLE.COM",  # different case
-        ]
-
-        for url in urls:
-            response = await client.post(
-                f"/api/v1/urls:create?agent_id={agent_id}",
-                json={"urls": [url]},
-            )
-            # Should succeed or indicate duplicate
-
-        # List URLs - should only have 1 unique URL
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1, f"Expected 1 unique URL, got {data['total']}"
+        assert final_quota == initial_quota + successful, (
+            "Quota tracking failed under load"
+        )
 
     @pytest.mark.asyncio
     async def test_error_handling_invalid_agent(self, client):
@@ -122,7 +96,11 @@ class TestProductionSimulation:
         # Try to chat with invalid agent
         response = await client.post(
             "/api/v1/chat",
-            json={"agent_id": invalid_agent_id, "session_id": "test", "message": "Hello"},
+            json={
+                "agent_id": invalid_agent_id,
+                "session_id": "test",
+                "message": "Hello",
+            },
         )
         assert response.status_code == 404
 
@@ -177,39 +155,6 @@ class TestProductionSimulation:
         # Note: This would require a session list endpoint to fully verify
 
     @pytest.mark.asyncio
-    async def test_index_rebuild_after_url_update(self, client):
-        """Test index rebuild workflow after URL addition"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add a URL
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-        assert response.status_code == 200
-
-        # Trigger index rebuild
-        response = await client.post(
-            f"/api/v1/index:rebuild?agent_id={agent_id}",
-            json={"force": False}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "job_id" in data
-
-        # Check job status
-        job_id = data["job_id"]
-        await wait_for_index_job(client, agent_id, job_id)
-
-        # Verify index info endpoint works (no data expected since Scrapling isn't available in tests)
-        response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert "urls_indexed" in data
-        assert "r2r_healthy" in data
-
-    @pytest.mark.asyncio
     async def test_quota_daily_reset(self, client):
         """Test quota reset mechanism (simulated)"""
         response = await client.get("/api/v1/agent:default")
@@ -248,36 +193,6 @@ class TestProductionSimulation:
         assert response.status_code in [200, 413, 422]
 
     @pytest.mark.asyncio
-    async def test_url_delete_and_refetch(self, client):
-        """Test URL deletion and refetch functionality"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add URL
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com"]},
-        )
-        assert response.status_code == 200
-
-        # Get URL ID
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        urls = response.json()["urls"]
-        assert len(urls) > 0
-        url_id = urls[0]["id"]
-
-        # Delete URL
-        response = await client.delete(
-            f"/api/v1/urls:delete?agent_id={agent_id}&url_id={url_id}"
-        )
-        assert response.status_code == 200
-
-        # Verify deletion
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        urls = response.json()["urls"]
-        assert not any(url["id"] == url_id for url in urls)
-
-    @pytest.mark.asyncio
     async def test_agent_config_update(self, client):
         """Test agent configuration update"""
         response = await client.get("/api/v1/agent:default")
@@ -287,10 +202,10 @@ class TestProductionSimulation:
         response = await client.put(
             f"/api/v1/agent?agent_id={agent_id}",
             json={
-                "name": "Updated Agent Name",
+                "name": "Agent Upd",
                 "temperature": 0.5,
-                "welcome_message": "Welcome to updated agent!"
-            }
+                "welcome_message": "Welcome to updated agent!",
+            },
         )
         assert response.status_code == 200
 
@@ -298,6 +213,6 @@ class TestProductionSimulation:
         response = await client.get(f"/api/v1/agent?agent_id={agent_id}")
         assert response.status_code == 200
         data = response.json()
-        assert data["name"] == "Updated Agent Name"
+        assert data["name"] == "Agent Upd"
         assert data["temperature"] == 0.5
         assert data["max_tokens"] == 1024

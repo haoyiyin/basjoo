@@ -2,6 +2,7 @@
 """
 Docker entrypoint script that ensures proper permissions and switches to non-root user.
 """
+
 import os
 import pwd
 import secrets
@@ -66,62 +67,14 @@ def ensure_data_directory():
     return uid, gid
 
 
-def ensure_r2r_config_directory():
-    """Ensure r2r-config volume mount (and user_configs subdir) is writable by basjoo user.
-
-    This fixes the EACCES when write_r2r_config() runs as non-root after privilege drop.
-    Safe on read-only mounts: PermissionError is caught and logged as warning.
-    """
-    r2r_dir = "/app/r2r-config"
-    user_configs_dir = os.path.join(r2r_dir, "user_configs")
-
-    # Create if missing (covers first-run before any volume or when host dir absent)
-    if not os.path.exists(r2r_dir):
-        print(f"Creating r2r config directory: {r2r_dir}")
-        os.makedirs(r2r_dir, exist_ok=True)
-    os.makedirs(user_configs_dir, exist_ok=True)
-
-    try:
-        user_info = pwd.getpwnam("basjoo")
-        uid = user_info.pw_uid
-        gid = user_info.pw_gid
-
-        print(f"Fixing permissions for {r2r_dir} (UID={uid})")
-        for root, dirs, files in os.walk(r2r_dir):
-            try:
-                os.chown(root, uid, gid)
-                os.chmod(root, 0o755)
-            except PermissionError:
-                print(f"Warning: cannot chown {root} (read-only mount or insufficient caps)")
-                # continue walking — some subpaths may still be fixable
-            except Exception as exc:
-                print(f"Warning: chown error on {root}: {exc}")
-
-            for dirname in dirs:
-                path = os.path.join(root, dirname)
-                try:
-                    os.chown(path, uid, gid)
-                    os.chmod(path, 0o755)
-                except Exception:
-                    pass
-
-            for filename in files:
-                path = os.path.join(root, filename)
-                try:
-                    os.chown(path, uid, gid)
-                except Exception:
-                    pass
-    except KeyError:
-        print("Warning: basjoo user not found, skipping r2r-config chown")
-    except Exception as exc:
-        print(f"Warning: r2r-config permission fix failed: {exc}")
-
-
-
 def apply_lenient_defaults():
     """Apply permissive defaults so first-run deployments succeed without a populated .env."""
-    secret_key_file = os.environ.get("SECRET_KEY_FILE", "").strip() or DEFAULT_SECRET_KEY_FILE
-    encryption_key_file = os.environ.get("ENCRYPTION_KEY_FILE", "").strip() or DEFAULT_ENCRYPTION_KEY_FILE
+    secret_key_file = (
+        os.environ.get("SECRET_KEY_FILE", "").strip() or DEFAULT_SECRET_KEY_FILE
+    )
+    encryption_key_file = (
+        os.environ.get("ENCRYPTION_KEY_FILE", "").strip() or DEFAULT_ENCRYPTION_KEY_FILE
+    )
     os.environ["SECRET_KEY_FILE"] = secret_key_file
     os.environ["ENCRYPTION_KEY_FILE"] = encryption_key_file
 
@@ -136,7 +89,6 @@ def apply_lenient_defaults():
         os.environ["ALLOWED_HEADERS"] = DEFAULT_ALLOWED_HEADERS
 
 
-
 def _load_secret_from_file(secret_key_file: str):
     try:
         path = Path(secret_key_file)
@@ -148,7 +100,6 @@ def _load_secret_from_file(secret_key_file: str):
     except Exception as exc:
         print(f"Warning: failed to read SECRET_KEY from {secret_key_file}: {exc}")
         return None
-
 
 
 def _generate_and_save_secret(secret_key_file: str) -> str:
@@ -167,7 +118,6 @@ def _generate_and_save_secret(secret_key_file: str) -> str:
         )
 
     return secret_key
-
 
 
 def ensure_secret_key():
@@ -191,7 +141,6 @@ def ensure_secret_key():
     return generated_secret
 
 
-
 def check_encryption_key():
     """Check encryption key file status."""
     key_file = os.environ.get("ENCRYPTION_KEY_FILE", DEFAULT_ENCRYPTION_KEY_FILE)
@@ -205,10 +154,14 @@ def check_encryption_key():
         print(f"Encryption key file will be auto-generated at: {key_file}")
 
 
-
 def validate_secret_key():
     """Ensure SECRET_KEY is resolved even when production validation is enabled."""
-    require_secret_key = os.environ.get("REQUIRE_SECRET_KEY", "").lower() in {"1", "true", "yes", "on"}
+    require_secret_key = os.environ.get("REQUIRE_SECRET_KEY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     secret_key = os.environ.get("SECRET_KEY", "")
 
     if _is_missing_or_insecure_secret(secret_key):
@@ -217,7 +170,6 @@ def validate_secret_key():
 
     if require_secret_key:
         print("REQUIRE_SECRET_KEY is enabled and a valid SECRET_KEY is available")
-
 
 
 def migrate_sqlite_schema():
@@ -231,7 +183,6 @@ def migrate_sqlite_schema():
     except Exception as e:
         print(f"SQLite migration failed: {e}")
         sys.exit(1)
-
 
 
 def drop_privileges(uid, gid):
@@ -251,12 +202,10 @@ def drop_privileges(uid, gid):
     print(f"Dropped privileges to UID={new_uid}, GID={new_gid}, HOME={home_dir}")
 
 
-
 def main():
     """Main entrypoint function."""
     if os.getuid() == 0:
         uid, gid = ensure_data_directory()
-        ensure_r2r_config_directory()
 
         if uid is not None:
             print("Switching to basjoo user...")

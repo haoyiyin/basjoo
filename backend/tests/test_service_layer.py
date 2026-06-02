@@ -11,51 +11,12 @@ from services.scraper import URLScraper
 
 class TestSchedulerService:
     """Test scheduler service functionality"""
-
-    @pytest.mark.asyncio
-    async def test_url_fetch_scheduling(self, client):
-        """Test URL fetch scheduling logic"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add a URL
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com/scheduler-test"]},
-        )
-        # Should succeed (URL added to queue)
-        assert response.status_code in [200, 400, 422]
-
-
 # Auth service tests are covered in test_auth_service.py
 # Skipping here to avoid conflicts
 
 
 class TestScraperService:
     """Test scraper service functionality"""
-
-    @pytest.mark.asyncio
-    async def test_url_normalization_via_api(self, client):
-        """Test URL normalization via API"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add same URL with different formats
-        response1 = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com/test/"]},
-        )
-
-        response2 = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com/test"]},
-        )
-
-        # Both should succeed or be rejected (duplicate detection)
-        assert response1.status_code in [200, 400, 422]
-        assert response2.status_code in [200, 400, 422]
-
-
 class TestURLCrawlerRegression:
     """Regression tests for URL scraper and crawler bugs"""
 
@@ -155,46 +116,3 @@ class TestDatabaseOperations:
 
 class TestErrorHandling:
     """Test error handling in various scenarios"""
-
-    @pytest.mark.asyncio
-    async def test_network_timeout_handling(self, client):
-        """Test handling of network timeouts"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Add URL (will be fetched in background)
-        response = await client.post(
-            f"/api/v1/urls:create?agent_id={agent_id}",
-            json={"urls": ["https://example.com/timeout-test"]},
-        )
-        # Should succeed or fail gracefully
-        assert response.status_code in [200, 400, 422]
-
-    @pytest.mark.asyncio
-    async def test_resource_cleanup(self, client):
-        """Test resources are cleaned up properly"""
-        response = await client.get("/api/v1/agent:default")
-        agent_id = response.json()["id"]
-
-        # Create multiple sessions
-        for i in range(5):
-            await client.post(
-                "/api/v1/chat",
-                json={
-                    "agent_id": agent_id,
-                    "session_id": f"cleanup_test_{i}",
-                    "message": f"Message {i}",
-                },
-            )
-
-        # Delete URL if exists
-        response = await client.get(f"/api/v1/urls:list?agent_id={agent_id}")
-        if response.json()["urls"]:
-            url_id = response.json()["urls"][0]["id"]
-            await client.delete(f"/api/v1/urls:delete?url_id={url_id}&agent_id={agent_id}")
-
-        # Verify cleanup happened (quota updated)
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        assert response.status_code == 200
-        quota = response.json()
-        assert quota is not None

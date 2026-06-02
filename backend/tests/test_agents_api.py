@@ -12,7 +12,7 @@ async def test_agents_can_be_created_listed_selected_and_deactivated(client):
     create_response = await client.post(
         "/api/v1/agents",
         json={
-            "name": "WhatsApp Clone",
+            "name": "WA Clone",
             "description": "Answers as a personal assistant",
             "agent_type": "ai_clone",
             "channel_mode": "whatsapp",
@@ -20,7 +20,7 @@ async def test_agents_can_be_created_listed_selected_and_deactivated(client):
     )
     assert create_response.status_code == 201
     created = create_response.json()
-    assert created["name"] == "WhatsApp Clone"
+    assert created["name"] == "WA Clone"
     assert created["agent_type"] == "ai_clone"
     assert created["channel_mode"] == "whatsapp"
     assert created["workspace_id"] is not None
@@ -80,14 +80,22 @@ async def test_support_sees_only_assigned_agents(client, support_client, setup_t
     # Create two agents as super_admin
     create_response_1 = await client.post(
         "/api/v1/agents",
-        json={"name": "Agent A", "description": "First agent", "agent_type": "ai_clone"},
+        json={
+            "name": "Agent A",
+            "description": "First agent",
+            "agent_type": "ai_clone",
+        },
     )
     assert create_response_1.status_code == 201
     agent_a_id = create_response_1.json()["id"]
 
     create_response_2 = await client.post(
         "/api/v1/agents",
-        json={"name": "Agent B", "description": "Second agent", "agent_type": "ai_clone"},
+        json={
+            "name": "Agent B",
+            "description": "Second agent",
+            "agent_type": "ai_clone",
+        },
     )
     assert create_response_2.status_code == 201
     agent_b_id = create_response_2.json()["id"]
@@ -101,7 +109,11 @@ async def test_support_sees_only_assigned_agents(client, support_client, setup_t
         assert support_user is not None
         support_user_id = support_user.id
 
-        session.add(AgentMember(agent_id=agent_a_id, admin_user_id=support_user_id, role="support"))
+        session.add(
+            AgentMember(
+                agent_id=agent_a_id, admin_user_id=support_user_id, role="support"
+            )
+        )
         await session.commit()
 
     # Support user should see only Agent A
@@ -118,3 +130,58 @@ async def test_readonly_denied_on_agent_listing(readonly_client):
     """Readonly role should still be denied on GET /api/v1/agents."""
     response = await readonly_client.get("/api/v1/agents")
     assert response.status_code == 403
+
+
+# ── Name length validation tests (display width 10) ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_agent_name_accepts_ten_ascii_display_units(client):
+    response = await client.post(
+        "/api/v1/agents",
+        json={"name": "AgentName1", "agent_type": "ai_clone"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "AgentName1"
+
+
+@pytest.mark.asyncio
+async def test_agent_name_accepts_five_chinese_characters(client):
+    response = await client.post(
+        "/api/v1/agents",
+        json={"name": "客服助手一", "agent_type": "ai_clone"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "客服助手一"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["AgentName12", "客服助手一二"])
+async def test_agent_name_rejects_more_than_ten_display_units(client, name):
+    response = await client.post(
+        "/api/v1/agents",
+        json={"name": name, "agent_type": "ai_clone"},
+    )
+
+    assert response.status_code == 422
+    assert "10" in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_update_rejects_over_limit_display_width_name(client):
+    create_response = await client.post(
+        "/api/v1/agents",
+        json={"name": "AgentName1", "agent_type": "ai_clone"},
+    )
+    assert create_response.status_code == 201
+    agent_id = create_response.json()["id"]
+
+    update_response = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"name": "客服助手一二"},
+    )
+
+    assert update_response.status_code == 422
+    assert "10" in update_response.text

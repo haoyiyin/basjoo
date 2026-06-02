@@ -1,3 +1,6 @@
+import hashlib
+import uuid
+
 from sqlalchemy import (
     Column,
     String,
@@ -15,10 +18,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from database import Base
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
-import hashlib
-import uuid
 
 
 def normalize_url(url: str) -> str:
@@ -97,9 +99,23 @@ class Agent(Base):
 
     # AI服务商配置
     provider_type = Column(
-        SQLEnum("openai", "openai_native", "google", "anthropic", "xai", "openrouter", "zai", "deepseek", "volcengine", "moonshot", "aliyun_bailian", "siliconflow", name="llm_provider"),
+        SQLEnum(
+            "openai",
+            "openai_native",
+            "google",
+            "anthropic",
+            "xai",
+            "openrouter",
+            "zai",
+            "deepseek",
+            "volcengine",
+            "moonshot",
+            "aliyun_bailian",
+            "siliconflow",
+            name="llm_provider",
+        ),
         nullable=True,
-        default="openai"
+        default="openai",
     )
 
     # Azure OpenAI特定配置
@@ -136,7 +152,9 @@ class Agent(Base):
 
     # 检索配置
     top_k = Column(Integer, nullable=False, default=8)
-    similarity_threshold = Column(Float, nullable=False, default=DEFAULT_AGENT_SIMILARITY_THRESHOLD)
+    similarity_threshold = Column(
+        Float, nullable=False, default=DEFAULT_AGENT_SIMILARITY_THRESHOLD
+    )
     enable_context = Column(Boolean, nullable=False, default=False)
 
     # AI对话限制配置
@@ -171,6 +189,11 @@ class Agent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    # 知识库关联（新增）
+    kb_id = Column(
+        String(36), ForeignKey("knowledge_bases.id"), nullable=True, index=True
+    )
+
     # 关系
     workspace = relationship("Workspace", back_populates="agents")
     url_sources = relationship(
@@ -185,6 +208,7 @@ class Agent(Base):
     members = relationship(
         "AgentMember", back_populates="agent", cascade="all, delete-orphan"
     )
+    knowledge_base = relationship("KnowledgeBase", back_populates="agents")
 
 
 class URLSource(Base):
@@ -218,7 +242,6 @@ class URLSource(Base):
         JSON, nullable=True
     )  # etag, last_modified, content_length等
     is_indexed = Column(Boolean, nullable=False, default=False)  # 是否已训练
-    r2r_document_id = Column(String(100), nullable=True, index=True)  # R2R document id
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -233,7 +256,7 @@ class URLSource(Base):
 
 
 class KnowledgeFile(Base):
-    """知识文件模型（通过 R2R 管理）"""
+    """知识文件模型"""
 
     __tablename__ = "knowledge_files"
 
@@ -247,13 +270,11 @@ class KnowledgeFile(Base):
     file_size = Column(Integer, nullable=True)  # bytes
     file_type = Column(String(50), nullable=True)  # pdf, txt, csv, etc.
 
-    # R2R document ID
-    r2r_document_id = Column(String(100), nullable=True, index=True)
-    r2r_collection_id = Column(String(100), nullable=True)
-
     # 状态
     status = Column(
-        SQLEnum("uploading", "processing", "ready", "failed", "pending", name="file_status"),
+        SQLEnum(
+            "uploading", "processing", "ready", "failed", "pending", name="file_status"
+        ),
         default="uploading",
         index=True,
     )
@@ -345,7 +366,7 @@ class ChatMessage(Base):
 
     # 发送者信息（用于区分人工和 Agent）
     sender_type = Column(String(20), nullable=True)  # 'agent', 'human'
-    sender_id = Column(String(50), nullable=True)    # 管理员ID（人工发送时）
+    sender_id = Column(String(50), nullable=True)  # 管理员ID（人工发送时）
 
     # 引用来源
     sources = Column(
@@ -409,7 +430,9 @@ class AgentMember(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
-    admin_user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=False, index=True)
+    admin_user_id = Column(
+        Integer, ForeignKey("admin_users.id"), nullable=False, index=True
+    )
     role = Column(String(50), default="admin", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -471,10 +494,119 @@ class AdminUser(Base):
     name = Column(String(100), nullable=False)
     is_active = Column(Boolean, default=True)
     role = Column(String(50), default="admin", nullable=False)
-    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True, index=True)
+    workspace_id = Column(
+        Integer, ForeignKey("workspaces.id"), nullable=True, index=True
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     workspace = relationship("Workspace", back_populates="admin_users")
     agent_members = relationship(
         "AgentMember", back_populates="admin_user", cascade="all, delete-orphan"
     )
+
+
+class Tenant(Base):
+    """租户表（多租户顶层）"""
+
+    __tablename__ = "tenants"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(100), nullable=False)
+    slug = Column(String(50), unique=True, nullable=False, index=True)
+    plan = Column(String(20), nullable=False, default="free")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    knowledge_bases = relationship(
+        "KnowledgeBase", back_populates="tenant", cascade="all, delete-orphan"
+    )
+
+
+class KnowledgeBase(Base):
+    """知识库表（每 agent 独立 KB）"""
+
+    __tablename__ = "knowledge_bases"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    embedding_model = Column(String(100), nullable=False, default="BAAI/bge-m3")
+    embedding_base_url = Column(String(500), nullable=True)
+    vector_backend = Column(String(20), nullable=False, default="qdrant")
+    qdrant_collection = Column(String(50), unique=True, nullable=False, index=True)
+    is_locked = Column(
+        Boolean, nullable=False, default=False
+    )  # 有 chunk 后锁定 embedding 配置
+    chunk_size = Column(Integer, nullable=False, default=512)
+    chunk_overlap = Column(Integer, nullable=False, default=64)
+    status = Column(
+        SQLEnum(
+            "active",
+            "resetting",
+            "processing",
+            "error",
+            name="kb_status",
+        ),
+        default="active",
+        nullable=False,
+        index=True,
+    )
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    tenant = relationship("Tenant", back_populates="knowledge_bases")
+    documents = relationship(
+        "KbDocument", back_populates="knowledge_base", cascade="all, delete-orphan"
+    )
+    agents = relationship("Agent", back_populates="knowledge_base")
+
+
+class KbDocument(Base):
+    """文档表"""
+
+    __tablename__ = "kb_documents"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    kb_id = Column(
+        String(36), ForeignKey("knowledge_bases.id"), nullable=False, index=True
+    )
+    tenant_id = Column(
+        String(36), ForeignKey("tenants.id"), nullable=False, index=True
+    )  # 冗余，方便过滤
+    filename = Column(String(500), nullable=False)
+    file_type = Column(String(20), nullable=True)
+    status = Column(
+        SQLEnum("pending", "processing", "ready", "error", name="kb_doc_status"),
+        default="pending",
+        index=True,
+    )
+    chunk_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    file_size = Column(Integer, nullable=True)
+    storage_path = Column(String(1000), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    knowledge_base = relationship("KnowledgeBase", back_populates="documents")
+    chunks = relationship(
+        "KbChunk", back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class KbChunk(Base):
+    """Chunk 元数据表"""
+
+    __tablename__ = "kb_chunks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    kb_id = Column(
+        String(36), ForeignKey("knowledge_bases.id"), nullable=False, index=True
+    )
+    doc_id = Column(
+        String(36), ForeignKey("kb_documents.id"), nullable=False, index=True
+    )
+    tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
+    vector_id = Column(String(100), nullable=True, index=True)  # Qdrant point id
+    chunk_index = Column(Integer, nullable=False)
+    content_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    document = relationship("KbDocument", back_populates="chunks")
