@@ -84,8 +84,10 @@ export async function adminLogin(page: Page): Promise<void> {
     await route.continue({ headers: { ...route.request().headers(), ...loginHeaders() } });
   });
   await page.goto('/login');
-  await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-  await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
+  const emailInput = page.getByLabel(/email|邮箱/i).or(page.locator('input[type="email"]')).first();
+  const passwordInput = page.getByLabel(/password|密码/i).or(page.locator('input[type="password"]')).first();
+  await emailInput.fill(ADMIN_EMAIL);
+  await passwordInput.fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
   await page.waitForLoadState('networkidle');
   // Should not be on login page anymore
