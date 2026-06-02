@@ -13,11 +13,10 @@ import {
   API_BASE,
   loginByApi,
   getDefaultAgent,
-  loginHeaders,
 } from '../fixtures/e2e-context';
 
 test.describe('Admin Sessions Takeover', () => {
-  test('full takeover chain via API', async ({ page, request }) => {
+  test('full takeover chain via API', async ({ request }) => {
     // 1. Login as admin using shared helper
     const token = await loginByApi(request);
     const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };

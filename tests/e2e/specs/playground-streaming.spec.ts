@@ -56,9 +56,10 @@ test.describe('Playground Streaming Chat', () => {
     await expect(page.getByText(uniqueMessage)).toBeVisible({ timeout: 10_000 });
 
     // Wait for assistant response or error (provider might not be configured)
-    // Allow either assistant content or a user-visible error message
+    // Look for assistant/error content that is NOT the user's unique message
+    // Assistant responses typically appear in a separate container with different styling
     await expect(
-      page.locator('main').getByText(/test message|hello|help|帮助|error|错误|failed|失败|quota|配置/i).first()
+      page.locator('main').locator('div').filter({ hasNot: page.getByText(uniqueMessage) }).getByText(/hello|你好|help|帮助|i can|我可以|error|错误|failed|失败|quota|配置|api|provider/i).first()
     ).toBeVisible({ timeout: 30_000 });
   });
 
@@ -78,8 +79,9 @@ test.describe('Playground Streaming Chat', () => {
     await expect(page.getByText(uniqueMessage)).toBeVisible({ timeout: 10_000 });
 
     // Wait for response or error to appear before clearing
+    // Look for content that is NOT the user's unique message
     await expect(
-      page.locator('main').getByText(/test|hello|help|帮助|error|错误|failed|失败|quota|配置/i).first()
+      page.locator('main').locator('div').filter({ hasNot: page.getByText(uniqueMessage) }).getByText(/hello|你好|help|帮助|i can|我可以|error|错误|failed|失败|quota|配置|api|provider/i).first()
     ).toBeVisible({ timeout: 30_000 });
 
     // Click clear button and accept the confirmation dialog

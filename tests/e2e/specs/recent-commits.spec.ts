@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
@@ -56,15 +56,6 @@ async function updateAgent(
   return updateRes.json() as Promise<Agent>;
 }
 
-
-
-async function loginByUi(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-  await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
-}
 
 test.describe.configure({ mode: 'serial' });
 
@@ -204,8 +195,8 @@ test.describe('Recent commit regressions', () => {
     const htmlAfter = await page.locator('body').innerText();
     expect(htmlAfter).not.toBe(htmlBefore);
 
-    await page.locator('input').first().fill(ADMIN_EMAIL);
-    await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
+    await page.locator('input[type="email"]').or(page.getByLabel(/email|邮箱/i)).first().fill(ADMIN_EMAIL);
+    await page.locator('input[type="password"]').or(page.getByLabel(/password|密码/i)).first().fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
     await page.waitForLoadState('networkidle');
     await expect(page).not.toHaveURL(/\/login/);
