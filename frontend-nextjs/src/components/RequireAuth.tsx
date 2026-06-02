@@ -40,7 +40,7 @@ const SUPER_ADMIN_ONLY_ROOT_PATHS = [
     '/knowledge',
     '/urls',
     '/files',
-    '/settings/system',
+    '/settings/agent',
 ];
 
 function isSuperAdminOnlyRootPath(pathname: string): boolean {

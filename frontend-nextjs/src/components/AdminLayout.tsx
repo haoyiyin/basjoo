@@ -168,8 +168,8 @@ const navItemsConfig: NavItem[] = [
 		),
 	},
 	{
-		path: "/settings/system",
-		i18nKey: "navigation.systemSettings",
+		path: "/settings/agent",
+		i18nKey: "navigation.agentSettings",
 		icon: (
 			<svg
 				width="20"

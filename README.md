@@ -112,11 +112,11 @@ The Sessions page shows live conversations, supports human takeover, and gives o
 
 ![English sessions screenshot](resource/screenshots/admin/en-US/sessions.png)
 
-### System settings and widget appearance
+### Agent settings and widget appearance
 
-System Settings covers language/theme preferences, widget appearance, embed behavior, and other operational controls.
+Agent Settings covers language/theme preferences, widget appearance, embed behavior, and other operational controls.
 
-![English system settings screenshot](resource/screenshots/admin/en-US/system-settings.png)
+![English agent settings screenshot](resource/screenshots/admin/en-US/system-settings.png)
 
 ### Embedded widget experience
 

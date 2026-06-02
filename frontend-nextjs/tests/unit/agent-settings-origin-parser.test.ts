@@ -1,13 +1,13 @@
 /**
- * Unit tests for SystemSettings allowed_widget_origins parsing and validation.
+ * Unit tests for AgentSettings allowed_widget_origins parsing and validation.
  *
- * Run with: vitest run tests/unit/system-settings-origin-parser.test.ts
+ * Run with: vitest run tests/unit/agent-settings-origin-parser.test.ts
  */
 
 import { describe, it, expect } from 'vitest';
 
 /**
- * Extracted from SystemSettings.tsx
+ * Extracted from AgentSettings.tsx
  */
 function parseAllowedWidgetOriginsText(value: string): string[] {
   return value

@@ -117,11 +117,11 @@ Playground 页面可以测试回复效果、观察检索结果，并联动调整
 
 ![中文会话中心截图](resource/screenshots/admin/zh-CN/sessions.png)
 
-### 系统设置与 Widget 外观
+### 智能体设置与 Widget 外观
 
-系统设置页面用于管理语言/主题偏好、Widget 外观、嵌入行为及其它后台配置。
+智能体设置页面用于管理语言/主题偏好、Widget 外观、嵌入行为及其它后台配置。
 
-![中文系统设置截图](resource/screenshots/admin/zh-CN/system-settings.png)
+![中文智能体设置截图](resource/screenshots/admin/zh-CN/system-settings.png)
 
 ### 嵌入式 Widget 聊天窗口
 

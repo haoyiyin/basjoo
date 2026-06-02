@@ -12,10 +12,18 @@ const fakeLocalStorage = (() => {
 	let store: Record<string, string> = {};
 	return {
 		getItem: (key: string) => store[key] ?? null,
-		setItem: (key: string, value: string) => { store[key] = value; },
-		removeItem: (key: string) => { delete store[key]; },
-		clear: () => { store = {}; },
-		get length() { return Object.keys(store).length; },
+		setItem: (key: string, value: string) => {
+			store[key] = value;
+		},
+		removeItem: (key: string) => {
+			delete store[key];
+		},
+		clear: () => {
+			store = {};
+		},
+		get length() {
+			return Object.keys(store).length;
+		},
 		key: (index: number) => Object.keys(store)[index] ?? null,
 	};
 })();
@@ -30,10 +38,23 @@ vi.mock("react-i18next", () => ({
 	useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-// A realistic JWT token expiring ~24h from now so setTimeout works (no 32-bit overflow)
-// payload: {"exp":1780395198,"sub":"1"}
-const TEST_TOKEN =
-	"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODAzOTUxOTgsInN1YiI6IjEifQ.fakesignature";
+// A realistic JWT token expiring ~24h from test execution so setTimeout works
+// without 32-bit overflow and the fixture does not go stale over time.
+function base64UrlEncode(value: object): string {
+	return btoa(JSON.stringify(value))
+		.replace(/=/g, "")
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_");
+}
+
+const TEST_TOKEN = [
+	base64UrlEncode({ alg: "HS256", typ: "JWT" }),
+	base64UrlEncode({
+		exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+		sub: "1",
+	}),
+	"fakesignature",
+].join(".");
 const TEST_ADMIN = {
 	id: 1,
 	email: "owner@example.com",
@@ -60,8 +81,9 @@ describe("Register bootstrap flow (real AuthProvider)", () => {
 	it("registers a super admin and persists the session in localStorage without calling /login", async () => {
 		const fetchCalls: FetchEntry[] = [];
 
-		global.fetch = vi.fn().mockImplementation(
-			(url: string, options?: RequestInit) => {
+		global.fetch = vi
+			.fn()
+			.mockImplementation((url: string, options?: RequestInit) => {
 				fetchCalls.push({ url, method: options?.method || "GET" });
 
 				// Order matters: check the longer path first to avoid partial matches
@@ -94,8 +116,7 @@ describe("Register bootstrap flow (real AuthProvider)", () => {
 					status: 404,
 					json: async () => ({ detail: "Not found" }),
 				});
-			},
-		) as any;
+			}) as any;
 
 		const router = createMemoryRouter(
 			[
@@ -113,9 +134,9 @@ describe("Register bootstrap flow (real AuthProvider)", () => {
 
 		// Wait for registration-settings check to complete and form to render
 		await screen.findByText("initialSetup.name");
-		expect(fetchCalls.some((f) => f.url.includes("registration-settings"))).toBe(
-			true,
-		);
+		expect(
+			fetchCalls.some((f) => f.url.includes("registration-settings")),
+		).toBe(true);
 
 		// Fill the form
 		fireEvent.change(

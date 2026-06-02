@@ -68,7 +68,7 @@
     "urlKnowledge": "网站管理",
     "sessions": "会话中心",
     "aiSettings": "AI 设置",
-    "systemSettings": "系统设置",
+    "agentSettings": "智能体设置",
     "administrator": "管理员",
     "agents": "智能体",
     "users": "用户管理"
@@ -228,7 +228,7 @@
     "knowledgeDescription": "管理AI的知识来源，包括网页和上传的文件",
     "addWebKnowledge": "添加网页知识库",
     "configModelParams": "配置模型参数",
-    "configSystemParams": "配置系统参数和嵌入代码",
+    "configAgentSettings": "配置智能体设置和嵌入代码",
     "tips": "使用提示",
     "testAgentTip1": "输入问题测试 Agent 响应",
     "testAgentTip2": "查看引用来源验证检索",

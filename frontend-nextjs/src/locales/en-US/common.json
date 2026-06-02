@@ -68,7 +68,7 @@
     "urlKnowledge": "Website Management",
     "sessions": "Sessions",
     "aiSettings": "AI Settings",
-    "systemSettings": "System Settings",
+    "agentSettings": "Agent Settings",
     "administrator": "Administrator",
     "agents": "Agents",
     "users": "Users"
@@ -228,7 +228,7 @@
     "knowledgeDescription": "Manage AI knowledge sources including web pages and uploaded files",
     "addWebKnowledge": "Add web knowledge base",
     "configModelParams": "Configure model parameters",
-    "configSystemParams": "Configure system settings and embed code",
+    "configAgentSettings": "Configure agent settings and embed code",
     "tips": "Tips",
     "testAgentTip1": "Enter questions to test Agent responses",
     "testAgentTip2": "View citation sources to verify retrieval",
