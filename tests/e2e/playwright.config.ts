@@ -18,7 +18,6 @@ const isCI = !!process.env.CI;
 const isProdLike = process.env.E2E_ENV === 'prod';
 
 const baseURL = process.env.BASE_URL || (isProdLike ? 'http://localhost' : 'http://localhost:3000');
-const apiBaseUrl = process.env.API_BASE_URL || (isProdLike ? 'http://localhost' : 'http://localhost:8000');
 
 export default defineConfig({
   testDir: './specs',
@@ -36,7 +35,7 @@ export default defineConfig({
     video: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  // Global setup runs once before all tests: seeds admin + QA data
+  // Global setup runs once before all tests: ensures admin login works and default agent context exists
   globalSetup: './global.setup.ts',
   projects: [
     // Smoke E2E against dev environment - runs core admin/chat specs only

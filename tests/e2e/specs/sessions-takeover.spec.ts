@@ -7,29 +7,22 @@
  * @prod
  */
 import { test, expect } from '@playwright/test';
-
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
-const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000';
-
-function loginHeaders() {
-  return { 'X-Forwarded-For': `203.0.113.${Math.floor(Math.random() * 200) + 20}` };
-}
+import {
+  adminLogin,
+  agentRoute,
+  API_BASE,
+  loginByApi,
+  getDefaultAgent,
+} from '../fixtures/e2e-context';
 
 test.describe('Admin Sessions Takeover', () => {
-  test('full takeover chain via API', async ({ page, request }) => {
-    // 1. Login as admin
-    const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
-      headers: loginHeaders(),
-      data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-    });
-    const loginData = await loginRes.json();
-    const token = loginData.access_token;
+  test('full takeover chain via API', async ({ request }) => {
+    // 1. Login as admin using shared helper
+    const token = await loginByApi(request);
     const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
-    // 2. Get default agent
-    const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, { headers: authHeaders });
-    const agent = await agentRes.json();
+    // 2. Get default agent using shared helper
+    const agent = await getDefaultAgent(request, token);
 
     await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
       headers: authHeaders,
@@ -88,19 +81,12 @@ test.describe('Admin Sessions Takeover', () => {
   });
 
   test('sessions page shows visitor sessions after login', async ({ page, request }) => {
-    // 1. Create a visitor session via API first
-    const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
-      headers: loginHeaders(),
-      data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-    });
-    const token = (await loginRes.json() as { access_token: string }).access_token;
+    // 1. Create a visitor session via API first using shared helpers
+    const token = await loginByApi(request);
     const authHeaders = { Authorization: `Bearer ${token}` };
 
-    // Get default agent
-    const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, {
-      headers: authHeaders,
-    });
-    const agent = await agentRes.json() as { id: string };
+    // Get default agent using shared helper
+    const agent = await getDefaultAgent(request, token);
 
     await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
@@ -108,6 +94,7 @@ test.describe('Admin Sessions Takeover', () => {
     });
 
     // Create a visitor chat session
+
     const sessionId = `e2e-ui-session-${Date.now()}`;
     const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
       headers: { 'Content-Type': 'application/json' },
@@ -115,22 +102,13 @@ test.describe('Admin Sessions Takeover', () => {
     });
     expect(chatRes.status()).toBe(200);
 
-    await page.route('**/api/admin/login', async (route) => {
-      await route.continue({ headers: { ...route.request().headers(), 'X-Forwarded-For': '203.0.113.44' } });
-    });
+    // 2. Login to admin dashboard using shared helper
+    await adminLogin(page);
 
-    // 2. Login to admin dashboard
-    await page.goto('/login');
-    await page.locator('input').first().fill(ADMIN_EMAIL);
-    await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
-    await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
+    // 3. Navigate to agent-scoped sessions page
+    await page.goto(agentRoute(agent.id, 'sessions'));
     await page.waitForLoadState('networkidle');
-    await expect(page).not.toHaveURL(/\/login/);
-
-    // 3. Navigate to sessions page
-    await page.goto('/sessions');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2_000);
+    await expect(page).toHaveURL(`/agents/${agent.id}/sessions`);
 
     // 4. Verify session appears in the admin list by checking via API
     const sessionsRes = await request.get(`${API_BASE}/api/v1/admin/sessions?skip=0&limit=10`, {
@@ -140,8 +118,8 @@ test.describe('Admin Sessions Takeover', () => {
     expect(Array.isArray(sessionsData.items)).toBe(true);
     expect(sessionsData.items.length).toBeGreaterThanOrEqual(1);
 
-    // 5. Verify sessions page renders content
-    await expect(page.getByRole('heading', { name: /会话中心|sessions/i })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(`会话 #${sessionId}`, { exact: true })).toBeVisible({ timeout: 10_000 });
+    // 5. Verify sessions page renders content with bilingual assertions
+    await expect(page.getByRole('heading', { name: /会话中心|Sessions Center/i })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(`会话 #${sessionId}|Session #${sessionId}`))).toBeVisible({ timeout: 10_000 });
   });
 });

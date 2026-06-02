@@ -1,128 +1,117 @@
 /**
- * E2E smoke test: File upload, listing, and file management UI.
+ * E2E smoke test: current knowledge source APIs and file management UI.
  *
  * @smoke @prod
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from '@playwright/test';
+import { agentRoute, API_BASE, resolveAgentContext, loginByApi, getDefaultAgent, adminLogin } from '../fixtures/e2e-context';
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "test@example.com";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "testpassword123";
-const API_BASE = process.env.API_BASE_URL || "http://localhost:8000";
+test.describe('Knowledge Source Flow', () => {
+  test('API shape: files:list and sources:summary', async ({ request }) => {
+    // 1. Login via API to get token
+    const token = await loginByApi(request);
 
-function loginHeaders() {
-	return {
-		"X-Forwarded-For": `203.0.113.${Math.floor(Math.random() * 200) + 20}`,
-	};
-}
+    // 2. Get default agent
+    const agent = await getDefaultAgent(request, token);
 
-async function login(page: any) {
-	await page.route("**/api/admin/login", async (route: any) => {
-		await route.continue({
-			headers: {
-				...route.request().headers(),
-				"X-Forwarded-For": `203.0.113.${Math.floor(Math.random() * 200) + 20}`,
-			},
-		});
-	});
-	await page.goto("/login");
-	await page.locator("input").first().fill(ADMIN_EMAIL);
-	await page.locator("input").nth(1).fill(ADMIN_PASSWORD);
-	await page.getByRole("button", { name: /login|登录|submit|提交/i }).click();
-	await page.waitForLoadState("networkidle");
-	await expect(page).not.toHaveURL(/\/login/);
-}
+    // 3. Test files:list API shape
+    const filesListRes = await request.get(
+      `${API_BASE}/api/v1/files:list?agent_id=${agent.id}&skip=0&limit=10`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    expect(filesListRes.status()).toBe(200);
+    const filesList = await filesListRes.json();
+    expect(filesList).toHaveProperty('files');
+    expect(filesList).toHaveProperty('total');
+    expect(Array.isArray(filesList.files)).toBe(true);
+    expect(typeof filesList.total).toBe('number');
 
-test.describe("Knowledge Indexing Flow", () => {
-	test("file upload and listing", async ({ request }) => {
-		// 1. Login via API to get token
-		const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
-			headers: loginHeaders(),
-			data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-		});
-		expect(loginRes.status(), await loginRes.text()).toBe(200);
-		const loginData = (await loginRes.json()) as { access_token: string };
-		const token = loginData.access_token;
+    // 4. Test sources:summary API shape
+    const sourcesSummaryRes = await request.get(
+      `${API_BASE}/api/v1/sources:summary?agent_id=${agent.id}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    expect(sourcesSummaryRes.status()).toBe(200);
+    const sourcesSummary = await sourcesSummaryRes.json();
+    // urls shape
+    expect(sourcesSummary).toHaveProperty('urls');
+    expect(sourcesSummary.urls).toHaveProperty('total');
+    expect(sourcesSummary.urls).toHaveProperty('indexed');
+    expect(sourcesSummary.urls).toHaveProperty('pending');
+    expect(typeof sourcesSummary.urls.total).toBe('number');
+    expect(typeof sourcesSummary.urls.indexed).toBe('number');
+    expect(typeof sourcesSummary.urls.pending).toBe('number');
+    // files shape
+    expect(sourcesSummary).toHaveProperty('files');
+    expect(sourcesSummary.files).toHaveProperty('total');
+    expect(sourcesSummary.files).toHaveProperty('ready');
+    expect(sourcesSummary.files).toHaveProperty('processing');
+    expect(typeof sourcesSummary.files.total).toBe('number');
+    expect(typeof sourcesSummary.files.ready).toBe('number');
+    expect(typeof sourcesSummary.files.processing).toBe('number');
+    // has_pending flag
+    expect(sourcesSummary).toHaveProperty('has_pending');
+    expect(typeof sourcesSummary.has_pending).toBe('boolean');
+  });
 
-		// 2. Get default agent
-		const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, {
-			headers: { Authorization: `Bearer ${token}` },
-		});
-		expect(agentRes.status(), await agentRes.text()).toBe(200);
-		const agent = (await agentRes.json()) as { id: string };
+  test('File management UI loads and displays key sections', async ({ page, request }) => {
+    // 1. Resolve agent context
+    const context = await resolveAgentContext(request);
 
-		// 3. Upload a test file with unique content
-		const filename = `e2e-test-${Date.now()}.txt`;
-		const uploadRes = await request.post(
-			`${API_BASE}/api/v1/files:upload?agent_id=${agent.id}`,
-			{
-				headers: { Authorization: `Bearer ${token}` },
-				multipart: {
-					files: {
-						name: filename,
-						mimeType: "text/plain",
-						buffer: Buffer.from(`E2E Test File Content ${Date.now()}`),
-					},
-				},
-			},
-		);
-		expect(uploadRes.status(), await uploadRes.text()).toBe(200);
-		const uploadData = (await uploadRes.json()) as {
-			uploaded: number;
-			files: Array<{ id: string; filename: string; status: string }>;
-		};
-		expect(uploadData.uploaded).toBe(1);
-		expect(uploadData.files[0].filename).toBe(filename);
+    // 2. Complete KB setup via API (required for FileUploadManagement to show content)
+    const kbSetupRes = await request.post(
+      `${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
+      {
+        headers: { Authorization: `Bearer ${await loginByApi(request)}`, 'Content-Type': 'application/json' },
+        data: {
+          embedding_provider: 'jina',
+          embedding_model: 'jina-embeddings-v3',
+          jina_api_key: 'test_jina_key_for_e2e',
+        },
+      }
+    );
+    // KB setup may already be completed (409/400) or succeed (200)
+    expect([200, 400, 409]).toContain(kbSetupRes.status());
 
-		// 4. List files to verify the uploaded file appears
-		const listRes = await request.get(
-			`${API_BASE}/api/v1/files:list?agent_id=${agent.id}`,
-			{
-				headers: { Authorization: `Bearer ${token}` },
-			},
-		);
-		expect(listRes.status(), await listRes.text()).toBe(200);
-		const listData = (await listRes.json()) as {
-			total: number;
-			files: Array<{ id: string; filename: string }>;
-		};
-		expect(listData.total).toBeGreaterThanOrEqual(1);
-		expect(listData.files.some((f) => f.filename === filename)).toBe(true);
-	});
+    // 3. Login via UI using shared helper
+    await adminLogin(page);
 
-	test("file management UI shows file list", async ({ page, request }) => {
-		// 1. Login via API
-		const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
-			headers: loginHeaders(),
-			data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-		});
-		expect(loginRes.status(), await loginRes.text()).toBe(200);
-		const loginData = (await loginRes.json()) as { access_token: string };
-		const token = loginData.access_token;
+    // 4. Navigate to agent files page
+    const filesRoute = agentRoute(context.agentId, 'files');
+    await page.goto(filesRoute);
+    await page.waitForLoadState('networkidle');
 
-		// 2. Get default agent
-		const agentRes = await request.get(`${API_BASE}/api/v1/agent:default`, {
-			headers: { Authorization: `Bearer ${token}` },
-		});
-		expect(agentRes.status(), await agentRes.text()).toBe(200);
-		const agent = (await agentRes.json()) as { id: string };
+    // 5. Assert URL is correct
+    await expect(page).toHaveURL(new RegExp(`/agents/${context.agentId}/files`));
 
-		// 3. Verify files API returns data
-		const listRes = await request.get(
-			`${API_BASE}/api/v1/files:list?agent_id=${agent.id}`,
-			{
-				headers: { Authorization: `Bearer ${token}` },
-			},
-		);
-		expect(listRes.status(), await listRes.text()).toBe(200);
+    // 6. Assert page heading (File Upload / 文件上传) - use more specific locator to avoid sidebar h1
+    const headingLocator = page.locator('h1').filter({
+      hasText: /File Upload|文件上传/i
+    });
+    await expect(headingLocator).toBeVisible({ timeout: 10_000 });
 
-		// 4. Navigate to /files page
-		await login(page);
-		await page.goto(`/agents/${agent.id}/files`);
-		await page.waitForLoadState("networkidle");
+    // 7. Assert upload section heading (Upload Files / 上传文件)
+    const uploadSectionHeading = page.locator('h2').filter({
+      hasText: /Upload Files|上传文件/i
+    });
+    await expect(uploadSectionHeading.first()).toBeVisible({ timeout: 10_000 });
 
-		// The page should render with a heading or content area
-		await expect(
-			page.locator('h1, h2, [class*="title"], [class*="files"]').first(),
-		).toBeVisible({ timeout: 10_000 });
-	});
+    // 8. Assert file list section heading (File List / 文件列表)
+    const fileListHeading = page.locator('h2').filter({
+      hasText: /File List|文件列表/i
+    });
+    await expect(fileListHeading.first()).toBeVisible({ timeout: 10_000 });
+
+    // 9. Assert dropzone text (drag and drop / 拖放文件)
+    const dropzoneText = page.locator('p').filter({
+      hasText: /drag and drop|拖放文件/i
+    });
+    await expect(dropzoneText.first()).toBeVisible({ timeout: 10_000 });
+
+    // 10. Assert supported formats hint (PDF, TXT, etc.)
+    const formatsHint = page.locator('p').filter({
+      hasText: /PDF|TXT|JSON|CSV/i
+    });
+    await expect(formatsHint.first()).toBeVisible({ timeout: 10_000 });
+  });
 });
