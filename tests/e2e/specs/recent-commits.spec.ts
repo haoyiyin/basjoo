@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 
 /**
  * NOTE: QA (Question-Answer) batch import feature has been removed.
@@ -60,29 +60,6 @@ async function updateAgent(
   });
   expect(updateRes.status(), await updateRes.text()).toBe(200);
   return updateRes.json() as Promise<Agent>;
-}
-
-async function waitForIndex(request: APIRequestContext, token: string, agentId: string): Promise<Record<string, unknown>> {
-  for (let i = 0; i < 60; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    const statusRes = await request.get(`${API_BASE}/api/v1/index:status?agent_id=${agentId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    expect(statusRes.status(), await statusRes.text()).toBe(200);
-    const status = await statusRes.json() as Record<string, unknown>;
-    if (status.status === 'completed' || status.status === 'failed') {
-      return status;
-    }
-  }
-  throw new Error('Index rebuild did not finish within 60 seconds');
-}
-
-async function loginByUi(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel(/email|邮箱/i).fill(ADMIN_EMAIL);
-  await page.getByLabel(/password|密码/i).fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  await page.waitForURL(/\/(dashboard|playground)/, { timeout: 10_000 });
 }
 
 test.describe.configure({ mode: 'serial' });
