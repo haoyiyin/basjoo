@@ -1,5 +1,11 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
+/**
+ * NOTE: QA (Question-Answer) batch import feature has been removed.
+ * Tests previously using qa:batch_import now use files:upload.
+ * See: docs/plans/2026-06-03-fix-e2e-qa-tests-implementation-plan.md
+ */
+
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
 const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000';
@@ -143,7 +149,7 @@ test.describe('Recent commit regressions', () => {
     await expect(siliconflowTestRes.json()).resolves.toMatchObject({ success: true });
   });
 
-  test('SiliconFlow embedding can rebuild QA index and retrieve context', async ({ request }) => {
+  test('SiliconFlow embedding can upload files and list them', async ({ request }) => {
     test.skip(!SILICONFLOW_API_KEY, 'SiliconFlow test key is required');
 
     await updateAgent(request, token, agent.id, {
@@ -152,34 +158,34 @@ test.describe('Recent commit regressions', () => {
       siliconflow_api_key: SILICONFLOW_API_KEY,
     });
 
-    const unique = `SiliconFlow E2E ${Date.now()}`;
-    const answer = `The unique SiliconFlow E2E answer is ${unique}.`;
-    const qaRes = await request.post(`${API_BASE}/api/v1/qa:batch_import?agent_id=${agent.id}`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: {
-        format: 'json',
-        content: JSON.stringify([{ question: unique, answer }]),
-        overwrite: false,
+    const filename = `siliconflow-e2e-${Date.now()}.txt`;
+    const content = `SiliconFlow E2E test content ${Date.now()}`;
+
+    // Upload a test file via the files endpoint (replaces removed qa:batch_import)
+    const uploadRes = await request.post(`${API_BASE}/api/v1/files:upload?agent_id=${agent.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        files: {
+          name: filename,
+          mimeType: 'text/plain',
+          buffer: Buffer.from(content),
+        },
       },
     });
-    expect([200, 201]).toContain(qaRes.status());
+    expect(uploadRes.status(), await uploadRes.text()).toBe(200);
+    const uploadData = await uploadRes.json() as { uploaded: number; files: Array<{ id: string; filename: string; status: string }> };
+    expect(uploadData.uploaded).toBe(1);
+    expect(uploadData.files[0].filename).toBe(filename);
+    expect(uploadData.files[0].status).toBe('pending');
 
-    const rebuildRes = await request.post(`${API_BASE}/api/v1/index:rebuild?agent_id=${agent.id}`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { force: true },
+    // List files to verify the uploaded file appears
+    const listRes = await request.get(`${API_BASE}/api/v1/files:list?agent_id=${agent.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-    expect([200, 202]).toContain(rebuildRes.status());
-
-    const status = await waitForIndex(request, token, agent.id);
-    expect(status.status, JSON.stringify(status)).toBe('completed');
-
-    const contextRes = await request.post(`${API_BASE}/api/v1/contexts`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { agent_id: agent.id, query: unique, top_k: 5 },
-    });
-    expect(contextRes.status(), await contextRes.text()).toBe(200);
-    const contexts = await contextRes.json() as { contexts: Array<{ type: string; id?: string }> };
-    expect(contexts.contexts.some((item) => item.type === 'qa')).toBe(true);
+    expect(listRes.status(), await listRes.text()).toBe(200);
+    const listData = await listRes.json() as { total: number; files: Array<{ id: string; filename: string }> };
+    expect(listData.total).toBeGreaterThanOrEqual(1);
+    expect(listData.files.some((f) => f.filename === filename)).toBe(true);
   });
 
   test('URL safety rejects SSRF-like URLs without server errors', async ({ request }) => {
