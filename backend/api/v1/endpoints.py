@@ -155,8 +155,14 @@ def get_restricted_reply(
 
 
 def get_agent_plaintext_keys(agent: Agent) -> Optional[str]:
-    """Return decrypted agent API key."""
-    return decrypt_api_key(agent.api_key)
+    """Return decrypted agent API key, with env fallback for default agent."""
+    stored_key = decrypt_api_key(agent.api_key)
+    if stored_key:
+        return stored_key
+    # Fallback to environment variable for default agent
+    if agent.id == settings.default_agent_id:
+        return settings.deepseek_api_key
+    return None
 
 
 def build_agent_config(agent: Agent) -> dict:

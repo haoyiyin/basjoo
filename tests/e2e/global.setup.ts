@@ -12,6 +12,7 @@ import {
 } from './fixtures/e2e-context';
 
 const E2E_JINA_API_KEY = process.env.E2E_JINA_API_KEY || 'test_jina_key_for_e2e';
+const E2E_API_KEY = process.env.E2E_API_KEY || ''; // LLM API key (e.g., DeepSeek)
 
 export default async function globalSetup(): Promise<void> {
   // Use consistent IP for the setup run (required for rate limiting)
@@ -76,15 +77,31 @@ export default async function globalSetup(): Promise<void> {
     throw new Error('Default agent has no id');
   }
 
-  // 4. Set Jina API key if not already set (for embedding tests)
-  if (!agent.jina_api_key_set) {
+  // 4. Set API keys if not already set
+  // Use type assertion to check for api_key_set property
+  const agentWithKeyStatus = agent as { id: string; jina_api_key_set?: boolean | null; api_key_set?: boolean | null };
+
+  // Set main LLM API key if provided via environment and not already set
+  if (E2E_API_KEY && !agentWithKeyStatus.api_key_set) {
     const setKeyRes = await apiFetch(`/api/v1/agent?agent_id=${agent.id}`, {
+      method: 'PUT',
+      headers: authHeaders,
+      data: { api_key: E2E_API_KEY },
+    });
+    if (![200, 201].includes(setKeyRes.status)) {
+      throw new Error(`Failed to set API key: ${setKeyRes.status}`);
+    }
+  }
+
+  // Set Jina API key if not already set (for embedding tests)
+  if (!agent.jina_api_key_set) {
+    const setJinaRes = await apiFetch(`/api/v1/agent?agent_id=${agent.id}`, {
       method: 'PUT',
       headers: authHeaders,
       data: { jina_api_key: E2E_JINA_API_KEY },
     });
-    if (![200, 201].includes(setKeyRes.status)) {
-      throw new Error(`Failed to set Jina API key: ${setKeyRes.status}`);
+    if (![200, 201].includes(setJinaRes.status)) {
+      throw new Error(`Failed to set Jina API key: ${setJinaRes.status}`);
     }
   }
 
