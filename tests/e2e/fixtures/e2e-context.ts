@@ -93,7 +93,8 @@ export async function adminLogin(
   await emailInput.fill(ADMIN_EMAIL);
   await passwordInput.fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  await page.waitForLoadState('networkidle', { timeout });
+  await page.waitForLoadState('domcontentloaded');
+  await expect(page).not.toHaveURL(/\/login/);
   // Should not be on login page anymore
   await expect(page).not.toHaveURL(/\/login/, { timeout });
   // Token should be stored in localStorage
