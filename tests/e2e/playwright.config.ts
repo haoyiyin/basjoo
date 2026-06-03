@@ -24,7 +24,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: isCI,
   retries: isCI ? 2 : 0,
-  workers: isCI ? 1 : undefined,
+  workers: 1, // Sequential execution to avoid race conditions in login tests
   ignoreSnapshots: false,
   reporter: [['html', { outputFolder: '../playwright-report' }], ['list']],
   // Avoid picking up non-playwright test files (e.g. frontend vitest tests)

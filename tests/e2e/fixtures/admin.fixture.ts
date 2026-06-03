@@ -38,5 +38,5 @@ export async function goToPage(page: Page, path: string): Promise<void> {
     await adminLogin(page);
   }
   await page.goto(path);
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
 }

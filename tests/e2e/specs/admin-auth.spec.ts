@@ -27,7 +27,7 @@ test.describe('Admin Authentication', () => {
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
 
     // Should leave the login page after successful login
-    await page.waitForLoadState('networkidle', { timeout: 15_000 });
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
 
     // Token should be stored in localStorage
@@ -48,12 +48,12 @@ test.describe('Admin Authentication', () => {
     await page.locator('input').first().fill(ADMIN_EMAIL);
     await page.locator('input').nth(1).fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-    await page.waitForLoadState('networkidle', { timeout: 15_000 });
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
 
     // Refresh the page
     await page.reload();
-    await page.waitForLoadState('networkidle', { timeout: 15_000 });
+    await page.waitForLoadState('domcontentloaded');
 
     // Should still be logged in (not redirected to /login)
     await expect(page).not.toHaveURL(/\/login$/, { timeout: 15_000 });
@@ -90,7 +90,7 @@ test.describe('Admin Authentication', () => {
 
     // Reload page - AuthContext should detect expired token and logout
     await page.reload();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Should be redirected to login
     await expect(page).toHaveURL(/\/login/, { timeout: 5_000 });

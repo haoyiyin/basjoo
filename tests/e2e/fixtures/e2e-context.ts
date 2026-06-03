@@ -88,11 +88,17 @@ export async function adminLogin(
     await route.continue({ headers: { ...route.request().headers(), ...loginHeaders() } });
   });
   await page.goto('/login');
+  await page.waitForLoadState('domcontentloaded');
+  // Wait for form to be ready
   const emailInput = page.getByLabel(/email|邮箱/i).or(page.locator('input[type="email"]')).first();
   const passwordInput = page.getByLabel(/password|密码/i).or(page.locator('input[type="password"]')).first();
+  await expect(emailInput).toBeVisible({ timeout });
+  await expect(passwordInput).toBeVisible({ timeout });
   await emailInput.fill(ADMIN_EMAIL);
   await passwordInput.fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
+  const submitButton = page.getByRole('button', { name: /login|登录|submit|提交/i });
+  await expect(submitButton).toBeEnabled({ timeout });
+  await submitButton.click();
   await page.waitForLoadState('domcontentloaded');
   await expect(page).not.toHaveURL(/\/login/);
   // Should not be on login page anymore

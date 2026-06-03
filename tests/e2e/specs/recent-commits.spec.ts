@@ -206,7 +206,7 @@ test.describe('Recent commit regressions', () => {
     await page.locator('input[type="email"]').or(page.getByLabel(/email|邮箱/i)).first().fill(ADMIN_EMAIL);
     await page.locator('input[type="password"]').or(page.getByLabel(/password|密码/i)).first().fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).not.toHaveURL(/\/login/);
     await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBeTruthy();
   });
