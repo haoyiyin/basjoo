@@ -97,8 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 				localStorage.removeItem(ADMIN_STORAGE_KEY);
 			}
 		} else {
-			localStorage.removeItem(TOKEN_STORAGE_KEY);
-			localStorage.removeItem(ADMIN_STORAGE_KEY);
+			logout();
 		}
 
 		setIsLoading(false);
