@@ -79,7 +79,7 @@ test.describe('Knowledge Source Flow', () => {
     // 4. Navigate to agent files page
     const filesRoute = agentRoute(context.agentId, 'files');
     await page.goto(filesRoute);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // 5. Assert URL is correct
     await expect(page).toHaveURL(new RegExp(`/agents/${context.agentId}/files`));
