@@ -92,6 +92,48 @@ HOST_BLOCKED_URL=http://blocked.local \
 npx playwright test --config=tests/e2e/playwright.config.ts --project=widget-cross-origin
 ```
 
+#### Widget 跨域测试配置
+
+Widget 跨域测试需要从不同来源提供的两个宿主页。
+
+**1. 配置 /etc/hosts**
+
+在 `/etc/hosts` 中添加以下条目：
+
+```
+127.0.0.1 allowed.local
+127.0.0.1 blocked.local
+```
+
+**2. 启动宿主服务**
+
+```bash
+docker compose --profile dev up -d allowed-host blocked-host
+```
+
+或手动提供宿主页：
+
+```bash
+cd tests/environments/host-pages/allowed-host
+python3 -m http.server 8080
+
+cd tests/environments/host-pages/blocked-host
+python3 -m http.server 8081
+```
+
+**3. 设置环境变量**
+
+```bash
+export HOST_ALLOWED_URL=http://allowed.local:8080
+export HOST_BLOCKED_URL=http://blocked.local:8081
+```
+
+**4. 运行测试**
+
+```bash
+npm run test:e2e:widget
+```
+
 ### 运行所有 E2E 测试
 
 ```bash
