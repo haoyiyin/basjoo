@@ -61,6 +61,7 @@ export default defineConfig({
     // Production-approximate E2E via nginx (runs all specs via nginx)
     {
       name: 'prod-like',
+      timeout: 60_000, // Increase from default 30s for nginx proxy latency
       use: {
         ...devices['Desktop Chrome'],
         baseURL: process.env.BASE_URL || 'http://localhost',
