@@ -12,6 +12,11 @@ export const Login = () => {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [bootstrapRequired, setBootstrapRequired] = useState(false);
+    const [hydrated, setHydrated] = useState(false);
+
+    useEffect(() => {
+        setHydrated(true);
+    }, []);
     const { login } = useAuth();
     const navigate = useNavigate();
 
@@ -221,8 +226,9 @@ export const Login = () => {
                         </div>
 
                         <button
-                            type="submit"
-                            disabled={loading}
+                            type="button"
+                            onClick={handleLogin}
+                            disabled={loading || !hydrated}
                             className="btn-primary"
                             style={{
                                 width: '100%',
