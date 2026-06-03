@@ -19,6 +19,17 @@ export default function AgentSelector() {
 
   const isSupport = admin?.role === 'support'
 
+  // Loading timeout: prevent infinite "loading..." display
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (loading) {
+        setLoading(false)
+        setError(t('common.loadingTimeout'))
+      }
+    }, 10000)
+    return () => clearTimeout(timeout)
+  }, [loading, t])
+
   useEffect(() => {
     api.listAgents()
       .then(data => {
