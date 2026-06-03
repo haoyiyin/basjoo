@@ -107,7 +107,7 @@ test.describe('Admin Sessions Takeover', () => {
 
     // 3. Navigate to agent-scoped sessions page
     await page.goto(agentRoute(agent.id, 'sessions'));
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).toHaveURL(`/agents/${agent.id}/sessions`);
 
     // 4. Verify session appears in the admin list by checking via API
