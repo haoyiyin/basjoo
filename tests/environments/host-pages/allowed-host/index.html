@@ -19,7 +19,14 @@
   </div>
   <p>Use this page for Playwright E2E tests that verify widget loading from an allowed origin.</p>
 
-  <!-- Widget SDK - apiBase and agentId should be overridden by Playwright or environment -->
-  <script src="/sdk.js?agentId=PLACEHOLDER_AGENT_ID&apiBase=PLACEHOLDER API_BASE&themeColor=%233B82F6"></script>
+  <!-- Widget SDK - agentId from URL params, apiBase from backend -->
+  <script>
+    // Read agentId from URL query params (passed by Playwright test)
+    var urlParams = new URLSearchParams(window.location.search);
+    var agentId = urlParams.get('agentId') || '';
+    var apiBase = 'http://localhost:8000';
+    var sdkUrl = '/sdk.js?agentId=' + encodeURIComponent(agentId) + '&apiBase=' + encodeURIComponent(apiBase) + '&themeColor=%233B82F6';
+    document.write('<scr' + 'ipt src="' + sdkUrl + '"></scr' + 'ipt>');
+  </script>
 </body>
 </html>

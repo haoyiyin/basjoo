@@ -13,7 +13,7 @@ test.describe("Playground Streaming Chat", () => {
 		const context = await resolveAgentContext(request);
 		await adminLogin(page);
 		await page.goto(agentRoute(context.agentId, "playground"));
-		await page.waitForLoadState("domcontentloaded");
+		await page.waitForLoadState("domcontentloaded", { timeout: 15_000 });
 		await expect(page).toHaveURL(
 			new RegExp(`/agents/${context.agentId}/playground`),
 		);

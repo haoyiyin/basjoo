@@ -11,8 +11,18 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "test@example.com";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "testpassword123";
 const API_BASE = process.env.API_BASE_URL || "http://localhost:8000";
 
+/**
+ * Generate headers with random IP for rate limit bypass.
+ */
+function loginHeaders(): Record<string, string> {
+	return {
+		"X-Forwarded-For": `203.0.113.${Math.floor(Math.random() * 200) + 20}`,
+	};
+}
+
 async function getAdminToken(request: any): Promise<string> {
 	const loginRes = await request.post(`${API_BASE}/api/admin/login`, {
+		headers: loginHeaders(),
 		data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
 	});
 	const data = await loginRes.json();
@@ -43,8 +53,8 @@ test.describe("Widget Cross-Origin", () => {
 			data: { allowed_widget_origins: [allowedHost] },
 		});
 
-		// Navigate to allowed host page
-		await page.goto(process.env.HOST_ALLOWED_URL!);
+		// Navigate to allowed host page with agent ID
+		await page.goto(`${process.env.HOST_ALLOWED_URL!}?agentId=${agent.id}`);
 
 		// Wait for widget button to appear
 		await expect(page.locator("#basjoo-widget-button")).toBeVisible({
@@ -82,6 +92,22 @@ test.describe("Widget Cross-Origin", () => {
 			data: { allowed_widget_origins: ["https://only-allowed.example.com"] },
 		});
 
+		// Verify the update succeeded
+		const verifyRes = await request.get(
+			`${API_BASE}/api/v1/agent?agent_id=${agent.id}`,
+			{
+				headers: { Authorization: `Bearer ${token}` },
+			},
+		);
+		const verifyAgent = await verifyRes.json();
+		console.log(
+			"Agent allowed_widget_origins after update:",
+			verifyAgent.allowed_widget_origins,
+		);
+		expect(verifyAgent.allowed_widget_origins).toContain(
+			"https://only-allowed.example.com",
+		);
+
 		// Attach console listener before navigation to catch all errors
 		const consoleMessages: string[] = [];
 		page.on("console", (msg) => {
@@ -90,34 +116,37 @@ test.describe("Widget Cross-Origin", () => {
 			}
 		});
 
-		// Navigate to blocked host page
-		await page.goto(process.env.HOST_BLOCKED_URL!);
+		// Navigate to blocked host page with agent ID (widget needs agentId to initialize)
+		await page.goto(`${process.env.HOST_BLOCKED_URL!}?agentId=${agent.id}`);
 
-		// Wait a moment for the widget SDK to initialize
+		// Wait for widget button to be visible (more robust than arbitrary timeout)
+		const widgetButton = page.locator("#basjoo-widget-button");
+		await expect(widgetButton).toBeVisible({ timeout: 10_000 });
+
+		// Click to open chat window
+		await widgetButton.click();
+
+		// Wait for chat window to be visible
+		const chatWindow = page.locator("#basjoo-chat-window");
+		await expect(chatWindow).toBeVisible({ timeout: 5_000 });
+
+		// Wait for input to be visible and ready
+		const input = page.locator(".basjoo-input");
+		await expect(input).toBeVisible({ timeout: 5_000 });
+
+		// Fill and send message
+		await input.fill("test message from blocked host");
+		const sendButton = page.locator(".basjoo-send");
+		await expect(sendButton).toBeVisible({ timeout: 5_000 });
+		await sendButton.click();
+
+		// Wait for the error to be processed (widget needs time to receive SSE error and log it)
 		await page.waitForTimeout(3_000);
 
-		// The widget button may or may not render when blocked.
-		// But if it does, trying to send should fail.
-		// And regardless, we should see ORIGIN_NOT_ALLOWED in console.
-		const toggleButton = page.locator("#basjoo-widget-button");
-		const buttonVisible = await toggleButton
-			.isVisible({ timeout: 5_000 })
-			.catch(() => false);
+		// Log all captured console messages for debugging
+		console.log("All console messages captured:", consoleMessages);
 
-		if (buttonVisible) {
-			await toggleButton.click();
-			const input = page.locator("#basjoo-message-input");
-			const inputVisible = await input
-				.isVisible({ timeout: 5_000 })
-				.catch(() => false);
-			if (inputVisible) {
-				await input.fill("test message");
-				await page.click("#basjoo-send-button");
-				await page.waitForTimeout(5_000);
-			}
-		}
-
-		// Regardless of UI path, blocked origin should produce console error
+		// Blocked origin should produce console error
 		// Widget logs: '[Basjoo Widget] Widget request was blocked because the current page origin is not on the allowed domain list.'
 		const hasOriginError = consoleMessages.some(
 			(msg) =>

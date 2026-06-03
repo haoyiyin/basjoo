@@ -78,7 +78,11 @@ export async function resolveAgentContext(request: APIRequestContext): Promise<E
 /**
  * Login via UI (admin dashboard) with proper headers.
  */
-export async function adminLogin(page: Page): Promise<void> {
+export async function adminLogin(
+  page: Page,
+  options?: { timeout?: number },
+): Promise<void> {
+  const timeout = options?.timeout ?? 15_000;
   // Intercept login API calls to add required headers
   await page.route('**/api/admin/login', async (route) => {
     await route.continue({ headers: { ...route.request().headers(), ...loginHeaders() } });
@@ -89,9 +93,9 @@ export async function adminLogin(page: Page): Promise<void> {
   await emailInput.fill(ADMIN_EMAIL);
   await passwordInput.fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('networkidle', { timeout });
   // Should not be on login page anymore
-  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page).not.toHaveURL(/\/login/, { timeout });
   // Token should be stored in localStorage
   await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBeTruthy();
 }
