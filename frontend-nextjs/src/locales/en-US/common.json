@@ -56,7 +56,8 @@
     "saved": "Saved",
     "testing": "Testing...",
     "fetching": "Fetching",
-    "successBadge": "Success"
+    "successBadge": "Success",
+    "loadingTimeout": "Loading timeout, please refresh"
   },
   "navigation": {
     "dashboard": "Console",

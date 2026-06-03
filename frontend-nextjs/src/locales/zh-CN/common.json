@@ -56,7 +56,8 @@
     "saved": "已保存",
     "testing": "测试中...",
     "fetching": "抓取中",
-    "successBadge": "成功"
+    "successBadge": "成功",
+    "loadingTimeout": "加载超时，请刷新重试"
   },
   "navigation": {
     "dashboard": "仪表盘",
