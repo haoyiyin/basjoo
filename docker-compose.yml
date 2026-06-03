@@ -264,6 +264,35 @@ services:
         - path: ./frontend-nextjs/package.json
           action: rebuild
 
+  # ============================================
+  # Widget cross-origin test host services
+  # ============================================
+  allowed-host:
+    image: nginx:alpine
+    container_name: basjoo-allowed-host
+    profiles: ["dev", "prod"]
+    volumes:
+      - ./tests/environments/host-pages/allowed-host:/usr/share/nginx/html:ro
+      - ./tests/environments/host-pages/nginx-allowed.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+
+  blocked-host:
+    image: nginx:alpine
+    container_name: basjoo-blocked-host
+    profiles: ["dev", "prod"]
+    volumes:
+      - ./tests/environments/host-pages/blocked-host:/usr/share/nginx/html:ro
+      - ./tests/environments/host-pages/nginx-blocked.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+    networks:
+      - basjoo-network
+
 networks:
   basjoo-network:
     driver: bridge
