@@ -57,29 +57,41 @@ pytest -v -x --tb=short       # 组合使用
 
 ## E2E 测试环境
 
-### 快速 Smoke（默认）
+E2E 测试提供两种运行模式：
+
+| 模式 | 目标环境 | 入口地址 | 用途 |
+|------|----------|----------|------|
+| **smoke（默认）** | Docker dev 栈 | `http://localhost:3000` | 快速功能验证 |
+| **prod-like** | Docker 生产栈 | `http://localhost:80` (nginx) | 生产环境近似测试 |
+
+### Smoke 测试（Dev 环境）
 
 ```bash
-# 启动 dev 环境
-docker compose --profile dev up -d
-
-# 运行 smoke 测试
+# Playwright 会自动检查 :3000 是否就绪
 npm run test:e2e
-# 或等价于：
-npx playwright test --config=tests/e2e/playwright.config.ts --project=smoke
 ```
 
-### 生产近似 E2E
+### Prod-like 测试（生产近似环境）
+
+**重要：prod-like 测试需要手动启动生产 Docker 栈**
 
 ```bash
-# 启动生产环境
+# 1. 启动生产环境（必须手动执行）
 docker compose --profile prod up -d
 
-# 运行 prod-like 测试
+# 2. 确认 nginx 已在 localhost:80 运行
+curl http://localhost/health  # 应返回 200
+
+# 3. 运行 prod-like 测试
 npm run test:e2e:prod
-# 或等价于：
-E2E_ENV=prod npx playwright test --config=tests/e2e/playwright.config.ts --project=prod-like
 ```
+
+**环境变量说明：**
+| 变量 | smoke | prod-like |
+|------|-------|-----------|
+| `E2E_ENV` | 不设置 | `prod` |
+| `API_BASE_URL` | `localhost:8000` | `localhost` (通过nginx) |
+| `BASE_URL` | `localhost:3000` | `localhost:80` |
 
 ### 跨域 Widget 测试
 

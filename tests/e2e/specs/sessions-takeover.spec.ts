@@ -38,9 +38,10 @@ test.describe('Admin Sessions Takeover', () => {
     expect(sessionId).toBeTruthy();
 
     // 4. Admin views sessions list
-    const sessionsRes = await request.get(`${API_BASE}/api/v1/admin/sessions?skip=0&limit=10`, {
-      headers: authHeaders,
-    });
+    const sessionsRes = await request.get(
+      `${API_BASE}/api/v1/admin/sessions?skip=0&limit=10&agent_id=${agent.id}`,
+      { headers: authHeaders },
+    );
     const sessionsData = await sessionsRes.json();
     expect(sessionsData.items).toBeTruthy();
     expect(sessionsData.items.length).toBeGreaterThanOrEqual(1);
@@ -111,9 +112,10 @@ test.describe('Admin Sessions Takeover', () => {
     await expect(page).toHaveURL(`/agents/${agent.id}/sessions`);
 
     // 4. Verify session appears in the admin list by checking via API
-    const sessionsRes = await request.get(`${API_BASE}/api/v1/admin/sessions?skip=0&limit=10`, {
-      headers: authHeaders,
-    });
+    const sessionsRes = await request.get(
+      `${API_BASE}/api/v1/admin/sessions?skip=0&limit=10&agent_id=${agent.id}`,
+      { headers: authHeaders },
+    );
     const sessionsData = await sessionsRes.json() as { items: Array<{ session_id: string; status: string }> };
     expect(Array.isArray(sessionsData.items)).toBe(true);
     expect(sessionsData.items.length).toBeGreaterThanOrEqual(1);

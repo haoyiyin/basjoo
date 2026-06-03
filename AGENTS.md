@@ -34,7 +34,10 @@ All LLM calls to external providers; embeddings via self-KB (Jina/SiliconFlow/Op
 - Widget build (typecheck + bundles): `cd widget && npm run build`.
 - Sync widget to backend: `npm run sync-widget`.
 - Backend tests: `cd backend && pytest` (uses `pytest.ini`; `Test*` classes, `test_*` funcs).
-- E2E (smoke): `npm run test:e2e`; all: `npm run test:e2e:all`; prod-like: `npm run test:e2e:prod`; widget cross-origin: `npm run test:e2e:widget`.
+- E2E (smoke, dev env): `npm run test:e2e` (auto-starts docker compose --profile dev)
+- E2E (prod-like): `npm run test:e2e:prod` (requires docker compose --profile prod up -d first)
+- E2E (all): `npm run test:e2e:all`
+- E2E (widget): `npm run test:e2e:widget`
 - Docker rebuild: `docker compose --profile dev up -d --build <service>`.
 - Health: `curl http://localhost:8000/health`.
 

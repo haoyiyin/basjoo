@@ -5,6 +5,8 @@ import os
 
 import httpx
 
+from services.ssl_utils import create_ssl_context
+
 logger = logging.getLogger(__name__)
 
 # Supported extensions
@@ -97,7 +99,8 @@ class DocumentParser:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = {"model": model, "input": texts}
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        ssl_context = create_ssl_context()
+        async with httpx.AsyncClient(verify=ssl_context, timeout=60.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()

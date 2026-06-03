@@ -51,11 +51,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Root-level E2E tests (Playwright)
 
-- Smoke tests (dev env): `npm run test:e2e`
-- All test projects: `npm run test:e2e:all`
-- Production-like E2E: `npm run test:e2e:prod`
-- Widget cross-origin embed: `npm run test:e2e:widget`
-- Sync widget bundle to backend: `npm run sync-widget`
+- Smoke tests (dev): `npm run test:e2e` -- auto-starts docker compose --profile dev
+- Prod-like E2E: `npm run test:e2e:prod` -- requires docker compose --profile prod up -d first
+- All projects: `npm run test:e2e:all`
+- Widget cross-origin: `npm run test:e2e:widget`
 
 ### Backend (`backend/`)
 

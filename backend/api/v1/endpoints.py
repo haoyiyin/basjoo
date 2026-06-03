@@ -2422,13 +2422,15 @@ async def test_embedding_api(
         )
         try:
             import httpx
+            from services.ssl_utils import create_ssl_context
+            ssl_context = create_ssl_context()
 
-            response = httpx.post(
-                f"{test_base}/embeddings",
-                headers={"Authorization": f"Bearer {test_key}"},
-                json={"model": test_model, "input": ["test"]},
-                timeout=30,
-            )
+            with httpx.Client(verify=ssl_context, timeout=30) as client:
+                response = client.post(
+                    f"{test_base}/embeddings",
+                    headers={"Authorization": f"Bearer {test_key}"},
+                    json={"model": test_model, "input": ["test"]},
+                )
             response.raise_for_status()
             data = response.json()
             if "data" not in data or len(data["data"]) == 0:
@@ -2485,13 +2487,15 @@ async def test_jina_api(
 
     try:
         import httpx
+        from services.ssl_utils import create_ssl_context
+        ssl_context = create_ssl_context()
 
-        response = httpx.post(
-            settings.jina_embedding_api_base,
-            headers={"Authorization": f"Bearer {agent_jina_api_key}"},
-            json={"model": "jina-embeddings-v3", "input": ["test"]},
-            timeout=30,
-        )
+        with httpx.Client(verify=ssl_context, timeout=30) as client:
+            response = client.post(
+                settings.jina_embedding_api_base,
+                headers={"Authorization": f"Bearer {agent_jina_api_key}"},
+                json={"model": "jina-embeddings-v3", "input": ["test"]},
+            )
         response.raise_for_status()
 
         # 验证返回的数据
