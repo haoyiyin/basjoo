@@ -262,8 +262,7 @@ export const Login = () => {
 						</div>
 
 						<button
-							type="button"
-							onClick={handleLogin}
+							type="submit"
 							disabled={loading || !hydrated}
 							className="btn-primary"
 							style={{

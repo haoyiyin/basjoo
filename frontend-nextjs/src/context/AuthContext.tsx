@@ -8,6 +8,7 @@ import {
 	useCallback,
 	ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../lib/env";
 import { parseErrorResponse } from "../services/api";
 
@@ -66,6 +67,7 @@ function isTokenExpired(token: string): boolean {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+	const { t } = useTranslation("auth");
 	const [admin, setAdmin] = useState<Admin | null>(null);
 	const [token, setToken] = useState<string | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
@@ -180,7 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 		if (!response.ok) {
 			const message = await parseErrorResponse(response);
-			throw new Error(message || "登录失败");
+			throw new Error(message || t("errors.loginFailed"));
 		}
 
 		const data = await response.json();
