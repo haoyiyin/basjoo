@@ -8,6 +8,7 @@ from sqlalchemy import select
 from database import AsyncSessionLocal
 from models import Agent, KnowledgeBase
 from services.document_parser import DocumentParser
+from services.kb_document_processor import get_embedding_api_key
 from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
 
@@ -72,9 +73,12 @@ class KbRetrievalService:
                 return []
 
             # 3. Embed query (single item, reuse existing parser)
+            # Get decrypted API key from agent based on embedding_provider
+            api_key = get_embedding_api_key(agent)
+
             try:
                 embeddings = await self.parser.embed_texts(
-                    [query], kb.embedding_model, kb.embedding_base_url
+                    [query], kb.embedding_model, kb.embedding_base_url, api_key=api_key
                 )
                 if not embeddings:
                     return []
