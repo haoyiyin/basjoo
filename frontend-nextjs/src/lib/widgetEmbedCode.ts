@@ -27,8 +27,11 @@ export function buildWidgetEmbedCode(
 ): string {
   const sdkUrl = new URL('/sdk.js', `${scriptBaseUrl.replace(/\/$/, '')}/`);
   sdkUrl.searchParams.set('agent_id', agentId);
-  if (options.apiBase?.trim()) {
-    sdkUrl.searchParams.set('api_base', options.apiBase.trim().replace(/\/$/, ''));
+  // Always include api_base so the widget knows where to connect,
+  // especially important when embedded on third-party sites
+  const apiBase = options.apiBase?.trim() || scriptBaseUrl;
+  if (apiBase) {
+    sdkUrl.searchParams.set('api_base', apiBase.replace(/\/$/, ''));
   }
   return `<script src="${sdkUrl.toString()}" async></script>`;
 }
