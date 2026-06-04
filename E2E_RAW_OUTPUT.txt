@@ -1,0 +1,103 @@
+# Final E2E Raw Output (Redacted)
+Date: 2026-06-04
+Worktree: /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration
+Branch: execute/e2e-bugfix-integration-20260604
+
+Secrets redacted: API key values were not written.
+
+## Typecheck
+
+Command:
+```bash
+npm run typecheck:e2e
+```
+
+Result:
+```text
+> typecheck:e2e
+> tsc -p tests/e2e/tsconfig.json --noEmit
+PASS (0 errors)
+```
+
+## Smoke E2E
+
+Command:
+```bash
+E2E_API_KEY=$DEEPSEEK_API_KEY E2E_JINA_API_KEY=$JINA_API_KEY npm run test:e2e
+```
+
+Result:
+```text
+> test:e2e
+> playwright test --config=tests/e2e/playwright.config.ts --project=smoke
+
+E2E global setup complete: agentId=agt_f62d22e8a91b, adminEmail=test@example.com
+Running 20 tests using 1 worker
+
+18 passed
+2 skipped
+Duration: 3.2m
+Failed tests: none
+```
+
+Passed smoke tests included:
+```text
+admin-auth.spec.ts: login, refresh persistence, invalid credentials, expired token
+api-keys-validation.spec.ts: send message after settings save completes
+knowledge-indexing.spec.ts: API shape, file UI loads, agent with KB bound can chat
+playground-streaming.spec.ts: auto-save, send message, clear chat, KB indexed-content flow, chat endpoint success
+recent-commits.spec.ts: URL safety, auth language switcher, widget markdown safety
+sessions-takeover.spec.ts: full takeover chain, sessions page visitor sessions
+```
+
+Skipped smoke tests:
+```text
+recent-commits.spec.ts: provider keys are saved, masked, switchable, and usable for embedding API tests
+recent-commits.spec.ts: SiliconFlow embedding key can be saved and validated without legacy QA index
+```
+
+## Widget Cross-Origin E2E
+
+Command:
+```bash
+HOST_ALLOWED_URL=http://localhost:8080 HOST_BLOCKED_URL=http://localhost:8081 API_BASE_URL=http://localhost:8000 npm run test:e2e:widget
+```
+
+Result:
+```text
+> test:e2e:widget
+> playwright test --config=tests/e2e/playwright.config.ts --project=widget-cross-origin
+
+E2E global setup complete: agentId=agt_f62d22e8a91b, adminEmail=test@example.com
+Running 3 tests using 1 worker
+
+✓ admin-generated embed code renders widget popup
+  Diagnostics: scriptLoaded=true, buttonVisible=true, widgetContainer=1, widgetButton=1, pageErrors=[]
+✓ widget loads and chats from allowed host
+✓ widget is blocked on disallowed host
+
+3 passed
+Duration: 15.1s
+Failed tests: none
+```
+
+## Prod-like E2E
+
+Commands:
+```bash
+docker compose --profile prod up -d --build backend-prod frontend-prod nginx
+E2E_ENV=prod API_BASE_URL=http://localhost E2E_API_KEY=$DEEPSEEK_API_KEY E2E_JINA_API_KEY=$JINA_API_KEY npm run test:e2e:prod
+```
+
+Result:
+```text
+> test:e2e:prod
+> playwright test --config=tests/e2e/playwright.config.ts --project=prod-like
+
+E2E global setup complete: agentId=agt_f62d22e8a91b, adminEmail=test@example.com
+
+19 passed
+4 skipped
+Duration: 2.4m
+Failed tests: none
+```

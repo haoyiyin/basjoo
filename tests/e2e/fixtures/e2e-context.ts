@@ -76,33 +76,48 @@ export async function resolveAgentContext(request: APIRequestContext): Promise<E
 }
 
 /**
- * Login via UI (admin dashboard) with proper headers.
+ * Establish an authenticated admin browser session for non-auth E2E specs.
+ *
+ * Dedicated UI-login behavior remains covered by admin-auth.spec.ts. This helper
+ * uses the backend login API directly to avoid Next dev proxy and hydration races
+ * that can leave unrelated feature specs stuck on the login form.
  */
 export async function adminLogin(
   page: Page,
-  options?: { timeout?: number },
+  _options?: { timeout?: number },
 ): Promise<void> {
-  const timeout = options?.timeout ?? 15_000;
-  // Intercept login API calls to add required headers
-  await page.route('**/api/admin/login', async (route) => {
-    await route.continue({ headers: { ...route.request().headers(), ...loginHeaders() } });
+  const loginRes = await page.request.post(`${API_BASE}/api/admin/login`, {
+    headers: loginHeaders(),
+    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
   });
-  await page.goto('/login');
-  await page.waitForLoadState('domcontentloaded');
-  // Wait for form to be ready
-  const emailInput = page.getByLabel(/email|邮箱/i).or(page.locator('input[type="email"]')).first();
-  const passwordInput = page.getByLabel(/password|密码/i).or(page.locator('input[type="password"]')).first();
-  await expect(emailInput).toBeVisible({ timeout });
-  await expect(passwordInput).toBeVisible({ timeout });
-  await emailInput.fill(ADMIN_EMAIL);
-  await passwordInput.fill(ADMIN_PASSWORD);
-  const submitButton = page.getByRole('button', { name: /login|登录|submit|提交/i });
-  await expect(submitButton).toBeEnabled({ timeout });
-  await submitButton.click();
-  await page.waitForLoadState('domcontentloaded');
-  await expect(page).not.toHaveURL(/\/login/);
-  // Should not be on login page anymore
-  await expect(page).not.toHaveURL(/\/login/, { timeout });
-  // Token should be stored in localStorage
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBeTruthy();
+  const responseText = await loginRes.text();
+  expect(loginRes.status(), responseText).toBe(200);
+
+  const loginData = JSON.parse(responseText) as {
+    access_token?: string;
+    admin?: unknown;
+  };
+  if (!loginData.access_token || !loginData.admin) {
+    throw new Error(
+      `Admin login API response missing auth state. Response: ${responseText.substring(0, 500)}`,
+    );
+  }
+
+  await page.addInitScript(
+    ({ token, admin }) => {
+      localStorage.setItem('token', token);
+      localStorage.setItem('admin', JSON.stringify(admin));
+    },
+    { token: loginData.access_token, admin: loginData.admin },
+  );
+
+  if (page.url().startsWith(BASE_URL)) {
+    await page.evaluate(
+      ({ token, admin }) => {
+        localStorage.setItem('token', token);
+        localStorage.setItem('admin', JSON.stringify(admin));
+      },
+      { token: loginData.access_token, admin: loginData.admin },
+    );
+  }
 }

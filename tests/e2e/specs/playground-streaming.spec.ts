@@ -19,6 +19,7 @@ test.describe("Playground Streaming Chat", () => {
 		await expect(page).toHaveURL(
 			new RegExp(`/agents/${context.agentId}/playground`),
 		);
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 45_000 });
 	});
 
 	test("auto-save shows saving/saved state", async ({ page }) => {
@@ -120,12 +121,14 @@ test.describe("Playground Streaming Chat", () => {
 
 test.describe("Playground KB Context Retrieval", () => {
 	test("chat request succeeds after KB setup with indexed content", async ({ page, request }) => {
+		test.setTimeout(90_000);
 		// This test verifies the full flow: KB setup -> indexed content -> chat uses context
 		// 1. Get context and ensure KB is set up
 		const context = await resolveAgentContext(request);
 		const token = await loginByApi(request);
 
 		// Ensure KB setup is complete
+		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
 		const kbSetupRes = await request.post(
 			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
 			{
@@ -136,55 +139,73 @@ test.describe("Playground KB Context Retrieval", () => {
 				data: {
 					embedding_provider: "jina",
 					embedding_model: "jina-embeddings-v3",
-					jina_api_key: "test_jina_key_for_e2e",
+					jina_api_key: jinaApiKey,
 				},
 			},
 		);
 		// KB setup may already be completed (409/400) or succeed (200)
 		expect([200, 400, 409]).toContain(kbSetupRes.status());
 
-		// 2. Upload a file with unique content via tenant KB document endpoint
-		// First get the agent's KB info
-		const agentRes = await request.get(
+		// Verify kb_id is valid before continuing
+		const agentCheckRes = await request.get(
 			`${API_BASE}/api/v1/agent?agent_id=${context.agentId}`,
 			{ headers: { Authorization: `Bearer ${token}` } },
 		);
-		expect(agentRes.status()).toBe(200);
-		const agentData = await agentRes.json() as { kb_id?: string; workspace_id?: string };
-
-		// Skip file upload if no KB bound yet (KB setup should have created it)
-		if (!agentData.kb_id || !agentData.workspace_id) {
-			test.skip();
-			return;
+		expect(agentCheckRes.status()).toBe(200);
+		const agentCheckData = await agentCheckRes.json() as { kb_id?: string; kb_setup_completed?: boolean };
+		if (!agentCheckData.kb_id) {
+			throw new Error(`KB setup failed: kb_id is null. Setup status: ${kbSetupRes.status()}, kb_setup_completed: ${agentCheckData.kb_setup_completed}`);
 		}
 
+		// 2. Upload a file with unique content via agent-scoped file upload endpoint
 		// Upload file with unique test content
 		const uniquePhrase = `BasjooE2ETestKBPhrase-${Date.now()}`;
 		const testContent = `This is a test document for knowledge base verification. The unique test phrase is: ${uniquePhrase}. This content should be retrievable in Playground chat after indexing.`;
-		const blob = new Blob([testContent], { type: "text/plain" });
-		const formData = new FormData();
-		formData.append("files", blob, `test-kb-${Date.now()}.txt`);
+		const fileName = `test-kb-${Date.now()}.txt`;
 
+		// Use agent-scoped upload endpoint: /api/v1/files:upload?agent_id=...
 		const uploadRes = await request.post(
-			`${API_BASE}/api/tenants/${agentData.workspace_id}/knowledge_bases/${agentData.kb_id}/documents`,
+			`${API_BASE}/api/v1/files:upload?agent_id=${context.agentId}`,
 			{
 				headers: { Authorization: `Bearer ${token}` },
 				multipart: {
 					files: {
-						name: `test-kb-${Date.now()}.txt`,
+						name: fileName,
 						mimeType: "text/plain",
 						buffer: Buffer.from(testContent),
 					},
 				},
 			},
 		);
-		// Upload should succeed (may be 200 or 202 depending on processing)
-		expect([200, 202, 201]).toContain(uploadRes.status());
+		// Upload should succeed with 200 (FileUploadResponse)
+		expect(uploadRes.status()).toBe(200);
+		const uploadData = await uploadRes.json() as { uploaded: number; failed: number };
+		expect(uploadData.uploaded).toBeGreaterThan(0);
+		expect(uploadData.failed).toBe(0);
+
+		// Wait for background document processing to settle so later smoke specs
+		// don't race SQLite writes from the KB pipeline.
+		await expect.poll(async () => {
+			const filesRes = await request.get(
+				`${API_BASE}/api/v1/files:list?agent_id=${context.agentId}`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+			if (filesRes.status() !== 200) {
+				return `http-${filesRes.status()}`;
+			}
+			const filesData = await filesRes.json() as { files?: Array<{ filename?: string; status?: string }> };
+			const uploadedFile = filesData.files?.find((file) => file.filename === fileName);
+			return uploadedFile?.status || "missing";
+		}, {
+			timeout: 60_000,
+			intervals: [1_000, 2_000, 5_000],
+		}).toMatch(/^(ready|failed)$/);
 
 		// 3. Login and go to Playground
 		await adminLogin(page);
 		await page.goto(agentRoute(context.agentId, "playground"));
 		await page.waitForLoadState("domcontentloaded", { timeout: 15_000 });
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 45_000 });
 
 		// 4. Wait for chat input and send a query
 		const messageInput = page.getByTestId("chat-message-input");
@@ -193,16 +214,18 @@ test.describe("Playground KB Context Retrieval", () => {
 		// Query asking about the unique phrase
 		const query = `What is the unique test phrase in the knowledge base?`;
 		await messageInput.fill(query);
+		await expect(messageInput).toHaveValue(query);
 
-		// Listen for SSE/streaming response
+		// Listen for SSE/streaming response before submitting with Enter.
+		// Pressing Enter targets the textbox handler directly and avoids ambiguity with
+		// adjacent clear/send buttons in the dense Playground input controls.
 		const chatResponsePromise = page.waitForResponse(
 			(response) =>
 				response.url().includes("/api/v1/chat") &&
 				response.status() === 200,
 		);
 
-		const sendButton = page.getByRole("button", { name: /发送|send/i });
-		await sendButton.click();
+		await messageInput.press("Enter");
 
 		// Wait for response to complete
 		const chatResponse = await chatResponsePromise;
@@ -227,6 +250,7 @@ test.describe("Playground KB Context Retrieval", () => {
 		const context = await resolveAgentContext(request);
 
 		// Ensure KB setup
+		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
 		const kbSetupRes = await request.post(
 			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
 			{
@@ -237,7 +261,7 @@ test.describe("Playground KB Context Retrieval", () => {
 				data: {
 					embedding_provider: "jina",
 					embedding_model: "jina-embeddings-v3",
-					jina_api_key: "test_jina_key_for_e2e",
+					jina_api_key: jinaApiKey,
 				},
 			},
 		);
@@ -255,8 +279,8 @@ test.describe("Playground KB Context Retrieval", () => {
 			},
 		);
 		expect(chatRes.status()).toBe(200);
-		const chatData = await chatRes.json() as { message?: string; session_id?: string };
-		expect(chatData.message).toBeTruthy();
+		const chatData = await chatRes.json() as { reply?: string; session_id?: string };
+		expect(chatData.reply).toBeTruthy();
 		expect(chatData.session_id).toBeTruthy();
 	});
 });

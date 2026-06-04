@@ -67,9 +67,26 @@ export default async function globalSetup(): Promise<void> {
   const token = loginData.access_token;
   const authHeaders = { Authorization: `Bearer ${token}` };
 
-  // 3. Get default agent and validate
-  const agentRes = await apiFetch('/api/v1/agent:default', { headers: authHeaders });
-  if (agentRes.status !== 200) {
+  // 3. Get default agent and validate. Some reused E2E databases can have an
+  // admin/workspace but no active agent, so seed one instead of aborting.
+  let agentRes = await apiFetch('/api/v1/agent:default', { headers: authHeaders });
+  if (agentRes.status === 404) {
+    const createAgentRes = await apiFetch('/api/v1/agents', {
+      method: 'POST',
+      headers: authHeaders,
+      data: {
+        name: 'E2E Agent',
+        description: 'Default agent seeded by E2E global setup',
+        agent_type: 'website_support',
+        channel_mode: 'web_widget',
+      },
+    });
+    if (![200, 201].includes(createAgentRes.status)) {
+      throw new Error(`Failed to create E2E default agent after 404: ${createAgentRes.status}`);
+    }
+    agentRes = createAgentRes;
+  }
+  if (agentRes.status !== 200 && agentRes.status !== 201) {
     throw new Error(`Failed to get default agent: ${agentRes.status}`);
   }
   const agent = (await agentRes.json()) as { id: string; jina_api_key_set?: boolean | null };

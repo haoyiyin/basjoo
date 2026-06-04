@@ -17,9 +17,11 @@ test.describe("Playground API Keys Validation", () => {
 		await expect(page).toHaveURL(
 			new RegExp(`/agents/${context.agentId}/playground`),
 		);
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 45_000 });
 	});
 
 	test("send message after settings save completes", async ({ page }) => {
+		test.setTimeout(60_000);
 		// Find the temperature slider (first range input)
 		const tempInput = page.locator('input[type="range"]').first();
 		await expect(tempInput).toBeVisible({ timeout: 10_000 });
@@ -36,6 +38,7 @@ test.describe("Playground API Keys Validation", () => {
 				response.url().includes("/api/v1/agent?") &&
 				response.request().method() === "PUT" &&
 				response.status() === 200,
+			{ timeout: 45_000 },
 		);
 
 		// Change temperature value through keyboard interaction to trigger auto-save

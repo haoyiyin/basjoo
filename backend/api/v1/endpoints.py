@@ -1960,6 +1960,26 @@ async def kb_status(
     }
 
 
+async def _agent_kb_setup_is_valid(agent: Agent, db: AsyncSession) -> bool:
+    """Check if agent has a valid, existing KB bound.
+
+    Returns True only if kb_setup_completed is True AND kb_id points to an existing KB.
+    This handles the inconsistent state where kb_setup_completed=True but kb_id is None or stale.
+    """
+    if not agent.kb_setup_completed:
+        return False
+    if not agent.kb_id:
+        return False
+    # Verify KB actually exists
+    from models import KnowledgeBase
+
+    result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
+    )
+    kb = result.scalar_one_or_none()
+    return kb is not None
+
+
 @router.post("/agent:kb-setup")
 async def kb_setup(
     agent_id: str,
@@ -1970,7 +1990,9 @@ async def kb_setup(
     """One-time knowledge base embedding initialization."""
     agent = await require_agent_admin(db, agent_id, current_user)
 
-    if agent.kb_setup_completed:
+    # Check if setup is truly complete with valid KB
+    setup_is_valid = await _agent_kb_setup_is_valid(agent, db)
+    if setup_is_valid:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Knowledge base setup already completed. Use reset to change embedding settings.",
