@@ -683,6 +683,7 @@ class IndexInfoResponse(BaseModel):
 
     agent_id: str
     urls_indexed: int
+    files_indexed: int
     index_exists: bool
     status: str
 

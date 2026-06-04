@@ -500,21 +500,28 @@ export default function Dashboard() {
 									gap: "var(--space-3)",
 								}}
 							>
+								{/* Vector index status - established when URLs OR files are indexed */}
 								<div
 									style={{
 										width: "10px",
 										height: "10px",
 										background:
-											sourcesSummary && sourcesSummary.urls.indexed > 0
+											sourcesSummary &&
+											(sourcesSummary.urls.indexed > 0 ||
+												sourcesSummary.files.ready > 0)
 												? "var(--color-success)"
 												: "var(--color-warning)",
 										borderRadius: "var(--radius-full)",
 										boxShadow:
-											sourcesSummary && sourcesSummary.urls.indexed > 0
+											sourcesSummary &&
+											(sourcesSummary.urls.indexed > 0 ||
+												sourcesSummary.files.ready > 0)
 												? "0 0 12px hsla(150deg, 80%, 45%, 0.5)"
 												: "0 0 12px hsla(38deg, 95%, 55%, 0.5)",
 										animation:
-											sourcesSummary && sourcesSummary.urls.indexed > 0
+											sourcesSummary &&
+											(sourcesSummary.urls.indexed > 0 ||
+												sourcesSummary.files.ready > 0)
 												? "breathe 3s ease-in-out infinite"
 												: "none",
 									}}
@@ -535,7 +542,9 @@ export default function Dashboard() {
 											color: "var(--color-text-primary)",
 										}}
 									>
-										{sourcesSummary && sourcesSummary.urls.indexed > 0
+										{sourcesSummary &&
+										(sourcesSummary.urls.indexed > 0 ||
+											sourcesSummary.files.ready > 0)
 											? t("status.established")
 											: t("status.notEstablished")}
 									</div>

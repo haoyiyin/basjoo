@@ -2598,38 +2598,57 @@ async def get_sources_summary(
 
     url_pending = url_total - url_indexed
 
-    # 统计文件
-    file_total_result = await db.execute(
-        select(func.count())
-        .select_from(KnowledgeFile)
-        .where(KnowledgeFile.agent_id == agent_id)
-    )
-    file_total = file_total_result.scalar() or 0
+    # 统计文件 (使用 KbDocument 代替已废弃的 KnowledgeFile)
+    # 获取 agent 的 kb_id
+    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = agent_result.scalar_one_or_none()
+    kb_id = getattr(agent, "kb_id", None) if agent else None
 
-    file_ready_result = await db.execute(
-        select(func.count())
-        .select_from(KnowledgeFile)
-        .where(KnowledgeFile.agent_id == agent_id, KnowledgeFile.status == "ready")
-    )
-    file_ready = file_ready_result.scalar() or 0
-
-    file_processing_result = await db.execute(
-        select(func.count())
-        .select_from(KnowledgeFile)
-        .where(
-            KnowledgeFile.agent_id == agent_id,
-            KnowledgeFile.status.in_(["uploading", "processing", "pending"]),
+    if kb_id:
+        # 从 KnowledgeBase 获取 tenant_id 用于 tenant-scoped 查询
+        kb_result = await db.execute(
+            select(KnowledgeBase.tenant_id).where(KnowledgeBase.id == kb_id)
         )
-    )
-    file_processing = file_processing_result.scalar() or 0
+        tenant_id = kb_result.scalar_one_or_none()
 
-    file_size_result = await db.execute(
-        select(func.sum(KnowledgeFile.file_size)).where(
-            KnowledgeFile.agent_id == agent_id
+        # Query KbDocument stats
+        file_total_result = await db.execute(
+            select(func.count())
+            .select_from(KbDocument)
+            .where(KbDocument.kb_id == kb_id)
         )
-    )
-    file_size_bytes = file_size_result.scalar() or 0
-    file_size_kb = round(file_size_bytes / 1024, 2)
+        file_total = file_total_result.scalar() or 0
+
+        file_ready_result = await db.execute(
+            select(func.count())
+            .select_from(KbDocument)
+            .where(KbDocument.kb_id == kb_id, KbDocument.status == "ready")
+        )
+        file_ready = file_ready_result.scalar() or 0
+
+        # KbDocument statuses: pending, processing, ready, error
+        # processing includes pending + processing; error documents are not ready
+        file_processing_result = await db.execute(
+            select(func.count())
+            .select_from(KbDocument)
+            .where(
+                KbDocument.kb_id == kb_id,
+                KbDocument.status.in_(["pending", "processing"]),
+            )
+        )
+        file_processing = file_processing_result.scalar() or 0
+
+        file_size_result = await db.execute(
+            select(func.sum(KbDocument.file_size)).where(KbDocument.kb_id == kb_id)
+        )
+        file_size_bytes = file_size_result.scalar() or 0
+        file_size_kb = round(file_size_bytes / 1024, 2)
+    else:
+        # No KB bound, all file stats are zero
+        file_total = 0
+        file_ready = 0
+        file_processing = 0
+        file_size_kb = 0.0
 
     has_pending = url_pending > 0 or file_processing > 0
 
@@ -3505,7 +3524,7 @@ async def get_index_info(
     await require_agent_admin(db, agent_id, current_user)
 
     # Count indexed URLs
-    indexed_count = (
+    urls_indexed = (
         await db.scalar(
             select(func.count(URLSource.id)).where(
                 URLSource.agent_id == agent_id,
@@ -3515,14 +3534,28 @@ async def get_index_info(
         or 0
     )
 
-    # Check if agent has KB
+    # Check if agent has KB and count ready files
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one()
     index_exists = agent.kb_id is not None
 
+    # Count ready KbDocuments
+    files_indexed = 0
+    if agent.kb_id:
+        files_indexed = (
+            await db.scalar(
+                select(func.count(KbDocument.id)).where(
+                    KbDocument.kb_id == agent.kb_id,
+                    KbDocument.status == "ready",
+                )
+            )
+            or 0
+        )
+
     return IndexInfoResponse(
         agent_id=agent_id,
-        urls_indexed=indexed_count,
+        urls_indexed=urls_indexed,
+        files_indexed=files_indexed,
         index_exists=index_exists,
         status="ready" if index_exists else "not_setup",
     )
