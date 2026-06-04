@@ -7,6 +7,7 @@ import pytest
 from models import KbDocument, KnowledgeBase
 from services.document_parser import DocumentParser
 from services.kb_document_processor import KbDocumentProcessor
+from services.kb_service import KbService
 
 
 def test_knowledge_base_has_chunk_params():
@@ -174,3 +175,109 @@ async def test_embed_texts_receives_api_key():
                                 assert "api_key" in call_kwargs, f"api_key not in kwargs. Got args: {call_args}, kwargs: {call_kwargs}"
                                 # The api_key parameter should be present (value depends on agent lookup)
                                 assert "api_key" in call_kwargs, "api_key parameter must be passed to embed_texts()"
+
+
+def test_jina_default_base_url_from_config():
+    """Verify Jina base URL can be derived from config."""
+    from config import settings
+    # The config should have the Jina embedding API base
+    assert hasattr(settings, "jina_embedding_api_base")
+    # It should end with /embeddings
+    assert settings.jina_embedding_api_base.endswith("/embeddings")
+    # When we strip /embeddings, we get the base URL for the API
+    base_url = settings.jina_embedding_api_base.rstrip("/embeddings")
+    assert base_url == "https://api.jina.ai/v1"
+
+
+def test_kb_service_imports_config():
+    """KbService should be able to access settings from config."""
+    # This is a simple import test to verify the service can access config
+    from services.kb_service import KbService
+    from config import settings
+    # Both should be importable
+    assert KbService is not None
+    assert settings is not None
+
+
+@pytest.mark.asyncio
+async def test_jina_default_base_url(setup_test_db):
+    """When agent has embedding_provider='jina' and no embedding_api_base,
+    the KB should be created with Jina's base URL."""
+    from unittest.mock import AsyncMock, patch
+    import database
+    from sqlalchemy import select
+    from models import Agent
+    from services.kb_service import KbService
+
+    async with database.AsyncSessionLocal() as session:
+        # Get existing agent from fixture
+        result = await session.execute(
+            select(Agent)
+            .where(Agent.is_active == True)
+            .order_by(Agent.created_at)
+            .limit(1)
+        )
+        agent = result.scalar_one()
+        agent_id = agent.id
+
+        # Set agent to use Jina provider with no base URL
+        agent.embedding_provider = "jina"
+        agent.embedding_api_base = None
+        agent.embedding_model = "jina-embeddings-v3"
+        agent.kb_id = None  # Clear any existing KB binding
+        await session.commit()
+
+        # Mock Qdrant to avoid connection issues
+        with patch.object(KbService, "__init__", lambda self, session=None: None):
+            kb_svc = KbService(session=session)
+            kb_svc.qdrant = AsyncMock()
+            kb_svc.qdrant.ensure_collection = AsyncMock()
+            kb_svc.session = session
+
+            tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session)
+
+            # Verify: KB.embedding_base_url should be Jina's base URL
+            assert kb.embedding_base_url is not None, "embedding_base_url should not be None"
+            assert kb.embedding_base_url == "https://api.jina.ai/v1", f"Expected Jina base URL, got: {kb.embedding_base_url}"
+
+
+@pytest.mark.asyncio
+async def test_siliconflow_default_base_url(setup_test_db):
+    """When agent has embedding_provider='siliconflow' and no embedding_api_base,
+    the KB should be created with SiliconFlow's base URL."""
+    from unittest.mock import AsyncMock, patch
+    import database
+    from sqlalchemy import select
+    from models import Agent
+    from services.kb_service import KbService
+
+    async with database.AsyncSessionLocal() as session:
+        # Get existing agent from fixture
+        result = await session.execute(
+            select(Agent)
+            .where(Agent.is_active == True)
+            .order_by(Agent.created_at)
+            .limit(1)
+        )
+        agent = result.scalar_one()
+        agent_id = agent.id
+
+        # Set agent to use SiliconFlow provider with no base URL
+        agent.embedding_provider = "siliconflow"
+        agent.embedding_api_base = None
+        agent.embedding_model = "BAAI/bge-m3"
+        agent.kb_id = None  # Clear any existing KB binding
+        await session.commit()
+
+        # Mock Qdrant to avoid connection issues
+        with patch.object(KbService, "__init__", lambda self, session=None: None):
+            kb_svc = KbService(session=session)
+            kb_svc.qdrant = AsyncMock()
+            kb_svc.qdrant.ensure_collection = AsyncMock()
+            kb_svc.session = session
+
+            tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session)
+
+            # Verify: KB.embedding_base_url should be SiliconFlow's base URL
+            assert kb.embedding_base_url is not None, "embedding_base_url should not be None"
+            assert kb.embedding_base_url == "https://api.siliconflow.cn/v1", f"Expected SiliconFlow base URL, got: {kb.embedding_base_url}"
