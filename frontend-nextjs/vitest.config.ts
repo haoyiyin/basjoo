@@ -18,6 +18,10 @@ export default defineConfig({
 		environment: "jsdom",
 		globals: true,
 		setupFiles: ["./tests/setup.ts"],
+		// Several jsdom route tests mock browser globals such as localStorage,
+		// fetch, matchMedia, and react-i18next. Running files in parallel makes
+		// those global mocks flaky under Vitest workers, so keep unit tests serial.
+		maxWorkers: 1,
 		typecheck: {
 			tsconfig: "./tsconfig.test.json",
 		},

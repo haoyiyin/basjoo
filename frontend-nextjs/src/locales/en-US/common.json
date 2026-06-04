@@ -724,6 +724,7 @@
     "resetConfirmMessage": "Index needs to be rebuilt and all files need to be re-uploaded. Are you sure?",
     "resetSuccess": "Embedding configuration has been reset",
     "setupSuccess": "Knowledge base initialization complete",
+    "setupIncompleteError": "Knowledge base initialization incomplete. Please retry or check service logs.",
     "apiKeyConfigured": "Configured",
     "apiKeyNotConfigured": "Not configured",
     "setupRequired": "Please complete knowledge base setup first",

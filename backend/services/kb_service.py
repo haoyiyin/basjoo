@@ -324,43 +324,41 @@ class KbService:
         self, agent_id: str, session: AsyncSession | None = None
     ) -> tuple[Tenant, KnowledgeBase]:
         """Get or create a tenant-scoped KnowledgeBase for an agent.
-        
+
         If the agent already has a kb_id bound, return the existing KB and its tenant.
         Otherwise, create a new tenant, create a new KB bound to that tenant,
         bind it to the agent, and set kb_setup_completed=True.
-        
+
         Args:
             agent_id: The agent ID to bind
             session: Optional existing session to use (for endpoint integration).
                     If not provided, creates a new session.
-            
+
         Returns:
             Tuple of (tenant, knowledge_base)
         """
         if not agent_id:
             raise ValueError("agent_id is required")
-        
+
         # Use provided session or get new one
         if session is not None:
             return await self._get_or_create_agent_kb_with_session(agent_id, session)
-        
+
         # Create new session context
         async with await self._get_session() as session:
             return await self._get_or_create_agent_kb_with_session(agent_id, session)
-    
+
     async def _get_or_create_agent_kb_with_session(
         self, agent_id: str, session: AsyncSession
     ) -> tuple[Tenant, KnowledgeBase]:
         """Internal implementation using provided session."""
         # Get agent with its current kb_id
-        result = await session.execute(
-            select(Agent).where(Agent.id == agent_id)
-        )
+        result = await session.execute(select(Agent).where(Agent.id == agent_id))
         agent = result.scalar_one_or_none()
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
-        
-        # If agent already has KB bound, return it
+
+        # If agent already has KB bound, reconcile state
         if agent.kb_id:
             result = await session.execute(
                 select(KnowledgeBase, Tenant)
@@ -369,10 +367,25 @@ class KbService:
             )
             row = result.first()
             if row:
-                return row[1], row[0]  # (tenant, kb)
-        
+                kb, tenant = row[0], row[1]
+                # Reconcile: ensure kb_setup_completed is True and Qdrant collection exists
+                agent.kb_setup_completed = True
+                # Re-ensure Qdrant collection using current embedding model
+                embedding_model = (
+                    getattr(agent, "embedding_model", None) or kb.embedding_model
+                )
+                await self.qdrant.ensure_collection(str(kb.id), embedding_model)
+                await session.commit()
+                await session.refresh(kb)
+                await session.refresh(tenant)
+                return tenant, kb
+            else:
+                # KB record not found - clear stale binding and fall through to create new
+                agent.kb_id = None
+
         # Create new tenant for this agent's workspace
         from uuid import uuid4
+
         tenant = Tenant(
             id=str(uuid4()),
             name=f"Tenant for Agent {agent.name}",
@@ -380,11 +393,11 @@ class KbService:
         )
         session.add(tenant)
         await session.flush()
-        
+
         # Get agent's embedding config
         embedding_model = getattr(agent, "embedding_model", None) or "BAAI/bge-m3"
         embedding_base_url = getattr(agent, "embedding_api_base", None)
-        
+
         # Create new KB
         kb = KnowledgeBase(
             tenant_id=tenant.id,
@@ -395,26 +408,24 @@ class KbService:
         )
         session.add(kb)
         await session.flush()
-        
+
         # Set qdrant_collection name
         kb_id_str = str(kb.id)
-        object.__setattr__(
-            kb, "qdrant_collection", get_kb_collection_name(kb_id_str)
-        )
-        
+        object.__setattr__(kb, "qdrant_collection", get_kb_collection_name(kb_id_str))
+
         # Ensure Qdrant collection exists
         await self.qdrant.ensure_collection(kb_id_str, embedding_model)
-        
+
         # Bind KB to agent and mark setup complete
         agent.kb_id = kb.id
         agent.kb_setup_completed = True
-        
+
         await session.commit()
         await session.refresh(kb)
         await session.refresh(tenant)
-        
+
         logger.info(
             f"Created and bound KB {kb.id} (tenant {tenant.id}) to agent {agent_id}"
         )
-        
+
         return tenant, kb

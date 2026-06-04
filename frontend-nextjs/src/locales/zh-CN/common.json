@@ -724,6 +724,7 @@
     "resetConfirmMessage": "索引需要重构，所有文件需要重新上传。确定要重置吗？",
     "resetSuccess": "Embedding 配置已重置",
     "setupSuccess": "知识库初始化完成",
+    "setupIncompleteError": "知识库初始化未完成，请重试或查看服务日志。",
     "apiKeyConfigured": "已配置",
     "apiKeyNotConfigured": "未配置",
     "setupRequired": "请先完成知识库初始化设置",

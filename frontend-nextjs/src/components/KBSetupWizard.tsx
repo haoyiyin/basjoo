@@ -89,6 +89,9 @@ export default function KBSetupWizard({
 	};
 
 	const handleSetup = async () => {
+		// Prevent setup if already in progress or testing
+		if (settingUp || testing) return;
+
 		setSettingUp(true);
 		setError(null);
 
@@ -108,7 +111,15 @@ export default function KBSetupWizard({
 				config.embedding_api_base = embeddingApiBase;
 			}
 
-			await api.kbSetup(agentId, config);
+			const result = await api.kbSetup(agentId, config);
+
+			// Check if backend reports incomplete setup
+			if (result && result.kb_setup_completed === false) {
+				setError(t("kb.setupIncompleteError"));
+				setSettingUp(false);
+				return;
+			}
+
 			await onSetupComplete();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.saveFailed"));
@@ -398,7 +409,7 @@ export default function KBSetupWizard({
 						)}
 						<button
 							onClick={handleSetup}
-							disabled={settingUp || !apiKey.trim()}
+							disabled={settingUp || testing || !apiKey.trim()}
 							className="btn-primary"
 							style={{ flex: 1 }}
 						>

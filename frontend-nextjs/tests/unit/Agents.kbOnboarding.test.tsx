@@ -12,6 +12,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom";
 import Agents from "../../src/views/Agents";
+import KBSetupWizard from "../../src/components/KBSetupWizard";
 import { api } from "../../src/services/api";
 
 vi.mock("../../src/services/api", () => ({
@@ -123,6 +124,176 @@ beforeEach(() => {
 		success: true,
 		message: "ok",
 	} as any);
+});
+
+describe("KBSetupWizard diagnostics and race handling", () => {
+	it("shows error when setup returns but status check reports incomplete", async () => {
+		const mockOnSetupComplete = vi.fn();
+		const { container } = render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Enter API key
+		const apiKeyInput = screen.getByPlaceholderText("jina_...");
+		fireEvent.change(apiKeyInput, { target: { value: "jina_test_key" } });
+
+		// Mock setup to return an agent with kb_setup_completed: false
+		mockedApi.kbSetup.mockResolvedValueOnce({
+			id: "agt_test",
+			kb_setup_completed: false,
+		} as any);
+
+		// Mock kbStatus to also report incomplete
+		mockedApi.kbStatus.mockResolvedValueOnce({
+			agent_id: "agt_test",
+			kb_setup_completed: false,
+			embedding_provider: "jina",
+			embedding_model: "jina-embeddings-v3",
+			embedding_api_base: null,
+			embedding_batch_size: null,
+			embedding_api_key_set: true,
+		} as any);
+
+		// Click setup button
+		fireEvent.click(screen.getByRole("button", { name: "kb.initButton" }));
+
+		// Should show incomplete error message
+		await waitFor(() => {
+			expect(screen.getByText("kb.setupIncompleteError")).toBeInTheDocument();
+		});
+
+		// Should NOT call onSetupComplete
+		expect(mockOnSetupComplete).not.toHaveBeenCalled();
+
+		// Button should be re-enabled after error
+		expect(
+			screen.getByRole("button", { name: "kb.initButton" }),
+		).not.toBeDisabled();
+	});
+
+	it("disables setup button while testing API key to prevent race", async () => {
+		const mockOnSetupComplete = vi.fn();
+		render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Delay the test API response
+		mockedApi.testJinaApi.mockImplementation(
+			() =>
+				new Promise((resolve) =>
+					setTimeout(() => resolve({ success: true, message: "ok" }), 100),
+				),
+		);
+
+		// Enter API key and blur to trigger test
+		const apiKeyInput = screen.getByPlaceholderText("jina_...");
+		fireEvent.change(apiKeyInput, { target: { value: "jina_test_key" } });
+
+		// Blur should trigger test
+		fireEvent.blur(apiKeyInput);
+
+		// Setup button should be disabled while testing
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: "kb.initButton" }),
+			).toBeDisabled();
+		});
+
+		// Wait for test to complete
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: "kb.initButton" }),
+			).not.toBeDisabled();
+		});
+	});
+
+	it("prevents concurrent setup requests when clicked multiple times", async () => {
+		const mockOnSetupComplete = vi.fn();
+		mockedApi.kbSetup.mockImplementation(
+			() =>
+				new Promise((resolve) =>
+					setTimeout(
+						() =>
+							resolve({
+								id: "agt_test",
+								kb_setup_completed: true,
+							} as any),
+						100,
+					),
+				),
+		);
+
+		render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Enter API key
+		const apiKeyInput = screen.getByPlaceholderText("jina_...");
+		fireEvent.change(apiKeyInput, { target: { value: "jina_test_key" } });
+
+		// Click setup button multiple times rapidly
+		const setupButton = screen.getByRole("button", { name: "kb.initButton" });
+		fireEvent.click(setupButton);
+		fireEvent.click(setupButton);
+		fireEvent.click(setupButton);
+
+		// Should only call kbSetup once
+		await waitFor(() => {
+			expect(mockedApi.kbSetup).toHaveBeenCalledTimes(1);
+		});
+
+		// Wait for completion
+		await waitFor(() => {
+			expect(mockOnSetupComplete).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("completes successfully when setup returns completed status", async () => {
+		const mockOnSetupComplete = vi.fn();
+
+		// Mock setup to return completed agent
+		mockedApi.kbSetup.mockResolvedValueOnce({
+			id: "agt_test",
+			kb_setup_completed: true,
+		} as any);
+
+		render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Enter API key
+		const apiKeyInput = screen.getByPlaceholderText("jina_...");
+		fireEvent.change(apiKeyInput, { target: { value: "jina_test_key" } });
+
+		// Click setup button
+		fireEvent.click(screen.getByRole("button", { name: "kb.initButton" }));
+
+		// Should call onSetupComplete
+		await waitFor(() => {
+			expect(mockOnSetupComplete).toHaveBeenCalledTimes(1);
+		});
+
+		// Should not show error
+		expect(
+			screen.queryByText("kb.setupIncompleteError"),
+		).not.toBeInTheDocument();
+	});
 });
 
 describe("Agents onboarding and lifecycle actions", () => {

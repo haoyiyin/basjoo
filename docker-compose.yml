@@ -60,7 +60,15 @@ services:
     networks:
       - basjoo-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      # Qdrant image has bash but no curl; probe /readyz via bash TCP.
+      test:
+        - CMD
+        - bash
+        - -lc
+        - >-
+          exec 3<>/dev/tcp/localhost/6333;
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\n\r\n' >&3;
+          timeout 5 grep -q '200 OK' <&3
       interval: 10s
       timeout: 5s
       retries: 5
@@ -114,6 +122,8 @@ services:
       - backend-data:/app/data
     depends_on:
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
       scrapling-service:
         condition: service_healthy
@@ -206,6 +216,8 @@ services:
       - ./backend:/app
     depends_on:
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
       scrapling-service:
         condition: service_healthy
