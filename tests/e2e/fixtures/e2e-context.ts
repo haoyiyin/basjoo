@@ -77,32 +77,84 @@ export async function resolveAgentContext(request: APIRequestContext): Promise<E
 
 /**
  * Login via UI (admin dashboard) with proper headers.
+ * Hardened to eliminate race conditions by awaiting response and token persistence.
  */
 export async function adminLogin(
   page: Page,
   options?: { timeout?: number },
 ): Promise<void> {
   const timeout = options?.timeout ?? 15_000;
+
   // Intercept login API calls to add required headers
   await page.route('**/api/admin/login', async (route) => {
     await route.continue({ headers: { ...route.request().headers(), ...loginHeaders() } });
   });
+
   await page.goto('/login');
   await page.waitForLoadState('domcontentloaded');
+
   // Wait for form to be ready
   const emailInput = page.getByLabel(/email|邮箱/i).or(page.locator('input[type="email"]')).first();
   const passwordInput = page.getByLabel(/password|密码/i).or(page.locator('input[type="password"]')).first();
+  const submitButton = page.getByRole('button', { name: /login|登录|submit|提交/i });
+
   await expect(emailInput).toBeVisible({ timeout });
   await expect(passwordInput).toBeVisible({ timeout });
+  await expect(submitButton).toBeVisible({ timeout });
+
+  // Fill the form - this will trigger React state updates
+  // Note: The button may be disabled initially due to hydration state (disabled={loading || !hydrated})
+  // Playwright's click() will auto-wait for the button to be actionable
   await emailInput.fill(ADMIN_EMAIL);
   await passwordInput.fill(ADMIN_PASSWORD);
-  const submitButton = page.getByRole('button', { name: /login|登录|submit|提交/i });
-  await expect(submitButton).toBeEnabled({ timeout });
+
+  // STEP 1: Wait for login API response
+  const loginResponsePromise = page.waitForResponse(
+    (response) => response.url().includes('/api/admin/login') && response.request().method() === 'POST',
+    { timeout }
+  );
+
   await submitButton.click();
-  await page.waitForLoadState('domcontentloaded');
-  await expect(page).not.toHaveURL(/\/login/);
-  // Should not be on login page anymore
+
+  const loginResponse = await loginResponsePromise;
+  const responseStatus = loginResponse.status();
+  const responseText = await loginResponse.text();
+
+  // Assert response is 200 before proceeding
+  if (responseStatus !== 200) {
+    // Collect visible error text for diagnostics
+    const errorText = await page.locator('text=/登录失败|invalid|incorrect|failed|error/i').first().textContent().catch(() => 'No visible error');
+    throw new Error(
+      `Admin login API failed with status ${responseStatus}. ` +
+      `Response: ${responseText.substring(0, 500)}. ` +
+      `Visible error: ${errorText}`
+    );
+  }
+
+  // STEP 2: Wait for localStorage token to be set (proves auth state is durable)
+  await page.waitForFunction(
+    () => {
+      const token = localStorage.getItem('token');
+      const admin = localStorage.getItem('admin');
+      return Boolean(token && admin);
+    },
+    { timeout }
+  );
+
+  // Verify token and admin are truthy
+  const token = await page.evaluate(() => localStorage.getItem('token'));
+  const admin = await page.evaluate(() => localStorage.getItem('admin'));
+
+  if (!token || !admin) {
+    throw new Error(
+      `Auth state incomplete after login. token: ${token ? 'present' : 'missing'}, ` +
+      `admin: ${admin ? 'present' : 'missing'}`
+    );
+  }
+
+  // STEP 3: Wait for navigation away from /login
+  await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout });
+
+  // Final assertions to confirm login success
   await expect(page).not.toHaveURL(/\/login/, { timeout });
-  // Token should be stored in localStorage
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBeTruthy();
 }
