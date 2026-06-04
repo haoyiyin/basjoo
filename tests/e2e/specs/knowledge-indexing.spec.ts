@@ -129,4 +129,53 @@ test.describe("Knowledge Source Flow", () => {
 		});
 		await expect(formatsHint.first()).toBeVisible({ timeout: 10_000 });
 	});
+
+	test("agent with KB bound can receive chat responses", async ({ request }) => {
+		// Verify the full integration: KB setup -> chat endpoint works
+		const token = await loginByApi(request);
+		const agent = await getDefaultAgent(request, token);
+
+		// 1. Ensure KB setup
+		const kbSetupRes = await request.post(
+			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agent.id}`,
+			{
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				data: {
+					embedding_provider: "jina",
+					embedding_model: "jina-embeddings-v3",
+					jina_api_key: "test_jina_key_for_e2e",
+				},
+			},
+		);
+		expect([200, 400, 409]).toContain(kbSetupRes.status());
+
+		// 2. Verify agent config shows kb_id
+		const agentConfigRes = await request.get(
+			`${API_BASE}/api/v1/agent?agent_id=${agent.id}`,
+			{ headers: { Authorization: `Bearer ${token}` } },
+		);
+		expect(agentConfigRes.status()).toBe(200);
+		const config = await agentConfigRes.json() as { kb_id?: string; kb_setup_completed?: boolean };
+		// Agent should have kb_id bound after setup
+		expect(config.kb_id).toBeTruthy();
+
+		// 3. Chat should succeed (uses mock LLM in test mode, but verifies flow)
+		const chatRes = await request.post(
+			`${API_BASE}/api/v1/chat`,
+			{
+				headers: { Authorization: `Bearer ${token}` },
+				data: {
+					agent_id: agent.id,
+					message: `Test query about knowledge base ${Date.now()}`,
+				},
+			},
+		);
+		expect(chatRes.status()).toBe(200);
+		const chatData = await chatRes.json() as { message?: string; session_id?: string };
+		expect(chatData.message).toBeTruthy();
+		expect(chatData.session_id).toBeTruthy();
+	});
 });
