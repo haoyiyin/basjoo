@@ -139,6 +139,63 @@ function buildDefaultLogoUrl(apiBase: string): string {
   }
 }
 
+// Storage adapter that safely wraps localStorage with try/catch and memory fallback
+class StorageAdapter {
+  private memoryStore = new Map<string, string>();
+  private storageAvailable: boolean | null = null;
+
+  private isAvailable(): boolean {
+    if (this.storageAvailable !== null) {
+      return this.storageAvailable;
+    }
+    try {
+      const testKey = '__storage_test__';
+      window.localStorage.setItem(testKey, 'test');
+      window.localStorage.removeItem(testKey);
+      this.storageAvailable = true;
+      return true;
+    } catch {
+      this.storageAvailable = false;
+      return false;
+    }
+  }
+
+  getItem(key: string): string | null {
+    if (this.isAvailable()) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch {
+        // Fall through to memory store
+      }
+    }
+    return this.memoryStore.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    if (this.isAvailable()) {
+      try {
+        window.localStorage.setItem(key, value);
+        return;
+      } catch {
+        // Fall through to memory store
+      }
+    }
+    this.memoryStore.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    if (this.isAvailable()) {
+      try {
+        window.localStorage.removeItem(key);
+        return;
+      } catch {
+        // Fall through to memory store
+      }
+    }
+    this.memoryStore.delete(key);
+  }
+}
+
 class BasjooWidget {
   private config: Required<WidgetConfig>;
   private readonly hasTitleOverride: boolean;
@@ -153,6 +210,7 @@ class BasjooWidget {
   private readonly STORAGE_KEY: string;
   private readonly VISITOR_STORAGE_KEY = 'basjoo_visitor_id';
   private visitorId: string;
+  private storage: StorageAdapter;
   private effectiveTheme: 'light' | 'dark' = 'light';
   private originalTitle: string = '';
   private titleBlinkInterval: number | null = null;
@@ -193,15 +251,16 @@ class BasjooWidget {
     };
 
     this.STORAGE_KEY = `basjoo_session_${this.config.agentId}`;
-    this.sessionId = localStorage.getItem(this.STORAGE_KEY);
-    this.visitorId = localStorage.getItem(this.VISITOR_STORAGE_KEY) || this.generateVisitorId();
+    this.storage = new StorageAdapter();
+    this.sessionId = this.storage.getItem(this.STORAGE_KEY);
+    this.visitorId = this.storage.getItem(this.VISITOR_STORAGE_KEY) || this.generateVisitorId();
 
     this.effectiveTheme = this.getEffectiveTheme();
   }
 
   private generateVisitorId(): string {
     const visitorId = `visitor_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 11)}`;
-    localStorage.setItem(this.VISITOR_STORAGE_KEY, visitorId);
+    this.storage.setItem(this.VISITOR_STORAGE_KEY, visitorId);
     return visitorId;
   }
 
@@ -411,7 +470,7 @@ class BasjooWidget {
     }
 
     this.sessionId = null;
-    localStorage.removeItem(this.STORAGE_KEY);
+    this.storage.removeItem(this.STORAGE_KEY);
     if (this.config.welcomeMessage) {
       this.addMessage({
         role: 'assistant',
@@ -1610,7 +1669,7 @@ class BasjooWidget {
           const donePayload = payload as StreamDoneMeta;
           if (donePayload.session_id) {
             this.sessionId = donePayload.session_id;
-            localStorage.setItem(this.STORAGE_KEY, donePayload.session_id);
+            this.storage.setItem(this.STORAGE_KEY, donePayload.session_id);
             this.startPolling();
           }
           if (typeof donePayload.message_id === 'number' && donePayload.message_id > this.lastMessageId) {
