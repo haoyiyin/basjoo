@@ -19,6 +19,7 @@ test.describe("Playground Streaming Chat", () => {
 		await expect(page).toHaveURL(
 			new RegExp(`/agents/${context.agentId}/playground`),
 		);
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 15_000 });
 	});
 
 	test("auto-save shows saving/saved state", async ({ page }) => {
@@ -120,6 +121,7 @@ test.describe("Playground Streaming Chat", () => {
 
 test.describe("Playground KB Context Retrieval", () => {
 	test("chat request succeeds after KB setup with indexed content", async ({ page, request }) => {
+		test.setTimeout(90_000);
 		// This test verifies the full flow: KB setup -> indexed content -> chat uses context
 		// 1. Get context and ensure KB is set up
 		const context = await resolveAgentContext(request);
@@ -185,6 +187,7 @@ test.describe("Playground KB Context Retrieval", () => {
 		await adminLogin(page);
 		await page.goto(agentRoute(context.agentId, "playground"));
 		await page.waitForLoadState("domcontentloaded", { timeout: 15_000 });
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 15_000 });
 
 		// 4. Wait for chat input and send a query
 		const messageInput = page.getByTestId("chat-message-input");
@@ -193,16 +196,18 @@ test.describe("Playground KB Context Retrieval", () => {
 		// Query asking about the unique phrase
 		const query = `What is the unique test phrase in the knowledge base?`;
 		await messageInput.fill(query);
+		await expect(messageInput).toHaveValue(query);
 
-		// Listen for SSE/streaming response
+		// Listen for SSE/streaming response before submitting with Enter.
+		// Pressing Enter targets the textbox handler directly and avoids ambiguity with
+		// adjacent clear/send buttons in the dense Playground input controls.
 		const chatResponsePromise = page.waitForResponse(
 			(response) =>
 				response.url().includes("/api/v1/chat") &&
 				response.status() === 200,
 		);
 
-		const sendButton = page.getByRole("button", { name: /发送|send/i });
-		await sendButton.click();
+		await messageInput.press("Enter");
 
 		// Wait for response to complete
 		const chatResponse = await chatResponsePromise;

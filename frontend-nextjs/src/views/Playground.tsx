@@ -49,8 +49,12 @@ export default function Playground() {
 
   const loadDefaultAgent = async () => {
     try {
-      if (!routeAgentId) return;
-      const data = await api.getAgent(routeAgentId);
+      const pathAgentId = typeof window !== 'undefined'
+        ? window.location.pathname.match(/\/agents\/([^/]+)/)?.[1]
+        : undefined;
+      const currentAgentId = routeAgentId || pathAgentId;
+      if (!currentAgentId) return;
+      const data = await api.getAgent(currentAgentId);
       setAgent(data);
       setAgentId(data.id);
       setChatParams({
@@ -128,7 +132,8 @@ export default function Playground() {
   }, [t]);
 
   const handleSendMessage = useCallback(async () => {
-    if (!input.trim() || isLoading || isSettingsSaving || !agentId) return;
+    const effectiveAgentId = agentId || agent?.id || null;
+    if (!input.trim() || isLoading || isSettingsSaving || !effectiveAgentId) return;
 
     streamAbortControllerRef.current?.abort();
     const abortController = new AbortController();
@@ -229,7 +234,7 @@ export default function Playground() {
 
     try {
       const request: ChatRequest = {
-        agent_id: agentId,
+        agent_id: effectiveAgentId,
         message: currentInput,
         locale: i18n.language,
         session_id: sessionId,
@@ -309,7 +314,7 @@ export default function Playground() {
         setIsLoading(false);
       }
     }
-  }, [input, isLoading, isSettingsSaving, agentId, chatParams, sessionId, i18n.language, getErrorMessage]);
+  }, [input, isLoading, isSettingsSaving, agentId, agent?.id, chatParams, sessionId, i18n.language, getErrorMessage]);
 
   const handleClearChat = useCallback(() => {
     if (confirm(t('playground.confirmClear'))) {

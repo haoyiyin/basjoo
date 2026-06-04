@@ -76,8 +76,11 @@ export async function resolveAgentContext(request: APIRequestContext): Promise<E
 }
 
 /**
- * Login via UI (admin dashboard) with proper headers.
- * Hardened to eliminate race conditions by awaiting response and token persistence.
+ * Establish an authenticated admin browser session for non-auth E2E specs.
+ *
+ * Dedicated UI-login behavior remains covered by admin-auth.spec.ts. This helper
+ * uses the backend login API directly to avoid Next dev proxy and hydration races
+ * that can leave unrelated feature specs stuck on the login form.
  */
 export async function adminLogin(
   page: Page,
@@ -85,76 +88,38 @@ export async function adminLogin(
 ): Promise<void> {
   const timeout = options?.timeout ?? 15_000;
 
-  // Intercept login API calls to add required headers
-  await page.route('**/api/admin/login', async (route) => {
-    await route.continue({ headers: { ...route.request().headers(), ...loginHeaders() } });
+  const loginRes = await page.request.post(`${API_BASE}/api/admin/login`, {
+    headers: loginHeaders(),
+    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
   });
+  const responseText = await loginRes.text();
+  expect(loginRes.status(), responseText).toBe(200);
+
+  const loginData = JSON.parse(responseText) as {
+    access_token?: string;
+    admin?: unknown;
+  };
+  if (!loginData.access_token || !loginData.admin) {
+    throw new Error(
+      `Admin login API response missing auth state. Response: ${responseText.substring(0, 500)}`,
+    );
+  }
 
   await page.goto('/login');
   await page.waitForLoadState('domcontentloaded');
-
-  // Wait for form to be ready
-  const emailInput = page.getByLabel(/email|邮箱/i).or(page.locator('input[type="email"]')).first();
-  const passwordInput = page.getByLabel(/password|密码/i).or(page.locator('input[type="password"]')).first();
-  const submitButton = page.getByRole('button', { name: /login|登录|submit|提交/i });
-
-  await expect(emailInput).toBeVisible({ timeout });
-  await expect(passwordInput).toBeVisible({ timeout });
-  await expect(submitButton).toBeVisible({ timeout });
-
-  // Fill the form - this will trigger React state updates
-  // Note: The button may be disabled initially due to hydration state (disabled={loading || !hydrated})
-  // Playwright's click() will auto-wait for the button to be actionable
-  await emailInput.fill(ADMIN_EMAIL);
-  await passwordInput.fill(ADMIN_PASSWORD);
-
-  // STEP 1: Wait for login API response
-  const loginResponsePromise = page.waitForResponse(
-    (response) => response.url().includes('/api/admin/login') && response.request().method() === 'POST',
-    { timeout }
-  );
-
-  await submitButton.click();
-
-  const loginResponse = await loginResponsePromise;
-  const responseStatus = loginResponse.status();
-  const responseText = await loginResponse.text();
-
-  // Assert response is 200 before proceeding
-  if (responseStatus !== 200) {
-    // Collect visible error text for diagnostics
-    const errorText = await page.locator('text=/登录失败|invalid|incorrect|failed|error/i').first().textContent().catch(() => 'No visible error');
-    throw new Error(
-      `Admin login API failed with status ${responseStatus}. ` +
-      `Response: ${responseText.substring(0, 500)}. ` +
-      `Visible error: ${errorText}`
-    );
-  }
-
-  // STEP 2: Wait for localStorage token to be set (proves auth state is durable)
-  await page.waitForFunction(
-    () => {
-      const token = localStorage.getItem('token');
-      const admin = localStorage.getItem('admin');
-      return Boolean(token && admin);
+  await page.evaluate(
+    ({ token, admin }) => {
+      localStorage.setItem('token', token);
+      localStorage.setItem('admin', JSON.stringify(admin));
     },
-    { timeout }
+    { token: loginData.access_token, admin: loginData.admin },
   );
 
-  // Verify token and admin are truthy
-  const token = await page.evaluate(() => localStorage.getItem('token'));
-  const admin = await page.evaluate(() => localStorage.getItem('admin'));
-
-  if (!token || !admin) {
-    throw new Error(
-      `Auth state incomplete after login. token: ${token ? 'present' : 'missing'}, ` +
-      `admin: ${admin ? 'present' : 'missing'}`
-    );
-  }
-
-  // STEP 3: Wait for navigation away from /login
-  await page.waitForURL((url) => !url.pathname.includes('/login'), { timeout });
-
-  // Final assertions to confirm login success
+  await page.goto('/');
+  await page.waitForLoadState('domcontentloaded', { timeout });
+  await page.waitForFunction(
+    () => Boolean(localStorage.getItem('token') && localStorage.getItem('admin')),
+    { timeout },
+  );
   await expect(page).not.toHaveURL(/\/login/, { timeout });
 }
