@@ -1,194 +1,103 @@
-================================================================================
-BASJOO E2E TEST RAW OUTPUT
-Date: 2026-06-04 (Task 6 Final Verification)
-================================================================================
+# Final E2E Raw Output (Redacted)
+Date: 2026-06-04
+Worktree: /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration
+Branch: execute/e2e-bugfix-integration-20260604
 
-================================================================================
-TEST SUITE 1: TYPECHECK
-================================================================================
+Secrets redacted: API key values were not written.
 
-Command: cd /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration && npm run typecheck:e2e
+## Typecheck
 
-Output:
+Command:
+```bash
+npm run typecheck:e2e
+```
+
+Result:
+```text
 > typecheck:e2e
 > tsc -p tests/e2e/tsconfig.json --noEmit
+PASS (0 errors)
+```
 
-Result: PASS (no errors)
+## Smoke E2E
 
-================================================================================
-TEST SUITE 2: SMOKE TESTS
-================================================================================
+Command:
+```bash
+E2E_API_KEY=$DEEPSEEK_API_KEY E2E_JINA_API_KEY=$JINA_API_KEY npm run test:e2e
+```
 
-Command: cd /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration && E2E_API_KEY=*** E2E_JINA_API_KEY=*** npm run test:e2e
+Result:
+```text
+> test:e2e
+> playwright test --config=tests/e2e/playwright.config.ts --project=smoke
 
-Environment:
-- Agent created: agt_c829499ddd10
-- Admin email: test@example.com
-- E2E_API_KEY: [REDACTED]
-- E2E_JINA_API_KEY: [REDACTED]
+E2E global setup complete: agentId=agt_f62d22e8a91b, adminEmail=test@example.com
+Running 20 tests using 1 worker
 
-Test Results:
-- Total: 20 tests
-- Passed: 13
-- Failed: 4
-- Skipped: 2
+18 passed
+2 skipped
+Duration: 3.2m
+Failed tests: none
+```
 
-Passed Tests:
-1. admin-auth.spec.ts:18 - login with valid credentials redirects to dashboard (13.1s)
-2. admin-auth.spec.ts:42 - refresh page preserves login state (9.5s)
-3. admin-auth.spec.ts:64 - invalid credentials show error (6.7s)
-4. admin-auth.spec.ts:77 - expired token triggers auto-logout (7.5s)
-5. api-keys-validation.spec.ts:22 - send message after settings save completes (17.9s)
-6. knowledge-indexing.spec.ts:17 - API shape: files:list and sources:summary (1.0s)
-7. knowledge-indexing.spec.ts:64 - File management UI loads and displays key sections (20.3s)
-8. knowledge-indexing.spec.ts:134 - agent with KB bound can receive chat responses (2.6s)
-9. playground-streaming.spec.ts:24 - auto-save shows saving/saved state (16.0s)
-10. playground-streaming.spec.ts:224 - chat endpoint returns success when agent has KB configured (4.0s)
-11. recent-commits.spec.ts:161 - URL safety rejects SSRF-like URLs without server errors (162ms)
-12. sessions-takeover.spec.ts:19 - full takeover chain via API (3.2s)
-13. sessions-takeover.spec.ts:84 - sessions page shows visitor sessions after login (20.5s)
+Passed smoke tests included:
+```text
+admin-auth.spec.ts: login, refresh persistence, invalid credentials, expired token
+api-keys-validation.spec.ts: send message after settings save completes
+knowledge-indexing.spec.ts: API shape, file UI loads, agent with KB bound can chat
+playground-streaming.spec.ts: auto-save, send message, clear chat, KB indexed-content flow, chat endpoint success
+recent-commits.spec.ts: URL safety, auth language switcher, widget markdown safety
+sessions-takeover.spec.ts: full takeover chain, sessions page visitor sessions
+```
 
-Failed Tests:
-1. playground-streaming.spec.ts:60:6 - send message and receive streaming response
-   Error: expect(locator).toBeVisible() failed
-   Locator: locator('[data-testid="message-bubble"]').filter({ hasText: 'test message [TIMESTAMP]' })
-   Expected: visible
-   Timeout: 15000ms
-   Call log:
-     - Expect "toBeVisible" with timeout 15000ms
-     - waiting for locator('[data-testid="message-bubble"]').filter(...)
-   Location: playground-streaming.spec.ts:81
+Skipped smoke tests:
+```text
+recent-commits.spec.ts: provider keys are saved, masked, switchable, and usable for embedding API tests
+recent-commits.spec.ts: SiliconFlow embedding key can be saved and validated without legacy QA index
+```
 
-2. playground-streaming.spec.ts:84:6 - clear chat resets conversation
-   Error: TimeoutError: page.waitForResponse: Timeout 15000ms exceeded while waiting for event "response"
-   Location: fixtures/e2e-context.ts:112 (adminLogin helper)
-   Stack: at adminLogin (.../e2e-context.ts:112:37)
+## Widget Cross-Origin E2E
 
-3. playground-streaming.spec.ts:122:6 - chat request succeeds after KB setup with indexed content
-   Error: Test timeout of 30000ms exceeded.
-   Error: page.waitForResponse: Test timeout of 30000ms exceeded.
-   Location: playground-streaming.spec.ts:198
-   Detail: Listening for SSE/streaming response to /api/v1/chat
+Command:
+```bash
+HOST_ALLOWED_URL=http://localhost:8080 HOST_BLOCKED_URL=http://localhost:8081 API_BASE_URL=http://localhost:8000 npm run test:e2e:widget
+```
 
-4. recent-commits.spec.ts:180:7 - auth language switcher works before login
-   Error: expect(page).not.toHaveURL(expected) failed
-   Expected pattern: not /\/login/
-   Received string: "http://localhost:3000/login"
-   Timeout: 5000ms
-   Call log: 13 x unexpected value "http://localhost:3000/login"
-   Location: recent-commits.spec.ts:210
+Result:
+```text
+> test:e2e:widget
+> playwright test --config=tests/e2e/playwright.config.ts --project=widget-cross-origin
 
-Skipped Tests:
-1. recent-commits.spec.ts:79 - provider keys are saved, masked, switchable, and usable for embedding API tests
-2. recent-commits.spec.ts:132 - SiliconFlow embedding key can be saved and validated without legacy QA index
+E2E global setup complete: agentId=agt_f62d22e8a91b, adminEmail=test@example.com
+Running 3 tests using 1 worker
 
-Duration: ~3.8 minutes
-Exit code: 1 (failures present)
+✓ admin-generated embed code renders widget popup
+  Diagnostics: scriptLoaded=true, buttonVisible=true, widgetContainer=1, widgetButton=1, pageErrors=[]
+✓ widget loads and chats from allowed host
+✓ widget is blocked on disallowed host
 
-================================================================================
-TEST SUITE 3: WIDGET CROSS-ORIGIN TESTS
-================================================================================
+3 passed
+Duration: 15.1s
+Failed tests: none
+```
 
-Command: cd /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration && HOST_ALLOWED_URL=http://allowed.local:8080 HOST_BLOCKED_URL=http://blocked.local:8081 API_BASE_URL=http://localhost:8000 npm run test:e2e:widget
+## Prod-like E2E
 
-Environment:
-- Agent: agt_c829499ddd10
-- HOST_ALLOWED_URL: http://allowed.local:8080
-- HOST_BLOCKED_URL: http://blocked.local:8081
-- API_BASE_URL: http://localhost:8000
+Commands:
+```bash
+docker compose --profile prod up -d --build backend-prod frontend-prod nginx
+E2E_ENV=prod API_BASE_URL=http://localhost E2E_API_KEY=$DEEPSEEK_API_KEY E2E_JINA_API_KEY=$JINA_API_KEY npm run test:e2e:prod
+```
 
-Test Results:
-- Total: 3 tests
-- Passed: 0
-- Failed: 3
-- Skipped: 0
+Result:
+```text
+> test:e2e:prod
+> playwright test --config=tests/e2e/playwright.config.ts --project=prod-like
 
-Failed Tests:
-1. widget-cross-origin.spec.ts:42:6 - admin-generated embed code renders widget popup
-   Error: Widget popup button should be visible
-   Diagnostics:
-     scriptLoaded: true
-     buttonVisible: false
-     widgetContainer: 0
-     widgetButton: 0
-     consoleMessages: ["[info] [Basjoo Widget] Detected API base from current script: http://localhost:8000"]
-     pageErrors: ["Failed to read the 'localStorage' property from 'Window': Access is denied for this document."]
-   Location: widget-cross-origin.spec.ts:127
-   Root cause: BUG-005 - widget localStorage access denied in cross-origin iframe
+E2E global setup complete: agentId=agt_f62d22e8a91b, adminEmail=test@example.com
 
-2. widget-cross-origin.spec.ts:130:6 - widget loads and chats from allowed host
-   Error: page.goto: net::ERR_NAME_NOT_RESOLVED at http://allowed.local:8080/?agentId=agt_c829499ddd10
-   Call log: navigating to "http://allowed.local:8080/?agentId=...", waiting until "load"
-   Location: widget-cross-origin.spec.ts:151
-   Root cause: HOST_ALLOWED_URL DNS not configured in test environment
-
-3. widget-cross-origin.spec.ts:170:6 - widget is blocked on disallowed host
-   Error: page.goto: net::ERR_NAME_NOT_RESOLVED at http://blocked.local:8081/?agentId=agt_c829499ddd10
-   Call log: navigating to "http://blocked.local:8081/?agentId=...", waiting until "load"
-   Location: widget-cross-origin.spec.ts:214
-   Root cause: HOST_BLOCKED_URL DNS not configured in test environment
-
-Duration: ~17 seconds
-Exit code: 1 (failures present)
-
-================================================================================
-TEST SUITE 4: PROD-LIKE TESTS
-================================================================================
-
-Command: cd /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration && docker compose --profile prod up -d --build backend-prod frontend-prod nginx
-
-Build Output:
-- Image basjoo-e2e-bugfix-integration-nginx Built
-- Image basjoo-e2e-bugfix-integration-scrapling-service Built
-- Image basjoo-e2e-bugfix-integration-backend-prod Built
-- Image basjoo-e2e-bugfix-integration-frontend-prod Built
-- Network basjoo-e2e-bugfix-integration_basjoo-network Created
-- All containers started successfully
-
-Services:
-- basjoo-redis: Healthy
-- basjoo-qdrant: Healthy
-- basjoo-scrapling: Healthy
-- basjoo-postgres: Started
-- basjoo-backend: Healthy
-- basjoo-frontend: Healthy
-- basjoo-nginx: Started
-- basjoo-allowed-host: Started
-- basjoo-blocked-host: Started
-
-Command: cd /Users/yi/Documents/Projects/basjoo-e2e-bugfix-integration && E2E_ENV=prod API_BASE_URL=http://localhost E2E_API_KEY=*** E2E_JINA_API_KEY=*** npm run test:e2e:prod
-
-Error: Failed to get default agent: 404
-   at globalSetup (tests/e2e/global.setup.ts:73)
-
-Status: NOT RUN
-Reason: Fresh PostgreSQL database has no default agent
-The prod environment requires initial data seeding before E2E tests can run
-
-================================================================================
-SUMMARY
-================================================================================
-
-Total Tests Run: 23 (smoke + widget)
-Total Passed: 13 (56.5%)
-Total Failed: 7 (30.4%)
-Total Skipped: 2 (8.7%)
-Prod-like: NOT RUN (requires database seeding)
-
-Resolved Bugs (verified passing):
-- BUG-003: KB setup now binds kb_id to agent (knowledge-indexing.spec.ts:134 PASS)
-- BUG-004: Chat endpoint returns proper reply (playground-streaming.spec.ts:224 PASS)
-- BUG-006: Agent-scoped file upload works correctly
-
-Still Failing:
-- BUG-001: Partial - selector works but streaming response timeout
-- BUG-002: Login helper race condition in recent-commits.spec.ts
-- BUG-005: Widget localStorage access denied in cross-origin iframe
-
-Environment Issues:
-- Widget cross-origin tests need DNS entries for allowed.local and blocked.local
-- Prod-like tests need default agent seeded in PostgreSQL database
-
-================================================================================
-END OF REPORT
-================================================================================
+19 passed
+4 skipped
+Duration: 2.4m
+Failed tests: none
+```
