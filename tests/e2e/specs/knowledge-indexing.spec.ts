@@ -69,6 +69,7 @@ test.describe("Knowledge Source Flow", () => {
 		const context = await resolveAgentContext(request);
 
 		// 2. Complete KB setup via API (required for FileUploadManagement to show content)
+		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
 		const kbSetupRes = await request.post(
 			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
 			{
@@ -79,7 +80,7 @@ test.describe("Knowledge Source Flow", () => {
 				data: {
 					embedding_provider: "jina",
 					embedding_model: "jina-embeddings-v3",
-					jina_api_key: "test_jina_key_for_e2e",
+					jina_api_key: jinaApiKey,
 				},
 			},
 		);
@@ -139,6 +140,7 @@ test.describe("Knowledge Source Flow", () => {
 
 		// 1. Ensure KB setup - may need to reset first if agent has inconsistent state
 		// (kb_setup_completed=true but kb_id=null from pre-fix test runs)
+		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
 		let kbSetupRes = await request.post(
 			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agent.id}`,
 			{
@@ -149,13 +151,13 @@ test.describe("Knowledge Source Flow", () => {
 				data: {
 					embedding_provider: "jina",
 					embedding_model: "jina-embeddings-v3",
-					jina_api_key: "test_jina_key_for_e2e",
+					jina_api_key: jinaApiKey,
 				},
 			},
 		);
 
-		// Check if we got 409 but kb_id might be null (inconsistent state from pre-fix runs)
-		if (kbSetupRes.status() === 409) {
+		// Check if we got 409 or 400 but kb_id might be null (inconsistent state from pre-fix runs)
+		if (kbSetupRes.status() === 409 || kbSetupRes.status() === 400) {
 			// Check current agent config
 			const checkRes = await request.get(
 				`${API_BASE}/api/v1/agent?agent_id=${agent.id}`,
@@ -168,10 +170,11 @@ test.describe("Knowledge Source Flow", () => {
 
 			// If kb_id is null but setup is completed, reset and retry
 			if (!checkConfig.kb_id && checkConfig.kb_setup_completed) {
-				await request.post(
+				const resetRes = await request.post(
 					`${API_BASE}/api/v1/agent:kb-reset?agent_id=${agent.id}`,
 					{ headers: { Authorization: `Bearer ${token}` } },
 				);
+				expect(resetRes.status()).toBe(200);
 				// Retry setup
 				kbSetupRes = await request.post(
 					`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agent.id}`,
@@ -183,15 +186,16 @@ test.describe("Knowledge Source Flow", () => {
 						data: {
 							embedding_provider: "jina",
 							embedding_model: "jina-embeddings-v3",
-							jina_api_key: "test_jina_key_for_e2e",
+							jina_api_key: jinaApiKey,
 						},
 					},
 				);
 			}
 		}
-		expect([200, 201, 400, 409]).toContain(kbSetupRes.status());
+		// Setup should succeed (200) or be already completed (409)
+		expect([200, 409]).toContain(kbSetupRes.status());
 
-		// 2. Verify agent config shows kb_id
+		// 2. Verify agent config shows kb_id with diagnostic output
 		const agentConfigRes = await request.get(
 			`${API_BASE}/api/v1/agent?agent_id=${agent.id}`,
 			{ headers: { Authorization: `Bearer ${token}` } },
@@ -202,7 +206,7 @@ test.describe("Knowledge Source Flow", () => {
 			kb_setup_completed?: boolean;
 		};
 		// Agent should have kb_id bound after setup
-		expect(config.kb_id).toBeTruthy();
+		expect(config.kb_id, `KB setup failed: kb_id is null. Setup response status: ${kbSetupRes.status()}, kb_setup_completed: ${config.kb_setup_completed}`).toBeTruthy();
 
 		// 3. Chat should succeed (uses mock LLM in test mode, but verifies flow)
 		const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
@@ -215,11 +219,10 @@ test.describe("Knowledge Source Flow", () => {
 		expect(chatRes.status()).toBe(200);
 		const chatData = (await chatRes.json()) as {
 			reply?: string;
-			message?: string;
 			session_id?: string;
 		};
-		// API returns 'reply' field (or 'message' in some error cases)
-		expect(chatData.reply || chatData.message).toBeTruthy();
+		// API returns 'reply' field per ChatResponse schema
+		expect(chatData.reply).toBeTruthy();
 		expect(chatData.session_id).toBeTruthy();
 	});
 });
