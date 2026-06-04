@@ -11,7 +11,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import database
-from models import KbChunk, KbDocument
+from core.encryption import decrypt_api_key
+from models import Agent, KbChunk, KbDocument
 from services.document_parser import DocumentParser
 from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
@@ -23,6 +24,29 @@ logger = logging.getLogger(__name__)
 import os
 
 UPLOAD_ROOT = Path(os.environ.get("KB_UPLOAD_ROOT", "/app/data/kb_uploads"))
+
+
+def get_embedding_api_key(agent: Agent | None) -> str | None:
+    """Get decrypted embedding API key from agent based on embedding_provider.
+    
+    Args:
+        agent: The Agent model instance (or None)
+        
+    Returns:
+        Decrypted API key for the configured embedding provider, or None if not found.
+    """
+    if not agent:
+        return None
+    
+    embedding_provider = getattr(agent, "embedding_provider", "jina")
+    if embedding_provider == "jina":
+        return decrypt_api_key(getattr(agent, "jina_api_key", None))
+    elif embedding_provider == "siliconflow":
+        return decrypt_api_key(getattr(agent, "siliconflow_api_key", None))
+    elif embedding_provider == "custom":
+        # For custom provider, use jina_api_key as fallback
+        return decrypt_api_key(getattr(agent, "jina_api_key", None))
+    return None
 
 
 class KbDocumentProcessor:
@@ -109,7 +133,14 @@ class KbDocumentProcessor:
                 # embed (retry inside or simple)
                 model = cast(str, getattr(kb, "embedding_model", "BAAI/bge-m3"))
                 base_url = cast(str | None, getattr(kb, "embedding_base_url", None))
-                embeddings = await self.parser.embed_texts(chunks, model, base_url)
+
+                # Get agent for this KB to decrypt embedding API key
+                agent_stmt = select(Agent).where(Agent.kb_id == kb_id)
+                agent_result = await session.execute(agent_stmt)
+                agent = agent_result.scalar_one_or_none()
+                api_key = get_embedding_api_key(agent)
+
+                embeddings = await self.parser.embed_texts(chunks, model, base_url, api_key=api_key)
                 if len(embeddings) != len(chunks):
                     raise ValueError("Embedding count mismatch")
 
@@ -153,6 +184,8 @@ class KbDocumentProcessor:
                 logger.info(f"Doc {doc_id} indexed: {len(chunks)} chunks")
 
             except Exception as e:
+                # Intentionally catch all exceptions and set error status.
+                # Caller must check doc.status to determine success/failure.
                 logger.exception(f"Processing failed for doc {doc_id}: {e}")
                 object.__setattr__(doc, "status", "error")
                 object.__setattr__(doc, "error_message", str(e)[:500])

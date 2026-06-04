@@ -220,8 +220,26 @@ async def process_url_refetch(
                     # Process the document (chunk, embed, upsert to Qdrant)
                     await processor.process_document(str(doc.id), tenant_id, kb_id)
 
-                    # Mark URL as indexed
-                    url_source.is_indexed = True
+                    # Re-fetch document to check actual processing status
+                    # (process_document catches exceptions internally and sets status="error")
+                    from models import KbDocument
+                    doc_result = await session.execute(
+                        select(KbDocument).where(
+                            KbDocument.id == doc.id,
+                            KbDocument.tenant_id == tenant_id
+                        )
+                    )
+                    updated_doc = doc_result.scalar_one_or_none()
+
+                    # Only mark as indexed if document processing succeeded
+                    if updated_doc and getattr(updated_doc, "status", None) == "ready":
+                        url_source.is_indexed = True
+                    else:
+                        url_source.is_indexed = False
+                        logger.warning(
+                            f"[URL Refetch] Document processing did not complete successfully "
+                            f"for {url}, doc_status={getattr(updated_doc, 'status', 'N/A') if updated_doc else 'not_found'}"
+                        )
                     await session.commit()
 
                     logger.info(f"[URL Refetch] Indexed URL {url} with doc {doc.id}")

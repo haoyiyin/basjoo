@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import delete as sa_delete, func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database import AsyncSessionLocal
 from models import Agent, KnowledgeBase, KbChunk, KbDocument, Tenant
 from services.qdrant_service import QdrantKbService, get_kb_collection_name
@@ -397,6 +398,16 @@ class KbService:
         # Get agent's embedding config
         embedding_model = getattr(agent, "embedding_model", None) or "BAAI/bge-m3"
         embedding_base_url = getattr(agent, "embedding_api_base", None)
+        embedding_provider = getattr(agent, "embedding_provider", None) or "jina"
+
+        # Apply default base URL based on provider when not explicitly set
+        if embedding_base_url is None:
+            if embedding_provider == "jina":
+                embedding_base_url = settings.jina_embedding_api_base.rstrip(
+                    "/embeddings"
+                )
+            elif embedding_provider == "siliconflow":
+                embedding_base_url = "https://api.siliconflow.cn/v1"
 
         # Create new KB
         kb = KnowledgeBase(

@@ -96,7 +96,11 @@ export default function URLManagement() {
       const hasPendingOrFetching = data.urls.some(
         (url) => url.status === 'pending' || url.status === 'fetching'
       );
-      if (hasPendingOrFetching && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
+      const hasUnindexedSuccess = data.urls.some(
+        (url) => url.status === 'success' && !url.is_indexed
+      );
+      // 如果有 pending/fetching 的 URL，或者成功但未索引的 URL，启动轮询
+      if ((hasPendingOrFetching || hasUnindexedSuccess) && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
         setCrawlStartCount(data.total);
         setCrawlPolling(true);
       }
@@ -232,10 +236,11 @@ export default function URLManagement() {
       pollCount++;
 
       try {
-        // 同时查询 URL 列表和任务状态
-        const [data, tasksStatus] = await Promise.all([
+        // 同时查询 URL 列表、任务状态和索引状态
+        const [data, tasksStatus, indexStatus] = await Promise.all([
           api.listURLs(agentId),
-          api.getTasksStatus(agentId)
+          api.getTasksStatus(agentId),
+          api.getIndexStatus(agentId).catch(() => null) // 优雅降级，如果 API 不存在
         ]);
 
         // 更新 URL 列表
@@ -251,24 +256,46 @@ export default function URLManagement() {
           consecutiveNoChange++;
         }
 
-        // 停止条件：
-        // 1. 后端报告没有正在进行的抓取任务
-        // 2. 且已经轮询了至少 3 次
-        // 3. 且连续 2 次没有新 URL 增加（确保数据已稳定）
-        if (!tasksStatus.is_crawling && pollCount > 3 && consecutiveNoChange >= 2) {
+        // 计算索引相关状态
+        const hasPendingOrFetching = data.urls.some(
+          (url) => url.status === 'pending' || url.status === 'fetching'
+        );
+        const hasUnindexedSuccess = data.urls.some(
+          (url) => url.status === 'success' && !url.is_indexed
+        );
+        const isIndexing = indexStatus !== null && 
+          (indexStatus.status === 'processing' || indexStatus.status === 'pending');
+
+        // 停止条件（必须全部满足）：
+        // 1. 没有 pending/fetching 的 URL
+        // 2. 没有成功但未索引的 URL
+        // 3. 后端报告没有正在进行的抓取任务 (is_crawling = false)
+        // 4. 没有正在重建索引 (is_rebuilding = false)
+        // 5. 没有正在处理的索引任务
+        // 6. 已经轮询了至少 3 次
+        // 7. 连续 2 次没有新 URL 增加（确保数据已稳定）
+        const shouldStop = 
+          !hasPendingOrFetching &&
+          !hasUnindexedSuccess &&
+          !tasksStatus.is_crawling &&
+          !tasksStatus.is_rebuilding &&
+          !isIndexing &&
+          pollCount > 3 &&
+          consecutiveNoChange >= 2;
+
+        if (shouldStop) {
           if (pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current);
             pollingIntervalRef.current = null;
           }
           setCrawlPolling(false);
-          window.setTimeout(() => {
-            void loadURLs();
-          }, 500);
+          // 轮询停止后，最后刷新一次 URL 列表
+          await loadURLs();
           return;
         }
 
         // 备选停止条件：如果轮询超过 30 次仍没有变化，可能是抓取失败
-        if (consecutiveNoChange > 30 && !tasksStatus.is_crawling) {
+        if (consecutiveNoChange > 30 && !tasksStatus.is_crawling && !tasksStatus.is_rebuilding && !isIndexing) {
           await stopPolling();
         }
       } catch (error) {
@@ -277,10 +304,12 @@ export default function URLManagement() {
     };
 
     // Initial poll - 立即执行第一次
-    pollURLs();
+    void pollURLs();
 
     // Set up interval
-    pollingIntervalRef.current = setInterval(pollURLs, 2000);
+    pollingIntervalRef.current = setInterval(() => {
+      void pollURLs();
+    }, 2000);
 
     return () => {
       if (pollingIntervalRef.current) {
@@ -336,6 +365,27 @@ export default function URLManagement() {
       pending: { className: 'badge badge-info badge-pulse', label: t('status.pending') },
     };
     return styles[status] || { className: 'badge', label: status };
+  };
+
+  const getIndexStatusBadge = (url: URLSource): { className: string; label: string; showRebuild: boolean } | null => {
+    if (url.status !== 'success') {
+      return { className: 'badge', label: 'Not ready', showRebuild: false };
+    }
+    if (url.is_indexed) {
+      return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+    }
+    return { className: 'badge badge-warning', label: 'Not Indexed', showRebuild: true };
+  };
+
+  const handleRebuildIndex = async () => {
+    if (!agentId) return;
+    try {
+      await api.rebuildIndex(agentId);
+      // Poll for status updates
+      setTimeout(() => loadURLs(), 1000);
+    } catch (error) {
+      console.error('Failed to rebuild index:', error);
+    }
   };
 
   const handleDelete = async (urlId: number) => {
@@ -1135,10 +1185,34 @@ export default function URLManagement() {
                           alignItems: 'center',
                           gap: 'var(--space-2)',
                           marginBottom: 'var(--space-2)',
+                          flexWrap: 'wrap',
                         }}>
                           <span className={getStatusBadge(url.status).className}>
                             {getStatusBadge(url.status).label}
                           </span>
+                          {getIndexStatusBadge(url) && (
+                            <span className={getIndexStatusBadge(url)!.className}>
+                              {getIndexStatusBadge(url)!.label}
+                            </span>
+                          )}
+                          {url.status === 'success' && !url.is_indexed && (
+                            <button
+                              onClick={handleRebuildIndex}
+                              className="btn-ghost"
+                              style={{
+                                fontSize: 'var(--text-xs)',
+                                padding: '2px 8px',
+                                color: 'var(--color-accent-primary)',
+                              }}
+                              title="Rebuild index"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M23 4v6h-6M1 20v-6h6" />
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                              </svg>
+                              Reindex
+                            </button>
+                          )}
                         </div>
                         <a
                           href={url.url}
