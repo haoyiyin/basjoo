@@ -61,8 +61,11 @@ class KbRetrievalService:
                 )
                 return []
 
-            # 2. Enforce tenant match on KB (logical ownership check)
-            if kb.tenant_id != tenant_id:
+            # 2. Derive effective tenant and enforce match
+            # When tenant_id is None (chat path), derive from KB to allow retrieval
+            # When tenant_id is explicit, it must match KB's tenant
+            effective_tenant = tenant_id or kb.tenant_id
+            if tenant_id is not None and kb.tenant_id != tenant_id:
                 logger.warning(
                     f"Tenant mismatch: requested {tenant_id} but KB {kb.id} belongs to {kb.tenant_id}"
                 )
@@ -81,9 +84,7 @@ class KbRetrievalService:
                 return []
 
             # 4. Search with double isolation (collection + payload filter)
-            # Use provided tenant_id or fall back to the KB's own tenant_id
-            # (chat path passes None; admin retrieve path passes explicit tenant_id)
-            effective_tenant = tenant_id or kb.tenant_id
+            # Use effective_tenant (derived from KB when tenant_id is None)
             raw_hits = await self.qdrant.search_kb(
                 kb_id=kb.id,
                 tenant_id=effective_tenant,
