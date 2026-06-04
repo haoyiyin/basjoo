@@ -4,6 +4,8 @@ Ensures every agent that uses KB features has a tenant-scoped KnowledgeBase
 bound through agent.kb_id, with proper tenant isolation.
 """
 
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import select
 
@@ -166,3 +168,99 @@ async def test_agent_kb_binding_creates_qdrant_collection(setup_test_db):
         # KB should have a valid qdrant_collection name
         assert kb.qdrant_collection is not None
         assert kb.qdrant_collection.startswith("kb_")
+
+
+@pytest.mark.asyncio
+async def test_kb_setup_endpoint_creates_kb_binding(client, default_agent_id):
+    """KB setup endpoint should create/bind tenant-scoped KB when agent has no kb_id."""
+    async with database.AsyncSessionLocal() as session:
+        # Get agent and ensure it has no KB binding
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        agent.kb_id = None
+        agent.kb_setup_completed = False
+        await session.commit()
+
+    # Mock Qdrant to avoid external calls
+    with patch("services.kb_service.QdrantKbService.ensure_collection") as mock_ensure:
+        mock_ensure.return_value = None
+
+        # Call kb-setup endpoint
+        response = await client.post(
+            f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
+            json={
+                "embedding_provider": "jina",
+                "jina_api_key": "test_jina_key_for_kb_setup",
+            },
+        )
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    data = response.json()
+
+    # Verify kb_setup_completed is True
+    assert data["kb_setup_completed"] is True
+
+    # Verify agent now has kb_id bound
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        assert agent.kb_id is not None
+
+        # Verify the KB exists and belongs to a tenant
+        result = await session.execute(
+            select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
+        )
+        kb = result.scalar_one_or_none()
+        assert kb is not None
+        assert kb.tenant_id is not None
+
+        # Verify we can retrieve with tenant isolation
+        kb_svc = KbService(session=session)
+        kb_fetched = await kb_svc.get_knowledge_base(kb.tenant_id, kb.id)
+        assert kb_fetched is not None
+        assert kb_fetched.id == kb.id
+
+
+@pytest.mark.asyncio
+async def test_kb_setup_endpoint_returns_existing_kb_if_already_bound(client, default_agent_id):
+    """KB setup endpoint should return existing KB if agent already has kb_id."""
+    async with database.AsyncSessionLocal() as session:
+        # Create tenant and KB first
+        tenant = Tenant(name="Existing Tenant", slug="existing-tenant")
+        session.add(tenant)
+        await session.flush()
+
+        kb = KnowledgeBase(
+            tenant_id=tenant.id,
+            name="Existing KB",
+            qdrant_collection="kb_existing_test",
+        )
+        session.add(kb)
+        await session.flush()
+
+        # Bind to agent
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        agent.kb_id = kb.id
+        agent.kb_setup_completed = True
+        await session.commit()
+
+        existing_kb_id = kb.id
+
+    # Call kb-setup endpoint - should return 409 conflict since already completed
+    response = await client.post(
+        f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
+        json={
+            "embedding_provider": "jina",
+            "jina_api_key": "test_jina_key_for_kb_setup",
+        },
+    )
+
+    # Should return 409 since kb_setup_completed is already True
+    assert response.status_code == 409, f"Expected 409, got {response.status_code}: {response.text}"

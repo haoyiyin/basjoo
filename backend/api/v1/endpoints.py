@@ -94,6 +94,7 @@ from core.encryption import encrypt_api_key, decrypt_api_key
 from services.llm_service import get_llm_service
 from services.auth_service import AuthService
 from services.kb_retrieval_service import KbRetrievalService
+from services.kb_service import KbService
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -1999,7 +2000,7 @@ async def kb_setup(
                 detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
             )
 
-    # Save embedding settings
+    # Save embedding settings first (needed for KB creation)
     agent.embedding_provider = embedding_provider
     if request.embedding_api_base:
         agent.embedding_api_base = request.embedding_api_base
@@ -2012,17 +2013,10 @@ async def kb_setup(
     if request.siliconflow_api_key:
         agent.siliconflow_api_key = encrypt_api_key(request.siliconflow_api_key)
 
-    agent.kb_setup_completed = True
-
-    try:
-        await db.commit()
-    except Exception as e:
-        logger.exception(f"DB commit failed during kb_setup: {e}")
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save knowledge base setup: {str(e)}",
-        )
+    # Create/bind tenant-scoped KB for this agent
+    # This sets agent.kb_id and agent.kb_setup_completed
+    kb_svc = KbService(session=db)
+    await kb_svc.get_or_create_agent_kb(agent_id, session=db)
 
     await db.refresh(agent)
 
