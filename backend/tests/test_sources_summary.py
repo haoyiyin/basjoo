@@ -183,6 +183,74 @@ async def test_sources_summary_with_no_kb(client, default_agent_id):
 
 
 @pytest.mark.asyncio
+async def test_sources_summary_filters_by_tenant_id(client, agent_with_kb_docs):
+    """Test that sources:summary only counts KbDocuments with matching tenant_id.
+
+    This test creates a "corrupt" document with the same kb_id but a different
+    tenant_id to verify that tenant filtering is enforced. If the implementation
+    lacks tenant_id filtering, this document would be incorrectly counted.
+    """
+    import database
+    from models import Tenant, KbDocument
+
+    agent_id = agent_with_kb_docs["agent_id"]
+    kb_id = agent_with_kb_docs["kb_id"]
+    original_tenant_id = agent_with_kb_docs["tenant_id"]
+
+    # Create a different tenant
+    async with database.AsyncSessionLocal() as session:
+        other_tenant = Tenant(name="Other Tenant", slug="other-tenant")
+        session.add(other_tenant)
+        await session.flush()
+
+        # Create a "cross-tenant" document with same kb_id but different tenant_id
+        # This simulates a data integrity issue or malicious attempt
+        cross_tenant_doc = KbDocument(
+            kb_id=kb_id,  # Same KB
+            tenant_id=other_tenant.id,  # Different tenant
+            filename="cross_tenant_file.pdf",
+            file_type="pdf",
+            status="ready",
+            file_size=99999,
+            chunk_count=1,
+        )
+        session.add(cross_tenant_doc)
+        await session.commit()
+
+    # Get sources summary
+    response = await client.get(f"/api/v1/sources:summary?agent_id={agent_id}")
+
+    assert response.status_code == 200, (
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data = response.json()
+    files = data["files"]
+
+    # Should still show 5 documents (original test data), NOT 6
+    # If tenant filtering is missing, the cross-tenant doc would be counted
+    assert files["total"] == 5, (
+        f"Expected total 5 KbDocuments (tenant-scoped), got {files['total']}. "
+        f"Cross-tenant document with kb_id={kb_id} but different tenant_id was incorrectly counted."
+    )
+    assert files["ready"] == 2, (
+        f"Expected 2 ready documents (tenant-scoped), got {files['ready']}"
+    )
+
+    # Verify cross-tenant doc exists in DB with different tenant_id
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(KbDocument).where(KbDocument.filename == "cross_tenant_file.pdf")
+        )
+        doc = result.scalar_one_or_none()
+        assert doc is not None, "Cross-tenant document should exist in DB"
+        assert doc.kb_id == kb_id, "Cross-tenant doc should have same kb_id"
+        assert doc.tenant_id != original_tenant_id, (
+            f"Cross-tenant doc should have different tenant_id: {doc.tenant_id} vs {original_tenant_id}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_sources_summary_requires_auth(public_client, agent_with_kb_docs):
     """Test that sources:summary requires authentication."""
     agent_id = agent_with_kb_docs["agent_id"]

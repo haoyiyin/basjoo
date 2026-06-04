@@ -2611,38 +2611,56 @@ async def get_sources_summary(
         )
         tenant_id = kb_result.scalar_one_or_none()
 
-        # Query KbDocument stats
-        file_total_result = await db.execute(
-            select(func.count())
-            .select_from(KbDocument)
-            .where(KbDocument.kb_id == kb_id)
-        )
-        file_total = file_total_result.scalar() or 0
-
-        file_ready_result = await db.execute(
-            select(func.count())
-            .select_from(KbDocument)
-            .where(KbDocument.kb_id == kb_id, KbDocument.status == "ready")
-        )
-        file_ready = file_ready_result.scalar() or 0
-
-        # KbDocument statuses: pending, processing, ready, error
-        # processing includes pending + processing; error documents are not ready
-        file_processing_result = await db.execute(
-            select(func.count())
-            .select_from(KbDocument)
-            .where(
-                KbDocument.kb_id == kb_id,
-                KbDocument.status.in_(["pending", "processing"]),
+        if tenant_id:
+            # Query KbDocument stats with tenant-scoped filtering
+            file_total_result = await db.execute(
+                select(func.count())
+                .select_from(KbDocument)
+                .where(
+                    KbDocument.kb_id == kb_id,
+                    KbDocument.tenant_id == tenant_id,
+                )
             )
-        )
-        file_processing = file_processing_result.scalar() or 0
+            file_total = file_total_result.scalar() or 0
 
-        file_size_result = await db.execute(
-            select(func.sum(KbDocument.file_size)).where(KbDocument.kb_id == kb_id)
-        )
-        file_size_bytes = file_size_result.scalar() or 0
-        file_size_kb = round(file_size_bytes / 1024, 2)
+            file_ready_result = await db.execute(
+                select(func.count())
+                .select_from(KbDocument)
+                .where(
+                    KbDocument.kb_id == kb_id,
+                    KbDocument.tenant_id == tenant_id,
+                    KbDocument.status == "ready",
+                )
+            )
+            file_ready = file_ready_result.scalar() or 0
+
+            # KbDocument statuses: pending, processing, ready, error
+            # processing includes pending + processing; error documents are not ready
+            file_processing_result = await db.execute(
+                select(func.count())
+                .select_from(KbDocument)
+                .where(
+                    KbDocument.kb_id == kb_id,
+                    KbDocument.tenant_id == tenant_id,
+                    KbDocument.status.in_(["pending", "processing"]),
+                )
+            )
+            file_processing = file_processing_result.scalar() or 0
+
+            file_size_result = await db.execute(
+                select(func.sum(KbDocument.file_size)).where(
+                    KbDocument.kb_id == kb_id,
+                    KbDocument.tenant_id == tenant_id,
+                )
+            )
+            file_size_bytes = file_size_result.scalar() or 0
+            file_size_kb = round(file_size_bytes / 1024, 2)
+        else:
+            # KB exists but has no tenant_id - return zero stats safely
+            file_total = 0
+            file_ready = 0
+            file_processing = 0
+            file_size_kb = 0.0
     else:
         # No KB bound, all file stats are zero
         file_total = 0
@@ -3539,18 +3557,26 @@ async def get_index_info(
     agent = result.scalar_one()
     index_exists = agent.kb_id is not None
 
-    # Count ready KbDocuments
+    # Count ready KbDocuments with tenant-scoped filtering
     files_indexed = 0
     if agent.kb_id:
-        files_indexed = (
-            await db.scalar(
-                select(func.count(KbDocument.id)).where(
-                    KbDocument.kb_id == agent.kb_id,
-                    KbDocument.status == "ready",
-                )
-            )
-            or 0
+        # Get tenant_id from KnowledgeBase for tenant-scoped query
+        kb_result = await db.execute(
+            select(KnowledgeBase.tenant_id).where(KnowledgeBase.id == agent.kb_id)
         )
+        kb_tenant_id = kb_result.scalar_one_or_none()
+
+        if kb_tenant_id:
+            files_indexed = (
+                await db.scalar(
+                    select(func.count(KbDocument.id)).where(
+                        KbDocument.kb_id == agent.kb_id,
+                        KbDocument.tenant_id == kb_tenant_id,
+                        KbDocument.status == "ready",
+                    )
+                )
+                or 0
+            )
 
     return IndexInfoResponse(
         agent_id=agent_id,

@@ -96,6 +96,7 @@ async def agent_with_ready_files(setup_test_db):
         yield {
             "agent_id": agent.id,
             "kb_id": kb.id,
+            "tenant_id": tenant.id,
             "ready_count": 2,
         }
 
@@ -149,6 +150,56 @@ async def test_index_info_no_kb_returns_zero_files(client, default_agent_id):
     )
     assert data["files_indexed"] == 0, (
         f"Expected files_indexed=0 when no KB, got {data['files_indexed']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_index_info_filters_by_tenant_id(client, agent_with_ready_files):
+    """Test that index:info only counts KbDocuments with matching tenant_id.
+
+    This test creates a "corrupt" document with the same kb_id but a different
+    tenant_id to verify that tenant filtering is enforced in the files_indexed count.
+    """
+    import database
+    from models import Tenant, KbDocument
+
+    agent_id = agent_with_ready_files["agent_id"]
+    kb_id = agent_with_ready_files["kb_id"]
+    original_tenant_id = agent_with_ready_files["tenant_id"]
+
+    # Create a different tenant and cross-tenant document
+    async with database.AsyncSessionLocal() as session:
+        other_tenant = Tenant(name="Other Tenant Index", slug="other-tenant-index")
+        session.add(other_tenant)
+        await session.flush()
+
+        # Create a "cross-tenant" ready document that should NOT be counted
+        cross_tenant_doc = KbDocument(
+            kb_id=kb_id,  # Same KB
+            tenant_id=other_tenant.id,  # Different tenant
+            filename="cross_tenant_ready.pdf",
+            file_type="pdf",
+            status="ready",  # Ready status would be counted if no tenant filter
+            file_size=99999,
+            chunk_count=1,
+        )
+        session.add(cross_tenant_doc)
+        await session.commit()
+
+    # Get index info
+    response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
+
+    assert response.status_code == 200, (
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data = response.json()
+
+    # Should still show 2 ready files (original test data), NOT 3
+    # If tenant filtering is missing, the cross-tenant doc would be counted
+    assert data["files_indexed"] == 2, (
+        f"Expected files_indexed=2 (tenant-scoped), got {data['files_indexed']}. "
+        f"Cross-tenant ready document with kb_id={kb_id} but different tenant_id was incorrectly counted."
     )
 
 
