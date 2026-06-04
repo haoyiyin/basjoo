@@ -48,18 +48,7 @@ test.describe("Widget Cross-Origin", () => {
 		const agent = await agentRes.json();
 		expect(agent.id).toBeTruthy();
 
-		// Step 2: Set the current test page origin as allowed (using about:blank or file:// won't work,
-		// so we use localhost which is the default for the backend)
-		const testOrigin = "http://localhost";
-		await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": "application/json",
-			},
-			data: { allowed_widget_origins: [testOrigin] },
-		});
-
-		// Step 3: Construct the embed code using same logic as admin UI
+		// Step 2: Construct the embed code using same logic as admin UI
 		// buildWidgetEmbedCode(agent.id, scriptBaseUrl) generates:
 		// <script src="{scriptBaseUrl}/sdk.js?agent_id={agentId}" async></script>
 		const scriptBaseUrl = API_BASE; // Same as backend URL
@@ -84,12 +73,19 @@ test.describe("Widget Cross-Origin", () => {
 			console.log("[Widget Page Error]", error.message);
 		});
 
-		// Step 4: Use the widget-demo page which uses the same embed pattern
-		// The widget-demo page loads the SDK from the backend with agent_id parameter
-		await page.goto(`${API_BASE}/widget-demo`);
-
-		// Wait for page to load
-		await page.waitForLoadState("networkidle");
+		// Step 4: Inject the actual admin-generated script tag into a plain host page.
+		// This keeps the diagnostic focused on the copied embed code path rather than
+		// the built-in /widget-demo page.
+		await page.setContent(`
+			<!doctype html>
+			<html>
+				<head><title>Basjoo widget embed diagnostic</title></head>
+				<body>
+					<h1>Third-party host page</h1>
+					<script src="${embedScriptUrl.toString()}" async></script>
+				</body>
+			</html>
+		`, { waitUntil: "domcontentloaded" });
 
 		// Check if SDK script loaded successfully
 		const scriptLoaded = await page.evaluate((sdkUrl) => {
@@ -142,7 +138,7 @@ test.describe("Widget Cross-Origin", () => {
 		const agent = await agentRes.json();
 
 		// Set the allowed host as widget origin
-		const allowedHost = process.env.HOST_ALLOWED_URL!.replace(/\/$/", "");
+		const allowedHost = process.env.HOST_ALLOWED_URL!.replace(/\/$/, "");
 		await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
 			headers: {
 				Authorization: `Bearer ${token}`,
