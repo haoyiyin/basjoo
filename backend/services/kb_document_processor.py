@@ -10,7 +10,7 @@ from typing import cast
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import AsyncSessionLocal
+import database
 from models import KbChunk, KbDocument
 from services.document_parser import DocumentParser
 from services.kb_service import KbService
@@ -73,7 +73,7 @@ class KbDocumentProcessor:
 
     async def process_document(self, doc_id: str, tenant_id: str, kb_id: str):
         """Background task entrypoint. Updates status, parses, chunks, embeds, upserts."""
-        async with AsyncSessionLocal() as session:
+        async with database.AsyncSessionLocal() as session:
             # fetch with tenant filter
             stmt = select(KbDocument).where(
                 KbDocument.id == doc_id, KbDocument.tenant_id == tenant_id
