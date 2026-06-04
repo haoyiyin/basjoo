@@ -1,0 +1,165 @@
+================================================================================
+BASJOO E2E TEST RAW OUTPUT
+Date: 2026-06-04
+================================================================================
+
+TEST SUITE 1: SMOKE TESTS
+================================================================================
+
+Command: cd /Users/yi/Documents/Projects/basjoo && E2E_API_KEY=*** npx playwright test --config=tests/e2e/playwright.config.ts --project=smoke
+
+Environment Setup:
+- Agent created: agt_c829499ddd10
+- Admin email: test@example.com
+- Global setup complete
+
+Test Results:
+- Total: 20 tests
+- Passed: 13
+- Failed: 5
+- Skipped: 2
+
+Passed Tests:
+1. admin-auth.spec.ts:18 - login with valid credentials redirects to dashboard (17.3s)
+2. admin-auth.spec.ts:42 - refresh page preserves login state (9.7s)
+3. admin-auth.spec.ts:64 - invalid credentials show error (5.6s)
+4. admin-auth.spec.ts:77 - expired token triggers auto-logout (11.1s)
+5. api-keys-validation.spec.ts:22 - send message after settings save completes (28.7s)
+6. knowledge-indexing.spec.ts:17 - API shape: files:list and sources:summary (920ms)
+7. knowledge-indexing.spec.ts:64 - File management UI loads and displays key sections (21.9s)
+8. knowledge-indexing.spec.ts:133 - agent with KB bound can receive chat responses (4.2s) [NOTE: passed in smoke but failed in prod-like]
+9. recent-commits.spec.ts:161 - URL safety rejects SSRF-like URLs without server errors (77ms)
+10. recent-commits.spec.ts:180 - auth language switcher works before login (7.2s)
+11. recent-commits.spec.ts:214 - widget renderer does not execute malicious markdown-like content in welcome message (5.0s)
+12. sessions-takeover.spec.ts:19 - full takeover chain via API (2.7s)
+13. sessions-takeover.spec.ts:84 - sessions page shows visitor sessions after login (16.4s)
+
+Failed Tests:
+1. playground-streaming.spec.ts:24 - auto-save shows saving/saved state
+   Error: expect(page).not.toHaveURL(expected) failed - still on /login page
+   Location: fixtures/e2e-context.ts:103
+
+2. playground-streaming.spec.ts:60 - send message and receive streaming response
+   Error: expect(locator).toBeVisible() failed - chat-message-input not found
+   Location: playground-streaming.spec.ts:81
+
+3. playground-streaming.spec.ts:84 - clear chat resets conversation
+   Error: expect(page).not.toHaveURL(expected) failed - still on /login page
+   Location: fixtures/e2e-context.ts:103
+
+4. playground-streaming.spec.ts:122 - chat request succeeds after KB setup with indexed content
+   Error: expect([200, 202, 201]).toContain(uploadRes.status()) - assertion inverted
+   Location: playground-streaming.spec.ts:182
+
+5. playground-streaming.spec.ts:224 - chat endpoint returns success when agent has KB configured
+   Error: expect(received).toBeTruthy() - chatData.message is undefined
+   Location: playground-streaming.spec.ts:259
+
+Skipped Tests:
+1. recent-commits.spec.ts:79 - provider keys are saved, masked, switchable...
+2. recent-commits.spec.ts:132 - SiliconFlow embedding key can be saved...
+
+================================================================================
+
+TEST SUITE 2: WIDGET CROSS-ORIGIN TESTS
+================================================================================
+
+Command: cd /Users/yi/Documents/Projects/basjoo && E2E_API_KEY=*** npx playwright test --config=tests/e2e/playwright.config.ts --project=widget-cross-origin
+
+Test Results:
+- Total: 3 tests
+- Passed: 0
+- Failed: 1
+- Skipped: 2
+
+Failed Tests:
+1. widget-cross-origin.spec.ts:42 - admin-generated embed code renders widget popup
+   Error: Widget popup button should be visible
+   Diagnostics: scriptLoaded=true, widgetContainer=0, widgetButton=0
+   Page Error: "Failed to read the 'localStorage' property from 'Window': Access is denied for this document."
+
+Skipped Tests:
+1. widget-cross-origin.spec.ts:130 - widget loads and chats from allowed host
+2. widget-cross-origin.spec.ts:170 - widget is blocked on disallowed host
+
+================================================================================
+
+TEST SUITE 3: PROD-LIKE TESTS
+================================================================================
+
+Command: cd /Users/yi/Documents/Projects/basjoo && E2E_ENV=prod E2E_API_KEY=*** API_BASE_URL=http://localhost npx playwright test --config=tests/e2e/playwright.config.ts --project=prod-like
+
+Environment:
+- Services started: nginx, backend, frontend
+- Base URL: http://localhost
+
+Test Results:
+- Total: 23 tests
+- Passed: 13
+- Failed: 5
+- Skipped: 5
+
+Passed Tests:
+1. admin-auth.spec.ts:18 - login with valid credentials redirects to dashboard (5.4s)
+2. admin-auth.spec.ts:42 - refresh page preserves login state (5.3s)
+3. admin-auth.spec.ts:64 - invalid credentials show error (3.9s)
+4. admin-auth.spec.ts:77 - expired token triggers auto-logout (2.4s)
+5. api-keys-validation.spec.ts:22 - send message after settings save completes (10.0s)
+6. knowledge-indexing.spec.ts:17 - API shape: files:list and sources:summary (824ms)
+7. knowledge-indexing.spec.ts:64 - File management UI loads and displays key sections (14.3s)
+8. playground-streaming.spec.ts:24 - auto-save shows saving/saved state (8.9s)
+9. recent-commits.spec.ts:161 - URL safety rejects SSRF-like URLs without server errors (150ms)
+10. recent-commits.spec.ts:180 - auth language switcher works before login (6.6s)
+11. recent-commits.spec.ts:214 - widget renderer does not execute malicious content (4.6s)
+12. sessions-takeover.spec.ts:19 - full takeover chain via API (3.0s)
+13. sessions-takeover.spec.ts:84 - sessions page shows visitor sessions after login (8.7s)
+
+Failed Tests:
+1. knowledge-indexing.spec.ts:133 - agent with KB bound can receive chat responses
+   Error: expect(received).toBeTruthy() - config.kb_id is null
+   Location: knowledge-indexing.spec.ts:205
+
+2. playground-streaming.spec.ts:60 - send message and receive streaming response
+   Error: expect(locator).toBeVisible() failed - chat-message-input not found
+   Location: playground-streaming.spec.ts:63
+
+3. playground-streaming.spec.ts:84 - clear chat resets conversation
+   Error: expect(locator).toBeVisible() failed - chat-message-input not found
+   Location: playground-streaming.spec.ts:90
+
+4. playground-streaming.spec.ts:224 - chat endpoint returns success when agent has KB configured
+   Error: expect(received).toBeTruthy() - chatData.message is undefined
+   Location: playground-streaming.spec.ts:259
+
+5. widget-cross-origin.spec.ts:42 - admin-generated embed code renders widget popup
+   Error: Widget popup button should be visible
+   Diagnostics: scriptLoaded=true, widgetContainer=0, widgetButton=0
+   Page Error: "Failed to read the 'localStorage' property from 'Window': Access is denied for this document."
+
+Skipped Tests:
+1. recent-commits.spec.ts:79 - provider keys are saved, masked, switchable...
+2. recent-commits.spec.ts:132 - SiliconFlow embedding key can be saved...
+3. playground-streaming.spec.ts:122 - chat request succeeds after KB setup...
+4. widget-cross-origin.spec.ts:130 - widget loads and chats from allowed host
+5. widget-cross-origin.spec.ts:170 - widget is blocked on disallowed host
+
+================================================================================
+
+SUMMARY
+================================================================================
+
+Total Tests Run: 46
+Total Passed: 26 (56.5%)
+Total Failed: 11 (23.9%)
+Total Skipped: 9 (19.6%)
+
+Critical Issues Found:
+1. KB setup not binding kb_id to agent (affects KB functionality)
+2. Chat endpoint returning empty responses (affects chat functionality)
+3. Playground chat input missing data-testid (affects UI tests)
+
+Environment Issues:
+- Backend uses SQLite in dev mode (not PostgreSQL as configured in .env)
+- Widget localStorage blocked in cross-origin iframe context
+
+================================================================================
