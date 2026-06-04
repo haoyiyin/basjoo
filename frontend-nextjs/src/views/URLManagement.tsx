@@ -338,6 +338,27 @@ export default function URLManagement() {
     return styles[status] || { className: 'badge', label: status };
   };
 
+  const getIndexStatusBadge = (url: URLSource): { className: string; label: string; showRebuild: boolean } | null => {
+    if (url.status !== 'success') {
+      return { className: 'badge', label: 'Not ready', showRebuild: false };
+    }
+    if (url.is_indexed) {
+      return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+    }
+    return { className: 'badge badge-warning', label: 'Not Indexed', showRebuild: true };
+  };
+
+  const handleRebuildIndex = async () => {
+    if (!agentId) return;
+    try {
+      await api.rebuildIndex(agentId);
+      // Poll for status updates
+      setTimeout(() => loadURLs(), 1000);
+    } catch (error) {
+      console.error('Failed to rebuild index:', error);
+    }
+  };
+
   const handleDelete = async (urlId: number) => {
     if (!agentId) return;
     if (!confirm(t('labels.urlManagement.confirmDelete'))) return;
@@ -1135,10 +1156,34 @@ export default function URLManagement() {
                           alignItems: 'center',
                           gap: 'var(--space-2)',
                           marginBottom: 'var(--space-2)',
+                          flexWrap: 'wrap',
                         }}>
                           <span className={getStatusBadge(url.status).className}>
                             {getStatusBadge(url.status).label}
                           </span>
+                          {getIndexStatusBadge(url) && (
+                            <span className={getIndexStatusBadge(url)!.className}>
+                              {getIndexStatusBadge(url)!.label}
+                            </span>
+                          )}
+                          {url.status === 'success' && !url.is_indexed && (
+                            <button
+                              onClick={handleRebuildIndex}
+                              className="btn-ghost"
+                              style={{
+                                fontSize: 'var(--text-xs)',
+                                padding: '2px 8px',
+                                color: 'var(--color-accent-primary)',
+                              }}
+                              title="Rebuild index"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M23 4v6h-6M1 20v-6h6" />
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                              </svg>
+                              Reindex
+                            </button>
+                          )}
                         </div>
                         <a
                           href={url.url}
