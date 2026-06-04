@@ -205,10 +205,17 @@ test.describe('Recent commit regressions', () => {
 
     await page.locator('input[type="email"]').or(page.getByLabel(/email|邮箱/i)).first().fill(ADMIN_EMAIL);
     await page.locator('input[type="password"]').or(page.getByLabel(/password|密码/i)).first().fill(ADMIN_PASSWORD);
+    const loginResponsePromise = page.waitForResponse(
+      (response) => response.url().includes('/api/admin/login') && response.request().method() === 'POST',
+      { timeout: 15_000 },
+    );
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
-    await page.waitForLoadState('domcontentloaded');
-    await expect(page).not.toHaveURL(/\/login/);
-    await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBeTruthy();
+    const loginResponse = await loginResponsePromise;
+    expect(loginResponse.status(), await loginResponse.text()).toBe(200);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('token')), {
+      timeout: 15_000,
+    }).toBeTruthy();
+    await expect(page).not.toHaveURL(/\/login/, { timeout: 15_000 });
   });
 
   test('widget renderer does not execute malicious markdown-like content in welcome message', async ({ page, request }) => {

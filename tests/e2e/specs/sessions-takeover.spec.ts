@@ -37,9 +37,10 @@ test.describe('Admin Sessions Takeover', () => {
     const sessionId = chatData.session_id;
     expect(sessionId).toBeTruthy();
 
-    // 4. Admin views sessions list
+    // 4. Admin views sessions list. The endpoint sorts oldest first, so use a
+    // wider limit to find this freshly-created session in reused E2E databases.
     const sessionsRes = await request.get(
-      `${API_BASE}/api/v1/admin/sessions?skip=0&limit=10&agent_id=${agent.id}`,
+      `${API_BASE}/api/v1/admin/sessions?skip=0&limit=100&agent_id=${agent.id}`,
       { headers: authHeaders },
     );
     const sessionsData = await sessionsRes.json();
@@ -113,7 +114,7 @@ test.describe('Admin Sessions Takeover', () => {
 
     // 4. Verify session appears in the admin list by checking via API
     const sessionsRes = await request.get(
-      `${API_BASE}/api/v1/admin/sessions?skip=0&limit=10&agent_id=${agent.id}`,
+      `${API_BASE}/api/v1/admin/sessions?skip=0&limit=100&agent_id=${agent.id}`,
       { headers: authHeaders },
     );
     const sessionsData = await sessionsRes.json() as { items: Array<{ session_id: string; status: string }> };
