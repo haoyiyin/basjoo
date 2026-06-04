@@ -68,6 +68,11 @@ from api.v1.schemas import (
     AgentMemberListResponse,
     IndexRebuildRequest,
     IndexRebuildResponse,
+    IndexStatusResponse,
+    IndexInfoResponse,
+    URLCancelResponse,
+    SiteCrawlRequest,
+    SiteCrawlResponse,
     ModelsListRequest,
     QuotaInfo,
     SourcesSummaryResponse,
@@ -3047,6 +3052,284 @@ async def clear_all_files(
     await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id))
     await db.commit()
     return {"success": True}
+
+
+# ========== URL Indexing & Crawl Endpoints ==========
+
+
+@router.post("/urls:refetch", response_model=URLRefetchResponse)
+async def refetch_urls(
+    agent_id: str,
+    payload: URLRefetchRequest,
+    background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """重新抓取URL内容并索引到知识库。
+
+    - url_ids: 要重抓的URL ID列表，为空则重抓所有pending/success状态的URL
+    - force: 是否强制重抓（忽略内容哈希去重）
+    """
+    agent = await require_agent_admin(db, agent_id, current_user)
+
+    # Ensure agent has KB bound
+    if not agent.kb_id:
+        kb_svc = KbService(session=db)
+        await kb_svc.get_or_create_agent_kb(agent_id, session=db)
+        await db.refresh(agent)
+
+    # Acquire task lock
+    from services.task_lock import TaskType
+    job_id = f"refetch_{agent_id}_{uuid.uuid4().hex[:8]}"
+    acquired, error = await task_lock.acquire_task(
+        agent_id, TaskType.URL_REFETCH, job_id
+    )
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Refetch already in progress: {error}",
+        )
+
+    # Trigger background refetch
+    from services.url_service import process_url_refetch
+    background_tasks.add_task(
+        process_url_refetch,
+        agent_id=agent_id,
+        url_ids=payload.url_ids,
+        force=payload.force,
+        job_id=job_id,
+    )
+
+    return URLRefetchResponse(
+        job_id=job_id,
+        status="queued",
+        message="URL refetch queued",
+    )
+
+
+@router.post("/urls:cancel", response_model=URLCancelResponse)
+async def cancel_url_tasks(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """取消正在进行的URL抓取任务。"""
+    await require_agent_admin(db, agent_id, current_user)
+
+    from services.task_lock import TaskType
+
+    cancelled_task_ids = await task_lock.cancel_tasks(
+        agent_id, {TaskType.URL_CRAWL, TaskType.URL_REFETCH}
+    )
+
+    return URLCancelResponse(
+        cancelled=len(cancelled_task_ids),
+        task_ids=cancelled_task_ids,
+        message=f"Cancelled {len(cancelled_task_ids)} task(s)" if cancelled_task_ids else "No active tasks",
+    )
+
+
+@router.post("/urls:crawl_site", response_model=SiteCrawlResponse)
+async def crawl_site(
+    agent_id: str,
+    payload: SiteCrawlRequest,
+    background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """全站爬取发现并索引页面。
+
+    - url: 起始URL
+    - max_depth: 最大爬取深度 (1-5)
+    - max_pages: 最大页面数量 (1-500)
+    """
+    agent = await require_agent_admin(db, agent_id, current_user)
+
+    # Ensure agent has KB bound
+    if not agent.kb_id:
+        kb_svc = KbService(session=db)
+        await kb_svc.get_or_create_agent_kb(agent_id, session=db)
+        await db.refresh(agent)
+
+    # Acquire task lock
+    from services.task_lock import TaskType
+    job_id = f"crawl_{agent_id}_{uuid.uuid4().hex[:8]}"
+    acquired, error = await task_lock.acquire_task(
+        agent_id, TaskType.URL_CRAWL, job_id
+    )
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Crawl already in progress: {error}",
+        )
+
+    # Trigger background crawl
+    from services.url_service import process_site_crawl
+    background_tasks.add_task(
+        process_site_crawl,
+        agent_id=agent_id,
+        start_url=payload.url,
+        max_depth=payload.max_depth,
+        max_pages=payload.max_pages,
+        job_id=job_id,
+    )
+
+    return SiteCrawlResponse(
+        job_id=job_id,
+        status="queued",
+        discovered=0,
+        created=0,
+        message="Site crawl queued",
+    )
+
+
+@router.post("/urls:discover")
+async def discover_urls(
+    agent_id: str,
+    url: str,
+    max_depth: int = 1,
+    max_pages: int = 10,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """发现URL子页面但不立即索引（返回发现的URL列表）。"""
+    await require_agent_admin(db, agent_id, current_user)
+
+    from services.url_safety import validate_url_safe
+    safe, reason = validate_url_safe(url)
+    if not safe:
+        raise HTTPException(status_code=400, detail=f"Unsafe URL: {reason}")
+
+    from services.crawler import SiteCrawler
+    crawler = SiteCrawler()
+    results = await crawler.crawl_site(url, max_depth=max_depth, max_pages=max_pages)
+
+    discovered_urls = [r.url for r in results if r.url and not r.error]
+
+    return {
+        "discovered": len(results),
+        "urls": discovered_urls,
+        "message": f"Discovered {len(discovered_urls)} URLs",
+    }
+
+
+# ========== Index Management Endpoints ==========
+
+
+@router.post("/index:rebuild", response_model=IndexRebuildResponse)
+async def rebuild_index(
+    agent_id: str,
+    payload: IndexRebuildRequest,
+    background_tasks: BackgroundTasks,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """重建知识库索引。
+
+    - force: 是否强制重建（删除现有索引重新处理）
+    """
+    agent = await require_agent_admin(db, agent_id, current_user)
+
+    # Ensure agent has KB bound
+    if not agent.kb_id:
+        kb_svc = KbService(session=db)
+        await kb_svc.get_or_create_agent_kb(agent_id, session=db)
+        await db.refresh(agent)
+
+    # Acquire task lock
+    from services.task_lock import TaskType
+    job_id = f"rebuild_{agent_id}_{uuid.uuid4().hex[:8]}"
+    acquired, error = await task_lock.acquire_task(
+        agent_id, TaskType.INDEX_REBUILD, job_id
+    )
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Index rebuild already in progress: {error}",
+        )
+
+    # Trigger background rebuild
+    from services.url_service import process_index_rebuild
+    background_tasks.add_task(
+        process_index_rebuild,
+        agent_id=agent_id,
+        force=payload.force,
+        job_id=job_id,
+    )
+
+    return IndexRebuildResponse(
+        job_id=job_id,
+        status="queued",
+        message="Index rebuild queued",
+    )
+
+
+@router.get("/index:status", response_model=IndexStatusResponse)
+async def get_index_status(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取索引任务状态。"""
+    await require_agent_admin(db, agent_id, current_user)
+
+    from services.task_lock import TaskType
+
+    # Check for active tasks
+    is_rebuilding = task_lock.is_task_running(agent_id, TaskType.INDEX_REBUILD)
+    is_crawling = task_lock.is_task_running(agent_id, TaskType.URL_CRAWL)
+    is_refetching = task_lock.is_task_running(agent_id, TaskType.URL_REFETCH)
+
+    status = "idle"
+    if is_rebuilding:
+        status = "rebuilding"
+    elif is_crawling or is_refetching:
+        status = "indexing"
+
+    # Get active task IDs
+    active_tasks = task_lock.get_active_tasks(agent_id)
+    job_id = None
+    for task_id, task_info in active_tasks.items():
+        if task_info.get("type") in [TaskType.INDEX_REBUILD.value, TaskType.URL_CRAWL.value, TaskType.URL_REFETCH.value]:
+            job_id = task_id
+            break
+
+    return IndexStatusResponse(
+        agent_id=agent_id,
+        job_id=job_id,
+        status=status,
+        result=None,
+    )
+
+
+@router.get("/index:info", response_model=IndexInfoResponse)
+async def get_index_info(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取索引统计信息。"""
+    await require_agent_admin(db, agent_id, current_user)
+
+    # Count indexed URLs
+    indexed_count = await db.scalar(
+        select(func.count(URLSource.id)).where(
+            URLSource.agent_id == agent_id,
+            URLSource.is_indexed == True,
+        )
+    ) or 0
+
+    # Check if agent has KB
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one()
+    index_exists = agent.kb_id is not None
+
+    return IndexInfoResponse(
+        agent_id=agent_id,
+        urls_indexed=indexed_count,
+        index_exists=index_exists,
+        status="ready" if index_exists else "not_setup",
+    )
 
 
 # ========== WebSocket 端点 ==========

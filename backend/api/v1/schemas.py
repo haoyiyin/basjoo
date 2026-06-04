@@ -669,6 +669,32 @@ class IndexRebuildResponse(BaseModel):
     message: str
 
 
+class IndexStatusResponse(BaseModel):
+    """索引状态响应"""
+
+    agent_id: str
+    job_id: Optional[str] = None
+    status: str
+    result: Optional[Dict[str, Any]] = None
+
+
+class IndexInfoResponse(BaseModel):
+    """索引信息响应"""
+
+    agent_id: str
+    urls_indexed: int
+    index_exists: bool
+    status: str
+
+
+class URLCancelResponse(BaseModel):
+    """取消URL任务响应"""
+
+    cancelled: int
+    task_ids: List[str]
+    message: str
+
+
 # ========== Quota Schemas ==========
 
 
