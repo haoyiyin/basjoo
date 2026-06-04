@@ -161,9 +161,13 @@ describe("Register bootstrap flow (real AuthProvider)", () => {
 			screen.getByRole("button", { name: "initialSetup.registerButton" }),
 		);
 
-		// Wait for navigation to /
+		// Wait for navigation to / and the home page to render
 		await waitFor(() => {
 			expect(router.state.location.pathname).toBe("/");
+		});
+		// Wait for the home page content to be rendered after navigation
+		await waitFor(() => {
+			expect(screen.queryByText("Home page")).toBeInTheDocument();
 		});
 
 		// Verify localStorage has the persisted session
@@ -177,8 +181,5 @@ describe("Register bootstrap flow (real AuthProvider)", () => {
 			f.url.includes("/api/admin/login"),
 		);
 		expect(loginCalls).toHaveLength(0);
-
-		// Verify the home page content is shown
-		expect(screen.getByText("Home page")).toBeInTheDocument();
 	});
 });

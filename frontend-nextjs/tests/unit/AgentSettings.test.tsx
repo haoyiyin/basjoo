@@ -77,6 +77,8 @@ describe('AgentSettings', () => {
     renderAgentSettings();
 
     await waitFor(() => expect(mockedApi.getAgent).toHaveBeenCalledWith('agt_1'));
+    // Wait for loading state to complete before assertions
+    await waitFor(() => expect(screen.queryByText('status.loading')).not.toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'navigation.agentSettings' })).toBeInTheDocument();
     expect(screen.getByLabelText('labels.widgetTitle')).toHaveValue('Helpdesk');
     expect(screen.getByLabelText('labels.themeColor')).toHaveValue('#00aaff');
