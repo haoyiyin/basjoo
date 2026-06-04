@@ -212,6 +212,7 @@ def build_agent_config(agent: Agent) -> dict:
         "embedding_model": agent.embedding_model,
         "embedding_batch_size": agent.embedding_batch_size,
         "configuration_error": None,
+        "kb_id": agent.kb_id,
         "kb_setup_completed": agent.kb_setup_completed,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
@@ -2427,6 +2428,7 @@ async def test_embedding_api(
         try:
             import httpx
             from services.ssl_utils import create_ssl_context
+
             ssl_context = create_ssl_context()
 
             with httpx.Client(verify=ssl_context, timeout=30) as client:
@@ -2492,6 +2494,7 @@ async def test_jina_api(
     try:
         import httpx
         from services.ssl_utils import create_ssl_context
+
         ssl_context = create_ssl_context()
 
         with httpx.Client(verify=ssl_context, timeout=30) as client:
@@ -2971,11 +2974,11 @@ async def list_files(
 ):
     """List files for an agent (returns KbDocuments from agent's KB)."""
     agent = await require_agent_admin(db, agent_id, current_user)
-    
+
     # If agent has no KB bound, return empty list
     if not agent.kb_id:
         return {"files": [], "total": 0, "quota": {"used": 0, "max": 500}}
-    
+
     # Query KbDocuments from agent's KB
     stmt = (
         select(KbDocument)
@@ -2986,17 +2989,15 @@ async def list_files(
     )
     result = await db.execute(stmt)
     docs = result.scalars().all()
-    
+
     total = (
         await db.execute(
-            select(func.count(KbDocument.id)).where(
-                KbDocument.kb_id == agent.kb_id
-            )
+            select(func.count(KbDocument.id)).where(KbDocument.kb_id == agent.kb_id)
         )
     ).scalar() or 0
-    
+
     quota = {"used": total, "max": 500}
-    
+
     # Map KbDocument to FileItem format
     # KbDocument status: pending/processing/ready/error -> FileItem status: pending/processing/ready/failed
     items = []
@@ -3004,15 +3005,17 @@ async def list_files(
         status = doc.status
         if status == "error":
             status = "failed"
-        items.append(FileItem(
-            id=str(doc.id),
-            filename=doc.filename,
-            file_type=getattr(doc, "file_type", "") or "",
-            file_size=getattr(doc, "file_size", 0) or 0,
-            status=status,
-            created_at=str(doc.created_at) if doc.created_at else "",
-        ))
-    
+        items.append(
+            FileItem(
+                id=str(doc.id),
+                filename=doc.filename,
+                file_type=getattr(doc, "file_type", "") or "",
+                file_size=getattr(doc, "file_size", 0) or 0,
+                status=status,
+                created_at=str(doc.created_at) if doc.created_at else "",
+            )
+        )
+
     return {"files": items, "total": total, "quota": quota}
 
 
@@ -3031,28 +3034,28 @@ async def upload_files(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload files to agent's knowledge base (tenant KB document pipeline).
-    
+
     - Validates file limits (max 5 files, 20MB each)
     - Creates/binds tenant KB if needed
     - Stores file bytes and creates KbDocument records
     - Triggers background processing (parse→chunk→embed→Qdrant)
     """
     agent = await require_agent_admin(db, agent_id, current_user)
-    
+
     # Enforce max files limit
     if len(files) > MAX_FILES_PER_UPLOAD:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Max {MAX_FILES_PER_UPLOAD} files per upload",
         )
-    
+
     # Ensure agent has KB bound (creates if needed)
     if not agent.kb_id:
         kb_svc = KbService(session=db)
         tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session=db)
         agent.kb_id = kb.id
         await db.commit()
-    
+
     # Get tenant_id from agent's KB
     kb_result = await db.execute(
         select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
@@ -3065,50 +3068,53 @@ async def upload_files(
         )
     tenant_id = kb.tenant_id
     kb_id = kb.id
-    
+
     # Initialize processor
     from services.kb_document_processor import KbDocumentProcessor
+
     processor = KbDocumentProcessor()
-    
+
     uploaded = 0
     failed = 0
     errors: List[str] = []
     items: List[FileItem] = []
-    
+
     for upload_file in files[:MAX_FILES_PER_UPLOAD]:
         filename = upload_file.filename or "unnamed"
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        
+
         # Validate extension
         if ext not in ALLOWED_EXTENSIONS:
             failed += 1
             errors.append(f"{filename}: unsupported .{ext}")
             continue
-        
+
         try:
             # Read file content
             content = await upload_file.read()
-            
+
             # Validate size
             if len(content) > MAX_FILE_SIZE:
                 failed += 1
                 errors.append(f"{filename}: exceeds 20MB limit")
                 continue
-            
+
             # Create KbDocument record
             doc = await processor.create_document_record(
                 tenant_id, kb_id, filename, len(content), db
             )
-            
+
             # Save file to disk
             storage_path = processor.save_uploaded_file(doc, content, ext)
             object.__setattr__(doc, "storage_path", storage_path)
             object.__setattr__(doc, "file_type", ext)
-            
+
             # Trigger background processing
             doc_id = str(getattr(doc, "id", ""))
-            background_tasks.add_task(processor.process_document, doc_id, tenant_id, kb_id)
-            
+            background_tasks.add_task(
+                processor.process_document, doc_id, tenant_id, kb_id
+            )
+
             # Create FileItem for response (mapping from KbDocument)
             file_item = FileItem(
                 id=doc_id,
@@ -3120,14 +3126,14 @@ async def upload_files(
             )
             items.append(file_item)
             uploaded += 1
-            
+
         except Exception as e:
             logger.exception(f"File upload failed for {filename}: {e}")
             failed += 1
             errors.append(f"{filename}: {str(e)}")
-    
+
     await db.commit()
-    
+
     return {
         "uploaded": uploaded,
         "failed": failed,
@@ -3145,14 +3151,15 @@ async def delete_file(
 ):
     """Delete a file (KbDocument) from agent's KB."""
     agent = await require_agent_admin(db, agent_id, current_user)
-    
+
     if not agent.kb_id:
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     # Use KbDocumentProcessor for full delete (Qdrant + DB + file)
     from services.kb_document_processor import KbDocumentProcessor
+
     processor = KbDocumentProcessor()
-    
+
     # Get tenant_id from KB
     kb_result = await db.execute(
         select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
@@ -3160,7 +3167,7 @@ async def delete_file(
     kb = kb_result.scalar_one_or_none()
     if not kb:
         raise HTTPException(status_code=404, detail="KB not found")
-    
+
     await processor.delete_document(kb.tenant_id, agent.kb_id, file_id, db)
     return {"success": True}
 
@@ -3173,14 +3180,15 @@ async def clear_all_files(
 ):
     """Clear all files (KbDocuments) from agent's KB."""
     agent = await require_agent_admin(db, agent_id, current_user)
-    
+
     if not agent.kb_id:
         return {"success": True, "deleted_count": 0}
-    
+
     # Get all KbDocuments for this KB
     from services.kb_document_processor import KbDocumentProcessor
+
     processor = KbDocumentProcessor()
-    
+
     # Get tenant_id from KB
     kb_result = await db.execute(
         select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
@@ -3188,20 +3196,20 @@ async def clear_all_files(
     kb = kb_result.scalar_one_or_none()
     if not kb:
         return {"success": True, "deleted_count": 0}
-    
+
     # Get all document IDs
     result = await db.execute(
         select(KbDocument.id).where(KbDocument.kb_id == agent.kb_id)
     )
     doc_ids = [row[0] for row in result.all()]
-    
+
     # Delete each document using processor (clears Qdrant + DB + files)
     for doc_id in doc_ids:
         try:
             await processor.delete_document(kb.tenant_id, agent.kb_id, doc_id, db)
         except Exception as e:
             logger.warning(f"Failed to delete document {doc_id}: {e}")
-    
+
     return {"success": True, "deleted_count": len(doc_ids)}
 
 
@@ -3231,6 +3239,7 @@ async def refetch_urls(
 
     # Acquire task lock
     from services.task_lock import TaskType
+
     job_id = f"refetch_{agent_id}_{uuid.uuid4().hex[:8]}"
     acquired, error = await task_lock.acquire_task(
         agent_id, TaskType.URL_REFETCH, job_id
@@ -3243,6 +3252,7 @@ async def refetch_urls(
 
     # Trigger background refetch
     from services.url_service import process_url_refetch
+
     background_tasks.add_task(
         process_url_refetch,
         agent_id=agent_id,
@@ -3276,7 +3286,9 @@ async def cancel_url_tasks(
     return URLCancelResponse(
         cancelled=len(cancelled_task_ids),
         task_ids=cancelled_task_ids,
-        message=f"Cancelled {len(cancelled_task_ids)} task(s)" if cancelled_task_ids else "No active tasks",
+        message=f"Cancelled {len(cancelled_task_ids)} task(s)"
+        if cancelled_task_ids
+        else "No active tasks",
     )
 
 
@@ -3304,10 +3316,9 @@ async def crawl_site(
 
     # Acquire task lock
     from services.task_lock import TaskType
+
     job_id = f"crawl_{agent_id}_{uuid.uuid4().hex[:8]}"
-    acquired, error = await task_lock.acquire_task(
-        agent_id, TaskType.URL_CRAWL, job_id
-    )
+    acquired, error = await task_lock.acquire_task(agent_id, TaskType.URL_CRAWL, job_id)
     if not acquired:
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
@@ -3316,6 +3327,7 @@ async def crawl_site(
 
     # Trigger background crawl
     from services.url_service import process_site_crawl
+
     background_tasks.add_task(
         process_site_crawl,
         agent_id=agent_id,
@@ -3347,11 +3359,13 @@ async def discover_urls(
     await require_agent_admin(db, agent_id, current_user)
 
     from services.url_safety import validate_url_safe
+
     safe, reason = validate_url_safe(url)
     if not safe:
         raise HTTPException(status_code=400, detail=f"Unsafe URL: {reason}")
 
     from services.crawler import SiteCrawler
+
     crawler = SiteCrawler()
     results = await crawler.crawl_site(url, max_depth=max_depth, max_pages=max_pages)
 
@@ -3389,6 +3403,7 @@ async def rebuild_index(
 
     # Acquire task lock
     from services.task_lock import TaskType
+
     job_id = f"rebuild_{agent_id}_{uuid.uuid4().hex[:8]}"
     acquired, error = await task_lock.acquire_task(
         agent_id, TaskType.INDEX_REBUILD, job_id
@@ -3401,6 +3416,7 @@ async def rebuild_index(
 
     # Trigger background rebuild
     from services.url_service import process_index_rebuild
+
     background_tasks.add_task(
         process_index_rebuild,
         agent_id=agent_id,
@@ -3441,7 +3457,11 @@ async def get_index_status(
     active_tasks = task_lock.get_active_tasks(agent_id)
     job_id = None
     for task_id, task_info in active_tasks.items():
-        if task_info.get("type") in [TaskType.INDEX_REBUILD.value, TaskType.URL_CRAWL.value, TaskType.URL_REFETCH.value]:
+        if task_info.get("type") in [
+            TaskType.INDEX_REBUILD.value,
+            TaskType.URL_CRAWL.value,
+            TaskType.URL_REFETCH.value,
+        ]:
             job_id = task_id
             break
 
@@ -3463,12 +3483,15 @@ async def get_index_info(
     await require_agent_admin(db, agent_id, current_user)
 
     # Count indexed URLs
-    indexed_count = await db.scalar(
-        select(func.count(URLSource.id)).where(
-            URLSource.agent_id == agent_id,
-            URLSource.is_indexed == True,
+    indexed_count = (
+        await db.scalar(
+            select(func.count(URLSource.id)).where(
+                URLSource.agent_id == agent_id,
+                URLSource.is_indexed == True,
+            )
         )
-    ) or 0
+        or 0
+    )
 
     # Check if agent has KB
     result = await db.execute(select(Agent).where(Agent.id == agent_id))

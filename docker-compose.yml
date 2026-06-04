@@ -93,6 +93,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
       - SECRET_KEY=${SECRET_KEY:-}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
       - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
@@ -184,6 +185,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
       - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
       - SECRET_KEY_FILE=${SECRET_KEY_FILE:-/app/data/.secret_key}
       - DEFAULT_AGENT_ID=${DEFAULT_AGENT_ID:-}
