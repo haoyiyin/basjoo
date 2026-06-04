@@ -184,6 +184,8 @@ class KbDocumentProcessor:
                 logger.info(f"Doc {doc_id} indexed: {len(chunks)} chunks")
 
             except Exception as e:
+                # Intentionally catch all exceptions and set error status.
+                # Caller must check doc.status to determine success/failure.
                 logger.exception(f"Processing failed for doc {doc_id}: {e}")
                 object.__setattr__(doc, "status", "error")
                 object.__setattr__(doc, "error_message", str(e)[:500])
