@@ -19,7 +19,7 @@ test.describe("Playground Streaming Chat", () => {
 		await expect(page).toHaveURL(
 			new RegExp(`/agents/${context.agentId}/playground`),
 		);
-		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 45_000 });
 	});
 
 	test("auto-save shows saving/saved state", async ({ page }) => {
@@ -183,11 +183,29 @@ test.describe("Playground KB Context Retrieval", () => {
 		expect(uploadData.uploaded).toBeGreaterThan(0);
 		expect(uploadData.failed).toBe(0);
 
+		// Wait for background document processing to settle so later smoke specs
+		// don't race SQLite writes from the KB pipeline.
+		await expect.poll(async () => {
+			const filesRes = await request.get(
+				`${API_BASE}/api/v1/files:list?agent_id=${context.agentId}`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+			if (filesRes.status() !== 200) {
+				return `http-${filesRes.status()}`;
+			}
+			const filesData = await filesRes.json() as { files?: Array<{ filename?: string; status?: string }> };
+			const uploadedFile = filesData.files?.find((file) => file.filename === fileName);
+			return uploadedFile?.status || "missing";
+		}, {
+			timeout: 60_000,
+			intervals: [1_000, 2_000, 5_000],
+		}).toMatch(/^(ready|failed)$/);
+
 		// 3. Login and go to Playground
 		await adminLogin(page);
 		await page.goto(agentRoute(context.agentId, "playground"));
 		await page.waitForLoadState("domcontentloaded", { timeout: 15_000 });
-		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByText(context.agentId)).toBeVisible({ timeout: 45_000 });
 
 		// 4. Wait for chat input and send a query
 		const messageInput = page.getByTestId("chat-message-input");

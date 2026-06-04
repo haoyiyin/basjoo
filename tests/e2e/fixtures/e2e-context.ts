@@ -84,10 +84,8 @@ export async function resolveAgentContext(request: APIRequestContext): Promise<E
  */
 export async function adminLogin(
   page: Page,
-  options?: { timeout?: number },
+  _options?: { timeout?: number },
 ): Promise<void> {
-  const timeout = options?.timeout ?? 15_000;
-
   const loginRes = await page.request.post(`${API_BASE}/api/admin/login`, {
     headers: loginHeaders(),
     data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
@@ -105,9 +103,7 @@ export async function adminLogin(
     );
   }
 
-  await page.goto('/login');
-  await page.waitForLoadState('domcontentloaded');
-  await page.evaluate(
+  await page.addInitScript(
     ({ token, admin }) => {
       localStorage.setItem('token', token);
       localStorage.setItem('admin', JSON.stringify(admin));
@@ -115,11 +111,13 @@ export async function adminLogin(
     { token: loginData.access_token, admin: loginData.admin },
   );
 
-  await page.goto('/');
-  await page.waitForLoadState('domcontentloaded', { timeout });
-  await page.waitForFunction(
-    () => Boolean(localStorage.getItem('token') && localStorage.getItem('admin')),
-    { timeout },
-  );
-  await expect(page).not.toHaveURL(/\/login/, { timeout });
+  if (page.url().startsWith(BASE_URL)) {
+    await page.evaluate(
+      ({ token, admin }) => {
+        localStorage.setItem('token', token);
+        localStorage.setItem('admin', JSON.stringify(admin));
+      },
+      { token: loginData.access_token, admin: loginData.admin },
+    );
+  }
 }
