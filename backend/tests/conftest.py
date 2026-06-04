@@ -12,8 +12,10 @@ from config import DEFAULT_AGENT_SIMILARITY_THRESHOLD
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 TEST_DB_DIR = BACKEND_DIR / ".pytest_dbs"
+TEST_UPLOAD_DIR = BACKEND_DIR / ".pytest_uploads"
 
 os.environ["BASJOO_TEST_MODE"] = "1"
+os.environ["KB_UPLOAD_ROOT"] = str(TEST_UPLOAD_DIR)
 
 
 def _host_resolves(host: str) -> bool:

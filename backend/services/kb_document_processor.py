@@ -18,7 +18,11 @@ from services.qdrant_service import QdrantKbService
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_ROOT = Path("/app/data/kb_uploads")
+# Configurable upload root - defaults to /app/data/kb_uploads in production,
+# can be overridden via environment variable for tests
+import os
+
+UPLOAD_ROOT = Path(os.environ.get("KB_UPLOAD_ROOT", "/app/data/kb_uploads"))
 
 
 class KbDocumentProcessor:

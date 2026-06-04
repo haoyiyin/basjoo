@@ -45,6 +45,8 @@ from models import (
     AdminUser,
     AgentMember,
     normalize_url,
+    KnowledgeBase,
+    KbDocument,
 )
 from api.v1.schemas import (
     ChatRequest,
@@ -2967,57 +2969,165 @@ async def list_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
+    """List files for an agent (returns KbDocuments from agent's KB)."""
+    agent = await require_agent_admin(db, agent_id, current_user)
+    
+    # If agent has no KB bound, return empty list
+    if not agent.kb_id:
+        return {"files": [], "total": 0, "quota": {"used": 0, "max": 500}}
+    
+    # Query KbDocuments from agent's KB
     stmt = (
-        select(KnowledgeFile)
-        .where(KnowledgeFile.agent_id == agent_id)
-        .order_by(KnowledgeFile.created_at.desc())
+        select(KbDocument)
+        .where(KbDocument.kb_id == agent.kb_id)
+        .order_by(KbDocument.created_at.desc())
         .offset(skip)
         .limit(limit)
     )
     result = await db.execute(stmt)
-    files = result.scalars().all()
+    docs = result.scalars().all()
+    
     total = (
         await db.execute(
-            select(func.count(KnowledgeFile.id)).where(
-                KnowledgeFile.agent_id == agent_id
+            select(func.count(KbDocument.id)).where(
+                KbDocument.kb_id == agent.kb_id
             )
         )
     ).scalar() or 0
+    
     quota = {"used": total, "max": 500}
-    items = [FileItem.model_validate(f) for f in files]
+    
+    # Map KbDocument to FileItem format
+    # KbDocument status: pending/processing/ready/error -> FileItem status: pending/processing/ready/failed
+    items = []
+    for doc in docs:
+        status = doc.status
+        if status == "error":
+            status = "failed"
+        items.append(FileItem(
+            id=str(doc.id),
+            filename=doc.filename,
+            file_type=getattr(doc, "file_type", "") or "",
+            file_size=getattr(doc, "file_size", 0) or 0,
+            status=status,
+            created_at=str(doc.created_at) if doc.created_at else "",
+        ))
+    
     return {"files": items, "total": total, "quota": quota}
+
+
+# Constants for file upload validation
+MAX_FILES_PER_UPLOAD = 5
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+ALLOWED_EXTENSIONS = {"txt", "md", "html", "pdf", "docx", "xlsx"}
 
 
 @router.post("/files:upload", response_model=FileUploadResponse)
 async def upload_files(
     agent_id: str,
     files: List[UploadFile] = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
+    """Upload files to agent's knowledge base (tenant KB document pipeline).
+    
+    - Validates file limits (max 5 files, 20MB each)
+    - Creates/binds tenant KB if needed
+    - Stores file bytes and creates KbDocument records
+    - Triggers background processing (parse→chunk→embed→Qdrant)
+    """
+    agent = await require_agent_admin(db, agent_id, current_user)
+    
+    # Enforce max files limit
+    if len(files) > MAX_FILES_PER_UPLOAD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Max {MAX_FILES_PER_UPLOAD} files per upload",
+        )
+    
+    # Ensure agent has KB bound (creates if needed)
+    if not agent.kb_id:
+        kb_svc = KbService(session=db)
+        tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session=db)
+        agent.kb_id = kb.id
+        await db.commit()
+    
+    # Get tenant_id from agent's KB
+    kb_result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
+    )
+    kb = kb_result.scalar_one_or_none()
+    if not kb:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Agent KB not found",
+        )
+    tenant_id = kb.tenant_id
+    kb_id = kb.id
+    
+    # Initialize processor
+    from services.kb_document_processor import KbDocumentProcessor
+    processor = KbDocumentProcessor()
+    
     uploaded = 0
     failed = 0
     errors: List[str] = []
     items: List[FileItem] = []
-    for f in files:
-        try:
-            kf = KnowledgeFile(
-                agent_id=agent_id,
-                filename=f.filename or "unknown",
-                file_size=getattr(f, "size", None),
-                file_type=getattr(f, "content_type", None),
-                status="pending",
-            )
-            db.add(kf)
-            await db.commit()
-            await db.refresh(kf)
-            items.append(FileItem.model_validate(kf))
-            uploaded += 1
-        except Exception as e:
+    
+    for upload_file in files[:MAX_FILES_PER_UPLOAD]:
+        filename = upload_file.filename or "unnamed"
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        
+        # Validate extension
+        if ext not in ALLOWED_EXTENSIONS:
             failed += 1
-            errors.append(str(e))
+            errors.append(f"{filename}: unsupported .{ext}")
+            continue
+        
+        try:
+            # Read file content
+            content = await upload_file.read()
+            
+            # Validate size
+            if len(content) > MAX_FILE_SIZE:
+                failed += 1
+                errors.append(f"{filename}: exceeds 20MB limit")
+                continue
+            
+            # Create KbDocument record
+            doc = await processor.create_document_record(
+                tenant_id, kb_id, filename, len(content), db
+            )
+            
+            # Save file to disk
+            storage_path = processor.save_uploaded_file(doc, content, ext)
+            object.__setattr__(doc, "storage_path", storage_path)
+            object.__setattr__(doc, "file_type", ext)
+            
+            # Trigger background processing
+            doc_id = str(getattr(doc, "id", ""))
+            background_tasks.add_task(processor.process_document, doc_id, tenant_id, kb_id)
+            
+            # Create FileItem for response (mapping from KbDocument)
+            file_item = FileItem(
+                id=doc_id,
+                filename=filename,
+                file_type=ext,
+                file_size=len(content),
+                status="pending",
+                created_at=str(getattr(doc, "created_at", "")),
+            )
+            items.append(file_item)
+            uploaded += 1
+            
+        except Exception as e:
+            logger.exception(f"File upload failed for {filename}: {e}")
+            failed += 1
+            errors.append(f"{filename}: {str(e)}")
+    
+    await db.commit()
+    
     return {
         "uploaded": uploaded,
         "failed": failed,
@@ -3033,12 +3143,25 @@ async def delete_file(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
-    kf = await db.get(KnowledgeFile, file_id)
-    if not kf or kf.agent_id != agent_id:
+    """Delete a file (KbDocument) from agent's KB."""
+    agent = await require_agent_admin(db, agent_id, current_user)
+    
+    if not agent.kb_id:
         raise HTTPException(status_code=404, detail="File not found")
-    await db.delete(kf)
-    await db.commit()
+    
+    # Use KbDocumentProcessor for full delete (Qdrant + DB + file)
+    from services.kb_document_processor import KbDocumentProcessor
+    processor = KbDocumentProcessor()
+    
+    # Get tenant_id from KB
+    kb_result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
+    )
+    kb = kb_result.scalar_one_or_none()
+    if not kb:
+        raise HTTPException(status_code=404, detail="KB not found")
+    
+    await processor.delete_document(kb.tenant_id, agent.kb_id, file_id, db)
     return {"success": True}
 
 
@@ -3048,10 +3171,38 @@ async def clear_all_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
-    await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id))
-    await db.commit()
-    return {"success": True}
+    """Clear all files (KbDocuments) from agent's KB."""
+    agent = await require_agent_admin(db, agent_id, current_user)
+    
+    if not agent.kb_id:
+        return {"success": True, "deleted_count": 0}
+    
+    # Get all KbDocuments for this KB
+    from services.kb_document_processor import KbDocumentProcessor
+    processor = KbDocumentProcessor()
+    
+    # Get tenant_id from KB
+    kb_result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
+    )
+    kb = kb_result.scalar_one_or_none()
+    if not kb:
+        return {"success": True, "deleted_count": 0}
+    
+    # Get all document IDs
+    result = await db.execute(
+        select(KbDocument.id).where(KbDocument.kb_id == agent.kb_id)
+    )
+    doc_ids = [row[0] for row in result.all()]
+    
+    # Delete each document using processor (clears Qdrant + DB + files)
+    for doc_id in doc_ids:
+        try:
+            await processor.delete_document(kb.tenant_id, agent.kb_id, doc_id, db)
+        except Exception as e:
+            logger.warning(f"Failed to delete document {doc_id}: {e}")
+    
+    return {"success": True, "deleted_count": len(doc_ids)}
 
 
 # ========== URL Indexing & Crawl Endpoints ==========
