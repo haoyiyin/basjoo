@@ -56,10 +56,8 @@ test.describe("Playground Streaming Chat", () => {
 	});
 
 	test("send message and receive streaming response", async ({ page }) => {
-		// Wait for chat input to be ready (uses placeholder text)
-		const messageInput = page.getByRole("textbox", {
-			name: /输入您的问题|your question/i,
-		});
+		// Wait for chat input to be ready
+		const messageInput = page.getByTestId("chat-message-input");
 		await expect(messageInput).toBeVisible({ timeout: 10_000 });
 
 		// Wait for any saving state to clear from previous test
@@ -86,9 +84,7 @@ test.describe("Playground Streaming Chat", () => {
 		const uniqueMessage = `clear test ${Date.now()}`;
 
 		// Send a message first
-		const messageInput = page.getByRole("textbox", {
-			name: /输入您的问题|your question/i,
-		});
+		const messageInput = page.getByTestId("chat-message-input");
 		await expect(messageInput).toBeVisible({ timeout: 10_000 });
 
 		// Wait for any saving state to clear from previous test

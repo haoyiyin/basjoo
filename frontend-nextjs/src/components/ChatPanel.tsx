@@ -677,6 +677,7 @@ function ChatPanel({
 					>
 						<input
 							type="text"
+							data-testid="chat-message-input"
 							aria-label={t("playground.inputPlaceholder")}
 							value={input}
 							onChange={(e) => onInputChange(e.target.value)}
