@@ -7,7 +7,7 @@ from sqlalchemy import delete as sa_delete, func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal
-from models import KnowledgeBase, KbChunk, KbDocument
+from models import Agent, KnowledgeBase, KbChunk, KbDocument, Tenant
 from services.qdrant_service import QdrantKbService, get_kb_collection_name
 from services.task_lock import TaskType, task_lock
 
@@ -319,3 +319,87 @@ class KbService:
             raise
         finally:
             await task_lock.release_task(kb_id, task_id)
+
+    async def get_or_create_agent_kb(self, agent_id: str) -> tuple[Tenant, KnowledgeBase]:
+        """Get or create a tenant-scoped KnowledgeBase for an agent.
+        
+        If the agent already has a kb_id bound, return the existing KB and its tenant.
+        Otherwise, create a new tenant, create a new KB bound to that tenant,
+        bind it to the agent, and set kb_setup_completed=True.
+        
+        Args:
+            agent_id: The agent ID to bind
+            
+        Returns:
+            Tuple of (tenant, knowledge_base)
+        """
+        if not agent_id:
+            raise ValueError("agent_id is required")
+            
+        async with await self._get_session() as session:
+            # Get agent with its current kb_id
+            result = await session.execute(
+                select(Agent).where(Agent.id == agent_id)
+            )
+            agent = result.scalar_one_or_none()
+            if not agent:
+                raise ValueError(f"Agent {agent_id} not found")
+            
+            # If agent already has KB bound, return it
+            if agent.kb_id:
+                result = await session.execute(
+                    select(KnowledgeBase, Tenant)
+                    .join(Tenant, KnowledgeBase.tenant_id == Tenant.id)
+                    .where(KnowledgeBase.id == agent.kb_id)
+                )
+                row = result.first()
+                if row:
+                    return row[1], row[0]  # (tenant, kb)
+            
+            # Create new tenant for this agent's workspace
+            from uuid import uuid4
+            tenant = Tenant(
+                id=str(uuid4()),
+                name=f"Tenant for Agent {agent.name}",
+                slug=f"agent-{agent_id[:8]}",
+            )
+            session.add(tenant)
+            await session.flush()
+            
+            # Get agent's embedding config
+            embedding_model = getattr(agent, "embedding_model", None) or "BAAI/bge-m3"
+            embedding_base_url = getattr(agent, "embedding_api_base", None)
+            
+            # Create new KB
+            kb = KnowledgeBase(
+                tenant_id=tenant.id,
+                name=f"KB for Agent {agent.name}",
+                embedding_model=embedding_model,
+                embedding_base_url=embedding_base_url,
+                qdrant_collection="",  # Will be set below
+            )
+            session.add(kb)
+            await session.flush()
+            
+            # Set qdrant_collection name
+            kb_id_str = str(kb.id)
+            object.__setattr__(
+                kb, "qdrant_collection", get_kb_collection_name(kb_id_str)
+            )
+            
+            # Ensure Qdrant collection exists
+            await self.qdrant.ensure_collection(kb_id_str, embedding_model)
+            
+            # Bind KB to agent and mark setup complete
+            agent.kb_id = kb.id
+            agent.kb_setup_completed = True
+            
+            await session.commit()
+            await session.refresh(kb)
+            await session.refresh(tenant)
+            
+            logger.info(
+                f"Created and bound KB {kb.id} (tenant {tenant.id}) to agent {agent_id}"
+            )
+            
+            return tenant, kb

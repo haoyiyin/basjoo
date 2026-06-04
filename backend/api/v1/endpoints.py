@@ -860,11 +860,13 @@ async def prepare_chat_request(
             kb_retriever = KbRetrievalService()
             # tenant_id=None lets the service derive it from the agent's KB
             # (removes the extra query that was only needed for the filter)
+            # Pass agent's similarity_threshold for proper RRF-style scoring
             kb_results = await kb_retriever.retrieve(
                 tenant_id=None,
                 agent_id=agent_id,
                 query=request.message,
                 top_k=agent_top_k or 5,
+                threshold=agent_similarity_threshold,
             )
             if kb_results:
                 texts = [
@@ -1540,6 +1542,7 @@ async def get_contexts(
             agent_id=agent_id,
             query=request.query,
             top_k=request.top_k or 5,
+            threshold=agent.similarity_threshold if agent else None,
         )
         for r in kb_results or []:
             contexts.append(

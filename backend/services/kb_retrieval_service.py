@@ -19,7 +19,7 @@ class KbRetrievalService:
         self.parser = DocumentParser()
         self.qdrant = QdrantKbService()
         self.kb_svc = KbService()
-        self.default_threshold = 0.6  # cosine similarity floor
+        self.default_threshold = 0.6  # Fallback default, but agent threshold is preferred
 
     async def retrieve(
         self,
@@ -92,9 +92,14 @@ class KbRetrievalService:
             )
 
             # 5. Post-filter by threshold and cap at top_k
-            eff_threshold = (
-                threshold if threshold is not None else self.default_threshold
-            )
+            # Use explicit threshold > agent config > service default
+            agent_threshold = getattr(agent, "similarity_threshold", None)
+            if threshold is not None:
+                eff_threshold = threshold
+            elif agent_threshold is not None:
+                eff_threshold = agent_threshold
+            else:
+                eff_threshold = self.default_threshold
             results = []
             for h in raw_hits:
                 p = h.get("payload", {})
