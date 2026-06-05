@@ -3072,9 +3072,25 @@ async def clear_all_urls(
     db: AsyncSession = Depends(get_db),
 ):
     await require_agent_admin(db, agent_id, current_user)
+
+    # Count URLs to be deleted
+    from sqlalchemy import func, select
+
+    count_query = (
+        select(func.count()).select_from(URLSource).where(URLSource.agent_id == agent_id)
+    )
+    result = await db.execute(count_query)
+    deleted_count = result.scalar() or 0
+
+    # Delete all URLs for this agent
     await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
     await db.commit()
-    return {"success": True}
+
+    return {
+        "success": True,
+        "message": "All URLs cleared successfully",
+        "deleted_count": deleted_count,
+    }
 
 
 @router.get("/files:list", response_model=FileListResponse)
@@ -3295,7 +3311,7 @@ async def clear_all_files(
     agent = await require_agent_admin(db, agent_id, current_user)
 
     if not agent.kb_id:
-        return {"success": True, "deleted_count": 0}
+        return {"success": True, "message": "All files cleared successfully", "deleted_count": 0}
 
     # Get all KbDocuments for this KB
     from services.kb_document_processor import KbDocumentProcessor
@@ -3308,7 +3324,7 @@ async def clear_all_files(
     )
     kb = kb_result.scalar_one_or_none()
     if not kb:
-        return {"success": True, "deleted_count": 0}
+        return {"success": True, "message": "All files cleared successfully", "deleted_count": 0}
 
     # Get all document IDs
     result = await db.execute(
@@ -3323,7 +3339,11 @@ async def clear_all_files(
         except Exception as e:
             logger.warning(f"Failed to delete document {doc_id}: {e}")
 
-    return {"success": True, "deleted_count": len(doc_ids)}
+    return {
+        "success": True,
+        "message": "All files cleared successfully",
+        "deleted_count": len(doc_ids),
+    }
 
 
 # ========== URL Indexing & Crawl Endpoints ==========

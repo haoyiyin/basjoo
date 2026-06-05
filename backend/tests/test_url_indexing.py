@@ -732,3 +732,33 @@ async def test_create_urls_auto_dispatches_background_fetch(client, default_agen
         assert data.get("auto_fetch_queued") is True, (
             "auto_fetch_queued should be True when background fetch is dispatched"
         )
+
+
+@pytest.mark.asyncio
+async def test_clear_all_urls_response_schema(client, default_agent_id):
+    """Test that urls:clear_all returns message and deleted_count fields.
+
+    Frontend expects {message: string, deleted_count: number} but backend
+    was only returning {success: True}.
+    """
+    # Create some URLs first
+    url_data = {"urls": ["https://example1.com", "https://example2.com"]}
+    create_response = await client.post(
+        f"/api/v1/urls:create?agent_id={default_agent_id}",
+        json=url_data,
+    )
+    assert create_response.status_code == 200
+
+    # Clear all URLs
+    response = await client.post(
+        f"/api/v1/urls:clear_all?agent_id={default_agent_id}"
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Assert response has expected fields matching frontend expectation
+    assert "message" in data, f"Response missing 'message' field. Got: {list(data.keys())}"
+    assert "deleted_count" in data, f"Response missing 'deleted_count' field. Got: {list(data.keys())}"
+    assert isinstance(data["message"], str), "message should be a string"
+    assert isinstance(data["deleted_count"], int), "deleted_count should be an int"
+    assert data["deleted_count"] == 2, f"Expected deleted_count=2, got {data['deleted_count']}"
