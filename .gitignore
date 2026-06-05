@@ -98,6 +98,9 @@ coverage/
 .coverage
 htmlcov/
 
+# Pytest upload artifacts (generated test files)
+backend/.pytest_uploads/
+
 # 类型检查
 .mypy_cache/
 .dmypy.json
