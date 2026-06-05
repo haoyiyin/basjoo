@@ -40,7 +40,7 @@ export default function URLManagement() {
   const [crawlPolling, setCrawlPolling] = useState(false);
   const [crawlStartCount, setCrawlStartCount] = useState(0);
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [refreshTrigger, _setRefreshTrigger] = useState(0);
   const [clearing, setClearing] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [pollingStopped, setPollingStopped] = useState(false);
@@ -141,14 +141,10 @@ export default function URLManagement() {
           if (status.is_crawling && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
             setCrawlPolling(true);
           }
-          // NEW: Clear crawlPolling when backend reports no crawling but frontend still shows polling
-          if (!status.is_crawling && !status.is_rebuilding && crawlPollingRef.current) {
-            setCrawlPolling(false);
-            if (pollingIntervalRef.current) {
-              clearInterval(pollingIntervalRef.current);
-              pollingIntervalRef.current = null;
-            }
-          }
+          // Note: Don't immediately stop URL polling when is_crawling becomes false.
+          // The URL polling loop has its own stop conditions that ensure at least
+          // one more poll cycle runs after crawl completes, so newly created URLs
+          // (including error records) are picked up before stopping.
         } catch (error) {
           console.error('Failed to poll task status:', error);
         }
@@ -239,7 +235,6 @@ export default function URLManagement() {
     if (!crawlPolling || !agentId) return;
 
     let pollCount = 0;
-    const maxPolls = 60; // 最多轮询 60 次 (约 2 分钟)
     let lastUrlCount = crawlStartCount;
     let consecutiveNoChange = 0; // 连续无变化次数
 
@@ -274,12 +269,6 @@ export default function URLManagement() {
         // Backend index status: idle, indexing, rebuilding
         const isBackendIndexing = indexStatus !== null &&
           (indexStatus.status === 'indexing' || indexStatus.status === 'rebuilding');
-        // Note: hasUnindexedSuccess alone is NOT proof of active work - it may be a terminal indexing failure
-        // Only treat it as active if backend reports indexing/rebuilding is in progress
-        const hasUnindexedSuccess = data.urls.some(
-          (url) => url.status === 'success' && !url.is_indexed
-        );
-        const isIndexing = isBackendIndexing || hasUnindexedSuccess && tasksStatus.is_rebuilding;
 
         // 停止条件（必须全部满足）：
         // 1. 没有 pending/fetching 的 URL
@@ -1164,6 +1153,53 @@ export default function URLManagement() {
                 <span style={{ color: 'var(--color-text-secondary)' }}>
                   {t('labels.urlManagement.crawlDiscovered', { count: total - crawlStartCount })}
                 </span>
+              </div>
+            )}
+
+            {/* Crawl error banner */}
+            {!crawlPolling && !taskStatus?.is_crawling && urls.some(u => u.status === 'failed' && u.last_error) && (
+              <div style={{
+                padding: 'var(--space-3) var(--space-4)',
+                background: 'rgba(239, 68, 68, 0.08)',
+                borderRadius: 'var(--radius-md)',
+                marginBottom: 'var(--space-4)',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 'var(--space-3)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-error)" strokeWidth="2" style={{ marginTop: '2px', flexShrink: 0 }}>
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <div style={{ flex: 1 }}>
+                  <span style={{ color: 'var(--color-error)', fontWeight: 500, fontSize: 'var(--text-sm)' }}>
+                    {t('labels.urlManagement.crawlError') || 'Crawl errors occurred'}
+                  </span>
+                  <div style={{ marginTop: 'var(--space-1)' }}>
+                    {urls
+                      .filter(u => u.status === 'failed' && u.last_error)
+                      .slice(0, 3)
+                      .map(u => (
+                        <p key={u.id} style={{
+                          fontSize: 'var(--text-xs)',
+                          color: 'var(--color-text-secondary)',
+                          margin: '2px 0',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {u.url}: {u.last_error}
+                        </p>
+                      ))}
+                    {urls.filter(u => u.status === 'failed' && u.last_error).length > 3 && (
+                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                        +{urls.filter(u => u.status === 'failed' && u.last_error).length - 3} more...
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 

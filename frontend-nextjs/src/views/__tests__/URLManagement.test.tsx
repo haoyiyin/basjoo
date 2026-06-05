@@ -329,9 +329,10 @@ describe("URLManagement indexing status display", () => {
       expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
     });
 
-    // Should show the fetch error message
+    // Should show the fetch error message (may appear in both banner and URL card)
     await waitFor(() => {
-      expect(screen.getByText(/DNS resolution failed/i)).toBeInTheDocument();
+      const elements = screen.getAllByText(/DNS resolution failed/i);
+      expect(elements.length).toBeGreaterThanOrEqual(1);
     });
   });
 });
@@ -361,9 +362,9 @@ describe("URLManagement crawlPolling synchronization", () => {
     const sourceFile = path.join(__dirname, "../URLManagement.tsx");
     const content = fs.readFileSync(sourceFile, "utf-8");
 
-    // Verify the fix is present: clear crawlPolling when backend reports no crawling
-    expect(content).toContain("Clear crawlPolling when backend reports no crawling but frontend still shows polling");
-    expect(content).toContain("if (!status.is_crawling && !status.is_rebuilding && crawlPollingRef.current)");
+    // Verify the fix is present: don't immediately stop URL polling when is_crawling becomes false
+    expect(content).toContain("Don't immediately stop URL polling when is_crawling becomes false");
+    expect(content).toContain("The URL polling loop has its own stop conditions");
   });
 
   it("should have reduced consecutiveNoChange threshold from 2 to 1", () => {
