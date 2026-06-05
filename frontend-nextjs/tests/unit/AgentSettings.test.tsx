@@ -54,6 +54,8 @@ const agent = {
   enable_context: true,
   is_active: true,
   created_at: '2026-01-01T00:00:00Z',
+  rate_limit_per_minute: 10,
+  restricted_reply: 'Custom restricted message',
 };
 
 function renderAgentSettings(initialEntry = '/agents/agt_1/settings/agent') {
@@ -118,7 +120,78 @@ describe('AgentSettings', () => {
         welcome_message: 'Hello there',
         history_days: 30,
         allowed_widget_origins: ['https://example.com'],
+        rate_limit_per_minute: 10,
+        restricted_reply: 'Custom restricted message',
       });
+    });
+  });
+
+  it('renders rate_limit_per_minute from agent fixture and allows changing it', async () => {
+    const user = userEvent.setup();
+    renderAgentSettings();
+
+    await waitFor(() => expect(screen.queryByText('status.loading')).not.toBeInTheDocument());
+    
+    const rateLimitInput = screen.getByLabelText('labels.perMinuteLimit');
+    expect(rateLimitInput).toHaveValue(10);
+
+    await user.clear(rateLimitInput);
+    await user.type(rateLimitInput, '20');
+    expect(rateLimitInput).toHaveValue(20);
+
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({ rate_limit_per_minute: 20 }),
+      );
+    });
+  });
+
+  it('renders restricted_reply from agent fixture and allows changing it', async () => {
+    const user = userEvent.setup();
+    renderAgentSettings();
+
+    await waitFor(() => expect(screen.queryByText('status.loading')).not.toBeInTheDocument());
+    
+    const restrictedReplyInput = screen.getByLabelText('labels.restrictedReplyLabel');
+    expect(restrictedReplyInput).toHaveValue('Custom restricted message');
+
+    await user.clear(restrictedReplyInput);
+    await user.type(restrictedReplyInput, 'New restricted reply');
+    expect(restrictedReplyInput).toHaveValue('New restricted reply');
+
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({ restricted_reply: 'New restricted reply' }),
+      );
+    });
+  });
+
+  it('allows setting rate_limit_per_minute to 0 (no limit)', async () => {
+    const user = userEvent.setup();
+    renderAgentSettings();
+
+    await waitFor(() => expect(screen.queryByText('status.loading')).not.toBeInTheDocument());
+    
+    const rateLimitInput = screen.getByLabelText('labels.perMinuteLimit');
+    expect(rateLimitInput).toHaveValue(10);
+
+    await user.clear(rateLimitInput);
+    await user.type(rateLimitInput, '0');
+    expect(rateLimitInput).toHaveValue(0);
+
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({ rate_limit_per_minute: 0 }),
+      );
     });
   });
 });

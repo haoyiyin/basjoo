@@ -21,6 +21,8 @@ interface AgentSettingsFormData {
   welcome_message: string;
   history_days: number;
   allowed_widget_origins: string[];
+  rate_limit_per_minute: number;
+  restricted_reply: string;
 }
 
 const DEFAULT_WIDGET_COLOR = '#00aaff';
@@ -33,6 +35,8 @@ function formDataFromAgent(agent: Agent): AgentSettingsFormData {
     welcome_message: agent.welcome_message || '',
     history_days: agent.history_days || DEFAULT_HISTORY_DAYS,
     allowed_widget_origins: agent.allowed_widget_origins || [],
+    rate_limit_per_minute: agent.rate_limit_per_minute ?? agent.rate_limit_per_hour ?? 20,
+    restricted_reply: agent.restricted_reply ?? '',
   };
 }
 
@@ -100,6 +104,8 @@ export default function AgentSettings() {
         welcome_message: formData.welcome_message,
         history_days: formData.history_days,
         allowed_widget_origins: normalizedOrigins,
+        rate_limit_per_minute: typeof formData.rate_limit_per_minute === 'number' ? formData.rate_limit_per_minute : 20,
+        restricted_reply: formData.restricted_reply ?? '',
       };
       const updatedAgent = await api.updateAgent(agent.id, updates);
       setAgent(updatedAgent);
@@ -342,6 +348,102 @@ export default function AgentSettings() {
               }}>
                 {t('labels.embedWhitelistFormatHint')}
               </p>
+            </div>
+
+            {/* AI Conversation Limit */}
+            <div>
+              <label style={{
+                display: 'block',
+                fontSize: 'var(--text-base)',
+                fontWeight: 600,
+                marginBottom: 'var(--space-3)',
+                color: 'var(--color-text-primary)',
+              }}>
+                {t('labels.aiConversationLimit')}
+              </label>
+              <p style={{
+                fontSize: 'var(--text-sm)',
+                color: 'var(--color-text-secondary)',
+                marginBottom: 'var(--space-4)',
+              }}>
+                {t('labels.aiConversationLimitDesc')}
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 'var(--space-4)', alignItems: isMobile ? 'stretch' : 'center' }}>
+                <div>
+                  <label htmlFor="rate_limit_per_minute" style={{
+                    display: 'block',
+                    fontSize: 'var(--text-sm)',
+                    fontWeight: 500,
+                    marginBottom: 'var(--space-2)',
+                    color: 'var(--color-text-primary)',
+                  }}>
+                    {t('labels.perMinuteLimit')}
+                  </label>
+                  <input
+                    id="rate_limit_per_minute"
+                    type="number"
+                    value={formData?.rate_limit_per_minute ?? 20}
+                    onChange={(e) => {
+                      const value = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
+                      updateField('rate_limit_per_minute', isNaN(value) ? 0 : value);
+                    }}
+                    min={0}
+                    style={{
+                      width: '120px',
+                      padding: 'var(--space-3)',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: 'var(--text-base)',
+                      background: 'var(--color-bg-secondary)',
+                      color: 'var(--color-text-primary)',
+                    }}
+                  />
+                </div>
+              </div>
+              <p style={{
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+                marginTop: 'var(--space-2)',
+              }}>
+                {t('labels.zeroMeansNoLimit')}
+              </p>
+
+              <div style={{ marginTop: 'var(--space-4)' }}>
+                <label htmlFor="restricted_reply" style={{
+                  display: 'block',
+                  fontSize: 'var(--text-sm)',
+                  fontWeight: 500,
+                  marginBottom: 'var(--space-2)',
+                  color: 'var(--color-text-primary)',
+                }}>
+                  {t('labels.restrictedReplyLabel')}
+                </label>
+                <textarea
+                  id="restricted_reply"
+                  value={formData?.restricted_reply || ''}
+                  onChange={(e) => updateField('restricted_reply', e.target.value)}
+                  rows={2}
+                  placeholder={t('labels.restrictedReplyPlaceholder')}
+                  style={{
+                    width: '100%',
+                    padding: 'var(--space-3)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: 'var(--text-base)',
+                    background: 'var(--color-bg-secondary)',
+                    color: 'var(--color-text-primary)',
+                    resize: 'vertical',
+                  }}
+                />
+                <p style={{
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--color-text-muted)',
+                  marginTop: 'var(--space-2)',
+                }}>
+                  {t('labels.restrictedReplyDesc')}
+                </p>
+              </div>
             </div>
 
             {/* Embed Code */}
