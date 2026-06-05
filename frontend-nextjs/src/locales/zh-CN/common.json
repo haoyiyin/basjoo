@@ -509,6 +509,7 @@
       "crawling": "抓取中...",
       "crawlStarted": "全站抓取已启动: {{jobId}}",
       "crawlFailed": "全站抓取失败",
+      "crawlError": "抓取出错",
       "crawlDepth": "抓取深度",
       "crawlDepthDesc": "设置全站抓取时的最大深度（1-5），1表示只抓取当前页面及其直接链接",
       "crawlMaxPages": "最大页面数",

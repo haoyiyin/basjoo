@@ -363,6 +363,160 @@ async def test_url_indexed_flag_reflects_success(client, default_agent_id):
 
 
 @pytest.mark.asyncio
+async def test_store_crawl_error_stores_error_message(client, default_agent_id):
+    """Test that _store_crawl_error correctly stores error message and sets status to failed.
+
+    This verifies the fix where _store_crawl_error was missing await on session.execute().
+    The function should:
+    1. Create a new URLSource record if one doesn't exist
+    2. Store the error message in last_error field
+    3. Set status to 'failed'
+    """
+    from services.url_service import _store_crawl_error
+
+    test_url = "https://example-crawl-error.com/page"
+    error_message = "Crawl failed: connection timeout"
+
+    async with database.AsyncSessionLocal() as session:
+        # Call _store_crawl_error with the error
+        await _store_crawl_error(
+            session=session,
+            agent_id=default_agent_id,
+            start_url=test_url,
+            error_msg=error_message,
+        )
+        await session.commit()
+
+    # Verify the URLSource was created with error details
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(URLSource).where(
+                URLSource.agent_id == default_agent_id,
+                URLSource.url == test_url,
+            )
+        )
+        url_source = result.scalar_one_or_none()
+
+        assert url_source is not None, (
+            "URLSource should be created by _store_crawl_error"
+        )
+        assert url_source.status == "failed", (
+            f"Expected status='failed', got '{url_source.status}'"
+        )
+        assert url_source.last_error == error_message, (
+            f"Expected last_error='{error_message}', got '{url_source.last_error}'"
+        )
+        assert url_source.normalized_url == test_url, (
+            f"Expected normalized_url='{test_url}', got '{url_source.normalized_url}'"
+        )
+
+
+@pytest.mark.asyncio
+async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
+    """Test that _store_crawl_error updates an existing URLSource record.
+
+    When a URLSource already exists for the agent+normalized_url combination,
+    the function should update its status and last_error rather than creating
+    a duplicate.
+    """
+    from services.url_service import _store_crawl_error
+
+    test_url = "https://example-existing-url.com/page"
+    original_error = "Original error"
+    new_error = "Updated crawl error"
+
+    # Create an existing URLSource
+    async with database.AsyncSessionLocal() as session:
+        existing = URLSource(
+            agent_id=default_agent_id,
+            url=test_url,
+            normalized_url=test_url,
+            status="pending",
+            last_error=original_error,
+        )
+        session.add(existing)
+        await session.commit()
+        existing_id = existing.id
+
+    # Call _store_crawl_error to update the existing record
+    async with database.AsyncSessionLocal() as session:
+        await _store_crawl_error(
+            session=session,
+            agent_id=default_agent_id,
+            start_url=test_url,
+            error_msg=new_error,
+        )
+        await session.commit()
+
+    # Verify the existing record was updated (not a new one created)
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(URLSource).where(
+                URLSource.agent_id == default_agent_id,
+                URLSource.url == test_url,
+            )
+        )
+        url_sources = result.scalars().all()
+
+        assert len(url_sources) == 1, (
+            f"Expected 1 URLSource, got {len(url_sources)} (duplicate created)"
+        )
+        url_source = url_sources[0]
+        assert url_source.id == existing_id, (
+            "Should update existing record, not create new"
+        )
+        assert url_source.status == "failed", (
+            f"Expected status='failed', got '{url_source.status}'"
+        )
+        assert url_source.last_error == new_error, (
+            f"Expected last_error='{new_error}', got '{url_source.last_error}'"
+        )
+
+
+@pytest.mark.asyncio
+async def test_store_crawl_error_retrievable_via_url_list(client, default_agent_id):
+    """Test that errors stored by _store_crawl_error are visible in URL list endpoint.
+
+    This verifies the error is committed to the database and can be retrieved
+    through the normal API flow.
+    """
+    from services.url_service import _store_crawl_error
+
+    test_url = "https://example-api-visible.com/page"
+    error_message = "Site crawl failed: SSL certificate error"
+
+    # Store crawl error via the service function
+    async with database.AsyncSessionLocal() as session:
+        await _store_crawl_error(
+            session=session,
+            agent_id=default_agent_id,
+            start_url=test_url,
+            error_msg=error_message,
+        )
+        await session.commit()
+
+    # Retrieve via API endpoint
+    response = await client.get(f"/api/v1/urls:list?agent_id={default_agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    # Find the URL in the response
+    url_item = next(
+        (u for u in data["urls"] if u["url"] == test_url),
+        None,
+    )
+    assert url_item is not None, (
+        f"URL with error should be retrievable via list endpoint. URLs: {[u['url'] for u in data['urls']]}"
+    )
+    assert url_item["status"] == "failed", (
+        f"Expected status='failed' in API response, got '{url_item['status']}'"
+    )
+    assert url_item["last_error"] == error_message, (
+        f"Expected last_error='{error_message}' in API response, got '{url_item.get('last_error', 'MISSING')}'"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancel_url_tasks_endpoint_exists(client, default_agent_id):
     """URL cancel tasks endpoint should exist."""
     response = await client.post(

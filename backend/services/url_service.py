@@ -270,7 +270,7 @@ async def process_url_refetch(
         await task_lock.release_task(agent_id, job_id)
 
 
-def _store_crawl_error(
+async def _store_crawl_error(
     session,
     agent_id: str,
     start_url: str,
@@ -285,12 +285,12 @@ def _store_crawl_error(
     import sqlalchemy as sa
 
     normalized = normalize_url(start_url)
-    existing = session.execute(
+    existing = (await session.execute(
         sa.select(URLSource).where(
             URLSource.agent_id == agent_id,
             URLSource.normalized_url == normalized,
         )
-    ).scalar_one_or_none()
+    )).scalar_one_or_none()
 
     if existing:
         existing.status = "failed"
@@ -336,7 +336,7 @@ async def process_site_crawl(
         if not safe:
             logger.error(f"[Site Crawl] Unsafe start URL: {start_url} - {reason}")
             async with AsyncSessionLocal() as session:
-                _store_crawl_error(
+                await _store_crawl_error(
                     session, agent_id, start_url,
                     f"URL safety check failed: {reason}",
                 )
@@ -385,7 +385,7 @@ async def process_site_crawl(
                     f"({len(valid_pages)} valid). "
                     f"The site may have no sub-links or the start page may be unreachable."
                 )
-                _store_crawl_error(session, agent_id, start_url, error_msg)
+                await _store_crawl_error(session, agent_id, start_url, error_msg)
 
             await session.commit()
             logger.info(f"[Site Crawl] Created {created_count} URL records")
@@ -400,7 +400,7 @@ async def process_site_crawl(
         logger.exception(f"[Site Crawl] Job {job_id} failed: {e}")
         try:
             async with AsyncSessionLocal() as session:
-                _store_crawl_error(
+                await _store_crawl_error(
                     session, agent_id, start_url,
                     f"Site crawl failed: {str(e)[:500]}",
                 )

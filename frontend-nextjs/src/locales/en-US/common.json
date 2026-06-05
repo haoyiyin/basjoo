@@ -509,6 +509,7 @@
       "crawling": "Crawling...",
       "crawlStarted": "Site crawl started: {{jobId}}",
       "crawlFailed": "Site crawl failed",
+      "crawlError": "Crawl errors occurred",
       "crawlDepth": "Crawl Depth",
       "crawlDepthDesc": "Set the maximum depth for site crawling (1-5), 1 means current page and direct links only",
       "crawlMaxPages": "Max Pages",
