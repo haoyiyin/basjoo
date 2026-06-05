@@ -700,10 +700,7 @@ class APIService {
 	}
 
 	// URL Management APIs
-	async createURLs(
-		agentId: string,
-		urls: string[],
-	): Promise<URLListResponse> {
+	async createURLs(agentId: string, urls: string[]): Promise<URLListResponse> {
 		return this.request(`/api/v1/urls:create?agent_id=${agentId}`, {
 			method: "POST",
 			body: JSON.stringify({ urls }),
