@@ -140,6 +140,10 @@ class URLItem(BaseModel):
     is_indexed: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # KB indexing diagnostics
+    indexing_status: Optional[Literal["pending", "processing", "ready", "error"]] = None
+    indexing_error: Optional[str] = None
+    last_error: Optional[str] = None
 
 
 class URLListResponse(BaseModel):

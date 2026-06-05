@@ -291,6 +291,7 @@ async def test_file_list_shows_processing_status(client, default_agent_id):
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+            kb_svc = KbService(session=session)
             tenant = Tenant(name="test_tenant2", slug="test_tenant2")
             session.add(tenant)
             await session.flush()
