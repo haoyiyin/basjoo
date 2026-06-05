@@ -50,33 +50,40 @@ export default function KBSetupWizard({
 		}
 	}, [provider]);
 
+	const validateCredentials = async (): Promise<{
+		success: boolean;
+		message: string;
+	}> => {
+		const overrides: Record<string, string> = {
+			embedding_provider: provider,
+			embedding_model: modelName,
+		};
+
+		if (provider === "jina") {
+			overrides.jina_api_key = apiKey;
+		} else {
+			overrides.siliconflow_api_key = apiKey;
+		}
+
+		if (provider === "custom" && embeddingApiBase) {
+			overrides.embedding_api_base = embeddingApiBase;
+		}
+
+		const testFn =
+			provider === "jina"
+				? api.testJinaApi(agentId, overrides)
+				: api.testEmbeddingApi(agentId, overrides);
+
+		return await testFn;
+	};
+
 	const handleTest = async () => {
 		setTesting(true);
 		setTestResult(null);
 		setError(null);
 
 		try {
-			const overrides: Record<string, string> = {
-				embedding_provider: provider,
-				embedding_model: modelName,
-			};
-
-			if (provider === "jina") {
-				overrides.jina_api_key = apiKey;
-			} else {
-				overrides.siliconflow_api_key = apiKey;
-			}
-
-			if (provider === "custom" && embeddingApiBase) {
-				overrides.embedding_api_base = embeddingApiBase;
-			}
-
-			const testFn =
-				provider === "jina"
-					? api.testJinaApi(agentId, overrides)
-					: api.testEmbeddingApi(agentId, overrides);
-
-			const result = await testFn;
+			const result = await validateCredentials();
 			setTestResult(result);
 		} catch (err) {
 			setTestResult({
@@ -89,13 +96,29 @@ export default function KBSetupWizard({
 	};
 
 	const handleSetup = async () => {
-		// Prevent setup if already in progress or testing
-		if (settingUp || testing) return;
+		// Prevent setup if already in progress
+		if (settingUp) return;
+
+		// Reject empty API keys before network calls
+		if (!apiKey.trim()) {
+			setError(t("kb.apiKeyRequired"));
+			return;
+		}
 
 		setSettingUp(true);
 		setError(null);
 
 		try {
+			// Validate the configured provider credentials first
+			const validationResult = await validateCredentials();
+
+			// Stop and display validation error if the test fails
+			if (!validationResult.success) {
+				setError(validationResult.message);
+				setSettingUp(false);
+				return;
+			}
+
 			const config: Parameters<typeof api.kbSetup>[1] = {
 				embedding_provider: provider,
 				embedding_model: modelName,
@@ -228,11 +251,6 @@ export default function KBSetupWizard({
 								onChange={(e) => {
 									setApiKey(e.target.value);
 									setTestResult(null);
-								}}
-								onBlur={() => {
-									if (apiKey.trim() && !testing) {
-										handleTest();
-									}
 								}}
 								placeholder={provider === "jina" ? "jina_..." : "sk-..."}
 								style={{ paddingRight: "40px" }}
@@ -409,7 +427,7 @@ export default function KBSetupWizard({
 						)}
 						<button
 							onClick={handleSetup}
-							disabled={settingUp || testing || !apiKey.trim()}
+							disabled={settingUp || !apiKey.trim()}
 							className="btn-primary"
 							style={{ flex: 1 }}
 						>

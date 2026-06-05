@@ -8,6 +8,7 @@ import {
 	fireEvent,
 	within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom";
@@ -126,6 +127,162 @@ beforeEach(() => {
 	} as any);
 });
 
+describe("KBSetupWizard one-click initialization regression", () => {
+	it("initializes KB with one click when API key input is focused", async () => {
+		const user = userEvent.setup();
+		const mockOnSetupComplete = vi.fn();
+
+		// Mock successful setup response
+		mockedApi.kbSetup.mockResolvedValueOnce({
+			id: "agt_test",
+			kb_setup_completed: true,
+		} as any);
+
+		render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Focus the API key input
+		const apiKeyInput = screen.getByPlaceholderText("jina_...");
+		await user.click(apiKeyInput);
+
+		// Type the API key
+		await user.type(apiKeyInput, "jina_test_key");
+
+		// Click the setup button - this triggers blur before click
+		const setupButton = screen.getByRole("button", { name: "kb.initButton" });
+		await user.click(setupButton);
+
+		// Should call test API first (during validation), then kbSetup
+		await waitFor(() => {
+			expect(mockedApi.testJinaApi).toHaveBeenCalledTimes(1);
+		});
+
+		await waitFor(() => {
+			expect(mockedApi.kbSetup).toHaveBeenCalledTimes(1);
+			expect(mockedApi.kbSetup).toHaveBeenCalledWith(
+				"agt_test",
+				expect.objectContaining({
+					embedding_provider: "jina",
+					embedding_model: "jina-embeddings-v3",
+					jina_api_key: "jina_test_key",
+				}),
+			);
+		});
+
+		// Should complete successfully
+		await waitFor(() => {
+			expect(mockOnSetupComplete).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("shows validation error and does not call kbSetup when provider test fails during initialization", async () => {
+		const user = userEvent.setup();
+		const mockOnSetupComplete = vi.fn();
+
+		// Mock failed validation
+		mockedApi.testJinaApi.mockResolvedValueOnce({
+			success: false,
+			message: "Invalid API key",
+		} as any);
+
+		render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Focus the API key input
+		const apiKeyInput = screen.getByPlaceholderText("jina_...");
+		await user.click(apiKeyInput);
+
+		// Type the API key
+		await user.type(apiKeyInput, "invalid_key");
+
+		// Click the setup button
+		const setupButton = screen.getByRole("button", { name: "kb.initButton" });
+		await user.click(setupButton);
+
+		// Should call test API
+		await waitFor(() => {
+			expect(mockedApi.testJinaApi).toHaveBeenCalledTimes(1);
+		});
+
+		// Should NOT call kbSetup
+		expect(mockedApi.kbSetup).not.toHaveBeenCalled();
+
+		// Should show error message
+		await waitFor(() => {
+			expect(screen.getByText("Invalid API key")).toBeInTheDocument();
+		});
+
+		// onSetupComplete should not be called
+		expect(mockOnSetupComplete).not.toHaveBeenCalled();
+
+		// Button should be re-enabled after error
+		await waitFor(() => {
+			expect(setupButton).not.toBeDisabled();
+		});
+	});
+
+	it("initializes KB with one click for siliconflow provider", async () => {
+		const user = userEvent.setup();
+		const mockOnSetupComplete = vi.fn();
+
+		mockedApi.kbSetup.mockResolvedValueOnce({
+			id: "agt_test",
+			kb_setup_completed: true,
+		} as any);
+
+		render(
+			<KBSetupWizard
+				agentId="agt_test"
+				onSetupComplete={mockOnSetupComplete}
+				containerTestId="kb-wizard-test"
+			/>,
+		);
+
+		// Switch to siliconflow provider
+		const providerSelect = screen.getByRole("combobox");
+		await user.selectOptions(providerSelect, "siliconflow");
+
+		// Focus and type API key
+		const apiKeyInput = screen.getByPlaceholderText("sk-...");
+		await user.click(apiKeyInput);
+		await user.type(apiKeyInput, "sk-siliconflow-key");
+
+		// Click setup button
+		const setupButton = screen.getByRole("button", { name: "kb.initButton" });
+		await user.click(setupButton);
+
+		// Should test siliconflow API, then call kbSetup
+		await waitFor(() => {
+			expect(mockedApi.testEmbeddingApi).toHaveBeenCalledTimes(1);
+		});
+
+		await waitFor(() => {
+			expect(mockedApi.kbSetup).toHaveBeenCalledTimes(1);
+			expect(mockedApi.kbSetup).toHaveBeenCalledWith(
+				"agt_test",
+				expect.objectContaining({
+					embedding_provider: "siliconflow",
+					siliconflow_api_key: "sk-siliconflow-key",
+				}),
+			);
+		});
+
+		await waitFor(() => {
+			expect(mockOnSetupComplete).toHaveBeenCalledTimes(1);
+		});
+	});
+});
+
 describe("KBSetupWizard diagnostics and race handling", () => {
 	it("shows error when setup returns but status check reports incomplete", async () => {
 		const mockOnSetupComplete = vi.fn();
@@ -175,8 +332,24 @@ describe("KBSetupWizard diagnostics and race handling", () => {
 		).not.toBeDisabled();
 	});
 
-	it("disables setup button while testing API key to prevent race", async () => {
+	it("disables setup button during initialization to prevent concurrent requests", async () => {
 		const mockOnSetupComplete = vi.fn();
+
+		// Delay the kbSetup API response to simulate long initialization
+		mockedApi.kbSetup.mockImplementation(
+			() =>
+				new Promise((resolve) =>
+					setTimeout(
+						() =>
+							resolve({
+								id: "agt_test",
+								kb_setup_completed: true,
+							} as any),
+						500,
+					),
+			),
+		);
+
 		render(
 			<KBSetupWizard
 				agentId="agt_test"
@@ -185,34 +358,26 @@ describe("KBSetupWizard diagnostics and race handling", () => {
 			/>,
 		);
 
-		// Delay the test API response
-		mockedApi.testJinaApi.mockImplementation(
-			() =>
-				new Promise((resolve) =>
-					setTimeout(() => resolve({ success: true, message: "ok" }), 100),
-				),
-		);
-
-		// Enter API key and blur to trigger test
+		// Enter API key
 		const apiKeyInput = screen.getByPlaceholderText("jina_...");
 		fireEvent.change(apiKeyInput, { target: { value: "jina_test_key" } });
 
-		// Blur should trigger test
-		fireEvent.blur(apiKeyInput);
+		// Click setup button to trigger initialization
+		const setupButton = screen.getByRole("button", { name: "kb.initButton" });
+		fireEvent.click(setupButton);
 
-		// Setup button should be disabled while testing
+		// Setup button should be disabled during initialization
 		await waitFor(() => {
-			expect(
-				screen.getByRole("button", { name: "kb.initButton" }),
-			).toBeDisabled();
+			expect(setupButton).toBeDisabled();
 		});
 
-		// Wait for test to complete
+		// Wait for initialization to complete
 		await waitFor(() => {
-			expect(
-				screen.getByRole("button", { name: "kb.initButton" }),
-			).not.toBeDisabled();
+			expect(mockOnSetupComplete).toHaveBeenCalledTimes(1);
 		});
+
+		// Button should be re-enabled after completion
+		expect(setupButton).not.toBeDisabled();
 	});
 
 	it("prevents concurrent setup requests when clicked multiple times", async () => {
