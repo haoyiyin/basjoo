@@ -340,11 +340,13 @@ export default function URLManagement() {
       return;
     }
 
+    const normalizedUrl = normalizeUrl(newUrl);
+
     stopPollingRequestedRef.current = false;
     setCrawling(true);
     setCrawlStartCount(total);
     try {
-      await api.crawlSite(agentId, newUrl, crawlMaxDepth, crawlMaxPages);
+      await api.crawlSite(agentId, normalizedUrl, crawlMaxDepth, crawlMaxPages);
       setNewUrl('');
       setCrawlPolling(true);
     } catch (error) {
@@ -683,7 +685,7 @@ export default function URLManagement() {
 
               <button
                   onClick={handleCrawlSite}
-                  disabled={crawling || !newUrl.trim()}
+                  disabled={crawling || taskStatus?.is_crawling || !newUrl.trim()}
                   className="btn-secondary"
                   style={{
                     width: '100%',
