@@ -750,15 +750,19 @@ async def test_clear_all_urls_response_schema(client, default_agent_id):
     assert create_response.status_code == 200
 
     # Clear all URLs
-    response = await client.post(
-        f"/api/v1/urls:clear_all?agent_id={default_agent_id}"
-    )
+    response = await client.post(f"/api/v1/urls:clear_all?agent_id={default_agent_id}")
     assert response.status_code == 200
     data = response.json()
 
     # Assert response has expected fields matching frontend expectation
-    assert "message" in data, f"Response missing 'message' field. Got: {list(data.keys())}"
-    assert "deleted_count" in data, f"Response missing 'deleted_count' field. Got: {list(data.keys())}"
+    assert "message" in data, (
+        f"Response missing 'message' field. Got: {list(data.keys())}"
+    )
+    assert "deleted_count" in data, (
+        f"Response missing 'deleted_count' field. Got: {list(data.keys())}"
+    )
     assert isinstance(data["message"], str), "message should be a string"
     assert isinstance(data["deleted_count"], int), "deleted_count should be an int"
-    assert data["deleted_count"] == 2, f"Expected deleted_count=2, got {data['deleted_count']}"
+    assert data["deleted_count"] == 2, (
+        f"Expected deleted_count=2, got {data['deleted_count']}"
+    )

@@ -2976,10 +2976,10 @@ async def create_urls(
     db: AsyncSession = Depends(get_db),
 ):
     await require_agent_admin(db, agent_id, current_user)
-    
+
     # Track newly created URL IDs for background fetch
     new_url_ids = []
-    
+
     for url_str in payload.urls:
         normalized = normalize_url(url_str)
         exists = (
@@ -2998,37 +2998,38 @@ async def create_urls(
         db.add(us)
         await db.flush()  # Get the ID before commit
         new_url_ids.append(us.id)
-    
+
     await db.commit()
-    
+
     # Get the list response data
     result = await list_urls(agent_id, 0, 100, current_user, db)
-    
+
     # Auto-dispatch background fetch if new URLs were created
     job_id = None
     auto_fetch_queued = False
-    
+
     if new_url_ids:
         # Ensure agent has KB bound (required for indexing)
         agent = await db.get(Agent, agent_id)
         if agent and not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=db)
             await kb_svc.get_or_create_agent_kb(agent_id, session=db)
             await db.refresh(agent)
-        
+
         # Attempt to acquire task lock for auto-fetch
         from services.task_lock import TaskType
-        
+
         job_id = f"refetch_{agent_id}_{uuid.uuid4().hex[:8]}"
         acquired, _ = await task_lock.acquire_task(
             agent_id, TaskType.URL_REFETCH, job_id
         )
-        
+
         if acquired:
             # Dispatch background refetch for newly created URLs
             from services.url_service import process_url_refetch
-            
+
             background_tasks.add_task(
                 process_url_refetch,
                 agent_id=agent_id,
@@ -3038,7 +3039,7 @@ async def create_urls(
             )
             auto_fetch_queued = True
         # If lock not acquired, URLs remain pending for later manual refetch
-    
+
     # Return response with job_id if auto-fetch was dispatched
     return URLListResponse(
         urls=result["urls"],
@@ -3077,7 +3078,9 @@ async def clear_all_urls(
     from sqlalchemy import func, select
 
     count_query = (
-        select(func.count()).select_from(URLSource).where(URLSource.agent_id == agent_id)
+        select(func.count())
+        .select_from(URLSource)
+        .where(URLSource.agent_id == agent_id)
     )
     result = await db.execute(count_query)
     deleted_count = result.scalar() or 0
@@ -3311,7 +3314,11 @@ async def clear_all_files(
     agent = await require_agent_admin(db, agent_id, current_user)
 
     if not agent.kb_id:
-        return {"success": True, "message": "All files cleared successfully", "deleted_count": 0}
+        return {
+            "success": True,
+            "message": "All files cleared successfully",
+            "deleted_count": 0,
+        }
 
     # Get all KbDocuments for this KB
     from services.kb_document_processor import KbDocumentProcessor
@@ -3324,7 +3331,11 @@ async def clear_all_files(
     )
     kb = kb_result.scalar_one_or_none()
     if not kb:
-        return {"success": True, "message": "All files cleared successfully", "deleted_count": 0}
+        return {
+            "success": True,
+            "message": "All files cleared successfully",
+            "deleted_count": 0,
+        }
 
     # Get all document IDs
     result = await db.execute(
