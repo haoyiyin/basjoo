@@ -127,9 +127,9 @@ test.describe("Playground KB Context Retrieval", () => {
 		const context = await resolveAgentContext(request);
 		const token = await loginByApi(request);
 
-		// Ensure KB setup is complete
+		// Ensure KB setup is complete - may need to reset first if agent has stale key
 		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		const kbSetupRes = await request.post(
+		let kbSetupRes = await request.post(
 			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
 			{
 				headers: {
@@ -143,8 +143,44 @@ test.describe("Playground KB Context Retrieval", () => {
 				},
 			},
 		);
-		// KB setup may already be completed (409/400) or succeed (200)
-		expect([200, 400, 409]).toContain(kbSetupRes.status());
+
+		// If setup returned 409/400, check if key needs updating - may need reset
+		if (kbSetupRes.status() === 409 || kbSetupRes.status() === 400) {
+			const checkRes = await request.get(
+				`${API_BASE}/api/v1/agent?agent_id=${context.agentId}`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+			const checkConfig = await checkRes.json() as {
+				kb_id?: string;
+				kb_setup_completed?: boolean;
+				jina_api_key_masked?: string;
+			};
+			// If using fallback key (tes***_e2e), reset and retry with real key
+			if (checkConfig.jina_api_key_masked?.includes("_e2e") && jinaApiKey !== "test_jina_key_for_e2e") {
+				const resetRes = await request.post(
+					`${API_BASE}/api/v1/agent:kb-reset?agent_id=${context.agentId}`,
+					{ headers: { Authorization: `Bearer ${token}` } },
+				);
+				expect(resetRes.status()).toBe(200);
+				// Retry setup with real key
+				kbSetupRes = await request.post(
+					`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
+					{
+						headers: {
+							Authorization: `Bearer ${token}`,
+							"Content-Type": "application/json",
+						},
+						data: {
+							embedding_provider: "jina",
+							embedding_model: "jina-embeddings-v3",
+							jina_api_key: jinaApiKey,
+						},
+					},
+				);
+			}
+		}
+		// KB setup should succeed (200) or be already completed (409)
+		expect([200, 409]).toContain(kbSetupRes.status());
 
 		// Verify kb_id is valid before continuing
 		const agentCheckRes = await request.get(
@@ -185,17 +221,22 @@ test.describe("Playground KB Context Retrieval", () => {
 
 		// Wait for background document processing to settle so later smoke specs
 		// don't race SQLite writes from the KB pipeline.
+		let lastFileStatus = "unknown";
+		let lastFileError: string | null = null;
 		await expect.poll(async () => {
 			const filesRes = await request.get(
 				`${API_BASE}/api/v1/files:list?agent_id=${context.agentId}`,
 				{ headers: { Authorization: `Bearer ${token}` } },
 			);
 			if (filesRes.status() !== 200) {
-				return `http-${filesRes.status()}`;
+				lastFileStatus = `http-${filesRes.status()}`;
+				return lastFileStatus;
 			}
-			const filesData = await filesRes.json() as { files?: Array<{ filename?: string; status?: string }> };
+			const filesData = await filesRes.json() as { files?: Array<{ filename?: string; status?: string; error_message?: string }> };
 			const uploadedFile = filesData.files?.find((file) => file.filename === fileName);
-			return uploadedFile?.status || "missing";
+			lastFileStatus = uploadedFile?.status || "missing";
+			lastFileError = uploadedFile?.error_message || null;
+			return lastFileStatus;
 		}, {
 			timeout: 60_000,
 			// Use shorter consistent intervals to prevent connection idle timeout
