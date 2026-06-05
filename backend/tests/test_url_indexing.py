@@ -22,7 +22,9 @@ async def test_url_creation_returns_list_response_shape(client, default_agent_id
         f"/api/v1/urls:create?agent_id={default_agent_id}",
         json={"urls": ["https://example.com/test1", "https://example.com/test2"]},
     )
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    assert response.status_code == 200, (
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
     data = response.json()
 
     # Should have URLListResponse shape
@@ -34,7 +36,9 @@ async def test_url_creation_returns_list_response_shape(client, default_agent_id
 
 
 @pytest.mark.asyncio
-async def test_url_status_transitions_to_success_after_indexing(client, default_agent_id):
+async def test_url_status_transitions_to_success_after_indexing(
+    client, default_agent_id
+):
     """URL added for an agent should progress to success and be marked indexed."""
     async with database.AsyncSessionLocal() as session:
         # Ensure agent has KB bound
@@ -44,6 +48,7 @@ async def test_url_status_transitions_to_success_after_indexing(client, default_
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=session)
             await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
 
@@ -73,7 +78,9 @@ async def test_url_status_transitions_to_success_after_indexing(client, default_
         )
 
         # Refetch should return job info
-        assert refetch_response.status_code == 200, f"Expected 200, got {refetch_response.status_code}: {refetch_response.text}"
+        assert refetch_response.status_code == 200, (
+            f"Expected 200, got {refetch_response.status_code}: {refetch_response.text}"
+        )
         refetch_data = refetch_response.json()
         assert "job_id" in refetch_data
         assert refetch_data["status"] in ["queued", "running", "completed"]
@@ -141,7 +148,9 @@ async def test_index_status_endpoint_exists(client, default_agent_id):
     )
     # Should not be 404 - endpoint should exist
     assert response.status_code != 404, "index:status endpoint should exist"
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    assert response.status_code == 200, (
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
 
     data = response.json()
     assert "agent_id" in data
@@ -157,7 +166,9 @@ async def test_index_info_endpoint_exists(client, default_agent_id):
     )
     # Should not be 404 - endpoint should exist
     assert response.status_code != 404, "index:info endpoint should exist"
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    assert response.status_code == 200, (
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
 
     data = response.json()
     assert "agent_id" in data
@@ -228,6 +239,7 @@ async def test_task_lock_prevents_duplicate_indexing(client, default_agent_id):
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=session)
             await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
 
@@ -245,7 +257,9 @@ async def test_task_lock_prevents_duplicate_indexing(client, default_agent_id):
             default_agent_id, TaskType.INDEX_REBUILD, "rebuild_agt_test_456"
         )
         # Should fail because URL_REFETCH is running
-        assert not acquired2, "Should not be able to acquire INDEX_REBUILD while URL_REFETCH is running"
+        assert not acquired2, (
+            "Should not be able to acquire INDEX_REBUILD while URL_REFETCH is running"
+        )
         assert "refetch" in error.lower() or "crawl" in error.lower() or "抓取" in error
     finally:
         # Release the lock
@@ -268,6 +282,7 @@ async def test_url_content_upserts_to_qdrant(client, default_agent_id):
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=session)
             await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
 
@@ -316,6 +331,7 @@ async def test_url_indexed_flag_reflects_success(client, default_agent_id):
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=session)
             await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
 
@@ -355,13 +371,13 @@ async def test_cancel_url_tasks_endpoint_exists(client, default_agent_id):
 @pytest.mark.asyncio
 async def test_is_indexed_true_on_process_success(client, default_agent_id):
     """When KbDocument.status is 'ready', is_indexed should be True.
-    
+
     This test verifies the fix logic: after process_document returns,
     we check doc.status and only set is_indexed=True if status=='ready'.
     """
     from models import KnowledgeBase, KbDocument
     import uuid
-    
+
     async with database.AsyncSessionLocal() as session:
         # Ensure agent has KB
         result = await session.execute(
@@ -399,7 +415,7 @@ async def test_is_indexed_true_on_process_success(client, default_agent_id):
         # The logic from url_service.py: check doc status and set is_indexed
         updated_doc = await session.get(KbDocument, doc_id)
         is_indexed = updated_doc.status == "ready"
-        
+
         assert is_indexed is True, (
             f"Expected is_indexed=True when doc.status='ready', got {is_indexed}"
         )
@@ -409,14 +425,14 @@ async def test_is_indexed_true_on_process_success(client, default_agent_id):
 async def test_is_indexed_false_on_process_failure(client, default_agent_id):
     """After process_document fails internally (KbDocument in error status),
     url_source.is_indexed should remain False.
-    
+
     This test verifies the bug fix where is_indexed was unconditionally set to True
     after process_document(), even when document processing failed internally.
     """
     from models import KnowledgeBase, KbDocument
     from services.kb_document_processor import KbDocumentProcessor
     import uuid
-    
+
     # Create URL source and ensure agent has KB
     async with database.AsyncSessionLocal() as session:
         result = await session.execute(
@@ -453,7 +469,7 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
 
     # Directly test the fix: create a doc and process it with a failing parser
     processor = KbDocumentProcessor()
-    
+
     async with database.AsyncSessionLocal() as session:
         # Create document record
         doc = await processor.create_document_record(
@@ -470,7 +486,11 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
         doc_id = str(doc.id)
 
     # Mock parse_with_retry to fail
-    with patch.object(processor.parser, 'parse_with_retry', side_effect=Exception("Simulated parse failure")):
+    with patch.object(
+        processor.parser,
+        "parse_with_retry",
+        side_effect=Exception("Simulated parse failure"),
+    ):
         # Process the document - this should set status="error" internally
         await processor.process_document(doc_id, "1", kb_id)
 
@@ -480,8 +500,10 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
             select(KbDocument).where(KbDocument.id == doc_id)
         )
         updated_doc = result.scalar_one()
-        assert updated_doc.status == "error", f"Expected doc status='error', got '{updated_doc.status}'"
-        
+        assert updated_doc.status == "error", (
+            f"Expected doc status='error', got '{updated_doc.status}'"
+        )
+
         # Now test the fixed logic: re-query doc and set is_indexed based on status
         is_indexed = updated_doc.status == "ready"
         assert is_indexed is False, (
@@ -493,68 +515,68 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
 @pytest.mark.asyncio
 async def test_process_url_refetch_in_syntax(client, default_agent_id):
     """Test that process_url_refetch compiles the SQL query correctly.
-    
+
     This test verifies the fix for the SQLAlchemy .in_() syntax error where
     multiple positional arguments were passed instead of a list.
-    
-    Before fix: URLSource.status.in_("pending", "success", "failed") 
+
+    Before fix: URLSource.status.in_("pending", "success", "failed")
     -> TypeError: ColumnOperators.in_() takes 2 positional arguments but 4 were given
-    
+
     After fix: URLSource.status.in_(["pending", "success", "failed"])
     -> Compiles correctly to: status IN (?, ?, ?)
     """
     from sqlalchemy import select
     from models import URLSource
-    
+
     # Build the query the same way process_url_refetch does (after fix)
     query = select(URLSource).where(
         URLSource.agent_id == default_agent_id,
         URLSource.status.in_(["pending", "success", "failed"]),
     )
-    
+
     # Compile the query to verify it works
     compiled = query.compile(compile_kwargs={"literal_binds": True})
     sql_str = str(compiled)
-    
+
     # Verify the query contains the IN clause
     assert "IN" in sql_str.upper(), f"Query should contain IN clause: {sql_str}"
     assert "pending" in sql_str.lower(), f"Query should contain 'pending': {sql_str}"
     assert "success" in sql_str.lower(), f"Query should contain 'success': {sql_str}"
     assert "failed" in sql_str.lower(), f"Query should contain 'failed': {sql_str}"
-    
+
     print(f"Generated SQL: {sql_str}")
 
 
 @pytest.mark.asyncio
 async def test_in_operator_rejects_multiple_positional_args():
     """Verify that .in_(arg1, arg2, arg3) raises TypeError.
-    
+
     This documents the bug pattern that was fixed.
     """
     from sqlalchemy import String
     from sqlalchemy.sql import column
-    
+
     status_col = column("status", String)
-    
+
     # Multiple positional args should raise TypeError
     with pytest.raises(TypeError) as exc_info:
         status_col.in_("pending", "success", "failed")
-    
+
     assert "takes 2 positional arguments" in str(exc_info.value)
 
 
 def test_crawl_page_result_accesses_status_code_from_metadata():
     """Unit test: CrawlPageResult.status_code should be accessed via metadata dict.
-    
+
     This verifies the fix for the AttributeError where page_result.status_code
     was accessed, but CrawlPageResult doesn't have that field - it should
     be retrieved from page_result.metadata instead.
-    
+
     Before fix: page_result.status_code -> AttributeError
     After fix: (page_result.metadata or {}).get("status_code") -> 200
     """
     from services.crawler import CrawlPageResult
-    
+
     # Create a CrawlPageResult with metadata containing status_code
     page_result = CrawlPageResult(
         url="https://example.com/test",
@@ -566,40 +588,48 @@ def test_crawl_page_result_accesses_status_code_from_metadata():
         error=None,
         metadata={"status_code": 200, "final_url": "https://example.com/test"},
     )
-    
+
     # Verify CrawlPageResult does NOT have status_code attribute
-    assert not hasattr(page_result, 'status_code') or 'status_code' not in page_result.__dict__, \
-        "CrawlPageResult should not have a direct status_code attribute"
-    
+    assert (
+        not hasattr(page_result, "status_code")
+        or "status_code" not in page_result.__dict__
+    ), "CrawlPageResult should not have a direct status_code attribute"
+
     # Verify the CORRECT way to access status_code (via metadata)
     status_code = (page_result.metadata or {}).get("status_code")
-    assert status_code == 200, f"Expected status_code=200 from metadata, got {status_code}"
-    
+    assert status_code == 200, (
+        f"Expected status_code=200 from metadata, got {status_code}"
+    )
+
     # Verify final_url is accessible directly (it's a field on CrawlPageResult)
     final_url = page_result.url
-    assert final_url == "https://example.com/test", f"Expected url field, got {final_url}"
-    
+    assert final_url == "https://example.com/test", (
+        f"Expected url field, got {final_url}"
+    )
+
     # Simulate the fixed fetch_metadata construction
     fetch_metadata = {
         "status_code": (page_result.metadata or {}).get("status_code"),
         "final_url": page_result.url,
     }
-    
+
     assert fetch_metadata["status_code"] == 200
     assert fetch_metadata["final_url"] == "https://example.com/test"
 
 
 @pytest.mark.asyncio
-async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default_agent_id):
+async def test_fetch_metadata_uses_metadata_dict_for_status_code(
+    client, default_agent_id
+):
     """Integration test: process_url_refetch builds fetch_metadata correctly.
-    
+
     This verifies the fix is applied in url_service.py where fetch_metadata
     is constructed from CrawlPageResult.
     """
     from services.crawler import CrawlPageResult
     from unittest.mock import patch, MagicMock, AsyncMock
     import uuid
-    
+
     async with database.AsyncSessionLocal() as session:
         # Ensure agent has KB bound
         result = await session.execute(
@@ -608,9 +638,10 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=session)
             await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-    
+
     # Create URL source first
     url = "https://example.com/test-metadata"
     async with database.AsyncSessionLocal() as session:
@@ -623,7 +654,7 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default
         session.add(url_source)
         await session.commit()
         url_id = url_source.id
-    
+
     # Create a proper CrawlPageResult with metadata containing status_code
     mock_page_result = CrawlPageResult(
         url="https://example.com/test-metadata",
@@ -635,17 +666,19 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default
         error=None,
         metadata={"status_code": 200, "final_url": "https://example.com/test-metadata"},
     )
-    
+
     # Patch the crawler to return our mock result
     # SiteCrawler is imported inside process_url_refetch, so we patch at the source
     with patch("services.crawler.SiteCrawler") as MockCrawler:
         mock_crawler_instance = MagicMock()
-        mock_crawler_instance.crawl_single_page = AsyncMock(return_value=mock_page_result)
+        mock_crawler_instance.crawl_single_page = AsyncMock(
+            return_value=mock_page_result
+        )
         MockCrawler.return_value = mock_crawler_instance
-        
+
         # Import and call process_url_refetch directly
         from services.url_service import process_url_refetch
-        
+
         # This should NOT raise AttributeError
         await process_url_refetch(
             agent_id=default_agent_id,
@@ -653,21 +686,21 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default
             force=True,
             job_id=f"test_job_{uuid.uuid4().hex[:8]}",
         )
-    
+
     # Verify URL source was updated with correct fetch_metadata
     async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(URLSource).where(URLSource.id == url_id)
-        )
+        result = await session.execute(select(URLSource).where(URLSource.id == url_id))
         updated_source = result.scalar_one()
-        
+
         # Status should be success (not failed)
         assert updated_source.status == "success", (
             f"Expected status='success', got status='{updated_source.status}'"
         )
-        
+
         # fetch_metadata should be populated correctly
-        assert updated_source.fetch_metadata is not None, "fetch_metadata should not be None"
+        assert updated_source.fetch_metadata is not None, (
+            "fetch_metadata should not be None"
+        )
         assert "status_code" in updated_source.fetch_metadata, (
             f"fetch_metadata should contain 'status_code', got: {updated_source.fetch_metadata}"
         )
@@ -685,15 +718,15 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default
 @pytest.mark.asyncio
 async def test_create_urls_auto_dispatches_background_fetch(client, default_agent_id):
     """create_urls endpoint should auto-dispatch background fetch for new URLs.
-    
+
     When URLs are created, the endpoint should:
     1. Return a job_id in the response indicating background fetch was queued
     2. URLs should transition from 'pending' status after background processing
-    
+
     This tests the fix for URLs getting stuck in 'pending' status.
     """
     from unittest.mock import patch
-    
+
     async with database.AsyncSessionLocal() as session:
         # Ensure agent has KB bound
         result = await session.execute(
@@ -702,21 +735,24 @@ async def test_create_urls_auto_dispatches_background_fetch(client, default_agen
         agent = result.scalar_one()
         if not agent.kb_id:
             from services.kb_service import KbService
+
             kb_svc = KbService(session=session)
             await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-    
+
     # Mock process_url_refetch to verify it gets called
     with patch("services.url_service.process_url_refetch") as mock_refetch:
         mock_refetch.return_value = None
-        
+
         response = await client.post(
             f"/api/v1/urls:create?agent_id={default_agent_id}",
             json={"urls": ["https://example.com/auto-fetch-test"]},
         )
-        
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text}"
+        )
         data = response.json()
-        
+
         # Response should include job_id when auto-fetch is dispatched
         assert "job_id" in data, (
             f"create_urls should return job_id when auto-dispatching background fetch. "

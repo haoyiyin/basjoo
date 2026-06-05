@@ -121,6 +121,7 @@ async def process_url_refetch(
 
             # Get tenant from KB
             from models import KnowledgeBase
+
             kb_result = await session.execute(
                 select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
             )
@@ -155,7 +156,9 @@ async def process_url_refetch(
                 # Validate URL safety
                 safe, reason = validate_url_safe(url)
                 if not safe:
-                    logger.warning(f"[URL Refetch] Unsafe URL skipped: {url} - {reason}")
+                    logger.warning(
+                        f"[URL Refetch] Unsafe URL skipped: {url} - {reason}"
+                    )
                     url_source.status = "failed"
                     url_source.last_error = f"URL safety check failed: {reason}"
                     await session.commit()
@@ -164,6 +167,7 @@ async def process_url_refetch(
                 # Update status to fetching
                 url_source.status = "fetching"
                 from datetime import datetime, timezone
+
                 url_source.last_fetch_at = datetime.now(timezone.utc)
                 await session.commit()
 
@@ -172,7 +176,9 @@ async def process_url_refetch(
                     page_result = await crawler.crawl_single_page(url)
 
                     if page_result.error:
-                        logger.warning(f"[URL Refetch] Failed to fetch {url}: {page_result.error}")
+                        logger.warning(
+                            f"[URL Refetch] Failed to fetch {url}: {page_result.error}"
+                        )
                         url_source.status = "failed"
                         url_source.last_error = page_result.error
                         url_source.is_indexed = False
@@ -181,9 +187,12 @@ async def process_url_refetch(
 
                     # Check content hash for duplicates (unless force=True)
                     from models import compute_content_hash
+
                     content_hash = compute_content_hash(page_result.content or "")
                     if not force and url_source.content_hash == content_hash:
-                        logger.info(f"[URL Refetch] Content unchanged for {url}, skipping")
+                        logger.info(
+                            f"[URL Refetch] Content unchanged for {url}, skipping"
+                        )
                         url_source.status = "success"
                         url_source.last_fetch_at = datetime.now(timezone.utc)
                         await session.commit()
@@ -212,7 +221,9 @@ async def process_url_refetch(
                     # Store content as a file for processing
                     doc_content = page_result.content or ""
                     doc_content_bytes = doc_content.encode("utf-8")
-                    storage_path = processor.save_uploaded_file(doc, doc_content_bytes, ".txt")
+                    storage_path = processor.save_uploaded_file(
+                        doc, doc_content_bytes, ".txt"
+                    )
                     object.__setattr__(doc, "storage_path", storage_path)
                     object.__setattr__(doc, "file_type", "txt")
                     await session.commit()
@@ -223,10 +234,10 @@ async def process_url_refetch(
                     # Re-fetch document to check actual processing status
                     # (process_document catches exceptions internally and sets status="error")
                     from models import KbDocument
+
                     doc_result = await session.execute(
                         select(KbDocument).where(
-                            KbDocument.id == doc.id,
-                            KbDocument.tenant_id == tenant_id
+                            KbDocument.id == doc.id, KbDocument.tenant_id == tenant_id
                         )
                     )
                     updated_doc = doc_result.scalar_one_or_none()
@@ -279,7 +290,9 @@ async def process_site_crawl(
     from services.crawler import SiteCrawler
     from services.url_safety import validate_url_safe
 
-    logger.info(f"[Site Crawl] Starting job {job_id} for agent {agent_id}, url={start_url}")
+    logger.info(
+        f"[Site Crawl] Starting job {job_id} for agent {agent_id}, url={start_url}"
+    )
 
     try:
         # Validate start URL
@@ -369,7 +382,9 @@ async def process_index_rebuild(
                 logger.info(f"[Index Rebuild] Clearing existing index for KB {kb_id}")
                 qdrant = QdrantKbService()
                 await qdrant.delete_collection(kb_id)
-                await qdrant.ensure_collection(kb_id, agent.embedding_model or "BAAI/bge-m3")
+                await qdrant.ensure_collection(
+                    kb_id, agent.embedding_model or "BAAI/bge-m3"
+                )
 
                 # Reset is_indexed flag for all URLs
                 result = await session.execute(
