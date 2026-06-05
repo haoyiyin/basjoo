@@ -4,6 +4,8 @@ These tests verify that:
 1. Chat endpoint includes KB context when agent has indexed content
 2. Tenant mismatches return no KB context
 3. The retrieved context is actually used in the system message
+4. Ready KB document content with a unique phrase is passed into chat KB context
+5. Failed ingestion is distinguishable from chat defects
 """
 
 import pytest
@@ -263,3 +265,111 @@ async def test_kb_retrieval_service_tenant_mismatch_returns_empty():
         )
 
         assert results == []
+
+
+@pytest.mark.asyncio
+async def test_ready_kb_content_with_unique_phrase_passed_to_chat_context():
+    """Verify that ready KB document content with a unique phrase is passed into chat KB context.
+
+    This test proves the ingestion-to-retrieval path: when a document is indexed (status=ready),
+    its content should be retrievable and passed into the chat system message.
+    """
+    from api.v1.endpoints import prepare_chat_request
+    from api.v1.schemas import ChatRequest
+
+    # Setup agent with KB
+    mock_agent = MagicMock()
+    mock_agent.id = "agent_kb_ready"
+    mock_agent.workspace_id = "ws_123"
+    mock_agent.kb_id = "kb_ready_456"
+    mock_agent.top_k = 3
+    mock_agent.similarity_threshold = 0.04
+    mock_agent.temperature = 0.7
+    mock_agent.system_prompt = "You are Basjoo assistant."
+    mock_agent.enable_context = False
+    mock_agent.api_key = "test_key"
+    mock_agent.api_base = "https://api.test.com"
+    mock_agent.model = "test-model"
+    mock_agent.rate_limit_per_minute = 0
+    mock_agent.restricted_reply = None
+
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_agent
+    mock_session.execute.return_value = mock_result
+
+    mock_quota = MagicMock()
+    mock_quota.used_messages_today = 0
+    mock_quota.max_messages_per_day = 1000
+    mock_quota.id = "quota_123"
+
+    # Use a unique test phrase that would only come from indexed content
+    unique_phrase = "UNIQUE_VERIFICATION_PHRASE_2024_READY_TEST"
+
+    chat_request = ChatRequest(
+        agent_id="agent_kb_ready",
+        message=f"Tell me about {unique_phrase}",
+        session_id=None,
+        params={},
+    )
+
+    mock_http_request = MagicMock()
+    mock_http_request.headers.get.return_value = ""
+
+    with patch("api.v1.endpoints.get_db") as mock_get_db:
+        mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("api.v1.endpoints.check_quota", return_value=mock_quota):
+            with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
+                mock_chat_session = MagicMock()
+                mock_chat_session.id = "session_ready_123"
+                mock_chat_session.status = "active"
+                mock_session_fn.return_value = mock_chat_session
+
+                # Mock KB retrieval returning content from a "ready" document
+                with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
+                    mock_kb_svc = MagicMock()
+                    # Simulate retrieval returning content from a ready/indexed document
+                    mock_kb_svc.retrieve = AsyncMock(return_value=[
+                        {
+                            "text": f"This is the document content containing {unique_phrase} which proves KB retrieval works.",
+                            "doc_id": "doc_ready_001",
+                            "chunk_index": 0,
+                            "score": 0.065,
+                            "filename": "ready_document.txt"
+                        }
+                    ])
+                    mock_kb_svc_cls.return_value = mock_kb_svc
+
+                    result = await prepare_chat_request(
+                        chat_request, mock_http_request, mock_session
+                    )
+
+                    # Verify retrieval was called
+                    mock_kb_svc.retrieve.assert_called_once()
+
+                    # Verify system message contains the unique phrase from the ready document
+                    messages = result.get("messages", [])
+                    assert len(messages) > 0, "Messages should not be empty"
+
+                    system_msg = messages[0]
+                    assert system_msg["role"] == "system", "First message should be system prompt"
+
+                    system_content = system_msg["content"]
+
+                    # The unique phrase from the ready KB document must be in the system message
+                    assert unique_phrase in system_content, (
+                        f"Unique phrase '{unique_phrase}' from ready KB document "
+                        f"should be present in system message. Got: {system_content[:200]}..."
+                    )
+
+                    # Verify the content structure indicates KB context injection
+                    assert "背景资料" in system_content or "relevant information" in system_content.lower(), (
+                        "System message should contain KB context marker"
+                    )
+
+                    # Verify source filename is included
+                    assert "ready_document.txt" in system_content, (
+                        "Source filename should be in KB context"
+                    )

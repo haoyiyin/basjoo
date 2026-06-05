@@ -199,7 +199,7 @@ test.describe("Playground KB Context Retrieval", () => {
 		}, {
 			timeout: 60_000,
 			intervals: [1_000, 2_000, 5_000],
-		}).toMatch(/^(ready|failed)$/);
+		}).toMatch(/^ready$/) // Tightened: require ready, not failed; on failure will show last status
 
 		// 3. Login and go to Playground
 		await adminLogin(page);
