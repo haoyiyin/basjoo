@@ -39,7 +39,13 @@ def _is_unsafe_ip(host: str) -> bool:
         return False
     if addr in ipaddress.ip_network("198.18.0.0/15"):
         return False
-    return addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_multicast or addr.is_unspecified
+    return (
+        addr.is_loopback
+        or addr.is_private
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
 
 
 def _validate_fetch_url_safe(url: str):
@@ -73,7 +79,9 @@ def _curl_get(url: str, timeout: int):
 
 
 def _httpx_get(url: str, timeout: int):
-    return httpx.get(url, headers=DEFAULT_HEADERS, timeout=timeout, follow_redirects=False)
+    return httpx.get(
+        url, headers=DEFAULT_HEADERS, timeout=timeout, follow_redirects=False
+    )
 
 
 def _fetch_following_safe_redirects(url: str, timeout: int, getter):
@@ -83,10 +91,20 @@ def _fetch_following_safe_redirects(url: str, timeout: int, getter):
         resp = getter(current_url, timeout)
         status_code = resp.status_code
         if status_code not in {301, 302, 303, 307, 308}:
-            return resp.text, status_code, str(resp.url), resp.headers.get("content-type", "")
+            return (
+                resp.text,
+                status_code,
+                str(resp.url),
+                resp.headers.get("content-type", ""),
+            )
         location = resp.headers.get("location")
         if not location:
-            return resp.text, status_code, str(resp.url), resp.headers.get("content-type", "")
+            return (
+                resp.text,
+                status_code,
+                str(resp.url),
+                resp.headers.get("content-type", ""),
+            )
         current_url = urljoin(str(resp.url), location)
     raise ValueError("Too many redirects")
 
@@ -138,7 +156,7 @@ def _resolve_title(title: str, html: str, url: str) -> str:
         return soup.h1.get_text().strip()
     # Try first markdown heading in plain-text content
     text = soup.get_text()
-    m = re.search(r'^\s*#\s+(.+)', text, re.MULTILINE)
+    m = re.search(r"^\s*#\s+(.+)", text, re.MULTILINE)
     if m:
         return m.group(1).strip()
     # Last resort: filename from URL path
@@ -167,10 +185,16 @@ def _extract_content(html: str, url: str) -> tuple:
         elif soup.h1:
             title = soup.h1.get_text().strip()
         # Remove non-content elements
-        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "iframe"]):
+        for tag in soup(
+            ["script", "style", "nav", "header", "footer", "aside", "iframe"]
+        ):
             tag.decompose()
         main = soup.find("main") or soup.find("article") or soup.find("body")
-        content = main.get_text(separator="\n", strip=True) if main else soup.get_text(separator="\n", strip=True)
+        content = (
+            main.get_text(separator="\n", strip=True)
+            if main
+            else soup.get_text(separator="\n", strip=True)
+        )
         title = _resolve_title(title, html, url)
         return title, content
 
@@ -180,26 +204,39 @@ async def fetch_url(request: FetchRequest):
     try:
         logger.info(f"Fetching URL: {request.url}")
 
-        html, status_code, final_url, content_type = _fetch_with_fallback(request.url, request.timeout)
+        html, status_code, final_url, content_type = _fetch_with_fallback(
+            request.url, request.timeout
+        )
 
         if status_code >= 400:
             return FetchResponse(
                 title="",
                 content="",
                 content_hash="",
-                metadata={"url": request.url, "status_code": status_code, "fetcher": "scrapling"},
+                metadata={
+                    "url": request.url,
+                    "status_code": status_code,
+                    "fetcher": "scrapling",
+                },
                 success=False,
-                error=f"HTTP {status_code}"
+                error=f"HTTP {status_code}",
             )
 
-        if "text/html" not in content_type.lower() and "text/plain" not in content_type.lower():
+        if (
+            "text/html" not in content_type.lower()
+            and "text/plain" not in content_type.lower()
+        ):
             return FetchResponse(
                 title="",
                 content="",
                 content_hash="",
-                metadata={"url": request.url, "content_type": content_type, "fetcher": "scrapling"},
+                metadata={
+                    "url": request.url,
+                    "content_type": content_type,
+                    "fetcher": "scrapling",
+                },
                 success=False,
-                error=f"Unsupported content type: {content_type}"
+                error=f"Unsupported content type: {content_type}",
             )
 
         title, content_text = _extract_content(html, request.url)
@@ -211,7 +248,7 @@ async def fetch_url(request: FetchRequest):
                 content_hash="",
                 metadata={"url": request.url, "fetcher": "scrapling"},
                 success=False,
-                error="Extracted content is too short or empty"
+                error="Extracted content is too short or empty",
             )
 
         content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
@@ -243,11 +280,13 @@ async def fetch_url(request: FetchRequest):
             content_hash="",
             metadata={"url": request.url, "fetcher": "scrapling"},
             success=False,
-            error=str(e)
+            error=str(e),
         )
 
 
-def _extract_links_from_html(html: str, base_url: str, base_domain: str, base_path: str) -> List[str]:
+def _extract_links_from_html(
+    html: str, base_url: str, base_domain: str, base_path: str
+) -> List[str]:
     """Extract valid links from HTML that match the base domain and path."""
     base_path_with_slash = "/" if base_path == "/" else f"{base_path}/"
     soup = BeautifulSoup(html, "lxml")
@@ -268,13 +307,15 @@ def _extract_links_from_html(html: str, base_url: str, base_domain: str, base_pa
 
         normalized_path = parsed.path or "/"
         normalized = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
-        if normalized.endswith("/") and normalized != f"{parsed.scheme}://{parsed.netloc}/":
+        if (
+            normalized.endswith("/")
+            and normalized != f"{parsed.scheme}://{parsed.netloc}/"
+        ):
             normalized = normalized[:-1]
             normalized_path = normalized_path[:-1]
 
-        is_subpath = (
-            normalized_path == base_path
-            or normalized_path.startswith(base_path_with_slash)
+        is_subpath = normalized_path == base_path or normalized_path.startswith(
+            base_path_with_slash
         )
         if not is_subpath:
             continue
@@ -287,7 +328,9 @@ def _extract_links_from_html(html: str, base_url: str, base_domain: str, base_pa
 @app.post("/discover", response_model=DiscoverResponse)
 async def discover_links(request: DiscoverRequest):
     try:
-        logger.info(f"Discovering links from: {request.url} with max_depth={request.max_depth}, max_pages={request.max_pages}")
+        logger.info(
+            f"Discovering links from: {request.url} with max_depth={request.max_depth}, max_pages={request.max_pages}"
+        )
 
         # Parse the seed URL
         parsed_base = urlparse(request.url)
@@ -298,11 +341,15 @@ async def discover_links(request: DiscoverRequest):
 
         # Normalize the seed URL
         seed_url = f"{parsed_base.scheme}://{parsed_base.netloc}{base_path}"
-        if seed_url.endswith("/") and seed_url != f"{parsed_base.scheme}://{parsed_base.netloc}/":
+        if (
+            seed_url.endswith("/")
+            and seed_url != f"{parsed_base.scheme}://{parsed_base.netloc}/"
+        ):
             seed_url = seed_url[:-1]
 
         # BFS queue: list of (url, depth)
         from collections import deque
+
         queue = deque([(seed_url, 0)])
         seen_urls = {seed_url}
         discovered = [{"url": seed_url, "depth": 0}]
@@ -313,7 +360,7 @@ async def discover_links(request: DiscoverRequest):
             current_url, current_depth = queue.popleft()
 
             # Stop if we've reached max_depth
-            if current_depth >= request.max_pages:
+            if current_depth >= request.max_depth:
                 continue
 
             logger.debug(f"Fetching {current_url} at depth {current_depth}")
@@ -326,7 +373,9 @@ async def discover_links(request: DiscoverRequest):
                     continue
 
                 # Extract links from the page
-                links = _extract_links_from_html(html, current_url, base_domain, base_path)
+                links = _extract_links_from_html(
+                    html, current_url, base_domain, base_path
+                )
 
                 for link in links:
                     if link in seen_urls:
@@ -337,7 +386,10 @@ async def discover_links(request: DiscoverRequest):
                     discovered.append({"url": link, "depth": next_depth})
 
                     # Queue for next depth level if within bounds
-                    if next_depth < request.max_depth and len(discovered) < request.max_pages:
+                    if (
+                        next_depth < request.max_depth
+                        and len(discovered) < request.max_pages
+                    ):
                         queue.append((link, next_depth))
 
                     if len(discovered) >= request.max_pages:
@@ -348,7 +400,7 @@ async def discover_links(request: DiscoverRequest):
                 continue
 
         logger.info(f"Discovered {len(discovered)} links from {request.url}")
-        return DiscoverResponse(urls=discovered[:request.max_pages])
+        return DiscoverResponse(urls=discovered[: request.max_pages])
 
     except HTTPException:
         raise
@@ -359,4 +411,5 @@ async def discover_links(request: DiscoverRequest):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)
