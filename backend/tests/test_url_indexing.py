@@ -543,6 +543,145 @@ async def test_in_operator_rejects_multiple_positional_args():
     assert "takes 2 positional arguments" in str(exc_info.value)
 
 
+def test_crawl_page_result_accesses_status_code_from_metadata():
+    """Unit test: CrawlPageResult.status_code should be accessed via metadata dict.
+    
+    This verifies the fix for the AttributeError where page_result.status_code
+    was accessed, but CrawlPageResult doesn't have that field - it should
+    be retrieved from page_result.metadata instead.
+    
+    Before fix: page_result.status_code -> AttributeError
+    After fix: (page_result.metadata or {}).get("status_code") -> 200
+    """
+    from services.crawler import CrawlPageResult
+    
+    # Create a CrawlPageResult with metadata containing status_code
+    page_result = CrawlPageResult(
+        url="https://example.com/test",
+        title="Test Page",
+        content="Test content",
+        content_hash="abc123",
+        depth=0,
+        success=True,
+        error=None,
+        metadata={"status_code": 200, "final_url": "https://example.com/test"},
+    )
+    
+    # Verify CrawlPageResult does NOT have status_code attribute
+    assert not hasattr(page_result, 'status_code') or 'status_code' not in page_result.__dict__, \
+        "CrawlPageResult should not have a direct status_code attribute"
+    
+    # Verify the CORRECT way to access status_code (via metadata)
+    status_code = (page_result.metadata or {}).get("status_code")
+    assert status_code == 200, f"Expected status_code=200 from metadata, got {status_code}"
+    
+    # Verify final_url is accessible directly (it's a field on CrawlPageResult)
+    final_url = page_result.url
+    assert final_url == "https://example.com/test", f"Expected url field, got {final_url}"
+    
+    # Simulate the fixed fetch_metadata construction
+    fetch_metadata = {
+        "status_code": (page_result.metadata or {}).get("status_code"),
+        "final_url": page_result.url,
+    }
+    
+    assert fetch_metadata["status_code"] == 200
+    assert fetch_metadata["final_url"] == "https://example.com/test"
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_uses_metadata_dict_for_status_code(client, default_agent_id):
+    """Integration test: process_url_refetch builds fetch_metadata correctly.
+    
+    This verifies the fix is applied in url_service.py where fetch_metadata
+    is constructed from CrawlPageResult.
+    """
+    from services.crawler import CrawlPageResult
+    from unittest.mock import patch, MagicMock, AsyncMock
+    import uuid
+    
+    async with database.AsyncSessionLocal() as session:
+        # Ensure agent has KB bound
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        if not agent.kb_id:
+            from services.kb_service import KbService
+            kb_svc = KbService(session=session)
+            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
+    
+    # Create URL source first
+    url = "https://example.com/test-metadata"
+    async with database.AsyncSessionLocal() as session:
+        url_source = URLSource(
+            agent_id=default_agent_id,
+            url=url,
+            normalized_url=url,
+            status="pending",
+        )
+        session.add(url_source)
+        await session.commit()
+        url_id = url_source.id
+    
+    # Create a proper CrawlPageResult with metadata containing status_code
+    mock_page_result = CrawlPageResult(
+        url="https://example.com/test-metadata",
+        title="Test Page",
+        content="Test content for metadata test.",
+        content_hash="abc123",
+        depth=0,
+        success=True,
+        error=None,
+        metadata={"status_code": 200, "final_url": "https://example.com/test-metadata"},
+    )
+    
+    # Patch the crawler to return our mock result
+    # SiteCrawler is imported inside process_url_refetch, so we patch at the source
+    with patch("services.crawler.SiteCrawler") as MockCrawler:
+        mock_crawler_instance = MagicMock()
+        mock_crawler_instance.crawl_single_page = AsyncMock(return_value=mock_page_result)
+        MockCrawler.return_value = mock_crawler_instance
+        
+        # Import and call process_url_refetch directly
+        from services.url_service import process_url_refetch
+        
+        # This should NOT raise AttributeError
+        await process_url_refetch(
+            agent_id=default_agent_id,
+            url_ids=[url_id],
+            force=True,
+            job_id=f"test_job_{uuid.uuid4().hex[:8]}",
+        )
+    
+    # Verify URL source was updated with correct fetch_metadata
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(URLSource).where(URLSource.id == url_id)
+        )
+        updated_source = result.scalar_one()
+        
+        # Status should be success (not failed)
+        assert updated_source.status == "success", (
+            f"Expected status='success', got status='{updated_source.status}'"
+        )
+        
+        # fetch_metadata should be populated correctly
+        assert updated_source.fetch_metadata is not None, "fetch_metadata should not be None"
+        assert "status_code" in updated_source.fetch_metadata, (
+            f"fetch_metadata should contain 'status_code', got: {updated_source.fetch_metadata}"
+        )
+        assert updated_source.fetch_metadata["status_code"] == 200, (
+            f"Expected status_code=200, got {updated_source.fetch_metadata.get('status_code')}"
+        )
+        assert "final_url" in updated_source.fetch_metadata, (
+            f"fetch_metadata should contain 'final_url', got: {updated_source.fetch_metadata}"
+        )
+        assert updated_source.fetch_metadata["final_url"] == url, (
+            f"Expected final_url='{url}', got {updated_source.fetch_metadata.get('final_url')}"
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_urls_auto_dispatches_background_fetch(client, default_agent_id):
     """create_urls endpoint should auto-dispatch background fetch for new URLs.

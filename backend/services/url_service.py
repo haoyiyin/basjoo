@@ -195,7 +195,7 @@ async def process_url_refetch(
                     url_source.content_hash = content_hash
                     url_source.status = "success"
                     url_source.fetch_metadata = {
-                        "status_code": page_result.status_code,
+                        "status_code": (page_result.metadata or {}).get("status_code"),
                         "final_url": page_result.url,
                     }
                     await session.commit()
