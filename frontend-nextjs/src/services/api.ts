@@ -493,7 +493,7 @@ class APIService {
 
 		try {
 			while (!streamEnded) {
-				let timeoutId: number | NodeJS.Timeout | null = null;
+				let timeoutId: number | null = null;
 				const { done, value } = await Promise.race([
 					reader.read(),
 					new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
@@ -700,10 +700,7 @@ class APIService {
 	}
 
 	// URL Management APIs
-	async createURLs(
-		agentId: string,
-		urls: string[],
-	): Promise<URLListResponse> {
+	async createURLs(agentId: string, urls: string[]): Promise<URLListResponse> {
 		return this.request(`/api/v1/urls:create?agent_id=${agentId}`, {
 			method: "POST",
 			body: JSON.stringify({ urls }),
@@ -765,7 +762,7 @@ class APIService {
 		agentId: string,
 	): Promise<{ message: string; deleted_count: number }> {
 		return this.request(`/api/v1/urls:clear_all?agent_id=${agentId}`, {
-			method: "DELETE",
+			method: "POST",
 		}).then((result) => result as { message: string; deleted_count: number });
 	}
 
@@ -881,7 +878,7 @@ class APIService {
 		agentId: string,
 	): Promise<{ message: string; deleted_count: number }> {
 		return this.request(`/api/v1/files:clear_all?agent_id=${agentId}`, {
-			method: "DELETE",
+			method: "POST",
 		}).then((result) => result as { message: string; deleted_count: number });
 	}
 
