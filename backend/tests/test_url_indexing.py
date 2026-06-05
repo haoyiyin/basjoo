@@ -541,3 +541,49 @@ async def test_in_operator_rejects_multiple_positional_args():
         status_col.in_("pending", "success", "failed")
     
     assert "takes 2 positional arguments" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_urls_auto_dispatches_background_fetch(client, default_agent_id):
+    """create_urls endpoint should auto-dispatch background fetch for new URLs.
+    
+    When URLs are created, the endpoint should:
+    1. Return a job_id in the response indicating background fetch was queued
+    2. URLs should transition from 'pending' status after background processing
+    
+    This tests the fix for URLs getting stuck in 'pending' status.
+    """
+    from unittest.mock import patch
+    
+    async with database.AsyncSessionLocal() as session:
+        # Ensure agent has KB bound
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        if not agent.kb_id:
+            from services.kb_service import KbService
+            kb_svc = KbService(session=session)
+            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
+    
+    # Mock process_url_refetch to verify it gets called
+    with patch("services.url_service.process_url_refetch") as mock_refetch:
+        mock_refetch.return_value = None
+        
+        response = await client.post(
+            f"/api/v1/urls:create?agent_id={default_agent_id}",
+            json={"urls": ["https://example.com/auto-fetch-test"]},
+        )
+        
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+        data = response.json()
+        
+        # Response should include job_id when auto-fetch is dispatched
+        assert "job_id" in data, (
+            f"create_urls should return job_id when auto-dispatching background fetch. "
+            f"Got keys: {list(data.keys())}"
+        )
+        assert data["job_id"] is not None
+        assert data.get("auto_fetch_queued") is True, (
+            "auto_fetch_queued should be True when background fetch is dispatched"
+        )

@@ -2971,10 +2971,15 @@ async def list_urls(
 async def create_urls(
     agent_id: str,
     payload: URLCreateRequest,
+    background_tasks: BackgroundTasks,
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     await require_agent_admin(db, agent_id, current_user)
+    
+    # Track newly created URL IDs for background fetch
+    new_url_ids = []
+    
     for url_str in payload.urls:
         normalized = normalize_url(url_str)
         exists = (
@@ -2991,8 +2996,57 @@ async def create_urls(
             agent_id=agent_id, url=url_str, normalized_url=normalized, status="pending"
         )
         db.add(us)
+        await db.flush()  # Get the ID before commit
+        new_url_ids.append(us.id)
+    
     await db.commit()
-    return await list_urls(agent_id, 0, 100, current_user, db)
+    
+    # Get the list response data
+    result = await list_urls(agent_id, 0, 100, current_user, db)
+    
+    # Auto-dispatch background fetch if new URLs were created
+    job_id = None
+    auto_fetch_queued = False
+    
+    if new_url_ids:
+        # Ensure agent has KB bound (required for indexing)
+        agent = await db.get(Agent, agent_id)
+        if agent and not agent.kb_id:
+            from services.kb_service import KbService
+            kb_svc = KbService(session=db)
+            await kb_svc.get_or_create_agent_kb(agent_id, session=db)
+            await db.refresh(agent)
+        
+        # Attempt to acquire task lock for auto-fetch
+        from services.task_lock import TaskType
+        
+        job_id = f"refetch_{agent_id}_{uuid.uuid4().hex[:8]}"
+        acquired, _ = await task_lock.acquire_task(
+            agent_id, TaskType.URL_REFETCH, job_id
+        )
+        
+        if acquired:
+            # Dispatch background refetch for newly created URLs
+            from services.url_service import process_url_refetch
+            
+            background_tasks.add_task(
+                process_url_refetch,
+                agent_id=agent_id,
+                url_ids=new_url_ids,
+                force=False,
+                job_id=job_id,
+            )
+            auto_fetch_queued = True
+        # If lock not acquired, URLs remain pending for later manual refetch
+    
+    # Return response with job_id if auto-fetch was dispatched
+    return URLListResponse(
+        urls=result["urls"],
+        total=result["total"],
+        quota=result["quota"],
+        job_id=job_id,
+        auto_fetch_queued=auto_fetch_queued,
+    )
 
 
 @router.delete("/urls:delete")

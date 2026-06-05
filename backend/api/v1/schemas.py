@@ -148,6 +148,8 @@ class URLListResponse(BaseModel):
     urls: List[URLItem]
     total: int
     quota: Dict[str, int] = Field(..., description="配额信息（used, max）")
+    job_id: Optional[str] = Field(None, description="后台抓取任务ID（当有新的URL创建时自动触发）")
+    auto_fetch_queued: bool = Field(False, description="是否已自动排队后台抓取")
 
 
 class URLRefetchRequest(BaseModel):
