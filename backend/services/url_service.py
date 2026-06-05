@@ -270,6 +270,42 @@ async def process_url_refetch(
         await task_lock.release_task(agent_id, job_id)
 
 
+def _store_crawl_error(
+    session,
+    agent_id: str,
+    start_url: str,
+    error_msg: str,
+) -> None:
+    """Store a crawl error as a URLSource record so the frontend can display it.
+
+    Uses upsert semantics: if a URLSource with the same normalized URL already
+    exists for this agent (e.g. from a previous failed crawl), update its error
+    message. Otherwise create a new record.
+    """
+    import sqlalchemy as sa
+
+    normalized = normalize_url(start_url)
+    existing = session.execute(
+        sa.select(URLSource).where(
+            URLSource.agent_id == agent_id,
+            URLSource.normalized_url == normalized,
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.status = "failed"
+        existing.last_error = error_msg
+    else:
+        url_source = URLSource(
+            agent_id=agent_id,
+            url=start_url,
+            normalized_url=normalized,
+            status="failed",
+            last_error=error_msg,
+        )
+        session.add(url_source)
+
+
 async def process_site_crawl(
     agent_id: str,
     start_url: str,
@@ -299,6 +335,12 @@ async def process_site_crawl(
         safe, reason = validate_url_safe(start_url)
         if not safe:
             logger.error(f"[Site Crawl] Unsafe start URL: {start_url} - {reason}")
+            async with AsyncSessionLocal() as session:
+                _store_crawl_error(
+                    session, agent_id, start_url,
+                    f"URL safety check failed: {reason}",
+                )
+                await session.commit()
             return
 
         crawler = SiteCrawler()
@@ -308,13 +350,13 @@ async def process_site_crawl(
 
         logger.info(f"[Site Crawl] Discovered {len(results)} pages from {start_url}")
 
+        # Filter to pages with actual content
+        valid_pages = [p for p in results if not p.error and p.url]
+
         # Create URLSource records for discovered pages
         async with AsyncSessionLocal() as session:
             created_count = 0
-            for page in results:
-                if page.error or not page.url:
-                    continue
-
+            for page in valid_pages:
                 normalized = normalize_url(page.url)
                 exists = await session.scalar(
                     select(URLSource).where(
@@ -335,16 +377,36 @@ async def process_site_crawl(
                 session.add(url_source)
                 created_count += 1
 
+            # If no pages were discovered, store an error so the frontend can display it
+            if created_count == 0:
+                error_msg = (
+                    f"No pages discovered from {start_url}. "
+                    f"Crawl returned {len(results)} results "
+                    f"({len(valid_pages)} valid). "
+                    f"The site may have no sub-links or the start page may be unreachable."
+                )
+                _store_crawl_error(session, agent_id, start_url, error_msg)
+
             await session.commit()
             logger.info(f"[Site Crawl] Created {created_count} URL records")
 
-        # Trigger refetch to index all discovered URLs
-        await process_url_refetch(agent_id, None, False, f"{job_id}_refetch")
+        # Trigger refetch to index all discovered URLs (only if we found pages)
+        if valid_pages:
+            await process_url_refetch(agent_id, None, False, f"{job_id}_refetch")
 
         logger.info(f"[Site Crawl] Job {job_id} completed")
 
     except Exception as e:
         logger.exception(f"[Site Crawl] Job {job_id} failed: {e}")
+        try:
+            async with AsyncSessionLocal() as session:
+                _store_crawl_error(
+                    session, agent_id, start_url,
+                    f"Site crawl failed: {str(e)[:500]}",
+                )
+                await session.commit()
+        except Exception:
+            logger.exception(f"[Site Crawl] Failed to store error for job {job_id}")
     finally:
         await task_lock.release_task(agent_id, job_id)
 
