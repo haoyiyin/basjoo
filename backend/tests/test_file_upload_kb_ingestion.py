@@ -248,3 +248,161 @@ class TestFileUploadKbIngestion:
         assert "status" in file_item
         # Status should reflect KbDocument status (pending/processing) not just KnowledgeFile
         assert file_item["status"] in ["pending", "processing"]
+
+    async def test_file_list_exposes_processing_error_details(self, client):
+        """When file processing fails, API should expose error_message.
+        
+        GAP: FileItem may not properly propagate KbDocument.error_message
+        when processing fails.
+        
+        Expected: File with status='error'|'failed' should include error_message
+        containing the KbDocument.error_message.
+        """
+        import uuid
+        from io import BytesIO
+        from models import Agent, Tenant, KbDocument
+        from services.kb_service import KbService
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Agent).where(Agent.is_active == True).limit(1)
+            )
+            agent = result.scalar_one_or_none()
+            assert agent is not None
+
+            tenant = Tenant(name="test_tenant_error", slug="test_tenant_error")
+            session.add(tenant)
+            await session.flush()
+            tenant_id = str(tenant.id)
+
+            kb_svc = KbService(session=session)
+            kb = await kb_svc.create_knowledge_base(
+                tenant_id=tenant_id,
+                name="Test KB Error",
+            )
+            agent.kb_id = kb.id
+            await session.commit()
+
+            agent_id = agent.id
+
+        # Upload a file
+        test_content = b"Test content for error propagation"
+        files = {"files": ("error_prop_test.txt", BytesIO(test_content), "text/plain")}
+
+        response = await client.post(
+            f"/api/v1/files:upload?agent_id={agent_id}",
+            files=files,
+        )
+        assert response.status_code == 200
+        upload_data = response.json()
+        file_id = upload_data["files"][0]["id"]
+
+        # Simulate processing failure
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(KbDocument).where(KbDocument.id == file_id)
+            )
+            doc = result.scalar_one_or_none()
+            if doc:
+                object.__setattr__(doc, "status", "error")
+                object.__setattr__(doc, "error_message", "Chunking failed: text too large")
+                await session.commit()
+
+        # Get file list
+        response = await client.get(f"/api/v1/files:list?agent_id={agent_id}")
+        assert response.status_code == 200
+        data = response.json()
+
+        file_item = next((f for f in data["files"] if f["id"] == file_id), None)
+        assert file_item is not None
+
+        # File should show error status AND error_message
+        if file_item.get("status") in ["failed", "error"]:
+            assert "error_message" in file_item, (
+                "GAP: FileItem with failed/error status must include error_message field"
+            )
+            assert file_item["error_message"] == "Chunking failed: text too large", (
+                "GAP: error_message should contain KbDocument.error_message"
+            )
+        else:
+            pytest.fail(
+                f"GAP: File status '{file_item.get('status')}' does not reflect "
+                f"KbDocument status 'error'. File list should expose processing errors."
+            )
+
+    async def test_file_list_shows_explicit_processing_state(self, client):
+        """File list should show explicit processing state vs pending vs ready.
+        
+        GAP: File status may not accurately reflect KbDocument processing state.
+        
+        Expected: FileItem.status should be one of:
+        - 'pending' = uploaded, waiting to process
+        - 'processing' = currently being chunked/embed/upsert
+        - 'ready' = successfully indexed
+        - 'error' = processing failed
+        """
+        import uuid
+        from io import BytesIO
+        from models import Agent, Tenant, KbDocument
+        from services.kb_service import KbService
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Agent).where(Agent.is_active == True).limit(1)
+            )
+            agent = result.scalar_one_or_none()
+            assert agent is not None
+
+            tenant = Tenant(name="test_tenant_state", slug="test_tenant_state")
+            session.add(tenant)
+            await session.flush()
+            tenant_id = str(tenant.id)
+
+            kb_svc = KbService(session=session)
+            kb = await kb_svc.create_knowledge_base(
+                tenant_id=tenant_id,
+                name="Test KB State",
+            )
+            agent.kb_id = kb.id
+            await session.commit()
+
+            agent_id = agent.id
+
+        # Upload a file
+        test_content = b"Test content for state tracking"
+        files = {"files": ("state_test.txt", BytesIO(test_content), "text/plain")}
+
+        response = await client.post(
+            f"/api/v1/files:upload?agent_id={agent_id}",
+            files=files,
+        )
+        assert response.status_code == 200
+        upload_data = response.json()
+        file_id = upload_data["files"][0]["id"]
+
+        # Set to processing state
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(KbDocument).where(KbDocument.id == file_id)
+            )
+            doc = result.scalar_one_or_none()
+            if doc:
+                object.__setattr__(doc, "status", "processing")
+                await session.commit()
+
+        # Get file list
+        response = await client.get(f"/api/v1/files:list?agent_id={agent_id}")
+        assert response.status_code == 200
+        data = response.json()
+
+        file_item = next((f for f in data["files"] if f["id"] == file_id), None)
+        assert file_item is not None
+
+        # File status should reflect KbDocument status
+        expected_statuses = ["pending", "processing", "ready", "error"]
+        if file_item.get("status") not in expected_statuses:
+            pytest.fail(
+                f"GAP: File status '{file_item.get('status')}' is not in expected "
+                f"processing states {expected_statuses}. File list should expose "
+                f"accurate KB processing state."
+            )

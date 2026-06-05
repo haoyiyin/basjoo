@@ -766,3 +766,156 @@ async def test_clear_all_urls_response_schema(client, default_agent_id):
     assert data["deleted_count"] == 2, (
         f"Expected deleted_count=2, got {data['deleted_count']}"
     )
+
+
+# ========== KB Indexing Diagnostics Gap Tests ==========
+# These tests expose the gap where URL responses do not include enough
+# diagnostic information about KB processing status.
+
+
+@pytest.mark.asyncio
+async def test_url_list_exposes_indexing_error_for_fetch_success_process_failure(
+    client, default_agent_id
+):
+    """When URL fetch succeeds but KB processing fails, API should expose error.
+    
+    GAP: Currently URLSource.last_error is only set on fetch failures.
+    When fetch succeeds but document processing fails, error is only in
+    KbDocument.error_message and not visible in URL list response.
+    
+    Expected: URL list should include indexing_error field.
+    """
+    import uuid
+
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        if not agent.kb_id:
+            new_kb_id = str(uuid.uuid4())
+            kb = KnowledgeBase(
+                id=new_kb_id,
+                tenant_id=agent.workspace_id,
+                name=f"Agent {default_agent_id} KB",
+                embedding_model="BAAI/bge-m3",
+                qdrant_collection=f"kb_{new_kb_id}",
+            )
+            session.add(kb)
+            await session.flush()
+            agent.kb_id = kb.id
+        kb_id = agent.kb_id
+        tenant_id = str(agent.workspace_id)
+
+        # Create URL: fetch succeeded, but indexing failed
+        url_source = URLSource(
+            agent_id=default_agent_id,
+            url="https://example.com/fetch-ok-index-fail",
+            normalized_url="https://example.com/fetch-ok-index-fail",
+            status="success",  # Fetch worked
+            is_indexed=False,  # But indexing failed
+            title="Fetch OK Index Fail",
+            content="Content fetched successfully",
+            last_error=None,  # No fetch error
+        )
+        session.add(url_source)
+        await session.flush()
+
+        # Create KbDocument with error (simulating failed processing)
+        doc = KbDocument(
+            id=str(uuid.uuid4()),
+            kb_id=kb_id,
+            tenant_id=tenant_id,
+            filename="url_content.txt",
+            status="error",
+            error_message="Embedding API rate limit exceeded",
+        )
+        session.add(doc)
+        await session.commit()
+
+    response = await client.get(f"/api/v1/urls:list?agent_id={default_agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    url_item = next(
+        (u for u in data["urls"] if u["url"] == "https://example.com/fetch-ok-index-fail"),
+        None
+    )
+    assert url_item is not None
+    assert url_item["status"] == "success"
+    assert url_item["is_indexed"] is False
+
+    # EXPECTED: URL should expose indexing error when fetch succeeded but indexing failed
+    # This assertion documents the GAP - it will FAIL until the API is enhanced
+    assert "indexing_error" in url_item, (
+        "GAP: URLItem should expose indexing_error field when fetch succeeded "
+        "but KB processing failed. Current: error only in KbDocument.error_message, "
+        "not visible in URL list response."
+    )
+    assert url_item["indexing_error"] == "Embedding API rate limit exceeded", (
+        "GAP: indexing_error should contain KbDocument.error_message"
+    )
+
+
+@pytest.mark.asyncio
+async def test_url_list_exposes_indexing_status_field(client, default_agent_id):
+    """URL list should expose explicit indexing_status field.
+    
+    GAP: Current URLItem only has status (fetch) and is_indexed (bool).
+    Cannot distinguish between 'still processing' vs 'processing failed'.
+    
+    Expected: URLItem should have indexing_status with values:
+    'pending'|'processing'|'ready'|'error'
+    """
+    import uuid
+
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Agent).where(Agent.id == default_agent_id)
+        )
+        agent = result.scalar_one()
+        if not agent.kb_id:
+            new_kb_id = str(uuid.uuid4())
+            kb = KnowledgeBase(
+                id=new_kb_id,
+                tenant_id=agent.workspace_id,
+                name="Test KB",
+                embedding_model="BAAI/bge-m3",
+                qdrant_collection=f"kb_{new_kb_id}",
+            )
+            session.add(kb)
+            await session.flush()
+            agent.kb_id = kb.id
+            await session.commit()
+
+        # Create URL being processed
+        url_source = URLSource(
+            agent_id=default_agent_id,
+            url="https://example.com/processing",
+            normalized_url="https://example.com/processing",
+            status="success",
+            is_indexed=False,
+        )
+        session.add(url_source)
+        await session.commit()
+
+    response = await client.get(f"/api/v1/urls:list?agent_id={default_agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    url_item = next(
+        (u for u in data["urls"] if u["url"] == "https://example.com/processing"),
+        None
+    )
+    assert url_item is not None
+
+    # EXPECTED: explicit indexing_status field
+    # This assertion documents the GAP
+    assert "indexing_status" in url_item, (
+        "GAP: URLItem should expose indexing_status field with explicit values "
+        "('pending'|'processing'|'ready'|'error') to distinguish processing state "
+        "from fetch status. Current: only is_indexed boolean available."
+    )
+    assert url_item["indexing_status"] in ["pending", "processing", "ready", "error"], (
+        "indexing_status should have explicit state values"
+    )
