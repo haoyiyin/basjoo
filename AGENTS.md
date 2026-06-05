@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Scope
-This is the primary reference for AI coding agents (Pi, Claude, Cursor, Aider, etc.) working on the Basjoo repository. **Always read this file, CLAUDE.md, and relevant sections of README.md before starting any task.** Follow more specific instructions in `openspec/AGENTS.md` when using spec-driven workflows.
+This is the primary reference for AI coding agents (Pi, Claude, Cursor, Aider, etc.) working on the Basjoo repository. **Always read this file, CLAUDE.md, and relevant sections of README.md before starting any task.** Implementation plans are in `docs/plans/`; capability specs are in `docs/specs/`.
 
 ## Project overview
 Docker-oriented AI customer support platform:
@@ -18,7 +18,7 @@ All LLM calls to external providers; embeddings via self-KB (Jina/SiliconFlow/Op
 - `scrapling-service/` — standalone stealth scraper (curl_cffi + readability).
 - `docker-compose.yml` — dev/prod profiles; `nginx/`.
 - `tests/e2e/` — Playwright specs.
-- `openspec/` — capability specs + change proposals (see its AGENTS.md).
+- `docs/` — `plans/` (implementation plans), `specs/` (capability specs).
 
 ## Required tools and setup
 - Dev stack: `docker compose --profile dev up --watch`.
@@ -117,4 +117,4 @@ Prefer `ctx_*` family to protect context window. Follow superpowers skills (TDD 
 
 **This is living documentation. Update when patterns change.**
 
-Last updated: 2026-05-31 (added KB document direct Qdrant pipeline: tenant-scoped upload/parse/index/delete, `kb_document_endpoints.py`, `KbDocumentProcessor`, `DocumentParser`; updated "New knowledge source type" and "Backend RAG / ingestion" sections)
+Last updated: 2026-06-05 (removed non-existent openspec reference, added docs directory structure, verified commands and architecture against current codebase)
