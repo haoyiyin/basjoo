@@ -274,26 +274,29 @@ export default function URLManagement() {
         const hasPendingOrFetching = data.urls.some(
           (url) => url.status === 'pending' || url.status === 'fetching'
         );
+        // Backend index status: idle, indexing, rebuilding
+        const isBackendIndexing = indexStatus !== null &&
+          (indexStatus.status === 'indexing' || indexStatus.status === 'rebuilding');
+        // Note: hasUnindexedSuccess alone is NOT proof of active work - it may be a terminal indexing failure
+        // Only treat it as active if backend reports indexing/rebuilding is in progress
         const hasUnindexedSuccess = data.urls.some(
           (url) => url.status === 'success' && !url.is_indexed
         );
-        const isIndexing = indexStatus !== null && 
-          (indexStatus.status === 'processing' || indexStatus.status === 'pending');
+        const isIndexing = isBackendIndexing || hasUnindexedSuccess && tasksStatus.is_rebuilding;
 
         // 停止条件（必须全部满足）：
         // 1. 没有 pending/fetching 的 URL
-        // 2. 没有成功但未索引的 URL
-        // 3. 后端报告没有正在进行的抓取任务 (is_crawling = false)
-        // 4. 没有正在重建索引 (is_rebuilding = false)
-        // 5. 没有正在处理的索引任务
-        // 6. 已经轮询了至少 3 次
-        // 7. 连续 2 次没有新 URL 增加（确保数据已稳定）
-        const shouldStop = 
+        // 2. 后端报告没有正在进行的抓取任务 (is_crawling = false)
+        // 3. 没有正在重建索引 (is_rebuilding = false)
+        // 4. 没有正在处理的索引任务 (backend status is not indexing/rebuilding)
+        // 5. 已经轮询了至少 3 次
+        // 6. 连续 2 次没有新 URL 增加（确保数据已稳定）
+        // Note: success-but-unindexed is NOT an active state indicator - may be terminal failure
+        const shouldStop =
           !hasPendingOrFetching &&
-          !hasUnindexedSuccess &&
           !tasksStatus.is_crawling &&
           !tasksStatus.is_rebuilding &&
-          !isIndexing &&
+          !isBackendIndexing &&
           pollCount > 3 &&
           consecutiveNoChange >= 1;
 
@@ -309,7 +312,7 @@ export default function URLManagement() {
         }
 
         // 备选停止条件：如果轮询超过 30 次仍没有变化，可能是抓取失败
-        if (consecutiveNoChange > 30 && !tasksStatus.is_crawling && !tasksStatus.is_rebuilding && !isIndexing) {
+        if (consecutiveNoChange > 30 && !tasksStatus.is_crawling && !tasksStatus.is_rebuilding && !isBackendIndexing) {
           await stopPolling();
         }
       } catch (error) {
@@ -1263,6 +1266,34 @@ export default function URLManagement() {
                             marginTop: 'var(--space-2)',
                           }}>
                             {t('labels.urlManagement.lastFetch')}: {new Date(url.last_fetch_at).toLocaleString()}
+                          </p>
+                        )}
+                        {/* Indexing error display */}
+                        {url.status === 'success' && !url.is_indexed && url.indexing_error && (
+                          <p style={{
+                            fontSize: 'var(--text-xs)',
+                            color: 'var(--color-error)',
+                            marginTop: 'var(--space-2)',
+                            padding: 'var(--space-1) var(--space-2)',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            borderRadius: 'var(--radius-sm)',
+                            borderLeft: '2px solid var(--color-error)',
+                          }}>
+                            {url.indexing_error}
+                          </p>
+                        )}
+                        {/* Fetch error display */}
+                        {url.status === 'failed' && url.last_error && (
+                          <p style={{
+                            fontSize: 'var(--text-xs)',
+                            color: 'var(--color-error)',
+                            marginTop: 'var(--space-2)',
+                            padding: 'var(--space-1) var(--space-2)',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            borderRadius: 'var(--radius-sm)',
+                            borderLeft: '2px solid var(--color-error)',
+                          }}>
+                            {url.last_error}
                           </p>
                         )}
                       </div>

@@ -160,6 +160,10 @@ export interface URLSource {
 	is_indexed: boolean;
 	created_at: string;
 	updated_at?: string;
+	// KB indexing diagnostics
+	indexing_status?: "pending" | "processing" | "ready" | "error";
+	indexing_error?: string;
+	last_error?: string;
 }
 
 export interface URLListResponse {
@@ -182,6 +186,8 @@ export interface FileItem {
 	status: "ready" | "processing" | "uploading" | "pending" | "failed";
 	created_at: string;
 	updated_at?: string;
+	// Processing error details
+	error_message?: string;
 }
 
 export interface Quota {

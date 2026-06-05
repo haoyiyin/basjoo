@@ -83,15 +83,18 @@ const mockAgent = {
   crawl_max_pages: 20,
 };
 
-const createMockURL = (status: URLSource["status"], isIndexed: boolean = false): URLSource => ({
+const createMockURL = (status: URLSource["status"], isIndexed: boolean = false, overrides: Partial<URLSource> = {}): URLSource => ({
   id: 1,
   url: "https://example.com",
+  normalized_url: "https://example.com",
   status,
   is_indexed: isIndexed,
   title: "Test Page",
   last_fetch_at: new Date().toISOString(),
   created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
   agent_id: "agt_test",
+  ...overrides,
 });
 
 describe("URLManagement", () => {
@@ -176,6 +179,164 @@ describe("URLManagement", () => {
     // Empty state should be shown
     await waitFor(() => {
       expect(screen.getByText("labels.urlManagement.noUrls")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("URLManagement indexing status display", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // Default mocks - idle backend state
+    mockedApi.getAgent.mockResolvedValue(mockAgent as any);
+    mockedApi.getTasksStatus.mockResolvedValue({
+      is_crawling: false,
+      is_rebuilding: false,
+      can_modify_index: true,
+      active_tasks: [],
+    } as any);
+    // Backend index status is idle (not indexing/rebuilding)
+    mockedApi.getIndexStatus.mockResolvedValue({
+      status: "idle",
+      total_chunks: 0,
+    } as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderComponent(initialURLs: URLSource[] = []) {
+    mockedApi.listURLs.mockResolvedValue({ urls: initialURLs, total: initialURLs.length } as any);
+
+    const router = createMemoryRouter(
+      [
+        { path: "/agents/:agentId/urls", element: <URLManagement /> },
+      ],
+      { initialEntries: ["/agents/agt_test/urls"] }
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    return { ...view, router };
+  }
+
+  it("should NOT show active fetching banner for success-but-unindexed URL when backend is idle", async () => {
+    // URL is fetched successfully but not indexed, and backend reports idle
+    const urls = [createMockURL("success", false, { 
+      indexing_status: "error",
+      indexing_error: "Embedding API rate limit exceeded"
+    })];
+    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
+
+    renderComponent(urls);
+
+    // Wait for component to load
+    await waitFor(() => {
+      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show "Not Indexed" or similar status, NOT active fetching/crawling banner
+    // The crawlInProgress banner should NOT be visible
+    await waitFor(() => {
+      const crawlBanner = screen.queryByText(/crawlInProgress/i);
+      expect(crawlBanner).not.toBeInTheDocument();
+    });
+
+    // Should display the URL's index status (Not Indexed)
+    await waitFor(() => {
+      expect(screen.getByText(/Not Indexed|Index failed/i)).toBeInTheDocument();
+    });
+  });
+
+  it("should recognize backend index status 'indexing' as active index work", async () => {
+    // Backend reports indexing is in progress
+    mockedApi.getIndexStatus.mockResolvedValue({
+      status: "indexing",
+      total_chunks: 10,
+    } as any);
+
+    const urls = [createMockURL("success", false, { indexing_status: "processing" })];
+    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
+
+    renderComponent(urls);
+
+    // Wait for component to load and polling to start
+    await waitFor(() => {
+      expect(mockedApi.getIndexStatus).toHaveBeenCalled();
+    });
+
+    // Should show active polling/work indicator when backend is indexing
+    await waitFor(() => {
+      expect(mockedApi.getIndexStatus).toHaveBeenCalledWith("agt_test");
+    });
+  });
+
+  it("should recognize backend index status 'rebuilding' as active index work", async () => {
+    // Backend reports rebuilding is in progress
+    mockedApi.getIndexStatus.mockResolvedValue({
+      status: "rebuilding",
+      total_chunks: 50,
+    } as any);
+    mockedApi.getTasksStatus.mockResolvedValue({
+      is_crawling: false,
+      is_rebuilding: true,
+      can_modify_index: false,
+      active_tasks: ["rebuild_index"],
+    } as any);
+
+    const urls = [createMockURL("success", false, { indexing_status: "processing" })];
+    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
+
+    renderComponent(urls);
+
+    // Wait for component to load
+    await waitFor(() => {
+      expect(mockedApi.getTasksStatus).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should detect rebuilding as active work
+    await waitFor(() => {
+      expect(mockedApi.getTasksStatus).toHaveBeenCalled();
+    });
+  });
+
+  it("should display indexing error details when provided", async () => {
+    const urls = [createMockURL("success", false, {
+      indexing_status: "error",
+      indexing_error: "Embedding API rate limit exceeded"
+    })];
+    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
+
+    renderComponent(urls);
+
+    // Wait for component to load
+    await waitFor(() => {
+      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show the indexing error message
+    await waitFor(() => {
+      expect(screen.getByText(/Embedding API rate limit exceeded/i)).toBeInTheDocument();
+    });
+  });
+
+  it("should display URL last_error when fetch failed", async () => {
+    const urls = [createMockURL("failed", false, {
+      last_error: "DNS resolution failed: example.com not found"
+    })];
+    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
+
+    renderComponent(urls);
+
+    // Wait for component to load
+    await waitFor(() => {
+      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show the fetch error message
+    await waitFor(() => {
+      expect(screen.getByText(/DNS resolution failed/i)).toBeInTheDocument();
     });
   });
 });

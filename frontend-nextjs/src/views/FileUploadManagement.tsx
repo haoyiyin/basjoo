@@ -649,6 +649,25 @@ export default function FileUploadManagement() {
                               {new Date(file.created_at).toLocaleDateString()}
                             </span>
                           </div>
+                          {/* Error message display for failed files */}
+                          {file.status === 'failed' && file.error_message && (
+                            <div style={{
+                              marginTop: 'var(--space-2)',
+                              padding: 'var(--space-2) var(--space-3)',
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              borderRadius: 'var(--radius-sm)',
+                              borderLeft: '2px solid var(--color-error)',
+                            }}>
+                              <p style={{
+                                fontSize: 'var(--text-xs)',
+                                color: 'var(--color-error)',
+                                margin: 0,
+                                lineHeight: 1.4,
+                              }}>
+                                {file.error_message}
+                              </p>
+                            </div>
+                          )}
                         </div>
                         <button
                           onClick={() => handleDelete(file.id)}

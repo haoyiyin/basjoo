@@ -67,13 +67,15 @@ const mockAgent = {
   name: "Test Agent",
 };
 
-const createMockFile = (status: FileItem["status"]): FileItem => ({
+const createMockFile = (status: FileItem["status"], overrides: Partial<FileItem> = {}): FileItem => ({
   id: `file_${status}`,
   filename: `test-${status}.pdf`,
   file_type: "application/pdf",
   file_size: 1024,
   status,
   created_at: "2026-06-01T00:00:00Z",
+  updated_at: "2026-06-01T00:00:00Z",
+  ...overrides,
 });
 
 describe("FileUploadManagement file status polling", () => {
@@ -277,5 +279,115 @@ describe("FileUploadManagement file status polling", () => {
     
     // Allow for task status polling (every 3 seconds) but not file polling
     expect(additionalCalls).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("FileUploadManagement error display", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    
+    // Default mocks
+    mockedApi.getAgent.mockResolvedValue(mockAgent as any);
+    mockedApi.getTasksStatus.mockResolvedValue({
+      is_crawling: false,
+      is_rebuilding: false,
+      can_modify_index: true,
+      active_tasks: [],
+    } as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderComponent(initialFiles: FileItem[] = []) {
+    mockedApi.listFiles.mockResolvedValue({ files: initialFiles } as any);
+
+    const router = createMemoryRouter(
+      [
+        { path: "/agents/:agentId/files", element: <FileUploadManagement /> },
+      ],
+      { initialEntries: ["/agents/agt_test/files"] }
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    return { ...view, router };
+  }
+
+  it("should display error_message for failed file uploads", async () => {
+    const failedFiles = [createMockFile("failed", {
+      error_message: "PDF parsing failed: malformed PDF structure"
+    })];
+    mockedApi.listFiles.mockResolvedValue({ files: failedFiles } as any);
+
+    renderComponent(failedFiles);
+
+    // Wait for initial load
+    await waitFor(() => {
+      expect(mockedApi.listFiles).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show the error message for the failed file
+    await waitFor(() => {
+      expect(screen.getByText(/PDF parsing failed: malformed PDF structure/i)).toBeInTheDocument();
+    });
+  });
+
+  it("should display Qdrant-specific error details", async () => {
+    const failedFiles = [createMockFile("failed", {
+      error_message: "Qdrant upsert failed: collection not found"
+    })];
+    mockedApi.listFiles.mockResolvedValue({ files: failedFiles } as any);
+
+    renderComponent(failedFiles);
+
+    // Wait for initial load
+    await waitFor(() => {
+      expect(mockedApi.listFiles).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show the Qdrant error
+    await waitFor(() => {
+      expect(screen.getByText(/Qdrant upsert failed: collection not found/i)).toBeInTheDocument();
+    });
+  });
+
+  it("should display embedding API error details", async () => {
+    const failedFiles = [createMockFile("failed", {
+      error_message: "Embedding API rate limit exceeded: too many requests"
+    })];
+    mockedApi.listFiles.mockResolvedValue({ files: failedFiles } as any);
+
+    renderComponent(failedFiles);
+
+    // Wait for initial load
+    await waitFor(() => {
+      expect(mockedApi.listFiles).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show the embedding API error
+    await waitFor(() => {
+      expect(screen.getByText(/Embedding API rate limit exceeded/i)).toBeInTheDocument();
+    });
+  });
+
+  it("should display parser error for unsupported file format", async () => {
+    const failedFiles = [createMockFile("failed", {
+      error_message: "Parser error: unsupported file format .xyz"
+    })];
+    mockedApi.listFiles.mockResolvedValue({ files: failedFiles } as any);
+
+    renderComponent(failedFiles);
+
+    // Wait for initial load
+    await waitFor(() => {
+      expect(mockedApi.listFiles).toHaveBeenCalledWith("agt_test");
+    });
+
+    // Should show the parser error
+    await waitFor(() => {
+      expect(screen.getByText(/Parser error: unsupported file format/i)).toBeInTheDocument();
+    });
   });
 });
