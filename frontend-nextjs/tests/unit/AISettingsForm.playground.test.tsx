@@ -112,6 +112,24 @@ describe("AISettingsForm DeepSeek defaults", () => {
 		expect(providerSelect).toHaveValue("deepseek");
 	});
 
+	it("defaults to deepseek provider when agent data has empty string provider_type", async () => {
+		const agentWithEmptyProvider = {
+			...agent,
+			provider_type: "",
+			model: "",
+		};
+		mockedApi.getAgent.mockResolvedValue(agentWithEmptyProvider as any);
+
+		render(<AISettingsForm agentId="agt_1" compact />);
+
+		// Wait for the form to load
+		await screen.findByDisplayValue("You are helpful.");
+
+		// Check that the provider select has deepseek selected
+		const providerSelect = screen.getAllByRole("combobox")[1];
+		expect(providerSelect).toHaveValue("deepseek");
+	});
+
 	it("defaults to deepseek-v4-flash model when agent data omits model", async () => {
 		const agentWithoutModel = {
 			...agent,
@@ -125,9 +143,29 @@ describe("AISettingsForm DeepSeek defaults", () => {
 		// Wait for the form to load
 		await screen.findByDisplayValue("You are helpful.");
 
-		// Check that the model input has deepseek-v4-flash placeholder
-		const modelInput = screen.getByPlaceholderText("deepseek-v4-flash");
+		// Check that the model input has deepseek-v4-flash as its value
+		const modelInput = screen.getByDisplayValue("deepseek-v4-flash");
 		expect(modelInput).toBeInTheDocument();
+		expect(modelInput).toHaveValue("deepseek-v4-flash");
+	});
+
+	it("defaults to deepseek-v4-flash model when agent data has empty string model", async () => {
+		const agentWithEmptyModel = {
+			...agent,
+			provider_type: "deepseek",
+			model: "",
+		};
+		mockedApi.getAgent.mockResolvedValue(agentWithEmptyModel as any);
+
+		render(<AISettingsForm agentId="agt_1" compact />);
+
+		// Wait for the form to load
+		await screen.findByDisplayValue("You are helpful.");
+
+		// Check that the model input has deepseek-v4-flash as its value
+		const modelInput = screen.getByDisplayValue("deepseek-v4-flash");
+		expect(modelInput).toBeInTheDocument();
+		expect(modelInput).toHaveValue("deepseek-v4-flash");
 	});
 
 	it("sets model to deepseek-v4-flash when user changes provider to DeepSeek", async () => {
@@ -147,10 +185,11 @@ describe("AISettingsForm DeepSeek defaults", () => {
 		const providerSelect = screen.getAllByRole("combobox")[1];
 		fireEvent.change(providerSelect, { target: { value: "deepseek" } });
 
-		// Check that the model input now has deepseek-v4-flash as placeholder
+		// Check that the model input now has deepseek-v4-flash as its value
 		await waitFor(() => {
-			const modelInput = screen.getByPlaceholderText("deepseek-v4-flash");
+			const modelInput = screen.getByDisplayValue("deepseek-v4-flash");
 			expect(modelInput).toBeInTheDocument();
+			expect(modelInput).toHaveValue("deepseek-v4-flash");
 		});
 	});
 
