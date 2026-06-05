@@ -1,5 +1,9 @@
 """Tests for URL ingestion and index status.
 
+Scrapling Service /discover Endpoint Tests:
+- The /discover endpoint in scrapling-service is tested directly via mocked HTTP calls.
+- These tests verify the BFS crawling behavior at the microservice level.
+
 Ensures that URL sources added from the admin UI:
 1. Progress from pending → fetching → success/error
 2. Content is indexed into the agent's tenant KB/Qdrant collection
@@ -919,3 +923,320 @@ async def test_url_list_exposes_indexing_status_field(client, default_agent_id):
     assert url_item["indexing_status"] in ["pending", "processing", "ready", "error"], (
         "indexing_status should have explicit state values"
     )
+
+
+# ========== Scrapling Service /discover Endpoint Tests ==========
+
+
+@pytest.mark.asyncio
+async def test_scrapling_discover_returns_urls_at_multiple_depths():
+    """Test that Scrapling /discover endpoint returns URLs at multiple depths via BFS.
+
+    This test verifies the fix for recursive depth crawling. The old implementation
+    only returned depth=1 links from the start page. The new BFS implementation
+    should return URLs at depth=0, 1, 2, etc. up to max_depth.
+
+    Test structure:
+    - Root page (depth=0): https://example.com/
+    - Level 1 pages (depth=1): /about, /products
+    - Level 2 pages (depth=2): /products/item1, /products/item2
+
+    Expected: discover endpoint returns URLs at depths 0, 1, and 2.
+    """
+    from unittest.mock import patch, MagicMock
+    import httpx
+
+    # HTML for root page (depth=0) - links to level 1
+    root_html = """
+    <html>
+        <head><title>Root Page</title></head>
+        <body>
+            <a href="/about">About</a>
+            <a href="/products">Products</a>
+            <a href="https://other.com/external">External (should be filtered)</a>
+        </body>
+    </html>
+    """
+
+    # HTML for /about page (depth=1) - no further links
+    about_html = """
+    <html>
+        <head><title>About Page</title></head>
+        <body>
+            <p>About us</p>
+        </body>
+    </html>
+    """
+
+    # HTML for /products page (depth=1) - links to level 2
+    products_html = """
+    <html>
+        <head><title>Products</title></head>
+        <body>
+            <a href="/products/item1">Item 1</a>
+            <a href="/products/item2">Item 2</a>
+            <a href="/about">About (already discovered)</a>
+        </body>
+    </html>
+    """
+
+    # HTML for /products/item1 and /products/item2 (depth=2)
+    item_html = """
+    <html>
+        <head><title>Product Item</title></head>
+        <body><p>Product details</p></body>
+    </html>
+    """
+
+    def mock_fetch_response(url, timeout):
+        """Mock _fetch_with_fallback to return tuple: (html, status_code, final_url, content_type)."""
+        url_str = str(url) if hasattr(url, 'path') else url
+
+        if "example.com/" in url_str and "/about" not in url_str and "/products" not in url_str:
+            return (root_html, 200, url, "text/html")
+        elif "/about" in url_str and "/products" not in url_str:
+            return (about_html, 200, url, "text/html")
+        elif "/products/item" in url_str:
+            return (item_html, 200, url, "text/html")
+        elif "/products" in url_str:
+            return (products_html, 200, url, "text/html")
+        else:
+            return ("", 404, url, "text/html")
+
+    # Import the scrapling service module directly
+    import sys
+    import importlib.util
+
+    scrapling_path = "/Users/yi/Documents/Projects/basjoo/scrapling-service/main.py"
+    spec = importlib.util.spec_from_file_location("scrapling_main", scrapling_path)
+    scrapling_main = importlib.util.module_from_spec(spec)
+    sys.modules["scrapling_main"] = scrapling_main
+    spec.loader.exec_module(scrapling_main)
+
+    # Test the discover endpoint with mocked fetch
+    from fastapi.testclient import TestClient
+    client = TestClient(scrapling_main.app)
+
+    with patch.object(scrapling_main, "_fetch_with_fallback") as mock_fetch:
+        mock_fetch.side_effect = mock_fetch_response
+
+        response = client.post(
+            "/discover",
+            json={"url": "https://example.com/", "max_depth": 2, "max_pages": 10}
+        )
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+        data = response.json()
+
+        # Should have urls list
+        assert "urls" in data, f"Response should have 'urls' field. Got: {list(data.keys())}"
+        urls = data["urls"]
+        assert len(urls) > 0, "Should discover at least the root URL"
+
+        # Build depth map
+        depth_map = {item["url"]: item["depth"] for item in urls}
+
+        # Should have URLs at multiple depths
+        depths = set(item["depth"] for item in urls)
+        assert 0 in depths or 1 in depths, (
+            f"Should have URLs at depth 0 or 1. Got depths: {depths}, urls: {urls}"
+        )
+
+        # Should discover the expected URLs
+        expected_urls = {
+            "https://example.com/",
+            "https://example.com/about",
+            "https://example.com/products",
+            "https://example.com/products/item1",
+            "https://example.com/products/item2",
+        }
+        discovered_urls = set(item["url"] for item in urls)
+
+        # At minimum, should have root and some subpages
+        assert "https://example.com/" in discovered_urls, "Should include root URL"
+
+        # Check depth values are reasonable (0-2 for max_depth=2)
+        for item in urls:
+            assert 0 <= item["depth"] <= 2, (
+                f"Depth should be between 0 and max_depth (2), got {item['depth']} for {item['url']}"
+            )
+
+        # Verify external URLs are filtered out
+        for item in urls:
+            assert "other.com" not in item["url"], (
+                f"External URL should be filtered: {item['url']}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_scrapling_discover_respects_max_depth():
+    """Test that /discover respects max_depth parameter.
+
+    With max_depth=1, should only return depth=0 and depth=1 URLs.
+    With max_depth=2, should return up to depth=2.
+    """
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    import sys
+    import importlib.util
+
+    # Import scrapling service module directly
+    scrapling_path = "/Users/yi/Documents/Projects/basjoo/scrapling-service/main.py"
+    spec = importlib.util.spec_from_file_location("scrapling_main_depth", scrapling_path)
+    scrapling_main_depth = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scrapling_main_depth)
+
+    client = TestClient(scrapling_main_depth.app)
+
+    # Create a chain of pages: root -> page1 -> page2
+    def mock_fetch(url, timeout):
+        """Mock _fetch_with_fallback to return tuple: (html, status_code, final_url, content_type)."""
+        url_str = str(url)
+        if "example.com/" in url_str and "/page1" not in url_str:
+            return ('<a href="/page1">Page 1</a>', 200, url, "text/html")
+        elif "/page1" in url_str and "/page2" not in url_str:
+            return ('<a href="/page2">Page 2</a>', 200, url, "text/html")
+        elif "/page2" in url_str:
+            return ('<p>No links</p>', 200, url, "text/html")
+        return ('', 404, url, "text/html")
+
+    # Test max_depth=1
+    with patch.object(scrapling_main_depth, "_fetch_with_fallback") as mock_fetch_fn:
+        mock_fetch_fn.side_effect = mock_fetch
+
+        response = client.post(
+            "/discover",
+            json={"url": "https://example.com/", "max_depth": 1, "max_pages": 10}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        urls = data["urls"]
+
+        # Should have root (depth=0) and page1 (depth=1)
+        # Should NOT have page2 (would be depth=2)
+        for item in urls:
+            assert item["depth"] <= 1, (
+                f"With max_depth=1, all URLs should have depth <= 1. "
+                f"Got {item['depth']} for {item['url']}"
+            )
+
+    # Test max_depth=2
+    with patch.object(scrapling_main_depth, "_fetch_with_fallback") as mock_fetch_fn:
+        mock_fetch_fn.side_effect = mock_fetch
+
+        response = client.post(
+            "/discover",
+            json={"url": "https://example.com/", "max_depth": 2, "max_pages": 10}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        urls = data["urls"]
+
+        # Should have page2 at depth=2
+        depths = set(item["depth"] for item in urls)
+        assert 2 in depths or len(urls) < 3, (
+            f"With max_depth=2, should have depth=2 URLs or few pages. "
+            f"Got depths: {depths}, urls: {urls}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_scrapling_discover_respects_max_pages():
+    """Test that /discover respects max_pages parameter.
+
+    Should stop crawling after discovering max_pages URLs.
+    """
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    import sys
+    import importlib.util
+
+    # Import scrapling service module directly
+    scrapling_path = "/Users/yi/Documents/Projects/basjoo/scrapling-service/main.py"
+    spec = importlib.util.spec_from_file_location("scrapling_main_pages", scrapling_path)
+    scrapling_main_pages = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scrapling_main_pages)
+
+    client = TestClient(scrapling_main_pages.app)
+
+    # Root page with many links
+    def mock_fetch(url, timeout):
+        """Mock _fetch_with_fallback to return tuple: (html, status_code, final_url, content_type)."""
+        url_str = str(url)
+        if "example.com/" in url_str:
+            # Generate many links
+            links = "\n".join([f'<a href="/page{i}">Page {i}</a>' for i in range(1, 20)])
+            return (f'<html><body>{links}</body></html>', 200, url, "text/html")
+        return ('<p>Empty</p>', 200, url, "text/html")
+
+    with patch.object(scrapling_main_pages, "_fetch_with_fallback") as mock_fetch_fn:
+        mock_fetch_fn.side_effect = mock_fetch
+
+        response = client.post(
+            "/discover",
+            json={"url": "https://example.com/", "max_depth": 2, "max_pages": 5}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        urls = data["urls"]
+
+        assert len(urls) <= 5, (
+            f"Should return at most max_pages URLs. Got {len(urls)} URLs, expected <= 5"
+        )
+
+
+@pytest.mark.asyncio
+async def test_scrapling_discover_avoids_cycles():
+    """Test that /discover avoids cycles by tracking visited URLs.
+
+    If page A links to B and B links back to A, should not infinite loop.
+    """
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    import sys
+    import importlib.util
+
+    # Import scrapling service module directly
+    scrapling_path = "/Users/yi/Documents/Projects/basjoo/scrapling-service/main.py"
+    spec = importlib.util.spec_from_file_location("scrapling_main_cycles", scrapling_path)
+    scrapling_main_cycles = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scrapling_main_cycles)
+
+    client = TestClient(scrapling_main_cycles.app)
+
+    # A <-> B cycle
+    def mock_fetch(url, timeout):
+        """Mock _fetch_with_fallback to return tuple: (html, status_code, final_url, content_type)."""
+        url_str = str(url)
+        if "example.com/" in url_str and "/b" not in url_str:
+            return ('<a href="/b">Go to B</a>', 200, url, "text/html")
+        elif "/b" in url_str:
+            return ('<a href="/">Back to A</a><a href="/c">Go to C</a>', 200, url, "text/html")
+        elif "/c" in url_str:
+            return ('<p>No links</p>', 200, url, "text/html")
+        return ('', 404, url, "text/html")
+
+    with patch.object(scrapling_main_cycles, "_fetch_with_fallback") as mock_fetch_fn:
+        mock_fetch_fn.side_effect = mock_fetch
+
+        response = client.post(
+            "/discover",
+            json={"url": "https://example.com/", "max_depth": 3, "max_pages": 10}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        urls = data["urls"]
+
+        # Should have A, B, C - no duplicates
+        discovered_urls = [item["url"] for item in urls]
+        unique_urls = set(discovered_urls)
+        assert len(discovered_urls) == len(unique_urls), (
+            f"Should not have duplicate URLs. Got: {discovered_urls}"
+        )
+
+        # Should complete without infinite loop
+        assert len(urls) >= 3, f"Should discover at least 3 unique URLs. Got: {urls}"

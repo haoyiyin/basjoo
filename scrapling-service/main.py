@@ -247,59 +247,105 @@ async def fetch_url(request: FetchRequest):
         )
 
 
+def _extract_links_from_html(html: str, base_url: str, base_domain: str, base_path: str) -> List[str]:
+    """Extract valid links from HTML that match the base domain and path."""
+    base_path_with_slash = "/" if base_path == "/" else f"{base_path}/"
+    soup = BeautifulSoup(html, "lxml")
+    links = []
+
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if href.startswith("#") or href.startswith("javascript:"):
+            continue
+        if href.startswith("mailto:") or href.startswith("tel:"):
+            continue
+
+        full_url = urljoin(base_url, href)
+        parsed = urlparse(full_url)
+
+        if parsed.netloc != base_domain:
+            continue
+
+        normalized_path = parsed.path or "/"
+        normalized = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
+        if normalized.endswith("/") and normalized != f"{parsed.scheme}://{parsed.netloc}/":
+            normalized = normalized[:-1]
+            normalized_path = normalized_path[:-1]
+
+        is_subpath = (
+            normalized_path == base_path
+            or normalized_path.startswith(base_path_with_slash)
+        )
+        if not is_subpath:
+            continue
+
+        links.append(normalized)
+
+    return links
+
+
 @app.post("/discover", response_model=DiscoverResponse)
 async def discover_links(request: DiscoverRequest):
     try:
-        logger.info(f"Discovering links from: {request.url}")
+        logger.info(f"Discovering links from: {request.url} with max_depth={request.max_depth}, max_pages={request.max_pages}")
 
+        # Parse the seed URL
         parsed_base = urlparse(request.url)
         base_domain = parsed_base.netloc
         base_path = parsed_base.path or "/"
         if base_path != "/" and base_path.endswith("/"):
             base_path = base_path[:-1]
-        base_path_with_slash = "/" if base_path == "/" else f"{base_path}/"
 
-        html, status_code, _, _ = _fetch_with_fallback(request.url, 30)
+        # Normalize the seed URL
+        seed_url = f"{parsed_base.scheme}://{parsed_base.netloc}{base_path}"
+        if seed_url.endswith("/") and seed_url != f"{parsed_base.scheme}://{parsed_base.netloc}/":
+            seed_url = seed_url[:-1]
 
-        if status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"HTTP {status_code}")
+        # BFS queue: list of (url, depth)
+        from collections import deque
+        queue = deque([(seed_url, 0)])
+        seen_urls = {seed_url}
+        discovered = [{"url": seed_url, "depth": 0}]
 
-        soup = BeautifulSoup(html, "lxml")
-        discovered = []
-        seen_urls = set()
+        logger.info(f"Starting BFS crawl from seed: {seed_url}")
 
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if href.startswith("#") or href.startswith("javascript:"):
-                continue
-            if href.startswith("mailto:") or href.startswith("tel:"):
-                continue
+        while queue and len(discovered) < request.max_pages:
+            current_url, current_depth = queue.popleft()
 
-            full_url = urljoin(request.url, href)
-            parsed = urlparse(full_url)
-
-            if parsed.netloc != base_domain:
+            # Stop if we've reached max_depth
+            if current_depth >= request.max_pages:
                 continue
 
-            normalized_path = parsed.path or "/"
-            normalized = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
-            if normalized.endswith("/") and normalized != f"{parsed.scheme}://{parsed.netloc}/":
-                normalized = normalized[:-1]
-                normalized_path = normalized_path[:-1]
+            logger.debug(f"Fetching {current_url} at depth {current_depth}")
 
-            is_subpath = (
-                normalized_path == base_path
-                or normalized_path.startswith(base_path_with_slash)
-            )
-            if not is_subpath:
+            try:
+                html, status_code, _, _ = _fetch_with_fallback(current_url, 30)
+
+                if status_code >= 400:
+                    logger.warning(f"HTTP {status_code} for {current_url}")
+                    continue
+
+                # Extract links from the page
+                links = _extract_links_from_html(html, current_url, base_domain, base_path)
+
+                for link in links:
+                    if link in seen_urls:
+                        continue
+
+                    seen_urls.add(link)
+                    next_depth = current_depth + 1
+                    discovered.append({"url": link, "depth": next_depth})
+
+                    # Queue for next depth level if within bounds
+                    if next_depth < request.max_depth and len(discovered) < request.max_pages:
+                        queue.append((link, next_depth))
+
+                    if len(discovered) >= request.max_pages:
+                        break
+
+            except Exception as e:
+                logger.warning(f"Error fetching {current_url}: {e}")
                 continue
-
-            if normalized not in seen_urls:
-                seen_urls.add(normalized)
-                discovered.append({"url": normalized, "depth": 1})
-
-            if len(discovered) >= request.max_pages:
-                break
 
         logger.info(f"Discovered {len(discovered)} links from {request.url}")
         return DiscoverResponse(urls=discovered[:request.max_pages])
