@@ -78,8 +78,18 @@ export default function FileUploadManagement() {
     );
 
     if (hasProcessingFiles && !filesPollingIntervalRef.current) {
+      let pollCount = 0;
+      const maxPolls = 100; // Safety limit to prevent infinite polling
       filesPollingIntervalRef.current = setInterval(async () => {
-        await loadFiles();
+        pollCount++;
+        if (pollCount > maxPolls) {
+          if (filesPollingIntervalRef.current) {
+            clearInterval(filesPollingIntervalRef.current);
+            filesPollingIntervalRef.current = null;
+          }
+          return;
+        }
+        await loadFilesRef.current();
         setRefreshTrigger(prev => prev + 1);
       }, 3000);
     } else if (!hasProcessingFiles && filesPollingIntervalRef.current) {
@@ -87,36 +97,47 @@ export default function FileUploadManagement() {
       filesPollingIntervalRef.current = null;
     }
 
+    // Note: No cleanup here to avoid clearing interval on files change
+    // The interval is managed by the conditions above
+  }, [files]);
+
+  // Cleanup files polling interval on unmount
+  useEffect(() => {
     return () => {
       if (filesPollingIntervalRef.current) {
         clearInterval(filesPollingIntervalRef.current);
         filesPollingIntervalRef.current = null;
       }
     };
-  }, [files, loadFiles]);
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
     if (agentId) {
-      void loadFiles();
+      let pollCount = 0;
+      const maxPolls = 100; // Safety limit to prevent infinite polling
+
+      void loadFilesRef.current();
       const pollTaskStatus = async () => {
         if (!isMountedRef.current || !agentIdRef.current) return;
+        pollCount++;
+        if (pollCount > maxPolls) {
+          if (taskStatusIntervalRef.current) {
+            clearInterval(taskStatusIntervalRef.current);
+            taskStatusIntervalRef.current = null;
+          }
+          return;
+        }
         try {
           const status = await api.getTasksStatus(agentIdRef.current);
           if (!isMountedRef.current) return;
-          setTaskStatus(prev => {
-            if (
-              prev &&
-              prev.is_crawling === status.is_crawling &&
-              prev.is_rebuilding === status.is_rebuilding &&
-              prev.can_modify_index === status.can_modify_index &&
-              prev.active_tasks.length === status.active_tasks.length &&
-              prev.active_tasks.every((task, index) => task === status.active_tasks[index])
-            ) {
-              return prev;
-            }
-            return status;
-          });
+          setTaskStatus(prev => ({
+            ...prev,
+            is_crawling: status.is_crawling ?? false,
+            is_rebuilding: status.is_rebuilding ?? false,
+            can_modify_index: status.can_modify_index ?? true,
+            active_tasks: status.active_tasks ?? [],
+          }));
         } catch (error) {
           console.error('Failed to poll task status:', error);
         }
@@ -128,9 +149,10 @@ export default function FileUploadManagement() {
       isMountedRef.current = false;
       if (taskStatusIntervalRef.current) {
         clearInterval(taskStatusIntervalRef.current);
+        taskStatusIntervalRef.current = null;
       }
     };
-  }, [agentId, loadFiles]);
+  }, [agentId]);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();

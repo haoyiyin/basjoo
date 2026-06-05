@@ -129,6 +129,7 @@ describe("FileUploadManagement file status polling", () => {
 
     // Advance timer by 3 seconds (polling interval)
     vi.advanceTimersByTime(3000);
+    await vi.runOnlyPendingTimersAsync();
 
     // Should have called listFiles again due to polling
     await waitFor(() => {
