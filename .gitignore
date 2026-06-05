@@ -120,6 +120,9 @@ temp/
 # Git worktrees (superpowers)
 .worktrees/
 
+# Local planning docs
+/docs/
+
 # Local AI/code intelligence caches
 .pi-lens/cache/
 **/.pi-lens/cache/
