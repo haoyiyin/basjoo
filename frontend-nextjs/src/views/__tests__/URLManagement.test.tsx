@@ -243,32 +243,27 @@ describe("URLManagement indexing status display", () => {
       expect(crawlBanner).not.toBeInTheDocument();
     });
 
-    // Should display the URL's index status (Not Indexed)
+    // Should display the URL's index status (Index Error)
     await waitFor(() => {
-      expect(screen.getByText(/Not Indexed|Index failed/i)).toBeInTheDocument();
+      expect(screen.getByText(/Index Error/i)).toBeInTheDocument();
     });
   });
 
-  it("should recognize backend index status 'indexing' as active index work", async () => {
-    // Backend reports indexing is in progress
-    mockedApi.getIndexStatus.mockResolvedValue({
-      status: "indexing",
-      total_chunks: 10,
-    } as any);
-
+  it("should display 'Indexing...' badge for URLs with indexing_status 'processing'", async () => {
+    // URL with indexing_status: "processing" should show "Indexing..." badge
     const urls = [createMockURL("success", false, { indexing_status: "processing" })];
     mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
 
     renderComponent(urls);
 
-    // Wait for component to load and polling to start
+    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.getIndexStatus).toHaveBeenCalled();
+      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
     });
 
-    // Should show active polling/work indicator when backend is indexing
+    // Should display "Indexing..." badge (polling only starts for pending/fetching URLs)
     await waitFor(() => {
-      expect(mockedApi.getIndexStatus).toHaveBeenCalledWith("agt_test");
+      expect(screen.getByText(/Indexing\.\.\./i)).toBeInTheDocument();
     });
   });
 

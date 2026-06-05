@@ -96,11 +96,8 @@ export default function URLManagement() {
       const hasPendingOrFetching = data.urls.some(
         (url) => url.status === 'pending' || url.status === 'fetching'
       );
-      const hasUnindexedSuccess = data.urls.some(
-        (url) => url.status === 'success' && !url.is_indexed
-      );
-      // 如果有 pending/fetching 的 URL，或者成功但未索引的 URL，启动轮询
-      if ((hasPendingOrFetching || hasUnindexedSuccess) && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
+      // 只有 pending/fetching 的 URL 才启动轮询
+      if (hasPendingOrFetching && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
         setCrawlStartCount(data.total);
         setCrawlPolling(true);
       }
@@ -388,10 +385,21 @@ export default function URLManagement() {
     if (url.status !== 'success') {
       return { className: 'badge', label: 'Not ready', showRebuild: false };
     }
-    if (url.is_indexed) {
-      return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+
+    switch (url.indexing_status) {
+      case 'ready':
+        return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+      case 'processing':
+        return { className: 'badge badge-info', label: 'Indexing...', showRebuild: false };
+      case 'error':
+        return { className: 'badge badge-error', label: 'Index Error', showRebuild: true };
+      case 'pending':
+      default:
+        if (url.is_indexed) {
+          return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+        }
+        return { className: 'badge badge-warning', label: 'Not Indexed', showRebuild: true };
     }
-    return { className: 'badge badge-warning', label: 'Not Indexed', showRebuild: true };
   };
 
   const handleRebuildIndex = async () => {
