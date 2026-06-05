@@ -397,7 +397,9 @@ async def test_store_crawl_error_stores_error_message(client, default_agent_id):
         )
         url_source = result.scalar_one_or_none()
 
-        assert url_source is not None, "URLSource should be created by _store_crawl_error"
+        assert url_source is not None, (
+            "URLSource should be created by _store_crawl_error"
+        )
         assert url_source.status == "failed", (
             f"Expected status='failed', got '{url_source.status}'"
         )
@@ -460,7 +462,9 @@ async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
             f"Expected 1 URLSource, got {len(url_sources)} (duplicate created)"
         )
         url_source = url_sources[0]
-        assert url_source.id == existing_id, "Should update existing record, not create new"
+        assert url_source.id == existing_id, (
+            "Should update existing record, not create new"
+        )
         assert url_source.status == "failed", (
             f"Expected status='failed', got '{url_source.status}'"
         )
