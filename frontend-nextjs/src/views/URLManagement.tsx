@@ -144,6 +144,14 @@ export default function URLManagement() {
           if (status.is_crawling && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
             setCrawlPolling(true);
           }
+          // NEW: Clear crawlPolling when backend reports no crawling but frontend still shows polling
+          if (!status.is_crawling && !status.is_rebuilding && crawlPollingRef.current) {
+            setCrawlPolling(false);
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+          }
         } catch (error) {
           console.error('Failed to poll task status:', error);
         }
@@ -287,7 +295,7 @@ export default function URLManagement() {
           !tasksStatus.is_rebuilding &&
           !isIndexing &&
           pollCount > 3 &&
-          consecutiveNoChange >= 2;
+          consecutiveNoChange >= 1;
 
         if (shouldStop) {
           if (pollingIntervalRef.current) {
