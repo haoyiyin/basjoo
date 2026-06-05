@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import select
 
 import database
-from models import Agent, KnowledgeBase, Tenant, URLSource
+from models import Agent, KnowledgeBase, KbDocument, Tenant, URLSource
 
 
 @pytest.mark.asyncio
