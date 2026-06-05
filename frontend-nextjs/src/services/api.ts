@@ -905,6 +905,7 @@ class APIService {
 	async getIndexInfo(agentId: string): Promise<{
 		agent_id: string;
 		urls_indexed: number;
+		files_indexed: number;
 		index_exists: boolean;
 		status: string;
 	}> {
