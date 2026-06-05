@@ -33,6 +33,7 @@ export default function FileUploadManagement() {
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const filesPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,6 +70,30 @@ export default function FileUploadManagement() {
   agentIdRef.current = agentId;
   const loadFilesRef = useRef(loadFiles);
   loadFilesRef.current = loadFiles;
+
+  // File status polling - auto-refresh when files are processing/pending
+  useEffect(() => {
+    const hasProcessingFiles = files.some(f => 
+      f.status === 'processing' || f.status === 'pending'
+    );
+
+    if (hasProcessingFiles && !filesPollingIntervalRef.current) {
+      filesPollingIntervalRef.current = setInterval(async () => {
+        await loadFiles();
+        setRefreshTrigger(prev => prev + 1);
+      }, 3000);
+    } else if (!hasProcessingFiles && filesPollingIntervalRef.current) {
+      clearInterval(filesPollingIntervalRef.current);
+      filesPollingIntervalRef.current = null;
+    }
+
+    return () => {
+      if (filesPollingIntervalRef.current) {
+        clearInterval(filesPollingIntervalRef.current);
+        filesPollingIntervalRef.current = null;
+      }
+    };
+  }, [files, loadFiles]);
 
   useEffect(() => {
     isMountedRef.current = true;
