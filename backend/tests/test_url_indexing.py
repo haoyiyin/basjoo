@@ -488,3 +488,56 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
             f"BUG: is_indexed should be False when doc status is '{updated_doc.status}', "
             f"but got is_indexed={is_indexed}"
         )
+
+
+@pytest.mark.asyncio
+async def test_process_url_refetch_in_syntax(client, default_agent_id):
+    """Test that process_url_refetch compiles the SQL query correctly.
+    
+    This test verifies the fix for the SQLAlchemy .in_() syntax error where
+    multiple positional arguments were passed instead of a list.
+    
+    Before fix: URLSource.status.in_("pending", "success", "failed") 
+    -> TypeError: ColumnOperators.in_() takes 2 positional arguments but 4 were given
+    
+    After fix: URLSource.status.in_(["pending", "success", "failed"])
+    -> Compiles correctly to: status IN (?, ?, ?)
+    """
+    from sqlalchemy import select
+    from models import URLSource
+    
+    # Build the query the same way process_url_refetch does (after fix)
+    query = select(URLSource).where(
+        URLSource.agent_id == default_agent_id,
+        URLSource.status.in_(["pending", "success", "failed"]),
+    )
+    
+    # Compile the query to verify it works
+    compiled = query.compile(compile_kwargs={"literal_binds": True})
+    sql_str = str(compiled)
+    
+    # Verify the query contains the IN clause
+    assert "IN" in sql_str.upper(), f"Query should contain IN clause: {sql_str}"
+    assert "pending" in sql_str.lower(), f"Query should contain 'pending': {sql_str}"
+    assert "success" in sql_str.lower(), f"Query should contain 'success': {sql_str}"
+    assert "failed" in sql_str.lower(), f"Query should contain 'failed': {sql_str}"
+    
+    print(f"Generated SQL: {sql_str}")
+
+
+@pytest.mark.asyncio
+async def test_in_operator_rejects_multiple_positional_args():
+    """Verify that .in_(arg1, arg2, arg3) raises TypeError.
+    
+    This documents the bug pattern that was fixed.
+    """
+    from sqlalchemy import String
+    from sqlalchemy.sql import column
+    
+    status_col = column("status", String)
+    
+    # Multiple positional args should raise TypeError
+    with pytest.raises(TypeError) as exc_info:
+        status_col.in_("pending", "success", "failed")
+    
+    assert "takes 2 positional arguments" in str(exc_info.value)

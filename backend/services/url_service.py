@@ -135,7 +135,7 @@ async def process_url_refetch(
             # Build query for URLs to process
             query = select(URLSource).where(
                 URLSource.agent_id == agent_id,
-                URLSource.status.in_("pending", "success", "failed"),
+                URLSource.status.in_(["pending", "success", "failed"]),
             )
             if url_ids:
                 query = query.where(URLSource.id.in_(url_ids))
