@@ -162,6 +162,18 @@ export interface URLSource {
 	updated_at?: string;
 }
 
+export interface URLListResponse {
+	urls: URLSource[];
+	total: number;
+	quota: { used: number; max: number };
+	job_id?: string;
+	auto_fetch_queued?: boolean;
+	last_fetch_at?: string;
+	is_indexed: boolean;
+	created_at: string;
+	updated_at?: string;
+}
+
 export interface FileItem {
 	id: string;
 	filename: string;
@@ -691,11 +703,11 @@ class APIService {
 	async createURLs(
 		agentId: string,
 		urls: string[],
-	): Promise<{ created: number; message: string }> {
+	): Promise<URLListResponse> {
 		return this.request(`/api/v1/urls:create?agent_id=${agentId}`, {
 			method: "POST",
 			body: JSON.stringify({ urls }),
-		}).then((result) => result as { created: number; message: string });
+		});
 	}
 
 	async listURLs(

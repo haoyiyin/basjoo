@@ -3141,8 +3141,8 @@ ALLOWED_EXTENSIONS = {"txt", "md", "html", "pdf", "docx", "xlsx"}
 @router.post("/files:upload", response_model=FileUploadResponse)
 async def upload_files(
     agent_id: str,
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):

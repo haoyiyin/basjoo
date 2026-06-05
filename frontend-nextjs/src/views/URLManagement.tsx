@@ -170,7 +170,13 @@ export default function URLManagement() {
     setAdding(true);
     try {
       const result = await api.createURLs(agentId, [newUrl]);
-      alert(t('labels.urlManagement.addedCount', { count: result.created }));
+      const createdCount = result.urls.length;
+      alert(t('labels.urlManagement.addedCount', { count: createdCount }));
+
+      // Start crawl polling if auto-fetch was queued
+      if (result.auto_fetch_queued && result.job_id) {
+        setCrawlPolling(true);
+      }
 
       setNewUrl('');
       await loadURLs();
