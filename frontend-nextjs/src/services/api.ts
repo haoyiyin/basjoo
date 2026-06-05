@@ -765,7 +765,7 @@ class APIService {
 		agentId: string,
 	): Promise<{ message: string; deleted_count: number }> {
 		return this.request(`/api/v1/urls:clear_all?agent_id=${agentId}`, {
-			method: "DELETE",
+			method: "POST",
 		}).then((result) => result as { message: string; deleted_count: number });
 	}
 
@@ -881,7 +881,7 @@ class APIService {
 		agentId: string,
 	): Promise<{ message: string; deleted_count: number }> {
 		return this.request(`/api/v1/files:clear_all?agent_id=${agentId}`, {
-			method: "DELETE",
+			method: "POST",
 		}).then((result) => result as { message: string; deleted_count: number });
 	}
 
