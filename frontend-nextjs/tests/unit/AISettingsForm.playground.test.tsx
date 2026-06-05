@@ -26,6 +26,7 @@ vi.mock("react-i18next", () => ({
 				"labels.agentName": "Agent 名称",
 				"labels.presetPersona": "预设人设",
 				"labels.aiProvider": "AI 服务商",
+				"labels.modelName": "模型名称",
 			};
 			return translations[key] || key;
 		},
@@ -89,5 +90,89 @@ describe("AISettingsForm Playground fields", () => {
 		);
 
 		expect(mockedApi.updateAgent.mock.calls[0][1]).not.toHaveProperty("name");
+	});
+});
+
+describe("AISettingsForm DeepSeek defaults", () => {
+	it("defaults to deepseek provider when agent data omits provider_type", async () => {
+		const agentWithoutProvider = {
+			...agent,
+			provider_type: undefined,
+			model: undefined,
+		};
+		mockedApi.getAgent.mockResolvedValue(agentWithoutProvider as any);
+
+		render(<AISettingsForm agentId="agt_1" compact />);
+
+		// Wait for the form to load
+		await screen.findByDisplayValue("You are helpful.");
+
+		// Check that the provider select has deepseek selected
+		const providerSelect = screen.getAllByRole("combobox")[1];
+		expect(providerSelect).toHaveValue("deepseek");
+	});
+
+	it("defaults to deepseek-v4-flash model when agent data omits model", async () => {
+		const agentWithoutModel = {
+			...agent,
+			provider_type: "deepseek",
+			model: undefined,
+		};
+		mockedApi.getAgent.mockResolvedValue(agentWithoutModel as any);
+
+		render(<AISettingsForm agentId="agt_1" compact />);
+
+		// Wait for the form to load
+		await screen.findByDisplayValue("You are helpful.");
+
+		// Check that the model input has deepseek-v4-flash placeholder
+		const modelInput = screen.getByPlaceholderText("deepseek-v4-flash");
+		expect(modelInput).toBeInTheDocument();
+	});
+
+	it("sets model to deepseek-v4-flash when user changes provider to DeepSeek", async () => {
+		const openaiAgent = {
+			...agent,
+			provider_type: "openai_native",
+			model: "gpt-4o",
+		};
+		mockedApi.getAgent.mockResolvedValue(openaiAgent as any);
+
+		render(<AISettingsForm agentId="agt_1" compact />);
+
+		// Wait for the form to load with OpenAI values
+		await screen.findByDisplayValue("You are helpful.");
+
+		// Change provider to DeepSeek (second combobox is the provider select)
+		const providerSelect = screen.getAllByRole("combobox")[1];
+		fireEvent.change(providerSelect, { target: { value: "deepseek" } });
+
+		// Check that the model input now has deepseek-v4-flash as placeholder
+		await waitFor(() => {
+			const modelInput = screen.getByPlaceholderText("deepseek-v4-flash");
+			expect(modelInput).toBeInTheDocument();
+		});
+	});
+
+	it("preserves saved non-DeepSeek provider and model values", async () => {
+		const anthropicAgent = {
+			...agent,
+			provider_type: "anthropic",
+			model: "claude-3-opus",
+		};
+		mockedApi.getAgent.mockResolvedValue(anthropicAgent as any);
+
+		render(<AISettingsForm agentId="agt_1" compact />);
+
+		// Wait for the form to load
+		await screen.findByDisplayValue("You are helpful.");
+
+		// Check that the provider select has anthropic selected
+		const providerSelect = screen.getAllByRole("combobox")[1];
+		expect(providerSelect).toHaveValue("anthropic");
+
+		// Check that the model input shows the saved model
+		const modelInput = screen.getByDisplayValue("claude-3-opus");
+		expect(modelInput).toBeInTheDocument();
 	});
 });

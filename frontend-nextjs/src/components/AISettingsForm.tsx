@@ -16,6 +16,7 @@ const PERSONA_TYPES: PersonaType[] = [
 	"custom",
 ];
 const SILICONFLOW_OFFICIAL_URL = "https://siliconflow.cn/";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 
 interface ChatParamOverrides {
 	temperature: number;
@@ -57,7 +58,7 @@ export default function AISettingsForm({
 		temperature: 0.7,
 		api_key: "",
 		api_base: "",
-		provider_type: "openai" as ProviderType,
+		provider_type: "deepseek" as ProviderType,
 		api_format: "openai" as ApiFormatType,
 		top_k: 8,
 		similarity_threshold: 0.01,
@@ -106,11 +107,11 @@ export default function AISettingsForm({
 
 			setFormData({
 				system_prompt: agentData.system_prompt || "",
-				model: agentData.model || "deepseek-chat",
+				model: agentData.model || DEFAULT_DEEPSEEK_MODEL,
 				temperature: agentData.temperature ?? 0.7,
 				api_key: "",
 				api_base: agentData.api_base || "https://api.deepseek.com/v1",
-				provider_type: agentData.provider_type || "openai",
+				provider_type: agentData.provider_type || "deepseek",
 				api_format: (agentData.api_format as ApiFormatType) || "openai",
 				top_k: agentData.top_k ?? 8,
 				similarity_threshold: agentData.similarity_threshold ?? 0.01,
@@ -332,7 +333,7 @@ export default function AISettingsForm({
 			case "zai":
 				return "z1-preview";
 			case "deepseek":
-				return "deepseek-chat";
+				return DEFAULT_DEEPSEEK_MODEL;
 			case "volcengine":
 				return "doubao-pro-32k";
 			case "moonshot":
