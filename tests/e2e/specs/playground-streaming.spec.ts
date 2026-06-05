@@ -200,7 +200,7 @@ test.describe("Playground KB Context Retrieval", () => {
 			timeout: 60_000,
 			// Use shorter consistent intervals to prevent connection idle timeout
 			intervals: [1_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000],
-		}).toMatch(/^(ready|failed)$/) // Accept ready or failed (E2E may not have valid Jina creds)
+		}).toBe("ready") // STRICT: must be ready, failed is not acceptable
 
 		// 3. Login and go to Playground
 		await adminLogin(page);
