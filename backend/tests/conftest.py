@@ -143,7 +143,7 @@ async def setup_test_db(prepare_test_db_dir):
                 workspace_id=workspace.id,
                 name="Test Agent",
                 description="Default test agent",
-                model="deepseek-chat",
+                model="deepseek-v4-flash",
                 api_base="https://api.deepseek.com/v1",
                 provider_type="deepseek",
                 jina_api_key="test_jina_key",

@@ -166,35 +166,136 @@ def _resolve_title(title: str, html: str, url: str) -> str:
     return ""
 
 
+# Keywords that indicate non-content regions (navigation, footer, sidebar, ads)
+NEGATIVE_KEYWORDS = [
+    'footer', 'sidebar', 'nav', 'navigation', 'menu', 'header',
+    'advertisement', 'ad-', 'ads-', 'social', 'share', 'comment',
+    'related', 'recommend', 'breadcrumb', 'pagination', 'pager',
+    'copyright', 'legal', 'disclaimer', 'cookie', 'gdpr',
+]
+
+# Keywords that indicate main content regions
+POSITIVE_KEYWORDS = [
+    'article', 'content', 'post', 'entry', 'text', 'body',
+    'main', 'story', 'blog', 'product', 'description', 'detail',
+]
+
+
+def _clean_template_content(content: str, min_unique_ratio: float = 0.3) -> str:
+    """Remove repetitive template content that appears across multiple pages.
+
+    Some websites have footer/contact sections that repeat on every page.
+    This function detects and removes such template content.
+
+    Args:
+        content: The extracted text content
+        min_unique_ratio: Minimum ratio of unique lines to total lines (default 0.3)
+
+    Returns:
+        Cleaned content with template sections removed
+    """
+    if not content or len(content) < 100:
+        return content
+
+    lines = content.split('\n')
+    if len(lines) < 3:
+        return content
+
+    # Detect repetitive lines (likely template content)
+    line_counts = {}
+    for line in lines:
+        stripped = line.strip()
+        if len(stripped) < 10:  # Skip short lines
+            continue
+        line_counts[stripped] = line_counts.get(stripped, 0) + 1
+
+    # Find lines that appear multiple times (template content)
+    template_lines = set()
+    for line, count in line_counts.items():
+        if count >= 2 and len(line) > 20:  # Repetitive long lines
+            template_lines.add(line)
+
+    # If more than 50% of significant lines are templates, filter them
+    if len(template_lines) > 0:
+        total_significant = sum(1 for l in lines if len(l.strip()) > 20)
+        template_ratio = len(template_lines) / max(total_significant, 1)
+
+        if template_ratio > 0.5:  # High template content ratio
+            # Keep only unique content
+            cleaned_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped not in template_lines:
+                    cleaned_lines.append(line)
+
+            cleaned_content = '\n'.join(cleaned_lines)
+            if len(cleaned_content.strip()) >= 50:  # Ensure we still have content
+                return cleaned_content
+
+    return content
+
+
 def _extract_content(html: str, url: str) -> tuple:
     """Extract title and main content from HTML using readability-lxml."""
     try:
-        doc = Document(html)
+        # Optimized readability configuration
+        doc = Document(
+            html,
+            url=url,  # Help resolve relative URLs
+            min_text_length=50,  # Filter short text blocks (default 25)
+            retry_length=300,    # More aggressive retry threshold (default 250)
+            positive_keywords=POSITIVE_KEYWORDS,
+            negative_keywords=NEGATIVE_KEYWORDS,
+        )
         title = doc.title() or ""
         content_html = doc.summary()
         soup = BeautifulSoup(content_html, "lxml")
         content = soup.get_text(separator="\n", strip=True)
+
+        # Clean template content
+        content = _clean_template_content(content)
+
         title = _resolve_title(title, html, url)
         return title, content
     except Exception:
-        # Fallback to BeautifulSoup
+        # Enhanced BeautifulSoup fallback
         soup = BeautifulSoup(html, "lxml")
         title = ""
         if soup.title and soup.title.string:
             title = soup.title.string.strip()
         elif soup.h1:
             title = soup.h1.get_text().strip()
-        # Remove non-content elements
+
+        # Remove non-content elements (expanded list)
         for tag in soup(
-            ["script", "style", "nav", "header", "footer", "aside", "iframe"]
+            ["script", "style", "nav", "header", "footer", "aside", "iframe",
+             "noscript", "form", "button", "input", "select", "textarea"]
         ):
             tag.decompose()
-        main = soup.find("main") or soup.find("article") or soup.find("body")
+
+        # Also remove elements with common non-content class names
+        for class_pattern in ['nav', 'menu', 'sidebar', 'footer', 'header', 'ad', 'social', 'share', 'comment', 'related']:
+            for tag in soup.find_all(class_=lambda c: c and class_pattern in str(c).lower()):
+                tag.decompose()
+
+        # Try to find main content area with priority order
+        main = (
+            soup.find("main")
+            or soup.find("article")
+            or soup.find("div", class_=lambda c: c and 'content' in str(c).lower())
+            or soup.find("div", id=lambda i: i and 'content' in str(i).lower())
+            or soup.find("div", class_=lambda c: c and 'main' in str(c).lower())
+            or soup.find("body")
+        )
         content = (
             main.get_text(separator="\n", strip=True)
             if main
             else soup.get_text(separator="\n", strip=True)
         )
+
+        # Clean template content
+        content = _clean_template_content(content)
+
         title = _resolve_title(title, html, url)
         return title, content
 
@@ -274,13 +375,30 @@ async def fetch_url(request: FetchRequest):
 
     except Exception as e:
         logger.error(f"Error fetching {request.url}: {e}")
+        error_str = str(e)
+
+        # Provide user-friendly error messages for common SSL/TLS issues
+        friendly_error = error_str
+        if "SSL" in error_str or "TLS" in error_str or "UNEXPECTED_EOF" in error_str:
+            friendly_error = "SSL/TLS connection error: The website has a security certificate problem or an unstable connection. Please try again later or use a different URL."
+        elif "timeout" in error_str.lower() or "timed out" in error_str.lower():
+            friendly_error = "Connection timeout: The website took too long to respond. Please try again later."
+        elif "connection refused" in error_str.lower() or "connect error" in error_str.lower():
+            friendly_error = "Connection refused: The website is not accessible or blocking requests."
+        elif "403" in error_str or "Forbidden" in error_str:
+            friendly_error = "Access denied (HTTP 403): The website is blocking automated access."
+        elif "404" in error_str or "Not Found" in error_str:
+            friendly_error = "Page not found (HTTP 404): The URL does not exist."
+        elif "chunked" in error_str.lower():
+            friendly_error = "Data transfer error: The website's response was incomplete or corrupted. This may be a temporary issue."
+
         return FetchResponse(
             title="",
             content="",
             content_hash="",
-            metadata={"url": request.url, "fetcher": "scrapling"},
+            metadata={"url": request.url, "fetcher": "scrapling", "raw_error": error_str},
             success=False,
-            error=str(e),
+            error=friendly_error,
         )
 
 

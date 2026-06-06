@@ -36,7 +36,7 @@ async def agent_with_kb_docs(setup_test_db):
             workspace_id=workspace.id,
             name="Test Agent with KB",
             description="Agent with KB documents",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             api_base="https://api.deepseek.com/v1",
             provider_type="deepseek",
             jina_api_key="test_jina_key",

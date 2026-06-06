@@ -118,6 +118,10 @@ class KbRetrievalService:
                         "chunk_index": p.get("chunk_index", 0),
                         "score": round(score, 4),
                         "filename": p.get("filename"),
+                        # Include source info for proper display
+                        "source_type": p.get("source_type", "file"),
+                        "source_url": p.get("source_url", ""),
+                        "source_title": p.get("source_title", ""),
                     }
                 )
                 if len(results) >= top_k:

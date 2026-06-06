@@ -1,10 +1,11 @@
 """全站抓取服务 - 使用 URLScraper"""
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 
 from .scraper import URLScraper
+from models import normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class SiteCrawler:
         max_depth: int = 2,
         max_pages: int = 500,
         include_external: bool = False,
+        should_cancel: Optional[Callable[[], bool]] = None,
     ) -> List[CrawlPageResult]:
         """
         全站爬取，返回所有页面内容
@@ -72,6 +74,8 @@ class SiteCrawler:
             max_depth: 最大爬取深度
             max_pages: 最大页面数量（包含起始URL）
             include_external: 是否包含外部链接（当前未启用）
+            should_cancel: Optional callback to check if crawl should be cancelled.
+                Returns True if the crawl should stop immediately.
 
         Returns:
             爬取结果列表
@@ -83,20 +87,33 @@ class SiteCrawler:
         if include_external:
             logger.info("[SiteCrawler] include_external is ignored by URLScraper-based crawler")
 
+        # Check cancellation before starting
+        if should_cancel and should_cancel():
+            logger.info("[SiteCrawler] Crawl cancelled before starting")
+            return []
+
         candidate_urls: List[tuple[str, int]] = [(url, 0)]
 
         if max_depth > 0 and max_pages > 1:
             try:
+                # Check cancellation before discovery
+                if should_cancel and should_cancel():
+                    logger.info("[SiteCrawler] Crawl cancelled before discovery")
+                    return []
+
                 discovered_urls = await self.scraper.discover_subpages(
                     url,
                     max_depth=max_depth,
-                    max_pages=max_pages - 1,
+                    max_pages=max_pages,
                 )
-                existing_urls = {candidate_url for candidate_url, _ in candidate_urls}
+                # Use normalized URLs for deduplication to prevent fetching
+                # the same page twice under different URL variants (e.g., www vs non-www)
+                existing_urls = {normalize_url(candidate_url) for candidate_url, _ in candidate_urls}
                 for discovered_url, discovered_depth in discovered_urls:
-                    if discovered_url not in existing_urls:
+                    norm = normalize_url(discovered_url)
+                    if norm not in existing_urls:
                         candidate_urls.append((discovered_url, discovered_depth))
-                        existing_urls.add(discovered_url)
+                        existing_urls.add(norm)
                     if len(candidate_urls) >= max_pages:
                         break
             except Exception as e:
@@ -105,6 +122,11 @@ class SiteCrawler:
         results: List[CrawlPageResult] = []
 
         for page_url, page_depth in candidate_urls[:max_pages]:
+            # Check cancellation before each page fetch
+            if should_cancel and should_cancel():
+                logger.info(f"[SiteCrawler] Crawl cancelled after {len(results)} pages")
+                break
+
             fetch_result = await self.scraper.fetch(page_url)
             page_result = self._build_page_result(page_url, fetch_result, page_depth)
             results.append(page_result)

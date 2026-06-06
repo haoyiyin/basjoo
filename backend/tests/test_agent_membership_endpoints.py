@@ -49,7 +49,7 @@ async def test_role_downgrade_deletes_all_agent_members(client, setup_test_db):
             workspace_id=super_admin_workspace_id,
             name="Agent in Canonical Workspace",
             description="Agent for same-workspace test",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             api_base="https://api.deepseek.com/v1",
             provider_type="deepseek",
         )
@@ -62,7 +62,7 @@ async def test_role_downgrade_deletes_all_agent_members(client, setup_test_db):
             workspace_id=workspace2_id,
             name="Agent in Workspace 2",
             description="Agent for cross-workspace test",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             api_base="https://api.deepseek.com/v1",
             provider_type="deepseek",
         )
@@ -148,7 +148,7 @@ async def test_super_admin_create_agent_no_membership(client, setup_test_db):
         json={
             "name": "Test Agent",
             "description": "Agent to test no auto-membership",
-            "model": "deepseek-chat",
+            "model": "deepseek-v4-flash",
             "api_base": "https://api.deepseek.com/v1",
             "provider_type": "deepseek",
         },

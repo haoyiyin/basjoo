@@ -147,6 +147,9 @@ class KbDocumentProcessor:
                 # prepare Qdrant points (batch)
                 points = []
                 chunk_records = []
+                # Get metadata for source info (URL for crawled pages)
+                doc_metadata = getattr(doc, "metadata_json", None) or {}
+
                 for idx, (chunk_text, emb) in enumerate(
                     zip(chunks, embeddings, strict=True)
                 ):
@@ -158,6 +161,10 @@ class KbDocumentProcessor:
                         "chunk_index": idx,
                         "text": chunk_text[:2000],  # cap
                         "filename": getattr(doc, "filename", ""),
+                        # Include source metadata for retrieval display
+                        "source_type": doc_metadata.get("source_type", "file"),
+                        "source_url": doc_metadata.get("source_url", ""),
+                        "source_title": doc_metadata.get("source_title", ""),
                     }
                     points.append({"id": point_id, "vector": emb, "payload": payload})
 

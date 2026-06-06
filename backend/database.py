@@ -69,7 +69,7 @@ def _build_default_agent(workspace_id: int):
         name="AI Agent",
         description="Default AI Customer Service Agent",
         system_prompt="You are a helpful customer service assistant.",
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
         temperature=0.7,
         max_tokens=DEFAULT_AGENT_MAX_TOKENS,
         api_key=encrypt_api_key(raw_api_key) if raw_api_key else "",

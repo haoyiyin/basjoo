@@ -836,7 +836,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.deepseek.com/v1",
-            model=resolved_model or "deepseek-chat",
+            model=resolved_model or "deepseek-v4-flash",
         )
 
     elif resolved_provider_type == "volcengine":

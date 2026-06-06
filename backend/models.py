@@ -142,7 +142,7 @@ class Agent(Base):
     kb_setup_completed = Column(Boolean, nullable=False, default=False)
     # URL抓取配置
     crawl_max_depth = Column(Integer, nullable=False, default=2)  # 全站爬取深度
-    crawl_max_pages = Column(Integer, nullable=False, default=500)  # 全站爬取最大页面数
+    crawl_max_pages = Column(Integer, nullable=False, default=20)  # 全站爬取最大页面数
     url_fetch_interval_days = Column(
         Integer, nullable=False, default=7
     )  # URL自动抓取间隔（天）
@@ -583,6 +583,8 @@ class KbDocument(Base):
     error_message = Column(Text, nullable=True)
     file_size = Column(Integer, nullable=True)
     storage_path = Column(String(1000), nullable=True)
+    # Metadata for document source info (e.g., URL for crawled pages)
+    metadata_json = Column(JSON, nullable=True, default=None)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")

@@ -67,8 +67,12 @@ class ScraplingClient:
         Returns:
             发现的子页面 URL 和深度列表 [(url, depth), ...]
         """
+        # Calculate timeout: scrapling-service BFS fetches each page with 30s internal
+        # timeout. Use max(self.timeout, 30 + max_pages * 30) so we don't cut off
+        # in-progress BFS work.
+        discover_timeout = max(self.timeout, 30 + max_pages * 30)
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=discover_timeout) as client:
                 resp = await client.post(
                     f"{self.base_url}/discover",
                     json={

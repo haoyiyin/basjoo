@@ -864,6 +864,7 @@ async def prepare_chat_request(
 
     # KB retrieval (direct Qdrant pipeline, tenant-isolated)
     kb_context = ""
+    kb_sources = []  # Track sources for SSE event
     if getattr(agent, "kb_id", None):
         try:
             kb_retriever = KbRetrievalService()
@@ -878,11 +879,32 @@ async def prepare_chat_request(
                 threshold=agent_similarity_threshold,
             )
             if kb_results:
-                texts = [
-                    f"[{r.get('filename', 'doc')}#{r['chunk_index']}] {r['text']}"
-                    for r in kb_results
-                ]
+                # Build texts with proper citation format for AI
+                # Include URL in the format so AI knows where to cite
+                texts = []
+                for i, r in enumerate(kb_results, 1):
+                    source_title = r.get('source_title') or r.get('filename', '文档')
+                    source_url = r.get('source_url', '')
+                    text_content = r['text']
+                    # Format: [来源N] 内容 (URL在末尾供AI参考)
+                    if source_url:
+                        texts.append(f"[来源{i}] {text_content}\n(来源: {source_title}, URL: {source_url})")
+                    else:
+                        texts.append(f"[来源{i}] {text_content}\n(来源: {source_title})")
                 kb_context = "\n\n".join(texts)
+                # Build sources list for SSE event
+                for r in kb_results:
+                    source_type = r.get("source_type", "file")
+                    source_url = r.get("source_url", "")
+                    source_title = r.get("source_title") or r.get("filename", "文档")
+
+                    kb_sources.append({
+                        "type": "url" if source_type == "url" else "file",
+                        "title": source_title,
+                        "url": source_url if source_type == "url" else "",
+                        "filename": r.get("filename", "") if source_type == "file" else "",
+                        "snippet": r.get("text", "")[:200],
+                    })
         except Exception as e:
             logger.warning(f"KB retrieval in chat skipped: {e}")
 
@@ -891,6 +913,8 @@ async def prepare_chat_request(
     if kb_context:
         system_content += (
             f"\n\n以下是相关背景资料：\n\n{kb_context}\n\n请基于以上资料回答用户问题。"
+            "\n\n引用说明：回答时请使用 [标题](#source-N) 格式引用来源，其中N为来源序号。"
+            "例如：根据 [Petking官网](#source-1)，我们的产品..."
         )
     else:
         system_content += (
@@ -920,7 +944,7 @@ async def prepare_chat_request(
         "use_mock_llm": use_mock_llm,
         "llm": llm,
         "messages": messages,
-        "sources": [],
+        "sources": kb_sources,  # Include KB sources for SSE event
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -1659,7 +1683,7 @@ async def create_agent(
         agent_type=request.agent_type,
         channel_mode=request.channel_mode,
         system_prompt=system_prompt,
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
         temperature=0.7,
         max_tokens=DEFAULT_AGENT_MAX_TOKENS,
         api_base="https://api.deepseek.com/v1",
@@ -3141,18 +3165,96 @@ async def clear_all_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    """Clear all URLs and their associated KB data for an agent.
+
+    This deletes:
+    - All URLSource records
+    - All KbDocuments created from URLs (filename starts with 'url_')
+    - All KbChunks for those documents
+    - All Qdrant vectors for those documents
+    - All stored files for those documents
+    """
     await require_agent_admin(db, agent_id, current_user)
 
-    # Count URLs to be deleted
     from sqlalchemy import func, select
+    from models import KbDocument, KbChunk
+    from services.qdrant_service import QdrantKbService
+    from services.kb_document_processor import UPLOAD_ROOT
+    import os
+    import shutil
 
+    # Get agent's KB
+    agent = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent_obj = agent.scalar_one_or_none()
+    kb_id = agent_obj.kb_id if agent_obj else None
+
+    # Count URLs to be deleted
     count_query = (
         select(func.count())
         .select_from(URLSource)
         .where(URLSource.agent_id == agent_id)
     )
     result = await db.execute(count_query)
-    deleted_count = result.scalar() or 0
+    deleted_url_count = result.scalar() or 0
+
+    # Find all KbDocuments created from URLs (filename starts with 'url_')
+    deleted_doc_count = 0
+    deleted_chunk_count = 0
+    deleted_qdrant_count = 0
+    deleted_files_count = 0
+
+    if kb_id:
+        # Get URL-generated documents
+        doc_query = select(KbDocument).where(
+            KbDocument.kb_id == kb_id,
+            KbDocument.filename.like('url_%')
+        )
+        docs_result = await db.execute(doc_query)
+        url_docs = list(docs_result.scalars().all())
+
+        if url_docs:
+            # Get tenant_id for Qdrant deletion
+            kb_query = select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+            kb_result = await db.execute(kb_query)
+            kb = kb_result.scalar_one_or_none()
+            tenant_id = kb.tenant_id if kb else None
+
+            # Delete from Qdrant
+            qdrant = QdrantKbService()
+            for doc in url_docs:
+                try:
+                    await qdrant.delete_points_by_doc_id(kb_id, str(doc.id))
+                    deleted_qdrant_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete Qdrant points for doc {doc.id}: {e}")
+
+            # Delete KbChunks
+            for doc in url_docs:
+                chunk_delete = delete(KbChunk).where(
+                    KbChunk.doc_id == doc.id,
+                    KbChunk.tenant_id == tenant_id
+                )
+                chunk_result = await db.execute(chunk_delete)
+                deleted_chunk_count += chunk_result.rowcount or 0
+
+            # Delete stored files
+            for doc in url_docs:
+                storage_path = getattr(doc, 'storage_path', None)
+                if storage_path and os.path.exists(storage_path):
+                    try:
+                        # Delete the entire doc directory
+                        doc_dir = os.path.dirname(storage_path)
+                        if os.path.exists(doc_dir):
+                            shutil.rmtree(doc_dir)
+                            deleted_files_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to delete file for doc {doc.id}: {e}")
+
+            # Delete KbDocuments
+            doc_ids = [doc.id for doc in url_docs]
+            doc_delete = delete(KbDocument).where(KbDocument.id.in_(doc_ids))
+            await db.execute(doc_delete)
+            deleted_doc_count = len(url_docs)
 
     # Delete all URLs for this agent
     await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
@@ -3160,8 +3262,12 @@ async def clear_all_urls(
 
     return {
         "success": True,
-        "message": "All URLs cleared successfully",
-        "deleted_count": deleted_count,
+        "message": "All URLs and associated KB data cleared successfully",
+        "deleted_url_count": deleted_url_count,
+        "deleted_doc_count": deleted_doc_count,
+        "deleted_chunk_count": deleted_chunk_count,
+        "deleted_qdrant_count": deleted_qdrant_count,
+        "deleted_files_count": deleted_files_count,
     }
 
 
@@ -3173,17 +3279,25 @@ async def list_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List files for an agent (returns KbDocuments from agent's KB)."""
+    """List uploaded files for an agent (excludes URL-generated files).
+
+    Only returns KbDocuments that were manually uploaded by users.
+    URL-generated documents (filename starting with 'url_') are excluded
+    and should be viewed via the URL management interface.
+    """
     agent = await require_agent_admin(db, agent_id, current_user)
 
     # If agent has no KB bound, return empty list
     if not agent.kb_id:
         return {"files": [], "total": 0, "quota": {"used": 0, "max": 500}}
 
-    # Query KbDocuments from agent's KB
+    # Query KbDocuments from agent's KB, excluding URL-generated files
     stmt = (
         select(KbDocument)
-        .where(KbDocument.kb_id == agent.kb_id)
+        .where(
+            KbDocument.kb_id == agent.kb_id,
+            ~KbDocument.filename.like('url_%')  # Exclude URL-generated files
+        )
         .order_by(KbDocument.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -3191,9 +3305,13 @@ async def list_files(
     result = await db.execute(stmt)
     docs = result.scalars().all()
 
+    # Count only uploaded files (excluding URL-generated)
     total = (
         await db.execute(
-            select(func.count(KbDocument.id)).where(KbDocument.kb_id == agent.kb_id)
+            select(func.count(KbDocument.id)).where(
+                KbDocument.kb_id == agent.kb_id,
+                ~KbDocument.filename.like('url_%')
+            )
         )
     ).scalar() or 0
 
@@ -3508,11 +3626,31 @@ async def cancel_url_tasks(
     )
 
 
+@router.post("/urls:repair-indexed-status")
+async def repair_url_indexed_status(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """修复 URL 的 is_indexed 状态。
+
+    由于历史 bug（session 隔离问题），部分 URL 虽然 KbDocument 已处理成功，
+    但 is_indexed 字段仍为 False。此接口根据 KbDocument 状态批量修复。
+
+    返回修复统计：fixed（已修复数量）、already_correct（已正确数量）、errors（问题数量）
+    """
+    await require_agent_admin(db, agent_id, current_user)
+
+    from services.url_service import repair_url_indexed_status as do_repair
+
+    result = await do_repair(agent_id)
+    return result
+
+
 @router.post("/urls:crawl_site", response_model=SiteCrawlResponse)
 async def crawl_site(
     agent_id: str,
     payload: SiteCrawlRequest,
-    background_tasks: BackgroundTasks,
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -3522,6 +3660,8 @@ async def crawl_site(
     - max_depth: 最大爬取深度 (1-5)
     - max_pages: 最大页面数量 (1-500)
     """
+    import asyncio
+
     agent = await require_agent_admin(db, agent_id, current_user)
 
     # Ensure agent has KB bound
@@ -3541,17 +3681,19 @@ async def crawl_site(
             detail=f"Crawl already in progress: {error}",
         )
 
-    # Trigger background crawl
+    # Trigger background crawl using asyncio.create_task for proper cancellation support
     from services.url_service import process_site_crawl
 
-    background_tasks.add_task(
-        process_site_crawl,
-        agent_id=agent_id,
-        start_url=payload.url,
-        max_depth=payload.max_depth,
-        max_pages=payload.max_pages,
-        job_id=job_id,
+    task = asyncio.create_task(
+        process_site_crawl(
+            agent_id=agent_id,
+            start_url=payload.url,
+            max_depth=payload.max_depth,
+            max_pages=payload.max_pages,
+            job_id=job_id,
+        )
     )
+    await task_lock.register_task_handle(agent_id, job_id, task)
 
     return SiteCrawlResponse(
         job_id=job_id,
