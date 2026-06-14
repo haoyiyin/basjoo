@@ -127,15 +127,6 @@ def run_sqlite_migrations(database_url: str) -> None:
                 ],
             )
 
-        # ── url_sources ───────────────────────────────────────────────────
-        if _table_exists(cursor, "url_sources"):
-            _ensure_columns(
-                cursor,
-                "url_sources",
-                [
-                    ("r2r_document_id", "VARCHAR(100)"),
-                ],
-            )
 
         # ── uq_chat_sessions_active_session unique index ───────────────────
         if _table_exists(cursor, "chat_sessions"):
@@ -476,7 +467,7 @@ def _backfill_agents(cursor: sqlite3.Cursor):
 
     # ── similarity_threshold ─────────────────────────────────────────────────
     if "similarity_threshold" in col_names:
-        # R2R uses RRF scores (≈0.01–0.05); old default 0.3 filters everything
+        # RRF scores are typically ≈0.01–0.05; old default 0.3 filters everything
         cursor.execute(
             "UPDATE agents SET similarity_threshold = ? "
             "WHERE similarity_threshold IS NULL OR similarity_threshold = 0.3",

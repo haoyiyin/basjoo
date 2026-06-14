@@ -62,7 +62,6 @@ sudo sh install-deploy.sh
 - `widget/` — 可嵌入聊天组件的构建产物来源
 - `scrapling-service/` — 独立的网页抓取微服务（curl_cffi + readability-lxml）
 - `nginx/` — Docker nginx 配置
-- (已移除: r2r-config/)
 - `docker-compose.yml` — 开发/生产风格环境编排入口
 
 ## 核心功能
