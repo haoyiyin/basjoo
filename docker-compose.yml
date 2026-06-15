@@ -284,7 +284,7 @@ services:
   allowed-host:
     image: nginx:alpine
     container_name: basjoo-allowed-host
-    profiles: ["dev", "prod"]
+    profiles: ["dev"]
     volumes:
       - ./tests/environments/host-pages/allowed-host:/usr/share/nginx/html:ro
       - ./tests/environments/host-pages/nginx-allowed.conf:/etc/nginx/conf.d/default.conf:ro
@@ -297,7 +297,7 @@ services:
   blocked-host:
     image: nginx:alpine
     container_name: basjoo-blocked-host
-    profiles: ["dev", "prod"]
+    profiles: ["dev"]
     volumes:
       - ./tests/environments/host-pages/blocked-host:/usr/share/nginx/html:ro
       - ./tests/environments/host-pages/nginx-blocked.conf:/etc/nginx/conf.d/default.conf:ro
@@ -306,6 +306,29 @@ services:
     restart: unless-stopped
     networks:
       - basjoo-network
+
+  # Widget test hosts (prod profile)
+  allowed-host-prod:
+    image: nginx:alpine
+    container_name: basjoo-allowed-host-prod
+    profiles: ["prod"]
+    networks:
+      - basjoo-network
+    volumes:
+      - ./tests/environments/host-pages/html:/usr/share/nginx/html:ro
+      - ./tests/environments/host-pages/nginx-allowed-prod.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  blocked-host-prod:
+    image: nginx:alpine
+    container_name: basjoo-blocked-host-prod
+    profiles: ["prod"]
+    networks:
+      - basjoo-network
+    volumes:
+      - ./tests/environments/host-pages/html:/usr/share/nginx/html:ro
+      - ./tests/environments/host-pages/nginx-blocked-prod.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
 
 networks:
   basjoo-network:
