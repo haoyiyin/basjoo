@@ -121,7 +121,7 @@ class KbDocumentProcessor:
                 file_type = str(getattr(doc, "file_type", "") or "")
                 text = self.parser.parse_with_retry(storage_path, file_type)
                 if not text.strip():
-                    raise ValueError("Empty text after parse")
+                    raise ValueError("Uploaded file contains no parseable text — the document may be empty or in an unsupported format")
 
                 # chunk (use getattr + cast to satisfy static type checker on SA models)
                 chunk_size = cast(int, getattr(kb, "chunk_size", 512))
@@ -193,7 +193,7 @@ class KbDocumentProcessor:
             except Exception as e:
                 # Intentionally catch all exceptions and set error status.
                 # Caller must check doc.status to determine success/failure.
-                logger.exception(f"Processing failed for doc {doc_id}: {e}")
+                logger.error(f"Processing failed for doc {doc_id}: {e}", exc_info=True)
                 object.__setattr__(doc, "status", "error")
                 object.__setattr__(doc, "error_message", str(e)[:500])
                 await session.commit()

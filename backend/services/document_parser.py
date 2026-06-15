@@ -47,14 +47,18 @@ class DocumentParser:
         return "\n\n".join(texts)
 
     def _parse_docx(self, path: str) -> str:
-        from docx import Document
-
+        try:
+            from docx import Document
+        except ImportError:
+            raise RuntimeError("DOCX support requires: pip install python-docx")
         doc = Document(path)
-        return "\n".join(p.text for p in doc.paragraphs)
+        return "\n".join(p.text for p in doc.paragraphs if p.text)
 
     def _parse_xlsx(self, path: str) -> str:
-        from openpyxl import load_workbook
-
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            raise RuntimeError("XLSX support requires: pip install openpyxl")
         wb = load_workbook(path, read_only=True, data_only=True)
         parts = []
         for sheet in wb.worksheets:
@@ -113,6 +117,9 @@ class DocumentParser:
             try:
                 return self.parse(storage_path, file_type)
             except Exception as e:
+                # Do not retry non-recoverable errors
+                if isinstance(e, (ImportError, ModuleNotFoundError, RuntimeError)):
+                    raise
                 last_exc = e
                 logger.warning(f"Parse attempt {attempt + 1} failed: {e}")
         if last_exc is not None:

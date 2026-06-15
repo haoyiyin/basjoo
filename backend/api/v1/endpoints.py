@@ -3421,6 +3421,11 @@ async def upload_files(
                 errors.append(f"{filename}: exceeds 20MB limit")
                 continue
 
+            if len(content) == 0:
+                errors.append(f"Empty file: {filename} (0 bytes)")
+                failed += 1
+                continue
+
             # Create KbDocument record
             doc = await processor.create_document_record(
                 tenant_id, kb_id, filename, len(content), db
