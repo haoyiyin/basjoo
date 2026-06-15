@@ -9,12 +9,14 @@ import KBSetupWizard from './KBSetupWizard';
 interface KBSetupGuardProps {
   agentId: string;
   children: React.ReactNode;
+  mode?: "blocking" | "banner";
 }
 
-export default function KBSetupGuard({ agentId, children }: KBSetupGuardProps) {
+export default function KBSetupGuard({ agentId, children, mode = "blocking" }: KBSetupGuardProps) {
   const { t } = useTranslation('common');
   const isMobile = useIsMobile();
   const [kbSetupCompleted, setKbSetupCompleted] = useState<boolean | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
 
   const checkKBStatus = useCallback(async () => {
     try {
@@ -29,7 +31,81 @@ export default function KBSetupGuard({ agentId, children }: KBSetupGuardProps) {
     checkKBStatus();
   }, [checkKBStatus]);
 
+  const handleComplete = useCallback(async () => {
+    await checkKBStatus();
+    setShowWizard(false);
+  }, [checkKBStatus]);
+
+  const handleCancelWizard = useCallback(() => {
+    setShowWizard(false);
+  }, []);
+
   if (kbSetupCompleted === false) {
+    if (mode === "banner") {
+      return (
+        <>
+          <div style={{
+            padding: '12px 16px',
+            background: '#fff3cd',
+            border: '1px solid #ffc107',
+            borderRadius: '8px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '8px',
+          }}>
+            <span style={{ color: '#856404', fontSize: 'var(--text-sm)' }}>
+              ⚠️ {t('kb.bannerMessage', 'Knowledge base is not configured. File uploads will not be processed until KB setup is complete.')}
+            </span>
+            <button
+              onClick={() => setShowWizard(true)}
+              style={{
+                padding: '6px 12px',
+                background: '#0d6efd',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 500,
+              }}
+            >
+              {t('kb.setupButton', 'Set Up KB')}
+            </button>
+          </div>
+          {showWizard && (
+            <div style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 1000,
+              background: 'rgba(0, 0, 0, 0.6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: isMobile ? 'var(--space-4)' : 'var(--space-6)',
+              overflowY: 'auto',
+            }}>
+              <div style={{
+                width: '100%',
+                maxWidth: '480px',
+                position: 'relative',
+                zIndex: 1,
+                animation: 'fadeIn 0.5s ease-out forwards',
+              }}>
+                <KBSetupWizard
+                  agentId={agentId}
+                  onSetupComplete={handleComplete}
+                  onCancel={handleCancelWizard}
+                />
+              </div>
+            </div>
+          )}
+          {children}
+        </>
+      );
+    }
     return (
       <div style={{
         position: 'fixed',

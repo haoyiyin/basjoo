@@ -301,7 +301,7 @@ export default function FileUploadManagement() {
   return (
     <AdminLayout>
       {agentId ? (
-        <KBSetupGuard agentId={agentId}>
+        <KBSetupGuard agentId={agentId} mode="banner">
           {showClearConfirm && (
         <div
           style={{
@@ -436,7 +436,7 @@ export default function FileUploadManagement() {
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".pdf,.txt,.json,.csv,.md,.docx,.doc,.html,.htm,.xml"
+                  accept=".pdf,.txt,.md,.html,.docx,.xlsx"
                   onChange={handleFileInput}
                   style={{ display: 'none' }}
                 />
