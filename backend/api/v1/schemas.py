@@ -207,7 +207,7 @@ class FileItem(BaseModel):
     id: str
     filename: str
     file_size: Optional[int] = None
-    file_type: Optional[str] = None
+    file_type: Optional[str] = Field(None, description="MIME type of the file (e.g., 'text/plain', 'application/pdf')")
     status: Literal["uploading", "processing", "ready", "failed", "pending"] = (
         "uploading"
     )
@@ -243,7 +243,7 @@ class KbDocumentItem(BaseModel):
 
     id: str
     filename: str
-    file_type: Optional[str] = None
+    file_type: Optional[str] = Field(None, description="MIME type of the file (e.g., 'text/plain', 'application/pdf')")
     status: Literal["pending", "processing", "ready", "error"] = "pending"
     chunk_count: int = 0
     error_message: Optional[str] = None

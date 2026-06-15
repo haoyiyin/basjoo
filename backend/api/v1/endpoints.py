@@ -3346,6 +3346,15 @@ MAX_FILES_PER_UPLOAD = 5
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 ALLOWED_EXTENSIONS = {"txt", "md", "html", "pdf", "docx", "xlsx"}
 
+EXT_TO_MIME = {
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "html": "text/html",
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 
 @router.post("/files:upload", response_model=FileUploadResponse)
 async def upload_files(
@@ -3446,7 +3455,7 @@ async def upload_files(
             file_item = FileItem(
                 id=doc_id,
                 filename=filename,
-                file_type=ext,
+                file_type=EXT_TO_MIME.get(ext, ext),
                 file_size=len(content),
                 status="pending",
                 created_at=str(getattr(doc, "created_at", "")),

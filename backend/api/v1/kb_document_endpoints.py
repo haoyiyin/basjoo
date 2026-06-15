@@ -43,6 +43,15 @@ MAX_FILES = 5
 MAX_SIZE = 20 * 1024 * 1024  # 20MB
 ALLOWED = {"txt", "md", "html", "pdf", "docx", "xlsx"}
 
+EXT_TO_MIME = {
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "html": "text/html",
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 processor = KbDocumentProcessor()
 
 
@@ -93,7 +102,7 @@ async def upload_kb_documents(
             getattr(doc, "status", "pending"),
         )
         uploaded_items.append(
-            KbDocumentItem(id=doc_id, filename=filename, status=status_val)
+            KbDocumentItem(id=doc_id, filename=filename, status=status_val, file_type=EXT_TO_MIME.get(ext, ext))
         )
         background_tasks.add_task(processor.process_document, doc_id, tenant_id, kb_id)
     await db.commit()
