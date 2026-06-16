@@ -133,8 +133,22 @@ async def log_requests(request, call_next):
     if content_length:
         content_length = int(content_length)
         from constants import DEFAULT_BODY_SIZE_LIMIT, FILE_UPLOAD_BODY_LIMIT
-        # Route-aware sizing: upload route accepts larger bodies
-        if request.url.path.startswith("/api/v1/files:upload"):
+
+        path = request.url.path
+        path_parts = path.strip("/").split("/")
+        is_kb_document_upload = (
+            request.method.upper() == "POST"
+            and len(path_parts) == 6
+            and path_parts[0] == "api"
+            and path_parts[1] == "tenants"
+            and bool(path_parts[2])
+            and path_parts[3] == "knowledge_bases"
+            and bool(path_parts[4])
+            and path_parts[5] == "documents"
+        )
+
+        # Route-aware sizing: file and KB document uploads accept larger bodies.
+        if path.startswith("/api/v1/files:upload") or is_kb_document_upload:
             max_size = FILE_UPLOAD_BODY_LIMIT
         else:
             max_size = DEFAULT_BODY_SIZE_LIMIT

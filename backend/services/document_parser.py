@@ -76,6 +76,8 @@ class DocumentParser:
     def _parse_docx(self, path: str) -> str:
         """Parse DOCX file, extract paragraph text."""
         file_size = os.path.getsize(path)
+        if file_size == 0:
+            raise RuntimeError(f"Cannot parse empty DOCX file: {path}")
         logger.info(f"Parsing DOCX: {path} ({file_size} bytes)")
         try:
             from docx import Document
@@ -97,6 +99,9 @@ class DocumentParser:
             ) from e
 
     def _parse_xlsx(self, path: str) -> str:
+        file_size = os.path.getsize(path)
+        if file_size == 0:
+            raise RuntimeError(f"Cannot parse empty XLSX file: {path}")
         try:
             from openpyxl import load_workbook
         except ImportError:

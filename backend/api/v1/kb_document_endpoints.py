@@ -12,6 +12,7 @@ from fastapi import (
     Path,
     UploadFile,
 )
+from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.endpoints.auth import require_admin_or_super_admin, require_tenant_access
@@ -43,9 +44,15 @@ router = APIRouter(prefix="/api/tenants", tags=["kb-documents"])
 processor = KbDocumentProcessor()
 
 
+class KbDocumentUploadResponseWithErrors(KbDocumentUploadResponse):
+    """KB document upload response including per-file validation errors."""
+
+    errors: list[str] = Field(default_factory=list)
+
+
 @router.post(
     "/{tenant_id}/knowledge_bases/{kb_id}/documents",
-    response_model=KbDocumentUploadResponse,
+    response_model=KbDocumentUploadResponseWithErrors,
 )
 async def upload_kb_documents(
     tenant_id: str = Path(...),
@@ -76,6 +83,9 @@ async def upload_kb_documents(
         if len(content) > MAX_FILE_SIZE:
             errors.append(f"{filename}: >20MB")
             continue
+        if len(content) == 0:
+            errors.append(f"Empty file: {filename} (0 bytes)")
+            continue
         # create pending record
         doc = await processor.create_document_record(
             tenant_id, kb_id, filename, len(content), db
@@ -94,10 +104,11 @@ async def upload_kb_documents(
         )
         background_tasks.add_task(processor.process_document, doc_id, tenant_id, kb_id)
     await db.commit()
-    return KbDocumentUploadResponse(
+    return KbDocumentUploadResponseWithErrors(
         uploaded=len(uploaded_items),
         failed=len(errors),
         documents=uploaded_items,
+        errors=errors,
     )
 
 
