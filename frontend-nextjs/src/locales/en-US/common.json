@@ -661,7 +661,8 @@
     "confirmClearAll": "Are you sure you want to delete all files? This action cannot be undone.",
     "clearing": "Clearing...",
     "clearSuccess": "Successfully deleted {{count}} file(s)",
-    "clearFailed": "Failed to clear files"
+    "clearFailed": "Failed to clear files",
+    "processingFailedFallback": "We couldn't process this file. Please upload a valid, readable PDF, TXT, MD, HTML, DOCX, or XLSX document."
   },
   "citations": {
     "references": "References"

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import database
 from core.encryption import decrypt_api_key
 from models import Agent, KbChunk, KbDocument
-from services.document_parser import DocumentParser
+from services.document_parser import DocumentParser, INVALID_TEXT_EMPTY_MESSAGE
 from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
 
@@ -24,6 +24,19 @@ logger = logging.getLogger(__name__)
 import os
 
 UPLOAD_ROOT = Path(os.environ.get("KB_UPLOAD_ROOT", "/app/data/kb_uploads"))
+
+PROCESSING_ERROR_MESSAGE_MAX_LENGTH = 500
+PROCESSING_ERROR_MESSAGE_FALLBACK = "DOCUMENT_PROCESSING_FAILED"
+
+
+def _format_processing_error_message(exc: Exception) -> str:
+    """Return a bounded, non-localized technical cause for persistence."""
+    raw_message = str(exc).strip() or type(exc).__name__
+    safe_message = "".join(ch if ch.isprintable() else " " for ch in raw_message)
+    safe_message = " ".join(safe_message.split())
+    if not safe_message:
+        safe_message = PROCESSING_ERROR_MESSAGE_FALLBACK
+    return safe_message[:PROCESSING_ERROR_MESSAGE_MAX_LENGTH]
 
 
 def get_embedding_api_key(agent: Agent | None) -> str | None:
@@ -121,7 +134,7 @@ class KbDocumentProcessor:
                 file_type = str(getattr(doc, "file_type", "") or "")
                 text = self.parser.parse_with_retry(storage_path, file_type)
                 if not text.strip():
-                    raise ValueError("Uploaded file contains no parseable text — the document may be empty or in an unsupported format")
+                    raise RuntimeError(INVALID_TEXT_EMPTY_MESSAGE)
 
                 # chunk (use getattr + cast to satisfy static type checker on SA models)
                 chunk_size = cast(int, getattr(kb, "chunk_size", 512))
@@ -195,7 +208,9 @@ class KbDocumentProcessor:
                 # Caller must check doc.status to determine success/failure.
                 logger.error(f"Processing failed for doc {doc_id}: {e}", exc_info=True)
                 object.__setattr__(doc, "status", "error")
-                object.__setattr__(doc, "error_message", str(e)[:500])
+                object.__setattr__(
+                    doc, "error_message", _format_processing_error_message(e)
+                )
                 await session.commit()
 
     async def get_document_progress(

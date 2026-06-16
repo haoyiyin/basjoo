@@ -186,6 +186,93 @@ def get_locale_from_request(request: Request) -> str:
     return DEFAULT_LOCALE
 
 
+DOCUMENT_PROCESSING_FAILED_MESSAGE = (
+    "Document processing failed. Please upload a valid, readable document and try again."
+)
+DOCUMENT_TEXT_UNREADABLE_MESSAGE = (
+    "File content could not be read. Please upload a valid text document encoded as UTF-8."
+)
+DOCUMENT_TEXT_EMPTY_MESSAGE = (
+    "No readable text could be found. Please upload a document that contains readable text."
+)
+DOCUMENT_TYPE_INVALID_MESSAGE = (
+    "File content does not match the selected document type. Please upload a valid, readable document."
+)
+
+_DOCUMENT_TEXT_BINARY_SIGNATURES = (
+    "invalid_text_binary",
+    "binary or unreadable text",
+)
+_DOCUMENT_TEXT_ENCODING_SIGNATURES = (
+    "invalid_text_encoding",
+    "not valid utf-8",
+    "utf-8 codec can't decode",
+    "unicodedecodeerror",
+)
+_DOCUMENT_TEXT_EMPTY_SIGNATURES = (
+    "invalid_text_empty",
+    "no readable text content",
+    "no chunks generated",
+)
+_DOCUMENT_INVALID_DOCUMENT_SIGNATURES = (
+    "badzipfile",
+    "file is not a zip file",
+    "package not found",
+    "packagenotfounderror",
+    "office open xml",
+    "no /root object",
+    "pdfsyntaxerror",
+    "invalid pdf",
+    "end-of-file marker",
+    "excel file format cannot be determined",
+    "not a valid .docx",
+)
+
+
+def _matches_any_signature(message: str, signatures: Iterable[str]) -> bool:
+    return any(signature in message for signature in signatures)
+
+
+def get_document_processing_error_message_id(raw_error: Optional[str]) -> str:
+    """Map a stored processing error to a client-safe gettext message id.
+
+    The background processor stores raw, non-localized causes so the API can
+    localize at request time. This mapper intentionally returns only known
+    friendly message ids and never includes parser/library details from the
+    stored value.
+    """
+    normalized_error = " ".join(str(raw_error or "").lower().split())
+    if not normalized_error:
+        return DOCUMENT_PROCESSING_FAILED_MESSAGE
+
+    if _matches_any_signature(normalized_error, _DOCUMENT_TEXT_EMPTY_SIGNATURES):
+        return DOCUMENT_TEXT_EMPTY_MESSAGE
+    if _matches_any_signature(normalized_error, _DOCUMENT_TEXT_ENCODING_SIGNATURES):
+        return DOCUMENT_TEXT_UNREADABLE_MESSAGE
+    if _matches_any_signature(normalized_error, _DOCUMENT_TEXT_BINARY_SIGNATURES):
+        return DOCUMENT_TYPE_INVALID_MESSAGE
+    if _matches_any_signature(normalized_error, _DOCUMENT_INVALID_DOCUMENT_SIGNATURES):
+        return DOCUMENT_TYPE_INVALID_MESSAGE
+
+    return DOCUMENT_PROCESSING_FAILED_MESSAGE
+
+
+def localize_document_processing_error(
+    raw_error: Optional[str], locale: str = DEFAULT_LOCALE
+) -> str:
+    """Return a localized, sanitized document processing failure message."""
+    return _(get_document_processing_error_message_id(raw_error), locale=locale)
+
+
+def get_localized_document_processing_error(
+    request: Request, raw_error: Optional[str]
+) -> str:
+    """Localize a document processing failure from the current request locale."""
+    return localize_document_processing_error(
+        raw_error, locale=get_locale_from_request(request)
+    )
+
+
 class I18nMiddleware(BaseHTTPMiddleware):
     """国际化中间件 - 使用Starlette BaseHTTPMiddleware"""
 

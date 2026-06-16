@@ -71,3 +71,16 @@ msgstr "登录尝试次数过多，请稍后再试"
 # 系统消息
 msgid "Request body too large"
 msgstr "请求体过大"
+
+# 文档处理错误
+msgid "Document processing failed. Please upload a valid, readable document and try again."
+msgstr "文档处理失败。请上传有效且可读取的文档后重试。"
+
+msgid "File content could not be read. Please upload a valid text document encoded as UTF-8."
+msgstr "无法读取文件内容。请上传使用 UTF-8 编码的有效文本文件。"
+
+msgid "No readable text could be found. Please upload a document that contains readable text."
+msgstr "未找到可读取的文本内容。请上传包含可读文本的文档。"
+
+msgid "File content does not match the selected document type. Please upload a valid, readable document."
+msgstr "文件内容与所选文档类型不匹配。请上传有效且可读取的文档。"

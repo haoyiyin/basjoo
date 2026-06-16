@@ -49,6 +49,18 @@ def test_document_parser_chunk_empty():
     assert chunks == []
 
 
+def test_document_parser_accepts_utf8_non_english_text(tmp_path):
+    """Valid UTF-8 Chinese/non-English text must not be treated as binary."""
+    text = "中文知识库内容可以被读取。\nEspañol con acentos: información útil."
+    path = tmp_path / "readable_multilingual.txt"
+    path.write_bytes(text.encode("utf-8"))
+
+    parsed = DocumentParser().parse(str(path), "txt")
+
+    assert "中文知识库内容" in parsed
+    assert "información útil" in parsed
+
+
 def test_document_parser_supported_exts():
     from constants import ALLOWED_EXTENSIONS
 
@@ -66,6 +78,117 @@ def test_kb_document_processor_imports():
     assert proc.parser is not None
     assert proc.qdrant is not None
     assert proc.kb_svc is not None
+
+
+_RANDOM_BINARY_BYTES = (
+    b"\x00\xff\x10not-a-real-document\x00\x01\x02" + bytes(range(3, 32))
+)
+
+
+async def _create_pending_binary_document(tmp_path, ext: str) -> tuple[str, str, str]:
+    import uuid
+    import database
+
+    path = tmp_path / f"random_binary.{ext}"
+    path.write_bytes(_RANDOM_BINARY_BYTES)
+
+    async with database.AsyncSessionLocal() as session:
+        tenant_id = str(uuid.uuid4())
+        kb_id = str(uuid.uuid4())
+        from models import Tenant
+
+        tenant = Tenant(
+            id=tenant_id,
+            name=f"tenant_{ext}",
+            slug=f"tenant-{ext}-{uuid.uuid4().hex[:8]}",
+        )
+        kb = KnowledgeBase(
+            id=kb_id,
+            tenant_id=tenant_id,
+            name=f"Binary {ext} KB",
+            qdrant_collection=f"kb_{uuid.uuid4().hex}",
+        )
+        doc = KbDocument(
+            kb_id=kb_id,
+            tenant_id=tenant_id,
+            filename=f"random_binary.{ext}",
+            file_type=ext,
+            file_size=len(_RANDOM_BINARY_BYTES),
+            storage_path=str(path),
+            status="pending",
+        )
+        session.add_all([tenant, kb, doc])
+        await session.commit()
+        return str(doc.id), tenant_id, kb_id
+
+
+async def _process_document_with_mocked_kb(
+    doc_id: str, tenant_id: str, kb_id: str
+) -> None:
+    mock_kb = MagicMock()
+    mock_kb.id = kb_id
+    mock_kb.tenant_id = tenant_id
+    mock_kb.chunk_size = 512
+    mock_kb.chunk_overlap = 64
+    mock_kb.embedding_model = "BAAI/bge-m3"
+    mock_kb.embedding_base_url = None
+    mock_kb.is_locked = False
+
+    with patch("services.kb_document_processor.QdrantKbService"), patch(
+        "services.kb_service.QdrantKbService"
+    ):
+        processor = KbDocumentProcessor()
+    processor.kb_svc.get_knowledge_base = AsyncMock(return_value=mock_kb)
+
+    await processor.process_document(doc_id, tenant_id, kb_id)
+
+
+async def _load_document(doc_id: str) -> KbDocument:
+    import database
+    from sqlalchemy import select
+
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(KbDocument).where(KbDocument.id == doc_id)
+        )
+        return result.scalar_one()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ext", ["txt", "md", "html"])
+async def test_processor_persists_stable_error_for_binary_renamed_text_files(
+    setup_test_db, tmp_path, ext
+):
+    """Random binary bytes renamed as text-like files fail with a stable stored error."""
+    doc_id, tenant_id, kb_id = await _create_pending_binary_document(tmp_path, ext)
+
+    await _process_document_with_mocked_kb(doc_id, tenant_id, kb_id)
+
+    doc = await _load_document(doc_id)
+    assert doc.status == "error"
+    assert doc.chunk_count in (0, None)
+    assert doc.error_message == (
+        "INVALID_TEXT_BINARY: file appears to be binary or unreadable text"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ext", ["pdf", "docx", "xlsx"])
+async def test_processor_marks_random_binary_parser_failures_as_error(
+    setup_test_db, tmp_path, ext
+):
+    """Binary payloads with binary document extensions must persist failed processing."""
+    from services.kb_document_processor import PROCESSING_ERROR_MESSAGE_MAX_LENGTH
+
+    doc_id, tenant_id, kb_id = await _create_pending_binary_document(tmp_path, ext)
+
+    await _process_document_with_mocked_kb(doc_id, tenant_id, kb_id)
+
+    doc = await _load_document(doc_id)
+    assert doc.status == "error"
+    assert doc.chunk_count in (0, None)
+    assert doc.error_message
+    assert len(doc.error_message) <= PROCESSING_ERROR_MESSAGE_MAX_LENGTH
 
 
 def test_kb_retrieval_service_imports():

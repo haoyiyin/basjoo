@@ -2,6 +2,7 @@
 
 import logging
 import os
+import unicodedata
 
 import httpx
 
@@ -15,6 +16,13 @@ from constants import ALLOWED_EXTENSIONS
 from services.ssl_utils import create_ssl_context
 
 logger = logging.getLogger(__name__)
+
+INVALID_TEXT_BINARY_MESSAGE = (
+    "INVALID_TEXT_BINARY: file appears to be binary or unreadable text"
+)
+INVALID_TEXT_EMPTY_MESSAGE = "INVALID_TEXT_EMPTY: no readable text content"
+INVALID_TEXT_ENCODING_MESSAGE = "INVALID_TEXT_ENCODING: file is not valid UTF-8 text"
+_ALLOWED_TEXT_CONTROL_CHARS = {"\t", "\n", "\r", "\f"}
 
 
 class DocumentParser:
@@ -30,8 +38,7 @@ class DocumentParser:
             raise ValueError(f"Unsupported: {ext}")
 
         if ext in ("txt", "md"):
-            with open(storage_path, encoding="utf-8", errors="ignore") as f:
-                return f.read()
+            return self._parse_readable_text(storage_path)
         elif ext == "html":
             return self._parse_html(storage_path)
         elif ext == "pdf":
@@ -41,6 +48,55 @@ class DocumentParser:
         elif ext == "xlsx":
             return self._parse_xlsx(storage_path)
         raise ValueError(f"Unhandled ext: {ext}")
+
+    def _parse_readable_text(self, path: str) -> str:
+        """Read a UTF-8 text-like file and reject binary/unreadable payloads."""
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            raise RuntimeError(f"Failed to read text file: {e}") from e
+
+        if not raw:
+            raise RuntimeError(INVALID_TEXT_EMPTY_MESSAGE)
+
+        self._reject_binary_bytes(raw)
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError as e:
+            raise RuntimeError(INVALID_TEXT_ENCODING_MESSAGE) from e
+
+        self._ensure_readable_text(text)
+        return text
+
+    def _reject_binary_bytes(self, raw: bytes) -> None:
+        """Reject obvious binary payloads before decoding as UTF-8 text."""
+        if b"\x00" in raw:
+            raise RuntimeError(INVALID_TEXT_BINARY_MESSAGE)
+
+        disallowed_controls = sum(
+            1
+            for byte in raw
+            if byte < 32 and byte not in (9, 10, 12, 13)
+        )
+        if disallowed_controls:
+            raise RuntimeError(INVALID_TEXT_BINARY_MESSAGE)
+
+    def _ensure_readable_text(self, text: str) -> None:
+        """Validate that decoded text contains readable content, not binary noise."""
+        if not text.strip():
+            raise RuntimeError(INVALID_TEXT_EMPTY_MESSAGE)
+
+        suspicious = 0
+        for ch in text:
+            if ch in _ALLOWED_TEXT_CONTROL_CHARS:
+                continue
+            category = unicodedata.category(ch)
+            if category in {"Cc", "Cs", "Co", "Cn"}:
+                suspicious += 1
+
+        if suspicious and suspicious / max(len(text), 1) > 0.02:
+            raise RuntimeError(INVALID_TEXT_BINARY_MESSAGE)
 
     def _parse_pdf(self, path: str) -> str:
         import pdfplumber
@@ -54,24 +110,26 @@ class DocumentParser:
 
     def _parse_html(self, path: str) -> str:
         """Extract visible text from HTML file (strips tags)."""
-        with open(path, encoding="utf-8", errors="ignore") as f:
-            raw = f.read()
+        raw = self._parse_readable_text(path)
         if _HAS_BS4:
             soup = BeautifulSoup(raw, "html.parser")
-            return soup.get_text(separator="\n", strip=True)
-        # Fallback: stdlib html.parser
-        from html.parser import HTMLParser
-        class _TextExtractor(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.parts = []
-            def handle_data(self, data):
-                text = data.strip()
-                if text:
-                    self.parts.append(text)
-        parser = _TextExtractor()
-        parser.feed(raw)
-        return "\n".join(parser.parts)
+            text = soup.get_text(separator="\n", strip=True)
+        else:
+            # Fallback: stdlib html.parser
+            from html.parser import HTMLParser
+            class _TextExtractor(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.parts = []
+                def handle_data(self, data):
+                    text = data.strip()
+                    if text:
+                        self.parts.append(text)
+            parser = _TextExtractor()
+            parser.feed(raw)
+            text = "\n".join(parser.parts)
+        self._ensure_readable_text(text)
+        return text
 
     def _parse_docx(self, path: str) -> str:
         """Parse DOCX file, extract paragraph text."""
