@@ -5,6 +5,12 @@ import os
 
 import httpx
 
+try:
+    from bs4 import BeautifulSoup
+    _HAS_BS4 = True
+except ImportError:
+    _HAS_BS4 = False
+
 from constants import ALLOWED_EXTENSIONS
 from services.ssl_utils import create_ssl_context
 
@@ -23,9 +29,11 @@ class DocumentParser:
         if ext not in ALLOWED_EXTENSIONS:
             raise ValueError(f"Unsupported: {ext}")
 
-        if ext in ("txt", "md", "html"):
+        if ext in ("txt", "md"):
             with open(storage_path, encoding="utf-8", errors="ignore") as f:
                 return f.read()
+        elif ext == "html":
+            return self._parse_html(storage_path)
         elif ext == "pdf":
             return self._parse_pdf(storage_path)
         elif ext == "docx":
@@ -44,13 +52,49 @@ class DocumentParser:
                 texts.append(t)
         return "\n\n".join(texts)
 
+    def _parse_html(self, path: str) -> str:
+        """Extract visible text from HTML file (strips tags)."""
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            raw = f.read()
+        if _HAS_BS4:
+            soup = BeautifulSoup(raw, "html.parser")
+            return soup.get_text(separator="\n", strip=True)
+        # Fallback: stdlib html.parser
+        from html.parser import HTMLParser
+        class _TextExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.parts = []
+            def handle_data(self, data):
+                text = data.strip()
+                if text:
+                    self.parts.append(text)
+        parser = _TextExtractor()
+        parser.feed(raw)
+        return "\n".join(parser.parts)
+
     def _parse_docx(self, path: str) -> str:
+        """Parse DOCX file, extract paragraph text."""
+        file_size = os.path.getsize(path)
+        logger.info(f"Parsing DOCX: {path} ({file_size} bytes)")
         try:
             from docx import Document
         except ImportError:
-            raise RuntimeError("DOCX support requires: pip install python-docx")
-        doc = Document(path)
-        return "\n".join(p.text for p in doc.paragraphs if p.text)
+            raise RuntimeError(
+                "DOCX support requires python-docx. "
+                "Install: pip install python-docx"
+            )
+        try:
+            doc = Document(path)
+            paragraphs = [p.text for p in doc.paragraphs if p.text]
+            logger.info(f"DOCX parsed: {len(paragraphs)} paragraphs from {file_size} bytes")
+            return "\n".join(paragraphs)
+        except Exception as e:
+            logger.error(f"DOCX parse failed for {path}: {e}")
+            raise RuntimeError(
+                f"Failed to parse DOCX file (type={type(e).__name__}): {e}. "
+                "Check that the file is a valid .docx (Office Open XML) format."
+            ) from e
 
     def _parse_xlsx(self, path: str) -> str:
         try:
