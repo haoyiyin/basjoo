@@ -16,3 +16,12 @@ FILE_UPLOAD_BODY_LIMIT = (
 
 # --- File upload ---
 ALLOWED_EXTENSIONS = frozenset({"txt", "md", "html", "pdf", "docx", "xlsx"})
+
+EXT_TO_MIME = {
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "html": "text/html",
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}

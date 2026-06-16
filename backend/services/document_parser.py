@@ -5,12 +5,10 @@ import os
 
 import httpx
 
+from constants import ALLOWED_EXTENSIONS
 from services.ssl_utils import create_ssl_context
 
 logger = logging.getLogger(__name__)
-
-# Supported extensions
-SUPPORTED_EXTS = {"txt", "md", "html", "pdf", "docx", "xlsx"}
 
 
 class DocumentParser:
@@ -22,7 +20,7 @@ class DocumentParser:
         if not os.path.exists(storage_path):
             raise FileNotFoundError(storage_path)
         ext = file_type.lower().lstrip(".")
-        if ext not in SUPPORTED_EXTS:
+        if ext not in ALLOWED_EXTENSIONS:
             raise ValueError(f"Unsupported: {ext}")
 
         if ext in ("txt", "md", "html"):
