@@ -132,7 +132,12 @@ async def log_requests(request, call_next):
     content_length = request.headers.get("content-length")
     if content_length:
         content_length = int(content_length)
-        max_size = 10 * 1024 * 1024
+        from constants import DEFAULT_BODY_SIZE_LIMIT, FILE_UPLOAD_BODY_LIMIT
+        # Route-aware sizing: upload route accepts larger bodies
+        if request.url.path.startswith("/api/v1/files:upload"):
+            max_size = FILE_UPLOAD_BODY_LIMIT
+        else:
+            max_size = DEFAULT_BODY_SIZE_LIMIT
         if content_length > max_size:
             logger.warning(
                 f"Request too large: {content_length} bytes from "

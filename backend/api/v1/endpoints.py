@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 import database
 from database import get_db
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
+from constants import ALLOWED_EXTENSIONS, MAX_FILES_PER_UPLOAD, MAX_FILE_SIZE
 from api.endpoints.auth import (
     get_current_admin,
     require_admin_or_super_admin,
@@ -3340,11 +3341,6 @@ async def list_files(
 
     return {"files": items, "total": total, "quota": quota}
 
-
-# Constants for file upload validation
-MAX_FILES_PER_UPLOAD = 5
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
-ALLOWED_EXTENSIONS = {"txt", "md", "html", "pdf", "docx", "xlsx"}
 
 EXT_TO_MIME = {
     "txt": "text/plain",
