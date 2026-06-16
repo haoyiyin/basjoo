@@ -28,6 +28,7 @@ from api.v1.schemas import (
     RetrieveRequest,
     RetrieveResponse,
 )
+from constants import ALLOWED_EXTENSIONS, EXT_TO_MIME, MAX_FILE_SIZE, MAX_FILES_PER_UPLOAD
 from database import get_db
 from models import AdminUser
 from services.kb_document_processor import KbDocumentProcessor
@@ -38,19 +39,6 @@ from typing import Literal, cast
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tenants", tags=["kb-documents"])
-
-MAX_FILES = 5
-MAX_SIZE = 20 * 1024 * 1024  # 20MB
-ALLOWED = {"txt", "md", "html", "pdf", "docx", "xlsx"}
-
-EXT_TO_MIME = {
-    "txt": "text/plain",
-    "md": "text/markdown",
-    "html": "text/html",
-    "pdf": "application/pdf",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-}
 
 processor = KbDocumentProcessor()
 
@@ -73,19 +61,19 @@ async def upload_kb_documents(
     kb = await kb_svc.get_knowledge_base(tenant_id, kb_id)
     if kb and str(getattr(kb, "status", "active")) == "resetting":
         raise HTTPException(423, "Knowledge base is resetting, uploads locked")
-    if len(files) > MAX_FILES:
-        raise HTTPException(400, f"Max {MAX_FILES} files per upload")
+    if len(files) > MAX_FILES_PER_UPLOAD:
+        raise HTTPException(400, f"Max {MAX_FILES_PER_UPLOAD} files per upload")
 
     uploaded_items = []
     errors = []
-    for upload_file in files[:MAX_FILES]:
+    for upload_file in files[:MAX_FILES_PER_UPLOAD]:
         filename = upload_file.filename or "unnamed"
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if ext not in ALLOWED:
+        if ext not in ALLOWED_EXTENSIONS:
             errors.append(f"{filename}: unsupported .{ext}")
             continue
         content = await upload_file.read()
-        if len(content) > MAX_SIZE:
+        if len(content) > MAX_FILE_SIZE:
             errors.append(f"{filename}: >20MB")
             continue
         # create pending record

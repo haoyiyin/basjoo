@@ -50,14 +50,14 @@ def test_document_parser_chunk_empty():
 
 
 def test_document_parser_supported_exts():
-    from services.document_parser import SUPPORTED_EXTS
+    from constants import ALLOWED_EXTENSIONS
 
-    assert "txt" in SUPPORTED_EXTS
-    assert "md" in SUPPORTED_EXTS
-    assert "html" in SUPPORTED_EXTS
-    assert "pdf" in SUPPORTED_EXTS
-    assert "docx" in SUPPORTED_EXTS
-    assert "xlsx" in SUPPORTED_EXTS
+    assert "txt" in ALLOWED_EXTENSIONS
+    assert "md" in ALLOWED_EXTENSIONS
+    assert "html" in ALLOWED_EXTENSIONS
+    assert "pdf" in ALLOWED_EXTENSIONS
+    assert "docx" in ALLOWED_EXTENSIONS
+    assert "xlsx" in ALLOWED_EXTENSIONS
 
 
 def test_kb_document_processor_imports():
