@@ -71,3 +71,16 @@ msgstr "Too many login attempts. Please try again later."
 # System Messages
 msgid "Request body too large"
 msgstr "Request body too large"
+
+# Document processing errors
+msgid "Document processing failed. Please upload a valid, readable document and try again."
+msgstr "Document processing failed. Please upload a valid, readable document and try again."
+
+msgid "File content could not be read. Please upload a valid text document encoded as UTF-8."
+msgstr "File content could not be read. Please upload a valid text document encoded as UTF-8."
+
+msgid "No readable text could be found. Please upload a document that contains readable text."
+msgstr "No readable text could be found. Please upload a document that contains readable text."
+
+msgid "File content does not match the selected document type. Please upload a valid, readable document."
+msgstr "File content does not match the selected document type. Please upload a valid, readable document."

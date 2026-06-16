@@ -187,17 +187,10 @@ async def test_url_list_shows_indexing_status_distinct_from_fetch_status(
 
 
 @pytest.mark.asyncio
-async def test_file_list_exposes_processing_error_message(client, default_agent_id):
-    """File list should expose error_message for failed processing.
-    
-    Current gap: FileItem schema has error_message field, but the file list
-    endpoint queries KbDocument which also has error_message. Need to verify
-    that processor errors are properly propagated to the API response.
-    
-    Expected: When KbDocument.status='error', FileItem should include 
-    the error_message from KbDocument.
-    """
-    import uuid
+async def test_file_list_exposes_localized_safe_processing_error_message(
+    client, default_agent_id
+):
+    """File list should expose a localized safe error for failed processing."""
     from io import BytesIO
 
     async with database.AsyncSessionLocal() as session:
@@ -239,33 +232,29 @@ async def test_file_list_exposes_processing_error_message(client, default_agent_
         doc = result.scalar_one_or_none()
         if doc:
             object.__setattr__(doc, "status", "error")
-            object.__setattr__(doc, "error_message", "PDF parsing failed: malformed file")
+            object.__setattr__(
+                doc,
+                "error_message",
+                "PDFSyntaxError: No /Root object! Traceback: invalid PDF",
+            )
             await session.commit()
 
     # Get file list
-    response = await client.get(f"/api/v1/files:list?agent_id={default_agent_id}")
+    response = await client.get(
+        f"/api/v1/files:list?agent_id={default_agent_id}&locale=en-US"
+    )
     assert response.status_code == 200
     data = response.json()
 
     file_item = next((f for f in data["files"] if f["id"] == file_id), None)
     assert file_item is not None, "File should be in list"
-
-    # File status should reflect KbDocument status
-    # EXPECTED BUT MAY NOT BE IMPLEMENTED: proper error propagation
-    if file_item.get("status") == "failed" or file_item.get("status") == "error":
-        assert "error_message" in file_item, (
-            "GAP: FileItem with failed/error status must include error_message field"
-        )
-        assert file_item["error_message"] == "PDF parsing failed: malformed file", (
-            "GAP: error_message should contain the KbDocument.error_message"
-        )
-    else:
-        # If status is still 'pending' or 'processing', this documents the gap
-        pytest.fail(
-            f"GAP: File status '{file_item.get('status')}' does not reflect "
-            f"KbDocument status 'error'. FileItem should expose processing status "
-            f"distinct from upload status."
-        )
+    assert file_item["status"] == "failed"
+    assert file_item.get("error_message")
+    message = file_item["error_message"]
+    assert "valid" in message.lower()
+    assert "document" in message.lower()
+    for raw_marker in ["PDFSyntaxError", "/Root", "Traceback", "invalid PDF"]:
+        assert raw_marker.lower() not in message.lower()
 
 
 @pytest.mark.asyncio

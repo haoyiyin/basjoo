@@ -10,9 +10,11 @@ from fastapi import (
     File,
     HTTPException,
     Path,
+    Request,
     UploadFile,
 )
 from pydantic import Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.endpoints.auth import require_admin_or_super_admin, require_tenant_access
@@ -31,7 +33,8 @@ from api.v1.schemas import (
 )
 from constants import ALLOWED_EXTENSIONS, EXT_TO_MIME, MAX_FILE_SIZE, MAX_FILES_PER_UPLOAD
 from database import get_db
-from models import AdminUser
+from i18n.core import get_localized_document_processing_error
+from models import AdminUser, KbDocument
 from services.kb_document_processor import KbDocumentProcessor
 from services.kb_retrieval_service import KbRetrievalService
 from services.kb_service import KbService
@@ -113,10 +116,55 @@ async def upload_kb_documents(
 
 
 @router.get(
+    "/{tenant_id}/knowledge_bases/{kb_id}/documents",
+    response_model=list[KbDocumentItem],
+)
+async def list_kb_documents(
+    http_request: Request,
+    tenant_id: str = Path(...),
+    kb_id: str = Path(...),
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+    _tenant: str = Depends(require_tenant_access),
+):
+    """List documents in a knowledge base with localized safe failure messages."""
+    result = await db.execute(
+        select(KbDocument)
+        .where(KbDocument.tenant_id == tenant_id, KbDocument.kb_id == kb_id)
+        .order_by(KbDocument.created_at.desc())
+    )
+    items: list[KbDocumentItem] = []
+    for doc in result.scalars().all():
+        status_val = cast(
+            Literal["pending", "processing", "ready", "error"],
+            getattr(doc, "status", "pending"),
+        )
+        file_type = getattr(doc, "file_type", None)
+        error_message = None
+        if status_val == "error":
+            error_message = get_localized_document_processing_error(
+                http_request, getattr(doc, "error_message", None)
+            )
+        items.append(
+            KbDocumentItem(
+                id=cast(str, getattr(doc, "id", "")),
+                filename=cast(str, getattr(doc, "filename", "")),
+                file_type=EXT_TO_MIME.get(file_type, file_type),
+                status=status_val,
+                chunk_count=getattr(doc, "chunk_count", 0) or 0,
+                error_message=error_message,
+                created_at=getattr(doc, "created_at", None),
+            )
+        )
+    return items
+
+
+@router.get(
     "/{tenant_id}/knowledge_bases/{kb_id}/documents/{doc_id}",
     response_model=KbDocumentProgressResponse,
 )
 async def get_kb_document_progress(
+    http_request: Request,
     tenant_id: str = Path(...),
     kb_id: str = Path(...),
     doc_id: str = Path(...),
@@ -128,6 +176,13 @@ async def get_kb_document_progress(
     result = await processor.get_document_progress(tenant_id, doc_id, db)
     if result.get("status") == "not_found":
         raise HTTPException(404, "Document not found")
+    if result.get("status") == "error":
+        result = {
+            **result,
+            "error_message": get_localized_document_processing_error(
+                http_request, result.get("error_message")
+            ),
+        }
     return KbDocumentProgressResponse(**result)
 
 

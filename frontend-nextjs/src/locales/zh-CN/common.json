@@ -661,7 +661,8 @@
     "confirmClearAll": "确定要删除所有文件吗？此操作不可撤销。",
     "clearing": "清空中...",
     "clearSuccess": "已成功删除 {{count}} 个文件",
-    "clearFailed": "清空失败"
+    "clearFailed": "清空失败",
+    "processingFailedFallback": "无法处理此文件。请上传有效的、可读的 PDF、TXT、MD、HTML、DOCX 或 XLSX 文档。"
   },
   "citations": {
     "references": "参考来源"

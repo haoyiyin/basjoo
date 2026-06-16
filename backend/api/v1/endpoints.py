@@ -106,6 +106,7 @@ from services.kb_service import KbService
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
+from i18n.core import get_localized_document_processing_error
 import os
 
 logger = logging.getLogger(__name__)
@@ -3275,6 +3276,7 @@ async def clear_all_urls(
 @router.get("/files:list", response_model=FileListResponse)
 async def list_files(
     agent_id: str,
+    http_request: Request,
     skip: int = 0,
     limit: int = 100,
     current_user: AdminUser = Depends(get_current_admin),
@@ -3326,7 +3328,9 @@ async def list_files(
         error_message = None
         if status == "error":
             status = "failed"
-            error_message = doc.error_message
+            error_message = get_localized_document_processing_error(
+                http_request, getattr(doc, "error_message", None)
+            )
         items.append(
             FileItem(
                 id=str(doc.id),
