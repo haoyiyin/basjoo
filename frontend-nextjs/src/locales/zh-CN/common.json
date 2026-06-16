@@ -645,7 +645,7 @@
     "description": "上传文件作为AI知识来源",
     "uploadTitle": "上传文件",
     "dropzoneText": "拖放文件到此处，或点击浏览",
-    "supportedFormats": "支持 PDF、TXT、JSON、CSV、MD、DOCX、HTML、XML",
+    "supportedFormats": "支持 PDF、TXT、MD、HTML、DOCX、XLSX",
     "uploading": "正在上传 {{count}} 个文件...",
     "uploadFailed": "上传失败",
     "uploadPartial": "已上传 {{uploaded}} 个文件，{{failed}} 个失败",
@@ -732,6 +732,6 @@
     "goToSetup": "前往设置",
     "batchSize": "批处理大小",
     "manageUrlsDesc": "管理网站知识源，添加和抓取网页内容",
-    "manageFilesDesc": "上传和管理文件，支持 PDF、TXT、CSV 等格式"
+    "manageFilesDesc": "上传和管理文件，支持 PDF、TXT、DOCX、XLSX 等格式"
   }
 }

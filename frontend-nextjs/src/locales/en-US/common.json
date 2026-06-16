@@ -645,7 +645,7 @@
     "description": "Upload files to use as AI knowledge sources",
     "uploadTitle": "Upload Files",
     "dropzoneText": "Drag and drop files here, or click to browse",
-    "supportedFormats": "Supports PDF, TXT, JSON, CSV, MD, DOCX, HTML, XML",
+    "supportedFormats": "Supports PDF, TXT, MD, HTML, DOCX, XLSX",
     "uploading": "Uploading {{count}} file(s)...",
     "uploadFailed": "Upload failed",
     "uploadPartial": "Uploaded {{uploaded}} file(s), {{failed}} failed",
@@ -732,6 +732,6 @@
     "goToSetup": "Go to Setup",
     "batchSize": "Batch Size",
     "manageUrlsDesc": "Manage website knowledge sources, add and crawl web content",
-    "manageFilesDesc": "Upload and manage files, supports PDF, TXT, CSV and more"
+    "manageFilesDesc": "Upload and manage files, supports PDF, TXT, DOCX, XLSX and more"
   }
 }
