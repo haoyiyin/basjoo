@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 const languages = [
@@ -10,7 +10,7 @@ const languages = [
 
 export function AuthLanguageSwitcher() {
   const { i18n, t } = useTranslation('auth');
-  const pathname = usePathname();
+  const pathname = useLocation().pathname;
 
   if (pathname !== '/login' && pathname !== '/register') {
     return null;

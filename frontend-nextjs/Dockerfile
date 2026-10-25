@@ -1,33 +1,28 @@
+# ---- build stage -------------------------------------------------------------
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-ARG BACKEND_PROXY_TARGET=http://localhost:8000
-ENV BACKEND_PROXY_TARGET=$BACKEND_PROXY_TARGET
 ENV NODE_OPTIONS=--max-old-space-size=1024
 
 COPY package*.json ./
-RUN npm ci --prefer-offline --no-audit
+# `--legacy-peer-deps` is required: npm 10's arborist crashes on this
+# dependency graph's peer set ("Cannot read properties of null (reading 'edgesOut')").
+RUN npm ci --prefer-offline --no-audit --legacy-peer-deps
 
-COPY next.config.mjs tsconfig.json next-env.d.ts ./
-COPY app ./app
+COPY tsconfig.json vite.config.ts index.html ./
 COPY src ./src
 COPY public ./public
 
 RUN npm run build
 
-FROM node:20-alpine AS runner
+# ---- runtime stage (static files only, no Node) ------------------------------
+FROM nginxinc/nginx-unprivileged:stable-alpine
 
-WORKDIR /app
-ENV NODE_ENV=production
-
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 3000
 
-ENV HOSTNAME=0.0.0.0
-ENV PORT=3000
-
-CMD ["node", "server.js"]
+# The image's entrypoint runs nginx as the unprivileged user.
+CMD ["nginx", "-g", "daemon off;"]

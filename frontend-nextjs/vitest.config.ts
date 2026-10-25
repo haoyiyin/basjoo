@@ -6,12 +6,7 @@ export default defineConfig({
 	plugins: [react()],
 	resolve: {
 		alias: {
-			// In tests, use the real react-router-dom (not the Next.js shim)
-			"react-router-dom": path.resolve(
-				__dirname,
-				"node_modules/react-router-dom",
-			),
-			"@": path.resolve(__dirname),
+			"@": path.resolve(import.meta.dirname),
 		},
 	},
 	test: {
@@ -23,7 +18,7 @@ export default defineConfig({
 		// those global mocks flaky under Vitest workers, so keep unit tests serial.
 		maxWorkers: 1,
 		typecheck: {
-			tsconfig: "./tsconfig.test.json",
+			tsconfig: "./tsconfig.json",
 		},
 	},
 });

@@ -121,15 +121,10 @@ services:
     build:
       context: ./frontend-nextjs
       dockerfile: Dockerfile
-      args:
-        BACKEND_PROXY_TARGET: http://backend-prod:8000
     container_name: basjoo-frontend
     restart: unless-stopped
     networks:
       - basjoo-network
-    environment:
-      - NEXT_PUBLIC_API_BASE_URL=
-      - BACKEND_PROXY_TARGET=http://backend-prod:8000
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
       interval: 30s
@@ -235,8 +230,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=
-      - NEXT_PUBLIC_WS_BASE_URL=
+      - VITE_API_BASE_URL=
+      - VITE_WS_BASE_URL=
       - BACKEND_PROXY_TARGET=http://backend-dev:8000
     volumes:
       - ./frontend-nextjs:/app
@@ -254,7 +249,7 @@ services:
           action: sync
           ignore:
             - node_modules/
-            - .next/
+            - dist/
         - path: ./frontend-nextjs/package.json
           action: rebuild
 

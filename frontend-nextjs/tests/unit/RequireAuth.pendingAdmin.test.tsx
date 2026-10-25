@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RequireAuth } from "../../src/components/RequireAuth";
@@ -21,14 +22,15 @@ vi.mock("../../src/context/AuthContext", () => ({
 	}),
 }));
 
-vi.mock("../../src/router/react-router-dom", async () => {
-	const React = await import("react");
+vi.mock("react-router-dom", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("react-router-dom")>();
 	return {
+		...actual,
 		Navigate: ({ to }: { to: string }) => {
 			navigateCalls.push(to);
 			return React.createElement("div", null, `navigate:${to}`);
 		},
-		useLocation: () => ({ pathname: "/", search: "" }),
+		useLocation: () => ({ pathname: "/", search: "", state: null, key: "default", hash: "" }),
 	};
 });
 
