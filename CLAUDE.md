@@ -27,17 +27,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Blank server deploy: `curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh`
 - Local repo deploy: `sudo sh install-deploy.sh`
 - Supported systems: Ubuntu and Debian. The script auto-installs Docker/Compose, clones/syncs the repo, and deploys the production profile.
-- Persistent volumes are preserved; `install-deploy.sh` does not remove `backend-data`, `redis-data`, or `postgres-data`.
+- Persistent volumes are preserved; `install-deploy.sh` does not remove `backend-data`, `redis-data`, or `qdrant-data`.
 
 ### Frontend (`frontend-nextjs/`)
 
 - Install deps: `npm install`
-- Start dev server: `npm run dev`
-- Build: `npm run build`
-- Start production build locally: `npm run start`
-- Lint: `npm run lint`
+- Start dev server: `npm run dev` (Vite on :3000, proxies `/api`, `/sdk.js`, `/widget-demo`, `/basjoo-logo.png`, `/health` to `BACKEND_PROXY_TARGET`)
+- Build: `npm run build` (runs `tsc --noEmit` first)
+- Preview the production bundle locally: `npm run preview`
 - Type-check: `npm run typecheck`
 - Run tests: `npm run test`
+
+There is no `npm run lint` and no `npm run start` in this package.
 
 ### Widget (`widget/`)
 
@@ -98,7 +99,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Frontend structure
 
-- The Next.js app uses the App Router under `frontend-nextjs/app/`, with route groups for auth pages and dashboard pages.
+- The Vite SPA uses react-router 7 with the route table in `frontend-nextjs/src/App.tsx`; the former Next.js `app/` route groups are gone, and the directory name `frontend-nextjs/` is a leftover.
 - Most page logic is delegated into `frontend-nextjs/src/views/`; shared UI/components live in `frontend-nextjs/src/components/`.
 - `frontend-nextjs/src/context/AuthContext.tsx` stores admin auth state in `localStorage` and powers `RequireAuth`-guarded dashboard routes.
 - `frontend-nextjs/src/services/api.ts` is the main frontend API client. It handles bearer auth, locale propagation, and SSE parsing for `/api/v1/chat/stream`.
@@ -111,7 +112,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Deployment notes
 
-- `docker-compose.yml` defines shared Redis/Qdrant/PostgreSQL plus separate dev/prod backend/frontend services.
+- `docker-compose.yml` defines shared Redis/Qdrant plus separate dev/prod backend/frontend services. Persistence is SQLite only (`backend-data` volume); there is no PostgreSQL service.
 - `install-deploy.sh` is the one-command production installer for Ubuntu/Debian. It wraps `deploy.sh` and handles Docker/Compose installation, repo clone/sync, and post-deploy health checks.
 - The active frontend container is `frontend-nextjs`; compose and nginx configs route traffic to that app, not the legacy frontend.
 - Nginx should allow bodies larger than the backend guard: `nginx/conf.d/default.conf` sets `client_max_body_size 12m` so oversized requests reach FastAPI and return JSON 413 responses.
@@ -142,7 +143,7 @@ The backend reads settings from environment variables and `.env` via `pydantic-s
 - `REQUIRE_SECRET_KEY` — set `true` in production to reject insecure secret keys
 - `cors_allow_null_origin` — boolean, default `false`; controls `Origin: null` CORS behavior
 
-Default dev ports: Frontend `3000`, Backend `8000`, Qdrant `6333`, PostgreSQL `5432`, Redis `6379`.
+Default dev ports: Frontend `3000`, Backend `8000`, Qdrant `6333`, Redis `6379`.
 
 ## Security model
 

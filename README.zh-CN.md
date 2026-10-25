@@ -2,7 +2,7 @@
 
 [![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Next.js](https://img.shields.io/badge/Next.js-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
+[![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
 [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
@@ -13,7 +13,7 @@
 Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 
 - `backend/` 中的 **FastAPI 后端**，负责智能体配置、聊天、索引、认证和定时任务
-- `frontend-nextjs/` 中的 **Next.js 管理后台前端**
+- `frontend-nextjs/` 中的 **Vite 单页管理后台**（React + react-router 7）
 - `widget/` 中的 **可嵌入聊天组件**，通过 HTTP 和 SSE 与后端通信
 
 当前技术栈还包括：
@@ -141,8 +141,8 @@ Widget 提供访客侧聊天入口，支持会话持久化、多语言文案、�
 
 ### 前端
 
-- Next.js 14
-- React 18
+- Vite 8
+- React 18 + react-router 7
 - TypeScript
 - i18next
 
@@ -226,9 +226,8 @@ npm run dev
 ```bash
 npm install
 npm run dev
-npm run build
-npm run start        # 本地运行生产构建
-npm run lint
+npm run build        # tsc --noEmit && vite build
+npm run preview      # 本地预览生产构建
 npm run typecheck
 npm run test         # vitest
 ```
@@ -355,15 +354,15 @@ docker compose --profile dev up --watch
 - `backend/services/scraper.py`
 - `backend/services/crawler.py`
 
-模型服务抽象位于 `backend/services/llm_service.py`。服务商选择由 `Agent.provider_type` 决定。当前代码支持多种 OpenAI 兼容服务商，以及专门的 OpenAI Native 和 Google 路径。
+模型服务抽象位于 `backend/services/llm_service.py`。服务商选择由 `Agent.provider_type` 决定。所有受支持的服务商都走 OpenAI 兼容客户端；OpenAI Native 保留独立类，Google（Gemini）使用 Google 的 OpenAI 兼容端点 `generativelanguage.googleapis.com/v1beta/openai`。
 
 Embedding 设置与聊天模型服务商相互独立。管理员可以在 Playground 中为知识库索引/检索选择 Jina 或 SiliconFlow；网站与文件上传页面只要求当前已选择的 Embedding API 对应 Key 已配置。SiliconFlow 可以使用独立的 SiliconFlow Embedding API Key；当 AI 服务商也选择 SiliconFlow 时，也兼容使用主 SiliconFlow AI Key 作为历史回退。
 
 ### 前端
 
-当前有效前端是 `frontend-nextjs/` 中的 Next.js 应用。
+当前有效前端是 `frontend-nextjs/` 中的 Vite 单页应用（目录名是上一代 Next.js 版本的遗留）。
 
-- App Router 路由位于 `frontend-nextjs/app/`
+- 路由表位于 `frontend-nextjs/src/App.tsx`（react-router 7）
 - 大多数页面逻辑位于 `frontend-nextjs/src/views/`
 - 共享组件位于 `frontend-nextjs/src/components/`
 - 管理员认证状态位于 `frontend-nextjs/src/context/AuthContext.tsx`
@@ -474,7 +473,7 @@ Basjoo 基于以下优秀的开源项目构建：
 - **[Qdrant](https://qdrant.tech/)** — 高性能向量相似性搜索引擎。驱动 Basjoo 自研多租户知识库。
 - **[Scrapling](https://github.com/D4Vinci/Scrapling)** — 隐身网页抓取，支持 TLS 指纹伪装（curl_cffi）。驱动 Basjoo 的 URL 内容提取微服务。
 - **[FastAPI](https://github.com/tiangolo/fastapi)** — 驱动 Basjoo 后端 API 的 Web 框架。
-- **[Next.js](https://github.com/vercel/next.js)** — 驱动 Basjoo 管理后台的 React 框架。
+- **[Vite](https://vite.dev/)** — 驱动 Basjoo 管理后台的构建工具。
 
 ## 贡献者
 
