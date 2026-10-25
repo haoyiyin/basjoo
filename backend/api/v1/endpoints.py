@@ -17,7 +17,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case, delete, or_
 from sqlalchemy.exc import IntegrityError, OperationalError
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 import asyncio
 import logging
 import re
@@ -48,6 +48,7 @@ from models import (
     normalize_url,
     KnowledgeBase,
     KbDocument,
+    KbChunk,
 )
 from api.v1.schemas import (
     ChatRequest,
@@ -108,6 +109,7 @@ from api.v1.sse_utils import sse_event
 from config import settings
 from i18n.core import get_localized_document_processing_error
 import os
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +177,11 @@ def get_agent_plaintext_keys(agent: Agent) -> Optional[str]:
     return None
 
 
-def build_agent_config(agent: Agent) -> dict:
+def build_agent_config(
+    agent: Agent, *, kb_name: Optional[str] = None, kb_status: Optional[str] = None
+) -> dict:
+    """Serialize an agent. Knowledge base details are passed in, never queried here."""
     api_key = get_agent_plaintext_keys(agent)
-    jina_key = decrypt_api_key(agent.jina_api_key)
-    siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
     deleted_at = getattr(agent, "deleted_at", None)
     is_active = bool(agent.is_active) and not deleted_at
     return {
@@ -196,10 +199,6 @@ def build_agent_config(agent: Agent) -> dict:
         "api_key_set": bool(api_key),
         "api_key_masked": mask_api_key(api_key),
         "api_base": agent.api_base,
-        "jina_api_key_set": bool(jina_key),
-        "jina_api_key_masked": mask_api_key(jina_key),
-        "siliconflow_api_key_set": bool(siliconflow_key),
-        "siliconflow_api_key_masked": mask_api_key(siliconflow_key),
         "provider_type": agent.provider_type,
         "azure_endpoint": agent.azure_endpoint,
         "azure_deployment_name": agent.azure_deployment_name,
@@ -208,14 +207,10 @@ def build_agent_config(agent: Agent) -> dict:
         "google_project_id": agent.google_project_id,
         "google_region": agent.google_region,
         "provider_config": agent.provider_config,
-        "embedding_provider": agent.embedding_provider or "jina",
-        "embedding_api_base": agent.embedding_api_base,
-        "embedding_api_key_set": bool(jina_key or siliconflow_key),
-        "embedding_model": agent.embedding_model,
-        "embedding_batch_size": agent.embedding_batch_size,
         "configuration_error": None,
         "kb_id": agent.kb_id,
-        "kb_setup_completed": agent.kb_setup_completed,
+        "kb_name": kb_name,
+        "kb_status": kb_status,
         "crawl_max_depth": agent.crawl_max_depth,
         "crawl_max_pages": agent.crawl_max_pages,
         "top_k": agent.top_k,
@@ -254,13 +249,38 @@ def as_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 async def build_agent_config_with_stats(agent: Agent, db: AsyncSession) -> dict:
-    config = build_agent_config(agent)
+    """Agent payload plus live counters and the bound KB's name/status.
+
+    `file_count` counts the agent's own KbDocument rows (the live file surface)
+    instead of the unused legacy `KnowledgeFile` table.
+    """
+    kb_name = None
+    kb_status = None
+    if getattr(agent, "kb_id", None):
+        kb_row = (
+            await db.execute(
+                select(KnowledgeBase.name, KnowledgeBase.status).where(
+                    KnowledgeBase.id == agent.kb_id
+                )
+            )
+        ).first()
+        if kb_row:
+            kb_name, kb_status = kb_row[0], str(kb_row[1])
+
+    config = build_agent_config(agent, kb_name=kb_name, kb_status=kb_status)
     url_count = await db.scalar(
         select(func.count(URLSource.id)).where(URLSource.agent_id == agent.id)
     )
-    file_count = await db.scalar(
-        select(func.count(KnowledgeFile.id)).where(KnowledgeFile.agent_id == agent.id)
-    )
+    file_count = 0
+    if getattr(agent, "kb_id", None):
+        file_count = (
+            await db.scalar(
+                select(func.count(KbDocument.id)).where(
+                    KbDocument.kb_id == agent.kb_id,
+                    ~KbDocument.filename.like("url\\_%", escape="\\"),
+                )
+            )
+        ) or 0
     active_session_count = await db.scalar(
         select(func.count(ChatSession.id)).where(
             ChatSession.agent_id == agent.id,
@@ -270,12 +290,22 @@ async def build_agent_config_with_stats(agent: Agent, db: AsyncSession) -> dict:
     config.update(
         {
             "url_count": url_count or 0,
-            "file_count": file_count or 0,
+            "file_count": file_count,
             "active_session_count": active_session_count or 0,
         }
     )
     return config
 
+
+def require_bound_kb(agent: Agent) -> str:
+    """Upload/URL/index endpoints need a bound KB: there is no auto-create path."""
+    kb_id = getattr(agent, "kb_id", None)
+    if not kb_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent has no knowledge base bound. Bind one first.",
+        )
+    return str(kb_id)
 
 def ensure_agent_access(agent: Agent, current_user: AdminUser):
     if getattr(agent, "deleted_at", None):
@@ -870,11 +900,9 @@ async def prepare_chat_request(
     if getattr(agent, "kb_id", None):
         try:
             kb_retriever = KbRetrievalService()
-            # tenant_id=None lets the service derive it from the agent's KB
-            # (removes the extra query that was only needed for the filter)
+            # The service resolves the KB (and its embedding config) from agent.kb_id.
             # Pass agent's similarity_threshold for proper RRF-style scoring
             kb_results = await kb_retriever.retrieve(
-                tenant_id=None,
                 agent_id=agent_id,
                 query=request.message,
                 top_k=agent_top_k or 5,
@@ -1573,7 +1601,6 @@ async def get_contexts(
     try:
         kb_retriever = KbRetrievalService()
         kb_results = await kb_retriever.retrieve(
-            tenant_id=None,
             agent_id=agent_id,
             query=request.query,
             top_k=request.top_k or 5,
@@ -1731,11 +1758,23 @@ async def deactivate_agent(
         db, agent_id, current_user, include_deleted=True
     )
     if getattr(agent, "deleted_at", None):
+        # Already deleted (or deleted before this release). Still drop any stale
+        # binding: `agents.kb_id` is UNIQUE, so a leftover value would make the
+        # KB permanently unbindable until the purge job removed the row.
+        if agent.kb_id:
+            agent.kb_id = None
+            agent.updated_at = datetime.now(timezone.utc)
+            await db.commit()
         return {"success": True}
     now = datetime.now(timezone.utc)
     agent.is_active = False
     agent.deleted_at = now
     agent.purge_after = now + timedelta(days=7)
+    # Release the KB in the same transaction. The delete is a soft delete, so the
+    # row (and its UNIQUE `kb_id`) would otherwise keep the KB bound to a dead
+    # agent for the whole 7-day purge window. Only the pointer is cleared: the KB
+    # row, its documents and its chunks are untouched.
+    agent.kb_id = None
     agent.updated_at = now
     await db.commit()
     return {
@@ -1781,45 +1820,17 @@ async def update_agent(
 
     update_data = request.model_dump(exclude_unset=True)
 
-    # Block embedding changes when KB setup is locked
-    embedding_fields = {
-        "embedding_provider",
-        "embedding_api_base",
-        "embedding_model",
-        "jina_api_key",
-        "siliconflow_api_key",
-    }
-    if agent.kb_setup_completed and embedding_fields.intersection(update_data.keys()):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Embedding configuration is locked. Use the KB reset flow first.",
-        )
-
     # 根据 persona_type 设置 system_prompt（仅对预设人设）
     persona_type = update_data.get("persona_type")
     if persona_type and persona_type in PERSONA_PRESETS:
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
     for field, value in update_data.items():
-        if field in ("api_key", "jina_api_key", "siliconflow_api_key") and isinstance(
-            value, str
-        ):
+        if field == "api_key" and isinstance(value, str):
             value = value.strip()
             if value:
                 value = encrypt_api_key(value)
         setattr(agent, field, value)
-
-    # Validate custom embedding provider has a valid base URL before persisting
-    effective_provider = getattr(agent, "embedding_provider", None)
-    if effective_provider == "custom":
-        effective_base = getattr(agent, "embedding_api_base", None)
-        if not effective_base or not str(effective_base).strip().startswith(
-            ("http://", "https://")
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
-            )
 
     await db.commit()
     await db.refresh(agent)
@@ -1943,25 +1954,7 @@ async def delete_agent_member(
     return {"success": True}
 
 
-@router.get("/agent:jina-key-status")
-async def get_jina_key_status(
-    agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    agent = await require_agent_admin(db, agent_id, current_user)
-
-    jina_key = decrypt_api_key(agent.jina_api_key)
-    siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
-    return {
-        "agent_id": agent_id,
-        "configured": bool(jina_key or siliconflow_key),
-        "embedding_provider": agent.embedding_provider or "jina",
-    }
-
-
-# ========== Knowledge Base Setup ==========
-
+# ========== Knowledge Base Status (derived) ==========
 
 @router.get("/agent:kb-status")
 async def kb_status(
@@ -1969,173 +1962,39 @@ async def kb_status(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get knowledge base setup status."""
-    agent = await require_agent_admin(db, agent_id, current_user)
+    """Derived knowledge base status: a bound, active KB is the only source of truth.
 
-    jina_key = decrypt_api_key(agent.jina_api_key)
-    siliconflow_key = decrypt_api_key(getattr(agent, "siliconflow_api_key", None) or "")
-
-    return {
-        "agent_id": agent_id,
-        "kb_setup_completed": agent.kb_setup_completed,
-        "embedding_provider": agent.embedding_provider or "jina",
-        "embedding_model": agent.embedding_model,
-        "embedding_api_base": agent.embedding_api_base,
-        "embedding_batch_size": agent.embedding_batch_size,
-        "embedding_api_key_set": bool(jina_key or siliconflow_key),
-    }
-
-
-async def _agent_kb_setup_is_valid(agent: Agent, db: AsyncSession) -> bool:
-    """Check if agent has a valid, existing KB bound.
-
-    Returns True only if kb_setup_completed is True AND kb_id points to an existing KB.
-    This handles the inconsistent state where kb_setup_completed=True but kb_id is None or stale.
+    `kb_setup_completed` is computed from `agent.kb_id` plus the KB row's status; the
+    legacy boolean column is never read.
     """
-    if not agent.kb_setup_completed:
-        return False
-    if not agent.kb_id:
-        return False
-    # Verify KB actually exists
-    from models import KnowledgeBase
-
-    result = await db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
-    )
-    kb = result.scalar_one_or_none()
-    return kb is not None
-
-
-@router.post("/agent:kb-setup")
-async def kb_setup(
-    agent_id: str,
-    request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """One-time knowledge base embedding initialization."""
     agent = await require_agent_admin(db, agent_id, current_user)
 
-    # Check if setup is truly complete with valid KB
-    setup_is_valid = await _agent_kb_setup_is_valid(agent, db)
-    if setup_is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Knowledge base setup already completed. Use reset to change embedding settings.",
-        )
-
-    # Validate required fields
-    embedding_provider = request.embedding_provider or "jina"
-    if embedding_provider not in ("jina", "siliconflow", "custom"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Embedding provider must be 'jina', 'siliconflow', or 'custom'",
-        )
-
-    # Validate API key
-    if embedding_provider == "jina" and not request.jina_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jina API key is required for jina embedding provider",
-        )
-    if (
-        embedding_provider in ("siliconflow", "custom")
-        and not request.siliconflow_api_key
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="SiliconFlow API key is required for siliconflow/custom embedding provider",
-        )
-
-    # Validate custom embedding provider has a valid base URL
-    if embedding_provider == "custom":
-        base_url = (request.embedding_api_base or "").strip()
-        if not base_url.startswith(("http://", "https://")):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
+    kb_payload = None
+    kb = None
+    if agent.kb_id:
+        kb = (
+            await db.execute(
+                select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
             )
+        ).scalar_one_or_none()
 
-    # Save embedding settings first (needed for KB creation)
-    agent.embedding_provider = embedding_provider
-    if request.embedding_api_base:
-        agent.embedding_api_base = request.embedding_api_base
-    if request.embedding_model:
-        agent.embedding_model = request.embedding_model
-    if request.embedding_batch_size:
-        agent.embedding_batch_size = request.embedding_batch_size
-    if request.jina_api_key:
-        agent.jina_api_key = encrypt_api_key(request.jina_api_key)
-    if request.siliconflow_api_key:
-        agent.siliconflow_api_key = encrypt_api_key(request.siliconflow_api_key)
-
-    # Create/bind tenant-scoped KB for this agent
-    # This sets agent.kb_id and agent.kb_setup_completed
-    kb_svc = KbService(session=db)
-    await kb_svc.get_or_create_agent_kb(agent_id, session=db)
-
-    await db.refresh(agent)
-
-    return {
-        **build_agent_config(agent),
-        "message": "知识库初始化完成。",
-    }
-
-
-@router.post("/agent:kb-reset")
-async def kb_reset(
-    agent_id: str,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Reset knowledge base embedding configuration."""
-    agent = await require_agent_admin(db, agent_id, current_user)
-
-    if not agent.kb_setup_completed:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Knowledge base setup not completed yet.",
-        )
-
-    # Delete all URLs and files for this agent
-    await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
-    await db.execute(delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent_id))
-
-    # Clear embedding keys
-    agent.jina_api_key = ""
-    agent.siliconflow_api_key = ""
-    agent.kb_setup_completed = False
-    await db.commit()
-    await db.refresh(agent)
-
-    return {
-        "message": "Embedding 配置已重置。所有文件需要重新上传。",
-    }
-
-
-@router.put("/agent:jina-key")
-async def update_jina_key(
-    agent_id: str,
-    request: AgentUpdateRequest,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    agent = await require_agent_admin(db, agent_id, current_user)
-
-    if not request.jina_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Jina API key is required"
-        )
-
-    agent.jina_api_key = encrypt_api_key(request.jina_api_key)
-    await db.commit()
-    await db.refresh(agent)
+    if kb is not None:
+        kb_payload = {
+            "id": kb.id,
+            "name": kb.name,
+            "embedding_provider": getattr(kb, "embedding_provider", None) or "jina",
+            "embedding_model": kb.embedding_model,
+            "status": str(getattr(kb, "status", "active")),
+        }
 
     return {
         "agent_id": agent_id,
-        "configured": True,
+        "kb_id": agent.kb_id,
+        "kb_setup_completed": bool(
+            agent.kb_id and kb is not None and str(getattr(kb, "status", "")) == "active"
+        ),
+        "kb": kb_payload,
     }
-
 
 @router.get("/quota", response_model=QuotaInfo)
 async def get_quota(
@@ -2367,227 +2226,6 @@ async def test_ai_api(
         )
 
 
-@router.post("/agent:test-embedding-api")
-async def test_embedding_api(
-    agent_id: str,
-    payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """测试当前 Embedding 配置是否可用"""
-    agent = await require_agent_admin(db, agent_id, current_user)
-
-    # Build provider config from payload overrides without mutating ORM object
-    embedding_provider_raw = (
-        payload.embedding_provider
-        if payload and payload.embedding_provider is not None
-        else getattr(agent, "embedding_provider", None)
-    )
-    if embedding_provider_raw in {"jina", "siliconflow", "custom"}:
-        embedding_provider = embedding_provider_raw
-    else:
-        embedding_provider = (
-            "siliconflow"
-            if (
-                payload.provider_type
-                if payload and payload.provider_type is not None
-                else agent.provider_type
-            )
-            == "siliconflow"
-            else "jina"
-        )
-    resolved_provider_type = (
-        payload.provider_type
-        if payload and payload.provider_type is not None
-        else agent.provider_type
-    )
-    api_key_raw = (
-        payload.api_key if payload and payload.api_key is not None else agent.api_key
-    )
-    api_base = (
-        payload.api_base if payload and payload.api_base is not None else agent.api_base
-    )
-    embedding_api_base = (
-        payload.embedding_api_base
-        if payload and payload.embedding_api_base is not None
-        else getattr(agent, "embedding_api_base", None)
-    )
-    embedding_model = (
-        payload.embedding_model
-        if payload and payload.embedding_model is not None
-        else agent.embedding_model
-    )
-    # Use dedicated siliconflow_api_key for embedding; fallback to main key only when provider_type is also siliconflow
-    sf_key_raw = (
-        payload.siliconflow_api_key
-        if payload and payload.siliconflow_api_key is not None
-        else getattr(agent, "siliconflow_api_key", None) or None
-    )
-    if sf_key_raw:
-        api_key_raw = sf_key_raw
-    elif resolved_provider_type == "siliconflow":
-        pass  # allow fallback to main api_key for legacy siliconflow provider
-    else:
-        api_key_raw = None  # no dedicated key, will fail validation below
-
-    if embedding_provider in {"siliconflow", "custom"}:
-        test_key = decrypt_api_key(api_key_raw)
-        if not test_key:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SiliconFlow API key not configured",
-            )
-        test_base = (
-            embedding_api_base
-            if embedding_provider == "custom" and embedding_api_base
-            else (
-                api_base
-                if resolved_provider_type == "siliconflow" and api_base
-                else "https://api.siliconflow.cn/v1"
-            )
-        )
-        if embedding_provider == "custom":
-            if not embedding_api_base or not str(embedding_api_base).strip().startswith(
-                ("http://", "https://")
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Custom embedding provider requires a valid embedding_api_base starting with http:// or https://",
-                )
-            test_base = str(embedding_api_base).strip()
-        elif embedding_provider == "siliconflow":
-            test_base = (
-                api_base
-                if resolved_provider_type == "siliconflow" and api_base
-                else "https://api.siliconflow.cn/v1"
-            )
-        else:
-            test_base = ""
-        test_base = test_base.rstrip("/")
-        test_model = (
-            "text-embedding-v4"
-            if embedding_provider == "custom"
-            and (
-                not embedding_model
-                or embedding_model in {"jina-embeddings-v3", "BAAI/bge-m3"}
-            )
-            else (
-                "BAAI/bge-m3"
-                if embedding_model == "jina-embeddings-v3"
-                else (embedding_model or "BAAI/bge-m3")
-            )
-        )
-        try:
-            import httpx
-            from services.ssl_utils import create_ssl_context
-
-            ssl_context = create_ssl_context()
-
-            with httpx.Client(verify=ssl_context, timeout=30) as client:
-                response = client.post(
-                    f"{test_base}/embeddings",
-                    headers={"Authorization": f"Bearer {test_key}"},
-                    json={"model": test_model, "input": ["test"]},
-                )
-            response.raise_for_status()
-            data = response.json()
-            if "data" not in data or len(data["data"]) == 0:
-                raise ValueError("SiliconFlow API returned empty embedding data")
-            embedding = data["data"][0].get("embedding")
-            if not embedding or all(v == 0.0 for v in embedding):
-                raise ValueError("SiliconFlow API returned zero vector")
-            return {
-                "success": True,
-                "message": "SiliconFlow embedding API connection successful",
-            }
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 401:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="SiliconFlow API key is invalid",
-                )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"SiliconFlow embedding API test failed: {e.response.text}",
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"SiliconFlow embedding API test failed: {str(e)}",
-            )
-
-    return await test_jina_api(
-        agent_id=agent_id, payload=payload, current_user=current_user, db=db
-    )
-
-
-@router.post("/agent:test-jina-api")
-async def test_jina_api(
-    agent_id: str,
-    payload: Optional[AgentUpdateRequest] = None,
-    current_user: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """测试Jina Embedding API是否可用"""
-    agent = await require_agent_admin(db, agent_id, current_user)
-
-    raw_jina_key = (
-        payload.jina_api_key
-        if payload and payload.jina_api_key is not None
-        else agent.jina_api_key
-    )
-    agent_jina_api_key = decrypt_api_key(raw_jina_key)
-    if not agent_jina_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jina API key not configured",
-        )
-
-    try:
-        import httpx
-        from services.ssl_utils import create_ssl_context
-
-        ssl_context = create_ssl_context()
-
-        with httpx.Client(verify=ssl_context, timeout=30) as client:
-            response = client.post(
-                settings.jina_embedding_api_base,
-                headers={"Authorization": f"Bearer {agent_jina_api_key}"},
-                json={"model": "jina-embeddings-v3", "input": ["test"]},
-            )
-        response.raise_for_status()
-
-        # 验证返回的数据
-        data = response.json()
-        if "data" in data and len(data["data"]) > 0:
-            embedding = data["data"][0]["embedding"]
-            # 验证不是零向量
-            if all(v == 0.0 for v in embedding):
-                raise ValueError("Jina API returned zero vector")
-
-        return {
-            "success": True,
-            "message": "Jina API connection successful",
-        }
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Jina API test failed: {e}")
-        if e.response.status_code == 401:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Jina API key is invalid",
-            )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Jina API test failed: {e.response.text}",
-        )
-    except Exception as e:
-        logger.error(f"Jina API test failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Jina API test failed: {str(e)}",
-        )
-
-
 @router.get("/sources:summary", response_model=SourcesSummaryResponse)
 async def get_sources_summary(
     agent_id: str,
@@ -2628,69 +2266,41 @@ async def get_sources_summary(
 
     url_pending = url_total - url_indexed
 
-    # 统计文件 (使用 KbDocument 代替已废弃的 KnowledgeFile)
-    # 获取 agent 的 kb_id
+    # 统计文件 (KbDocument, scoped by kb_id only — no Tenant in the request path)
     agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = agent_result.scalar_one_or_none()
     kb_id = getattr(agent, "kb_id", None) if agent else None
 
     if kb_id:
-        # 从 KnowledgeBase 获取 tenant_id 用于 tenant-scoped 查询
-        kb_result = await db.execute(
-            select(KnowledgeBase.tenant_id).where(KnowledgeBase.id == kb_id)
-        )
-        tenant_id = kb_result.scalar_one_or_none()
-
-        if tenant_id:
-            # Query KbDocument stats with tenant-scoped filtering
-            file_total_result = await db.execute(
-                select(func.count())
-                .select_from(KbDocument)
-                .where(
-                    KbDocument.kb_id == kb_id,
-                    KbDocument.tenant_id == tenant_id,
+        file_total = (
+            await db.scalar(
+                select(func.count(KbDocument.id)).where(KbDocument.kb_id == kb_id)
+            )
+        ) or 0
+        file_ready = (
+            await db.scalar(
+                select(func.count(KbDocument.id)).where(
+                    KbDocument.kb_id == kb_id, KbDocument.status == "ready"
                 )
             )
-            file_total = file_total_result.scalar() or 0
-
-            file_ready_result = await db.execute(
-                select(func.count())
-                .select_from(KbDocument)
-                .where(
+        ) or 0
+        # KbDocument statuses: pending, processing, ready, error
+        file_processing = (
+            await db.scalar(
+                select(func.count(KbDocument.id)).where(
                     KbDocument.kb_id == kb_id,
-                    KbDocument.tenant_id == tenant_id,
-                    KbDocument.status == "ready",
-                )
-            )
-            file_ready = file_ready_result.scalar() or 0
-
-            # KbDocument statuses: pending, processing, ready, error
-            # processing includes pending + processing; error documents are not ready
-            file_processing_result = await db.execute(
-                select(func.count())
-                .select_from(KbDocument)
-                .where(
-                    KbDocument.kb_id == kb_id,
-                    KbDocument.tenant_id == tenant_id,
                     KbDocument.status.in_(["pending", "processing"]),
                 )
             )
-            file_processing = file_processing_result.scalar() or 0
-
-            file_size_result = await db.execute(
+        ) or 0
+        file_size_bytes = (
+            await db.scalar(
                 select(func.sum(KbDocument.file_size)).where(
-                    KbDocument.kb_id == kb_id,
-                    KbDocument.tenant_id == tenant_id,
+                    KbDocument.kb_id == kb_id
                 )
             )
-            file_size_bytes = file_size_result.scalar() or 0
-            file_size_kb = round(file_size_bytes / 1024, 2)
-        else:
-            # KB exists but has no tenant_id - return zero stats safely
-            file_total = 0
-            file_ready = 0
-            file_processing = 0
-            file_size_kb = 0.0
+        ) or 0
+        file_size_kb = round(file_size_bytes / 1024, 2)
     else:
         # No KB bound, all file stats are zero
         file_total = 0
@@ -3074,7 +2684,8 @@ async def create_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
+    agent = await require_agent_admin(db, agent_id, current_user)
+    require_bound_kb(agent)
 
     # Track newly created URL IDs for background fetch
     new_url_ids = []
@@ -3108,15 +2719,6 @@ async def create_urls(
     auto_fetch_queued = False
 
     if new_url_ids:
-        # Ensure agent has KB bound (required for indexing)
-        agent = await db.get(Agent, agent_id)
-        if agent and not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=db)
-            await kb_svc.get_or_create_agent_kb(agent_id, session=db)
-            await db.refresh(agent)
-
         # Attempt to acquire task lock for auto-fetch
         from services.task_lock import TaskType
 
@@ -3171,104 +2773,87 @@ async def clear_all_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Clear all URLs and their associated KB data for an agent.
+    """Clear this agent's URLs and the KB data derived from them.
 
-    This deletes:
-    - All URLSource records
-    - All KbDocuments created from URLs (filename starts with 'url_')
-    - All KbChunks for those documents
-    - All Qdrant vectors for those documents
-    - All stored files for those documents
+    Only documents this agent ingested are removed (`source_agent_id == agent_id`).
+    Legacy rows with no provenance (NULL) are left alone so a shared KB never loses
+    another agent's content.
     """
     await require_agent_admin(db, agent_id, current_user)
 
-    from sqlalchemy import func, select
-    from models import KbDocument, KbChunk
     from services.qdrant_service import QdrantKbService
-    from services.kb_document_processor import UPLOAD_ROOT
-    import os
-    import shutil
 
-    # Get agent's KB
-    agent = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent_obj = agent.scalar_one_or_none()
+    agent_obj = (
+        await db.execute(select(Agent).where(Agent.id == agent_id))
+    ).scalar_one_or_none()
     kb_id = agent_obj.kb_id if agent_obj else None
 
-    # Count URLs to be deleted
-    count_query = (
-        select(func.count())
-        .select_from(URLSource)
-        .where(URLSource.agent_id == agent_id)
-    )
-    result = await db.execute(count_query)
-    deleted_url_count = result.scalar() or 0
+    deleted_url_count = (
+        await db.scalar(
+            select(func.count(URLSource.id)).where(URLSource.agent_id == agent_id)
+        )
+    ) or 0
 
-    # Find all KbDocuments created from URLs (filename starts with 'url_')
     deleted_doc_count = 0
     deleted_chunk_count = 0
     deleted_qdrant_count = 0
     deleted_files_count = 0
 
     if kb_id:
-        # Get URL-generated documents
-        doc_query = select(KbDocument).where(
-            KbDocument.kb_id == kb_id,
-            KbDocument.filename.like('url_%')
+        url_docs = list(
+            (
+                await db.execute(
+                    select(KbDocument).where(
+                        KbDocument.kb_id == kb_id,
+                        KbDocument.filename.like("url\\_%", escape="\\"),
+                        KbDocument.source_agent_id == agent_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
         )
-        docs_result = await db.execute(doc_query)
-        url_docs = list(docs_result.scalars().all())
 
         if url_docs:
-            # Get tenant_id for Qdrant deletion
-            kb_query = select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
-            kb_result = await db.execute(kb_query)
-            kb = kb_result.scalar_one_or_none()
-            tenant_id = kb.tenant_id if kb else None
-
-            # Delete from Qdrant
             qdrant = QdrantKbService()
             for doc in url_docs:
                 try:
                     await qdrant.delete_points_by_doc_id(kb_id, str(doc.id))
                     deleted_qdrant_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to delete Qdrant points for doc {doc.id}: {e}")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to delete Qdrant points for doc %s: %s", doc.id, exc
+                    )
 
-            # Delete KbChunks
-            for doc in url_docs:
-                chunk_delete = delete(KbChunk).where(
-                    KbChunk.doc_id == doc.id,
-                    KbChunk.tenant_id == tenant_id
-                )
-                chunk_result = await db.execute(chunk_delete)
-                deleted_chunk_count += chunk_result.rowcount or 0
+            doc_ids = [doc.id for doc in url_docs]
+            chunk_result = await db.execute(
+                delete(KbChunk).where(KbChunk.doc_id.in_(doc_ids))
+            )
+            deleted_chunk_count = chunk_result.rowcount or 0
 
-            # Delete stored files
             for doc in url_docs:
-                storage_path = getattr(doc, 'storage_path', None)
+                storage_path = getattr(doc, "storage_path", None)
                 if storage_path and os.path.exists(storage_path):
                     try:
-                        # Delete the entire doc directory
                         doc_dir = os.path.dirname(storage_path)
-                        if os.path.exists(doc_dir):
+                        if doc_dir and os.path.exists(doc_dir):
                             shutil.rmtree(doc_dir)
                             deleted_files_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to delete file for doc {doc.id}: {e}")
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to delete file for doc %s: %s", doc.id, exc
+                        )
 
-            # Delete KbDocuments
-            doc_ids = [doc.id for doc in url_docs]
-            doc_delete = delete(KbDocument).where(KbDocument.id.in_(doc_ids))
-            await db.execute(doc_delete)
+            await db.execute(delete(KbDocument).where(KbDocument.id.in_(doc_ids)))
             deleted_doc_count = len(url_docs)
 
-    # Delete all URLs for this agent
     await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
     await db.commit()
 
     return {
         "success": True,
-        "message": "All URLs and associated KB data cleared successfully",
+        "message": "All URLs and their knowledge base data cleared successfully",
+        "deleted_count": deleted_doc_count,
         "deleted_url_count": deleted_url_count,
         "deleted_doc_count": deleted_doc_count,
         "deleted_chunk_count": deleted_chunk_count,
@@ -3276,21 +2861,21 @@ async def clear_all_urls(
         "deleted_files_count": deleted_files_count,
     }
 
-
 @router.get("/files:list", response_model=FileListResponse)
 async def list_files(
     agent_id: str,
     http_request: Request,
     skip: int = 0,
     limit: int = 100,
+    source: Literal["all", "own"] = "all",
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """List uploaded files for an agent (excludes URL-generated files).
 
-    Only returns KbDocuments that were manually uploaded by users.
-    URL-generated documents (filename starting with 'url_') are excluded
-    and should be viewed via the URL management interface.
+    `source="own"` narrows the list to documents this agent uploaded. Legacy rows
+    with no provenance (NULL `source_agent_id`) stay visible to everyone because a
+    shared KB may hold pre-binding content.
     """
     agent = await require_agent_admin(db, agent_id, current_user)
 
@@ -3298,13 +2883,22 @@ async def list_files(
     if not agent.kb_id:
         return {"files": [], "total": 0, "quota": {"used": 0, "max": 500}}
 
+    filters = [
+        KbDocument.kb_id == agent.kb_id,
+        ~KbDocument.filename.like("url\\_%", escape="\\"),  # exclude URL docs
+    ]
+    if source == "own":
+        filters.append(
+            or_(
+                KbDocument.source_agent_id == agent_id,
+                KbDocument.source_agent_id.is_(None),
+            )
+        )
+
     # Query KbDocuments from agent's KB, excluding URL-generated files
     stmt = (
         select(KbDocument)
-        .where(
-            KbDocument.kb_id == agent.kb_id,
-            ~KbDocument.filename.like('url_%')  # Exclude URL-generated files
-        )
+        .where(*filters)
         .order_by(KbDocument.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -3312,15 +2906,9 @@ async def list_files(
     result = await db.execute(stmt)
     docs = result.scalars().all()
 
-    # Count only uploaded files (excluding URL-generated)
     total = (
-        await db.execute(
-            select(func.count(KbDocument.id)).where(
-                KbDocument.kb_id == agent.kb_id,
-                ~KbDocument.filename.like('url_%')
-            )
-        )
-    ).scalar() or 0
+        await db.scalar(select(func.count(KbDocument.id)).where(*filters))
+    ) or 0
 
     quota = {"used": total, "max": 500}
 
@@ -3368,14 +2956,15 @@ async def upload_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload files to agent's knowledge base (tenant KB document pipeline).
+    """Upload files to the agent's bound knowledge base.
 
     - Validates file limits (max 5 files, 20MB each)
-    - Creates/binds tenant KB if needed
-    - Stores file bytes and creates KbDocument records
+    - 409 when the agent has no KB bound (binding is an explicit super_admin action)
+    - Stores file bytes and creates KbDocument records tagged with `source_agent_id`
     - Triggers background processing (parse→chunk→embed→Qdrant)
     """
     agent = await require_agent_admin(db, agent_id, current_user)
+    kb_id = require_bound_kb(agent)
 
     # Enforce max files limit
     if len(files) > MAX_FILES_PER_UPLOAD:
@@ -3384,25 +2973,15 @@ async def upload_files(
             detail=f"Max {MAX_FILES_PER_UPLOAD} files per upload",
         )
 
-    # Ensure agent has KB bound (creates if needed)
-    if not agent.kb_id:
-        kb_svc = KbService(session=db)
-        tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session=db)
-        agent.kb_id = kb.id
-        await db.commit()
-
-    # Get tenant_id from agent's KB
-    kb_result = await db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
-    )
-    kb = kb_result.scalar_one_or_none()
+    kb = (
+        await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+    ).scalar_one_or_none()
     if not kb:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Agent KB not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Knowledge base not found",
         )
-    tenant_id = kb.tenant_id
-    kb_id = kb.id
+    workspace_id = int(kb.workspace_id)
 
     # Initialize processor
     from services.kb_document_processor import KbDocumentProcessor
@@ -3439,9 +3018,14 @@ async def upload_files(
                 failed += 1
                 continue
 
-            # Create KbDocument record
+            # Create KbDocument record tagged with its provenance
             doc = await processor.create_document_record(
-                tenant_id, kb_id, filename, len(content), db
+                workspace_id,
+                kb_id,
+                filename,
+                len(content),
+                source_agent_id=agent_id,
+                db=db,
             )
 
             # Save file to disk
@@ -3451,9 +3035,7 @@ async def upload_files(
 
             # Trigger background processing
             doc_id = str(getattr(doc, "id", ""))
-            background_tasks.add_task(
-                processor.process_document, doc_id, tenant_id, kb_id
-            )
+            background_tasks.add_task(processor.process_document, doc_id, kb_id)
 
             # Create FileItem for response (mapping from KbDocument)
             file_item = FileItem(
@@ -3489,26 +3071,27 @@ async def delete_file(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a file (KbDocument) from agent's KB."""
+    """Delete a file (KbDocument) from the agent's KB."""
     agent = await require_agent_admin(db, agent_id, current_user)
 
     if not agent.kb_id:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Use KbDocumentProcessor for full delete (Qdrant + DB + file)
     from services.kb_document_processor import KbDocumentProcessor
 
     processor = KbDocumentProcessor()
 
-    # Get tenant_id from KB
-    kb_result = await db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
-    )
-    kb = kb_result.scalar_one_or_none()
-    if not kb:
-        raise HTTPException(status_code=404, detail="KB not found")
+    doc = (
+        await db.execute(
+            select(KbDocument).where(
+                KbDocument.id == file_id, KbDocument.kb_id == agent.kb_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="File not found")
 
-    await processor.delete_document(kb.tenant_id, agent.kb_id, file_id, db)
+    await processor.delete_document(agent.kb_id, file_id, db)
     return {"success": True}
 
 
@@ -3528,33 +3111,23 @@ async def clear_all_files(
             "deleted_count": 0,
         }
 
-    # Get all KbDocuments for this KB
     from services.kb_document_processor import KbDocumentProcessor
 
     processor = KbDocumentProcessor()
 
-    # Get tenant_id from KB
-    kb_result = await db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
-    )
-    kb = kb_result.scalar_one_or_none()
-    if not kb:
-        return {
-            "success": True,
-            "message": "All files cleared successfully",
-            "deleted_count": 0,
-        }
-
-    # Get all document IDs
+    # Only uploaded documents (URL-derived rows are handled by urls:clear_all)
     result = await db.execute(
-        select(KbDocument.id).where(KbDocument.kb_id == agent.kb_id)
+        select(KbDocument.id).where(
+            KbDocument.kb_id == agent.kb_id,
+            ~KbDocument.filename.like("url\\_%", escape="\\"),
+        )
     )
     doc_ids = [row[0] for row in result.all()]
 
     # Delete each document using processor (clears Qdrant + DB + files)
     for doc_id in doc_ids:
         try:
-            await processor.delete_document(kb.tenant_id, agent.kb_id, doc_id, db)
+            await processor.delete_document(agent.kb_id, doc_id, db)
         except Exception as e:
             logger.warning(f"Failed to delete document {doc_id}: {e}")
 
@@ -3582,12 +3155,7 @@ async def refetch_urls(
     - force: 是否强制重抓（忽略内容哈希去重）
     """
     agent = await require_agent_admin(db, agent_id, current_user)
-
-    # Ensure agent has KB bound
-    if not agent.kb_id:
-        kb_svc = KbService(session=db)
-        await kb_svc.get_or_create_agent_kb(agent_id, session=db)
-        await db.refresh(agent)
+    require_bound_kb(agent)
 
     # Acquire task lock
     from services.task_lock import TaskType
@@ -3681,12 +3249,7 @@ async def crawl_site(
     import asyncio
 
     agent = await require_agent_admin(db, agent_id, current_user)
-
-    # Ensure agent has KB bound
-    if not agent.kb_id:
-        kb_svc = KbService(session=db)
-        await kb_svc.get_or_create_agent_kb(agent_id, session=db)
-        await db.refresh(agent)
+    require_bound_kb(agent)
 
     # Acquire task lock
     from services.task_lock import TaskType
@@ -3770,12 +3333,7 @@ async def rebuild_index(
     - force: 是否强制重建（删除现有索引重新处理）
     """
     agent = await require_agent_admin(db, agent_id, current_user)
-
-    # Ensure agent has KB bound
-    if not agent.kb_id:
-        kb_svc = KbService(session=db)
-        await kb_svc.get_or_create_agent_kb(agent_id, session=db)
-        await db.refresh(agent)
+    require_bound_kb(agent)
 
     # Acquire task lock
     from services.task_lock import TaskType
@@ -3869,31 +3427,21 @@ async def get_index_info(
         or 0
     )
 
-    # Check if agent has KB and count ready files
+    # Check if agent has KB and count ready files (scoped by kb_id only)
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one()
     index_exists = agent.kb_id is not None
 
-    # Count ready KbDocuments with tenant-scoped filtering
     files_indexed = 0
     if agent.kb_id:
-        # Get tenant_id from KnowledgeBase for tenant-scoped query
-        kb_result = await db.execute(
-            select(KnowledgeBase.tenant_id).where(KnowledgeBase.id == agent.kb_id)
-        )
-        kb_tenant_id = kb_result.scalar_one_or_none()
-
-        if kb_tenant_id:
-            files_indexed = (
-                await db.scalar(
-                    select(func.count(KbDocument.id)).where(
-                        KbDocument.kb_id == agent.kb_id,
-                        KbDocument.tenant_id == kb_tenant_id,
-                        KbDocument.status == "ready",
-                    )
+        files_indexed = (
+            await db.scalar(
+                select(func.count(KbDocument.id)).where(
+                    KbDocument.kb_id == agent.kb_id,
+                    KbDocument.status == "ready",
                 )
-                or 0
             )
+        ) or 0
 
     return IndexInfoResponse(
         agent_id=agent_id,

@@ -36,6 +36,9 @@ vi.mock("../../src/views/FileUploadManagement", () => ({
 vi.mock("../../src/views/KnowledgeBaseSetup", () => ({
 	default: () => <div>view:KnowledgeBaseSetup</div>,
 }));
+vi.mock("../../src/views/KnowledgeBases", () => ({
+	default: () => <div>view:KnowledgeBases</div>,
+}));
 vi.mock("../../src/views/Playground", () => ({
 	default: () => <div>view:Playground</div>,
 }));
@@ -82,7 +85,7 @@ function currentPath(): string {
 	return screen.getByTestId("location").textContent ?? "";
 }
 
-// --- Real routes: exactly the 17 rendering entries of the route table --------
+// --- Real routes: exactly the 18 rendering entries of the route table --------
 
 const routes: Array<[path: string, view: string]> = [
 	["/login", "view:Login"],
@@ -94,6 +97,7 @@ const routes: Array<[path: string, view: string]> = [
 	["/agents/some-id/dashboard", "view:Dashboard"],
 	["/agents/some-id/files", "view:FileUploadManagement"],
 	["/agents/some-id/knowledge", "view:KnowledgeBaseSetup"],
+	["/knowledge-bases", "view:KnowledgeBases"],
 	["/agents/some-id/playground", "view:Playground"],
 	["/agents/some-id/sessions", "view:Sessions"],
 	["/agents/some-id/settings/agent", "view:AgentSettings"],
@@ -115,7 +119,7 @@ describe("route table", () => {
 
 	const redirects: Array<[from: string, to: string, view: string]> = [
 		["/sessions", "/", "view:AgentPanel"],
-		["/knowledge", "/", "view:AgentPanel"],
+		["/knowledge", "/knowledge-bases", "view:KnowledgeBases"],
 		["/playground", "/", "view:AgentPanel"],
 		["/urls", "/", "view:AgentPanel"],
 		["/users", "/", "view:AgentPanel"],

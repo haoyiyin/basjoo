@@ -8,7 +8,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
 from models import URLSource, normalize_url, Agent
 from api.v1.schemas import URLCreateRequest, URLItem, URLListResponse
-from database import AsyncSessionLocal
+import database
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ async def process_url_refetch(
             logger.info(f"[URL Refetch] Job {job_id} cancelled before starting")
             return
 
-        async with AsyncSessionLocal() as session:
+        async with database.AsyncSessionLocal() as session:
             # Get agent and KB
             result = await session.execute(select(Agent).where(Agent.id == agent_id))
             agent = result.scalar_one_or_none()
@@ -138,21 +138,19 @@ async def process_url_refetch(
                 return
 
             kb_id = agent.kb_id
-            tenant_id = None
 
-            # Get tenant from KB
+            # The KB owns the embedding config and the workspace scope.
             from models import KnowledgeBase
 
             kb_result = await session.execute(
                 select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
             )
             kb = kb_result.scalar_one_or_none()
-            if kb:
-                tenant_id = kb.tenant_id
-
-            if not tenant_id:
-                logger.error(f"[URL Refetch] Could not determine tenant for KB {kb_id}")
+            if not kb:
+                logger.error(f"[URL Refetch] KB {kb_id} not found for agent {agent_id}")
                 return
+
+            workspace_id = int(kb.workspace_id)
 
             # Build query for URLs to process
             query = select(URLSource).where(
@@ -243,10 +241,11 @@ async def process_url_refetch(
                     # Index to KB: Create a virtual document for the URL content
                     # This uses the existing document processing pipeline
                     doc = await processor.create_document_record(
-                        tenant_id=tenant_id,
-                        kb_id=kb_id,
+                        workspace_id,
+                        kb_id,
                         filename=f"url_{url_id}.txt",
                         file_size=len(page_result.content or ""),
+                        source_agent_id=agent_id,
                         db=session,
                     )
                     # Store content as a file for processing
@@ -266,7 +265,7 @@ async def process_url_refetch(
                     await session.commit()
 
                     # Process the document (chunk, embed, upsert to Qdrant)
-                    await processor.process_document(str(doc.id), tenant_id, kb_id)
+                    await processor.process_document(str(doc.id), kb_id)
 
                     # Critical: Commit/expire session to see changes from process_document's
                     # separate session. Without this, the re-query below returns stale data
@@ -279,7 +278,7 @@ async def process_url_refetch(
 
                     doc_result = await session.execute(
                         select(KbDocument).where(
-                            KbDocument.id == doc.id, KbDocument.tenant_id == tenant_id
+                            KbDocument.id == doc.id, KbDocument.kb_id == kb_id
                         )
                     )
                     updated_doc = doc_result.scalar_one_or_none()
@@ -388,7 +387,7 @@ async def process_site_crawl(
         safe, reason = validate_url_safe(start_url)
         if not safe:
             logger.error(f"[Site Crawl] Unsafe start URL: {start_url} - {reason}")
-            async with AsyncSessionLocal() as session:
+            async with database.AsyncSessionLocal() as session:
                 await _store_crawl_error(
                     session, agent_id, start_url,
                     f"URL safety check failed: {reason}",
@@ -432,7 +431,7 @@ async def process_site_crawl(
         valid_pages = deduped_pages
 
         # Create URLSource records for discovered pages
-        async with AsyncSessionLocal() as session:
+        async with database.AsyncSessionLocal() as session:
             created_count = 0
             for page in valid_pages:
                 # Check cancellation during URL record creation
@@ -508,7 +507,7 @@ async def process_site_crawl(
     except Exception as e:
         logger.exception(f"[Site Crawl] Job {job_id} failed: {e}")
         try:
-            async with AsyncSessionLocal() as session:
+            async with database.AsyncSessionLocal() as session:
                 await _store_crawl_error(
                     session, agent_id, start_url,
                     f"Site crawl failed: {str(e)[:500]}",
@@ -533,12 +532,12 @@ async def process_index_rebuild(
         job_id: Task ID for tracking
     """
     from services.task_lock import TaskType, task_lock
-    from services.qdrant_service import QdrantKbService
+    from services.qdrant_service import QdrantKbService, get_embedding_dimension
 
     logger.info(f"[Index Rebuild] Starting job {job_id} for agent {agent_id}")
 
     try:
-        async with AsyncSessionLocal() as session:
+        async with database.AsyncSessionLocal() as session:
             # Get agent and KB
             result = await session.execute(select(Agent).where(Agent.id == agent_id))
             agent = result.scalar_one_or_none()
@@ -547,15 +546,27 @@ async def process_index_rebuild(
                 return
 
             kb_id = agent.kb_id
+            from models import KnowledgeBase
 
             # If force=True, clear existing Qdrant data
             if force:
                 logger.info(f"[Index Rebuild] Clearing existing index for KB {kb_id}")
+                kb_row = (
+                    await session.execute(
+                        select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+                    )
+                ).scalar_one_or_none()
+                dimension = (
+                    int(kb_row.embedding_dimension)
+                    if kb_row is not None
+                    and getattr(kb_row, "embedding_dimension", None)
+                    else get_embedding_dimension(
+                        str(getattr(kb_row, "embedding_model", "") or "")
+                    )
+                )
                 qdrant = QdrantKbService()
                 await qdrant.delete_collection(kb_id)
-                await qdrant.ensure_collection(
-                    kb_id, agent.embedding_model or "BAAI/bge-m3"
-                )
+                await qdrant.ensure_collection(kb_id, dimension)
 
                 # Reset is_indexed flag for all URLs
                 result = await session.execute(
@@ -594,7 +605,7 @@ async def repair_url_indexed_status(agent_id: str) -> dict:
     """
     from models import KbDocument
 
-    async with AsyncSessionLocal() as session:
+    async with database.AsyncSessionLocal() as session:
         # Get all URLs for this agent with status="success" but is_indexed=False
         stmt = select(URLSource).where(
             URLSource.agent_id == agent_id,

@@ -1,6 +1,9 @@
 """Tests for index:info endpoint - includes files_indexed count.
 
 RED: Tests expect files_indexed field but current implementation only returns urls_indexed.
+
+Since the KB-decoupling change a KB is scoped by `workspace_id` and `tenant_id` is
+legacy and unused, so nothing here creates a Tenant row.
 """
 
 import pytest
@@ -8,8 +11,8 @@ import pytest_asyncio
 from sqlalchemy import select
 
 import database
-from models import Agent, KnowledgeBase, KbDocument, Tenant, Workspace, WorkspaceQuota
-
+from models import Agent, KbDocument, Workspace, WorkspaceQuota
+from tests.conftest import make_test_kb
 
 @pytest_asyncio.fixture(loop_scope="function")
 async def agent_with_ready_files(setup_test_db):
@@ -25,46 +28,40 @@ async def agent_with_ready_files(setup_test_db):
             session.add(workspace)
             await session.flush()
             session.add(WorkspaceQuota(workspace_id=workspace.id))
+            await session.commit()
+        workspace_id = workspace.id
 
-        # Create tenant
-        tenant = Tenant(name="Test Tenant", slug="test-tenant")
-        session.add(tenant)
-        await session.flush()
-
+    async with database.AsyncSessionLocal() as session:
         # Create agent
         agent = Agent(
-            workspace_id=workspace.id,
+            workspace_id=workspace_id,
             name="Test Agent with Files",
             description="Agent with ready files",
             model="deepseek-v4-flash",
             api_base="https://api.deepseek.com/v1",
             provider_type="deepseek",
-            jina_api_key="test_jina_key",
         )
         session.add(agent)
-        await session.flush()
+        await session.commit()
+        agent_id = agent.id
 
-        # Create knowledge base
-        kb = KnowledgeBase(
-            tenant_id=tenant.id,
-            name=f"KB for {agent.id}",
-            embedding_model="BAAI/bge-m3",
-            qdrant_collection=f"kb_{agent.id}",
-            chunk_size=512,
-            chunk_overlap=64,
-        )
+    # Build the KB row through the shared fixture helper: it carries the
+    # workspace scope and an encrypted key without a Qdrant round trip.
+    kb = make_test_kb(workspace_id, f"KB for {agent_id}")
+
+    async with database.AsyncSessionLocal() as session:
         session.add(kb)
         await session.flush()
+        kb_id = kb.id
 
         # Bind KB to agent
-        agent.kb_id = kb.id
-        agent.kb_setup_completed = True
+        agent = await session.get(Agent, agent_id)
+        agent.kb_id = kb_id
         await session.commit()
 
         # Create ready files
         doc1 = KbDocument(
-            kb_id=kb.id,
-            tenant_id=tenant.id,
+            kb_id=kb_id,
             filename="ready_file_1.pdf",
             file_type="pdf",
             status="ready",
@@ -72,8 +69,7 @@ async def agent_with_ready_files(setup_test_db):
             chunk_count=10,
         )
         doc2 = KbDocument(
-            kb_id=kb.id,
-            tenant_id=tenant.id,
+            kb_id=kb_id,
             filename="ready_file_2.txt",
             file_type="txt",
             status="ready",
@@ -81,8 +77,7 @@ async def agent_with_ready_files(setup_test_db):
             chunk_count=5,
         )
         doc3 = KbDocument(
-            kb_id=kb.id,
-            tenant_id=tenant.id,
+            kb_id=kb_id,
             filename="processing_file.docx",
             file_type="docx",
             status="processing",
@@ -93,13 +88,12 @@ async def agent_with_ready_files(setup_test_db):
         session.add_all([doc1, doc2, doc3])
         await session.commit()
 
-        yield {
-            "agent_id": agent.id,
-            "kb_id": kb.id,
-            "tenant_id": tenant.id,
-            "ready_count": 2,
-        }
-
+    yield {
+        "agent_id": agent_id,
+        "kb_id": kb_id,
+        "workspace_id": workspace_id,
+        "ready_count": 2,
+    }
 
 @pytest.mark.asyncio
 async def test_index_info_includes_files_indexed(client, agent_with_ready_files):
@@ -132,7 +126,6 @@ async def test_index_info_includes_files_indexed(client, agent_with_ready_files)
     assert data["agent_id"] == agent_id
     assert data["index_exists"] is True
 
-
 @pytest.mark.asyncio
 async def test_index_info_no_kb_returns_zero_files(client, default_agent_id):
     """Test that index:info returns files_indexed=0 when agent has no KB."""
@@ -152,41 +145,33 @@ async def test_index_info_no_kb_returns_zero_files(client, default_agent_id):
         f"Expected files_indexed=0 when no KB, got {data['files_indexed']}"
     )
 
-
 @pytest.mark.asyncio
-async def test_index_info_filters_by_tenant_id(client, agent_with_ready_files):
-    """Test that index:info only counts KbDocuments with matching tenant_id.
+async def test_index_info_counts_every_document_of_the_kb(
+    client, agent_with_ready_files
+):
+    """files_indexed is scoped by kb_id alone — the KB is the only boundary.
 
-    This test creates a "corrupt" document with the same kb_id but a different
-    tenant_id to verify that tenant filtering is enforced in the files_indexed count.
+    Replaces `test_index_info_filters_by_tenant_id`, which inserted a document
+    with the same `kb_id` but a foreign `tenant_id` and asserted it was NOT
+    counted. `Tenant` has left the KB request path, so there is no second axis to
+    filter on: a document attached to the KB is a document of the KB.
     """
-    import database
-    from models import Tenant, KbDocument
-
     agent_id = agent_with_ready_files["agent_id"]
     kb_id = agent_with_ready_files["kb_id"]
-    original_tenant_id = agent_with_ready_files["tenant_id"]
 
-    # Create a different tenant and cross-tenant document
     async with database.AsyncSessionLocal() as session:
-        other_tenant = Tenant(name="Other Tenant Index", slug="other-tenant-index")
-        session.add(other_tenant)
-        await session.flush()
-
-        # Create a "cross-tenant" ready document that should NOT be counted
-        cross_tenant_doc = KbDocument(
-            kb_id=kb_id,  # Same KB
-            tenant_id=other_tenant.id,  # Different tenant
-            filename="cross_tenant_ready.pdf",
-            file_type="pdf",
-            status="ready",  # Ready status would be counted if no tenant filter
-            file_size=99999,
-            chunk_count=1,
+        session.add(
+            KbDocument(
+                kb_id=kb_id,
+                filename="attached_ready.pdf",
+                file_type="pdf",
+                status="ready",
+                file_size=99999,
+                chunk_count=1,
+            )
         )
-        session.add(cross_tenant_doc)
         await session.commit()
 
-    # Get index info
     response = await client.get(f"/api/v1/index:info?agent_id={agent_id}")
 
     assert response.status_code == 200, (
@@ -195,13 +180,11 @@ async def test_index_info_filters_by_tenant_id(client, agent_with_ready_files):
 
     data = response.json()
 
-    # Should still show 2 ready files (original test data), NOT 3
-    # If tenant filtering is missing, the cross-tenant doc would be counted
-    assert data["files_indexed"] == 2, (
-        f"Expected files_indexed=2 (tenant-scoped), got {data['files_indexed']}. "
-        f"Cross-tenant ready document with kb_id={kb_id} but different tenant_id was incorrectly counted."
+    # 2 seeded ready docs + 1 added here; the processing doc still does not count.
+    assert data["files_indexed"] == 3, (
+        f"Expected files_indexed=3 (kb_id-scoped), got {data['files_indexed']}. "
+        f"Every document attached to kb_id={kb_id} must be counted."
     )
-
 
 @pytest.mark.asyncio
 async def test_index_info_requires_auth(public_client, agent_with_ready_files):

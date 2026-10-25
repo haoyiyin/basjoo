@@ -2,7 +2,7 @@
 
 These tests verify that:
 1. Chat endpoint includes KB context when agent has indexed content
-2. Tenant mismatches return no KB context
+2. Retrieval needs no tenant at all: the KB's id is the only scope
 3. The retrieved context is actually used in the system message
 4. Ready KB document content with a unique phrase is passed into chat KB context
 5. Failed ingestion is distinguishable from chat defects
@@ -11,7 +11,11 @@ These tests verify that:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import database
+from core.encryption import encrypt_api_key
+from models import Agent, Workspace, WorkspaceQuota
 from services.kb_retrieval_service import KbRetrievalService
+from services.kb_service import KbService
 
 
 @pytest.mark.asyncio
@@ -233,38 +237,122 @@ async def test_chat_kb_retrieval_without_kb_id_returns_no_context():
                     assert "No relevant information" in system_content or "no relevant information" in system_content.lower()
 
 
-@pytest.mark.asyncio
-async def test_kb_retrieval_service_tenant_mismatch_returns_empty():
-    """KbRetrievalService returns empty when tenant doesn't match KB owner."""
-    service = KbRetrievalService()
+DIMENSION = 4
 
-    # This is already tested in test_kb_retrieval.py, but verify at chat layer
-    # by mocking the service behavior
-    with patch("services.kb_retrieval_service.AsyncSessionLocal") as mock_session_cls:
-        mock_session = AsyncMock()
-        mock_result = MagicMock()
+class RecordingParser:
+    def __init__(self):
+        self.calls: list[dict] = []
 
-        mock_agent = MagicMock()
-        mock_agent.id = "agent_123"
-        mock_agent.kb_id = "kb_123"
-
-        mock_kb = MagicMock()
-        mock_kb.id = "kb_123"
-        mock_kb.tenant_id = "tenant_a"  # Different from request
-
-        mock_result.first.return_value = (mock_agent, mock_kb)
-        mock_session.execute.return_value = mock_result
-        mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        results = await service.retrieve(
-            tenant_id="tenant_b",  # Wrong tenant
-            agent_id="agent_123",
-            query="test",
-            top_k=5,
+    async def embed_texts(self, texts, model, base_url, api_key=None):
+        self.calls.append(
+            {"texts": list(texts), "model": model, "base_url": base_url, "api_key": api_key}
         )
+        return [[0.1] * DIMENSION for _ in texts]
 
-        assert results == []
+class RecordingQdrant:
+    """Records every ``search_kb`` call so the scope can be asserted exactly."""
+
+    def __init__(self, hits=None):
+        self.calls: list[dict] = []
+        self.hits = hits if hits is not None else []
+
+    async def search_kb(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return list(self.hits)
+
+async def _workspace(email: str) -> int:
+    async with database.AsyncSessionLocal() as session:
+        workspace = Workspace(name=f"WS {email}", owner_email=email)
+        session.add(workspace)
+        await session.flush()
+        session.add(WorkspaceQuota(workspace_id=workspace.id))
+        await session.commit()
+        return workspace.id
+
+async def _kb(workspace_id: int, name: str) -> str:
+    kb = await KbService().create_knowledge_base(
+        workspace_id,
+        name,
+        embedding_provider="jina",
+        embedding_model="jina-embeddings-v3",
+        embedding_base_url="https://api.jina.ai/v1",
+        embedding_api_key=encrypt_api_key("chat-kb-key"),
+        embedding_dimension=DIMENSION,
+    )
+    return kb.id
+
+async def _agent(workspace_id: int, name: str, kb_id: str | None = None) -> str:
+    async with database.AsyncSessionLocal() as session:
+        agent = Agent(
+            workspace_id=workspace_id,
+            name=name,
+            model="deepseek-v4-flash",
+            api_base="https://api.deepseek.com/v1",
+            provider_type="deepseek",
+            kb_id=kb_id,
+        )
+        session.add(agent)
+        await session.commit()
+        return agent.id
+
+@pytest.mark.asyncio
+async def test_chat_kb_retrieval_needs_no_tenant(setup_test_db):
+    """Retrieval is scoped by kb_id only — no tenant anywhere on the call path.
+
+    Replaces the deleted tenant-mismatch test: `Tenant` has left the KB request
+    path entirely, so a KB is retrievable with no tenant identity at all and the
+    only scope handed to the vector store is the KB's own id.
+    """
+    workspace_id = await _workspace("chat-no-tenant@example.com")
+    kb_id = await _kb(workspace_id, "Chat KB")
+    agent_id = await _agent(workspace_id, "Chat Agent", kb_id=kb_id)
+
+    parser = RecordingParser()
+    qdrant = RecordingQdrant(
+        [
+            {
+                "score": 0.9,
+                "payload": {
+                    "text": "chunk from the KB",
+                    "doc_id": "doc-1",
+                    "chunk_index": 0,
+                    "filename": "notes.txt",
+                },
+            }
+        ]
+    )
+    service = KbRetrievalService()
+    service.parser = parser
+    service.qdrant = qdrant
+
+    results = await service.retrieve(agent_id=agent_id, query="hello", top_k=5)
+
+    assert [r["text"] for r in results] == ["chunk from the KB"]
+    assert len(qdrant.calls) == 1
+    assert qdrant.calls[0].keys() == {"kb_id", "query_vector", "top_k"}
+    assert qdrant.calls[0]["kb_id"] == kb_id
+    assert "tenant_id" not in qdrant.calls[0]
+    # The query was embedded with the KB's own config, not a tenant's.
+    assert parser.calls[0]["model"] == "jina-embeddings-v3"
+    assert parser.calls[0]["api_key"] == "chat-kb-key"
+
+@pytest.mark.asyncio
+async def test_chat_kb_retrieval_unbound_agent_skips_qdrant(setup_test_db):
+    """An agent whose kb_id is NULL returns [] and never touches Qdrant."""
+    workspace_id = await _workspace("chat-unbound@example.com")
+    agent_id = await _agent(workspace_id, "Unbound Chat Agent", kb_id=None)
+
+    parser = RecordingParser()
+    qdrant = RecordingQdrant()
+    service = KbRetrievalService()
+    service.parser = parser
+    service.qdrant = qdrant
+
+    results = await service.retrieve(agent_id=agent_id, query="hello", top_k=5)
+
+    assert results == []
+    assert qdrant.calls == []
+    assert parser.calls == []
 
 
 @pytest.mark.asyncio

@@ -484,3 +484,379 @@ def test_migration_cleans_cross_workspace_agent_members():
         assert ("agt_1", 2) in member_pairs  # admin → agt_1
     finally:
         os.unlink(db_path)
+
+# ---- knowledge base decoupling (issue #12) ---------------------------------
+
+LEGACY_KB_DDL = """
+CREATE TABLE knowledge_bases (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    embedding_model TEXT NOT NULL DEFAULT 'BAAI/bge-m3',
+    embedding_base_url TEXT,
+    vector_backend TEXT NOT NULL DEFAULT 'qdrant',
+    qdrant_collection TEXT NOT NULL,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    chunk_size INTEGER NOT NULL DEFAULT 512,
+    chunk_overlap INTEGER NOT NULL DEFAULT 64,
+    status TEXT NOT NULL DEFAULT 'active',
+    error_message TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE kb_documents (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    kb_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    file_type TEXT,
+    file_size INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    chunk_count INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+LEGACY_AGENTS_WITH_KB_DDL = """
+CREATE TABLE workspaces (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_email TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE agents (
+    id TEXT PRIMARY KEY,
+    workspace_id INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT 'AI Agent',
+    model TEXT NOT NULL DEFAULT 'gpt-4o-mini',
+    api_base TEXT DEFAULT 'https://api.openai.com/v1',
+    kb_id TEXT,
+    embedding_provider TEXT,
+    embedding_api_base TEXT,
+    embedding_model TEXT,
+    embedding_batch_size INTEGER,
+    jina_api_key TEXT,
+    siliconflow_api_key TEXT,
+    kb_setup_completed INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+def _create_legacy_kb_db(db_path: str) -> str:
+    """Legacy install: KB owns nothing, the bound agent owns the embedding config."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(LEGACY_AGENTS_WITH_KB_DDL)
+    conn.executescript(LEGACY_KB_DDL)
+
+    conn.execute("INSERT INTO workspaces (id, name, owner_email) VALUES (7, 'WS7', 'ws7@test.com')")
+    conn.execute("INSERT INTO workspaces (id, name, owner_email) VALUES (9, 'WS9', 'ws9@test.com')")
+
+    # A jina-bound agent in workspace 7.
+    conn.execute(
+        "INSERT INTO agents (id, workspace_id, name, kb_id, embedding_provider, "
+        "embedding_api_base, embedding_model, embedding_batch_size, jina_api_key) "
+        "VALUES ('agt_jina', 7, 'Jina Agent', 'kb_jina', 'jina', "
+        "'https://api.jina.ai/v1', 'jina-embeddings-v3', 8, 'enc:jina-ciphertext')"
+    )
+    # A siliconflow-bound agent in workspace 9, different model/width.
+    conn.execute(
+        "INSERT INTO agents (id, workspace_id, name, kb_id, embedding_provider, "
+        "embedding_api_base, embedding_model, embedding_batch_size, siliconflow_api_key) "
+        "VALUES ('agt_sf', 9, 'Silicon Agent', 'kb_sf', 'siliconflow', "
+        "'https://api.siliconflow.cn/v1', 'text-embedding-3-small', 16, 'enc:sf-ciphertext')"
+    )
+    # A bound agent in workspace 7 whose embedding columns are all empty.
+    conn.execute(
+        "INSERT INTO agents (id, workspace_id, name, kb_id) "
+        "VALUES ('agt_bare', 7, 'Bare Agent', 'kb_bare')"
+    )
+    # An unbound agent: must not influence any KB workspace.
+    conn.execute(
+        "INSERT INTO agents (id, workspace_id, name) VALUES ('agt_unbound', 9, 'Unbound Agent')"
+    )
+
+    conn.execute(
+        "INSERT INTO knowledge_bases (id, tenant_id, name, qdrant_collection) "
+        "VALUES ('kb_jina', 'tenant-legacy', 'Jina KB', 'kb_jina_collection')"
+    )
+    conn.execute(
+        "INSERT INTO knowledge_bases (id, tenant_id, name, qdrant_collection) "
+        "VALUES ('kb_sf', 'tenant-legacy', 'Silicon KB', 'kb_sf_collection')"
+    )
+    conn.execute(
+        "INSERT INTO knowledge_bases (id, tenant_id, name, qdrant_collection) "
+        "VALUES ('kb_bare', 'tenant-legacy', 'Bare KB', 'kb_bare_collection')"
+    )
+    # Truly unbound KB: falls back to the canonical (MIN) workspace.
+    conn.execute(
+        "INSERT INTO knowledge_bases (id, tenant_id, name, qdrant_collection) "
+        "VALUES ('kb_orphan', 'tenant-legacy', 'Orphan KB', 'kb_orphan_collection')"
+    )
+
+    conn.execute(
+        "INSERT INTO kb_documents (id, tenant_id, kb_id, filename) "
+        "VALUES ('doc_url', 'tenant-legacy', 'kb_jina', 'url_https_example_com')"
+    )
+    conn.execute(
+        "INSERT INTO kb_documents (id, tenant_id, kb_id, filename) "
+        "VALUES ('doc_upload', 'tenant-legacy', 'kb_jina', 'manual-upload.txt')"
+    )
+
+    conn.commit()
+    conn.close()
+    return db_path
+
+def _kb_rows(db_path: str) -> dict[str, sqlite3.Row]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = {
+        row["id"]: row
+        for row in conn.execute("SELECT * FROM knowledge_bases").fetchall()
+    }
+    conn.close()
+    return rows
+
+def _index_names(db_path: str, table: str) -> list[str]:
+    conn = sqlite3.connect(db_path)
+    names = [row[1] for row in conn.execute(f"PRAGMA index_list('{table}')")]
+    conn.close()
+    return names
+
+def test_migration_adds_kb_workspace_and_embedding_columns():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        kb_cols = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_bases)")}
+        doc_cols = {row[1] for row in conn.execute("PRAGMA table_info(kb_documents)")}
+        conn.close()
+
+        assert {"workspace_id", "embedding_provider", "embedding_api_key",
+                "embedding_batch_size", "embedding_dimension"} <= kb_cols
+        assert "source_agent_id" in doc_cols
+        # Legacy columns stay.
+        assert "tenant_id" in kb_cols
+        assert "tenant_id" in doc_cols
+        assert "ix_knowledge_bases_workspace_id" in _index_names(db_path, "knowledge_bases")
+    finally:
+        os.unlink(db_path)
+
+def test_migration_backfills_kb_workspace_id_from_bound_agent():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        rows = _kb_rows(db_path)
+        assert rows["kb_jina"]["workspace_id"] == 7  # from its bound agent
+        assert rows["kb_sf"]["workspace_id"] == 9
+        assert rows["kb_bare"]["workspace_id"] == 7
+        # Unbound KB falls back to MIN(workspaces.id), not to an arbitrary agent.
+        assert rows["kb_orphan"]["workspace_id"] == 7
+        assert all(row["workspace_id"] is not None for row in rows.values())
+    finally:
+        os.unlink(db_path)
+
+def test_migration_backfills_kb_embedding_config_from_bound_agent():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        rows = _kb_rows(db_path)
+
+        assert rows["kb_jina"]["embedding_provider"] == "jina"
+        assert rows["kb_jina"]["embedding_model"] == "jina-embeddings-v3"
+        assert rows["kb_jina"]["embedding_base_url"] == "https://api.jina.ai/v1"
+        assert rows["kb_jina"]["embedding_batch_size"] == 8
+        assert rows["kb_jina"]["embedding_api_key"] == "enc:jina-ciphertext"
+
+        assert rows["kb_sf"]["embedding_provider"] == "siliconflow"
+        assert rows["kb_sf"]["embedding_model"] == "text-embedding-3-small"
+        assert rows["kb_sf"]["embedding_api_key"] == "enc:sf-ciphertext"
+
+        # Key copied verbatim (still encrypted), never decrypted in SQL.
+        assert rows["kb_jina"]["embedding_api_key"].startswith("enc:")
+        assert rows["kb_sf"]["embedding_api_key"].startswith("enc:")
+    finally:
+        os.unlink(db_path)
+
+def test_migration_does_not_overwrite_existing_kb_embedding_config():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO knowledge_bases (id, name, embedding_model, qdrant_collection) "
+            "VALUES ('kb_own', 'Own KB', 'custom-embedding-9000', 'kb_own_collection')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, workspace_id, name, kb_id, embedding_provider, "
+            "embedding_model, jina_api_key) VALUES "
+            "('agt_own', 7, 'Own Agent', 'kb_own', 'jina', 'jina-embeddings-v3', 'enc:other')"
+        )
+        conn.commit()
+        conn.close()
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        row = _kb_rows(db_path)["kb_own"]
+        # An operator-chosen KB value is never replaced by the agent's.
+        assert row["embedding_model"] == "custom-embedding-9000"
+        assert row["embedding_dimension"] == 1024  # unknown model -> safe default
+    finally:
+        os.unlink(db_path)
+
+def test_migration_backfills_kb_embedding_dimension_from_model():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO knowledge_bases (id, name, embedding_model, qdrant_collection) "
+            "VALUES ('kb_large', 'Large KB', 'text-embedding-3-large', 'kb_large_c')"
+        )
+        conn.execute(
+            "INSERT INTO knowledge_bases (id, name, embedding_model, qdrant_collection) "
+            "VALUES ('kb_v2', 'V2 KB', 'jina-embeddings-v2-base-en', 'kb_v2_c')"
+        )
+        conn.commit()
+        conn.close()
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        rows = _kb_rows(db_path)
+        assert rows["kb_jina"]["embedding_dimension"] == 1024  # jina-embeddings-v3
+        assert rows["kb_sf"]["embedding_dimension"] == 1536  # text-embedding-3-small
+        assert rows["kb_large"]["embedding_dimension"] == 3072
+        assert rows["kb_v2"]["embedding_dimension"] == 768
+        # Unknown model still gets the safe default rather than NULL.
+        assert rows["kb_orphan"]["embedding_dimension"] == 1024
+    finally:
+        os.unlink(db_path)
+
+def test_migration_backfills_source_agent_id_for_url_documents_only():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        docs = {
+            row["id"]: row
+            for row in conn.execute(
+                "SELECT id, source_agent_id FROM kb_documents"
+            ).fetchall()
+        }
+        conn.close()
+
+        assert docs["doc_url"]["source_agent_id"] == "agt_jina"
+        # Manual uploads stay NULL: their origin is not recoverable.
+        assert docs["doc_upload"]["source_agent_id"] is None
+    finally:
+        os.unlink(db_path)
+
+def test_migration_dedupes_duplicate_kb_bindings_keeping_the_oldest():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        conn = sqlite3.connect(db_path)
+        # The bound agents are the oldest bindings, as on a real upgraded install.
+        conn.execute("UPDATE agents SET created_at = '2023-01-01 00:00:00'")
+        conn.execute(
+            "INSERT INTO agents (id, workspace_id, name, kb_id, created_at) VALUES "
+            "('agt_newer', 7, 'Newer Agent', 'kb_jina', '2024-06-01 00:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, workspace_id, name, kb_id, created_at) VALUES "
+            "('agt_mid', 7, 'Middle Agent', 'kb_sf', '2024-01-01 00:00:00')"
+        )
+        # Two bindings with an identical created_at: the rowid breaks the tie.
+        conn.execute(
+            "INSERT INTO knowledge_bases (id, name, qdrant_collection) "
+            "VALUES ('kb_tie', 'Tie KB', 'kb_tie_collection')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, workspace_id, name, kb_id, created_at) VALUES "
+            "('agt_tie_a', 7, 'Tie A', 'kb_tie', '2024-05-01 00:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, workspace_id, name, kb_id, created_at) VALUES "
+            "('agt_tie_b', 7, 'Tie B', 'kb_tie', '2024-05-01 00:00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        bindings = {
+            row[0]: row[1]
+            for row in conn.execute("SELECT id, kb_id FROM agents").fetchall()
+        }
+        conn.close()
+
+        assert bindings["agt_jina"] == "kb_jina"
+        assert bindings["agt_newer"] is None
+        assert bindings["agt_sf"] == "kb_sf"
+        assert bindings["agt_mid"] is None
+        # Ties break on rowid, i.e. insertion order: the earlier row keeps it.
+        assert bindings["agt_tie_a"] == "kb_tie"
+        assert bindings["agt_tie_b"] is None
+        # Agents were never bound stay unbound.
+        assert bindings["agt_unbound"] is None
+    finally:
+        os.unlink(db_path)
+
+def test_migration_creates_the_partial_unique_index_on_agents_kb_id():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        assert "uq_agents_kb_id" in _index_names(db_path, "agents")
+
+        # Many NULLs must be allowed…
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT INTO agents (id, workspace_id, name) VALUES ('agt_n1', 7, 'N1')")
+        conn.execute("INSERT INTO agents (id, workspace_id, name) VALUES ('agt_n2', 7, 'N2')")
+        conn.commit()
+
+        # …but a second binding of the same KB must be rejected by the index.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE agents SET kb_id = 'kb_jina' WHERE id = 'agt_n1'"
+            )
+        conn.close()
+    finally:
+        os.unlink(db_path)
+
+def test_kb_migration_block_is_idempotent():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_kb_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+        first = _kb_rows(db_path)
+        first_indexes = _index_names(db_path, "agents")
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+        second = _kb_rows(db_path)
+        second_indexes = _index_names(db_path, "agents")
+
+        assert {k: dict(v) for k, v in first.items()} == {
+            k: dict(v) for k, v in second.items()
+        }
+        assert sorted(first_indexes) == sorted(second_indexes)
+    finally:
+        os.unlink(db_path)

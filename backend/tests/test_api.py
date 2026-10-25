@@ -59,12 +59,7 @@ async def test_get_default_agent(client):
         ("GET", "/api/v1/agent:default", None),
         ("GET", "/api/v1/agent?agent_id={agent_id}", None),
         ("PUT", "/api/v1/agent?agent_id={agent_id}", {"name": "NoAuth"}),
-        ("GET", "/api/v1/agent:jina-key-status?agent_id={agent_id}", None),
-        (
-            "PUT",
-            "/api/v1/agent:jina-key?agent_id={agent_id}",
-            {"jina_api_key": "test_jina_key"},
-        ),
+        ("GET", "/api/v1/agent:kb-status?agent_id={agent_id}", None),
         ("GET", "/api/v1/quota?agent_id={agent_id}", None),
         (
             "POST",
@@ -73,7 +68,7 @@ async def test_get_default_agent(client):
         ),
         ("GET", "/api/v1/tasks:status?agent_id={agent_id}", None),
         ("POST", "/api/v1/agent:test-ai-api?agent_id={agent_id}", None),
-        ("POST", "/api/v1/agent:test-jina-api?agent_id={agent_id}", None),
+        ("GET", "/api/v1/knowledge-bases", None),
     ],
 )
 async def test_agent_admin_endpoints_require_auth(
@@ -215,28 +210,65 @@ async def test_patch_registration_settings_noop(client):
 
 
 @pytest.mark.asyncio
-async def test_jina_key_status_returns_jina(client):
-    """Embedding status should report the agent's configured provider."""
-    agent_response = await client.get("/api/v1/agent:default")
-    agent_id = agent_response.json()["id"]
-
-    response = await client.get(f"/api/v1/agent:jina-key-status?agent_id={agent_id}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["embedding_provider"] == "jina"
-
-
-@pytest.mark.asyncio
-async def test_agent_config_reports_embedding(client):
-    """Agent config should report the agent's embedding settings."""
+async def test_agent_config_reports_bound_kb(client):
+    """Agent config reports the KB binding; embedding config lives on the KB."""
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
 
     response = await client.get(f"/api/v1/agent?agent_id={agent_id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["embedding_provider"] == "jina"
-    assert "embedding_api_key_set" in data
+
+    assert data["kb_id"], "The default test agent has a KB bound"
+    assert data["kb_name"] == "Bound Test KB"
+    assert data["kb_status"] == "active"
+    assert "embedding_provider" not in data
+    assert "embedding_model" not in data
+    assert "jina_api_key_set" not in data
+    assert "kb_setup_completed" not in data
+
+
+@pytest.mark.asyncio
+async def test_kb_status_is_derived(client):
+    """`agent:kb-status` derives its answer from the binding, not a stored flag."""
+    agent_response = await client.get("/api/v1/agent:default")
+    agent_id = agent_response.json()["id"]
+
+    response = await client.get(f"/api/v1/agent:kb-status?agent_id={agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_id"] == agent_id
+    assert data["kb_setup_completed"] is True
+    assert data["kb"]["status"] == "active"
+    assert data["kb"]["embedding_provider"] == "jina"
+
+
+@pytest.mark.asyncio
+async def test_deleted_embedding_endpoints_are_unrouted(client, default_agent_id):
+    """The superseded per-agent embedding routes are removed, not merely hidden."""
+    for method, path, payload in (
+        ("get", "/api/v1/agent:jina-key-status", None),
+        ("put", "/api/v1/agent:jina-key", {"jina_api_key": "test"}),
+        ("post", "/api/v1/agent:kb-setup", {"embedding_provider": "jina"}),
+        ("post", "/api/v1/agent:kb-reset", None),
+        ("post", "/api/v1/agent:test-jina-api", None),
+        ("post", "/api/v1/agent:test-embedding-api", None),
+    ):
+        response = await client.request(
+            method.upper(), f"{path}?agent_id={default_agent_id}", json=payload
+        )
+        assert response.status_code in (404, 405, 422), (
+            f"{method.upper()} {path} should be gone, got {response.status_code}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_tenant_scoped_kb_router_is_gone(client, default_agent_id):
+    """The unshipped `/api/tenants/...` document router has been deleted."""
+    response = await client.get(
+        f"/api/tenants/t1/knowledge_bases/{default_agent_id}/documents"
+    )
+    assert response.status_code == 404
 
 
 # ── Role permission tests ────────────────────────────────────────────────

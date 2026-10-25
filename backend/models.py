@@ -91,10 +91,12 @@ class Agent(Base):
     api_key = Column(String(500), nullable=True)
     api_base = Column(String(500), nullable=True, default="https://api.openai.com/v1")
 
-    # Jina Embedding API Key
+    # DEPRECATED: owned by KnowledgeBase since the KB-decoupling change.
+    # Kept for one release; no code path reads or writes it.
     jina_api_key = Column(String(500), nullable=True)
 
-    # SiliconFlow Embedding API Key
+    # DEPRECATED: owned by KnowledgeBase since the KB-decoupling change.
+    # Kept for one release; no code path reads or writes it.
     siliconflow_api_key = Column(String(500), nullable=True)
 
     # AI服务商配置
@@ -133,12 +135,17 @@ class Agent(Base):
     # 通用提供商配置
     provider_config = Column(JSON, nullable=True)
 
-    # 嵌入配置
+    # DEPRECATED: owned by KnowledgeBase since the KB-decoupling change.
+    # Kept for one release; no code path reads or writes it.
     embedding_provider = Column(String(20), nullable=False, default="jina")
+    # DEPRECATED: owned by KnowledgeBase since the KB-decoupling change.
     embedding_api_base = Column(String(500), nullable=True)
+    # DEPRECATED: owned by KnowledgeBase since the KB-decoupling change.
     embedding_model = Column(String(100), nullable=False, default="jina-embeddings-v3")
+    # DEPRECATED: owned by KnowledgeBase since the KB-decoupling change.
     embedding_batch_size = Column(Integer, nullable=False, default=4)
-    # 知识库初始化状态
+    # DEPRECATED: the KB binding plus `KnowledgeBase.status` is the only source of
+    # truth since the KB-decoupling change; this column is never read.
     kb_setup_completed = Column(Boolean, nullable=False, default=False)
     # URL抓取配置
     crawl_max_depth = Column(Integer, nullable=False, default=2)  # 全站爬取深度
@@ -189,9 +196,13 @@ class Agent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # 知识库关联（新增）
+    # 知识库关联（一对一：一个 KB 最多绑定一个 agent）
     kb_id = Column(
-        String(36), ForeignKey("knowledge_bases.id"), nullable=True, index=True
+        String(36),
+        ForeignKey("knowledge_bases.id"),
+        nullable=True,
+        unique=True,
+        index=True,
     )
 
     # 关系
@@ -208,7 +219,7 @@ class Agent(Base):
     members = relationship(
         "AgentMember", back_populates="agent", cascade="all, delete-orphan"
     )
-    knowledge_base = relationship("KnowledgeBase", back_populates="agents")
+    knowledge_base = relationship("KnowledgeBase", back_populates="agent")
 
 
 class URLSource(Base):
@@ -527,8 +538,20 @@ class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
+    # Legacy tenant scope. `workspace_id` is authoritative since the KB-decoupling
+    # change; no code path filters or writes `tenant_id` any more.
+    tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=True, index=True)
+    workspace_id = Column(
+        Integer, ForeignKey("workspaces.id"), nullable=False, index=True
+    )
     name = Column(String(100), nullable=False)
+    # Embedding config travels with the KB. The API key is stored
+    # Fernet-encrypted via `core.encryption`.
+    embedding_provider = Column(String(20), nullable=False, default="jina")
+    embedding_api_key = Column(String(500), nullable=True)
+    embedding_batch_size = Column(Integer, nullable=False, default=4)
+    # Measured from the provider, never guessed from the model name.
+    embedding_dimension = Column(Integer, nullable=True)
     embedding_model = Column(String(100), nullable=False, default="BAAI/bge-m3")
     embedding_base_url = Column(String(500), nullable=True)
     vector_backend = Column(String(20), nullable=False, default="qdrant")
@@ -557,7 +580,7 @@ class KnowledgeBase(Base):
     documents = relationship(
         "KbDocument", back_populates="knowledge_base", cascade="all, delete-orphan"
     )
-    agents = relationship("Agent", back_populates="knowledge_base")
+    agent = relationship("Agent", back_populates="knowledge_base", uselist=False)
 
 
 class KbDocument(Base):
@@ -570,8 +593,10 @@ class KbDocument(Base):
         String(36), ForeignKey("knowledge_bases.id"), nullable=False, index=True
     )
     tenant_id = Column(
-        String(36), ForeignKey("tenants.id"), nullable=False, index=True
-    )  # 冗余，方便过滤
+        String(36), ForeignKey("tenants.id"), nullable=True, index=True
+    )
+    # Provenance: which agent ingested this document (NULL = unknown / legacy).
+    source_agent_id = Column(String(50), nullable=True, index=True)
     filename = Column(String(500), nullable=False)
     file_type = Column(String(20), nullable=True)
     status = Column(
@@ -605,7 +630,8 @@ class KbChunk(Base):
     doc_id = Column(
         String(36), ForeignKey("kb_documents.id"), nullable=False, index=True
     )
-    tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
+    # Legacy tenant scope; unused since the KB-decoupling change.
+    tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=True, index=True)
     vector_id = Column(String(100), nullable=True, index=True)  # Qdrant point id
     chunk_index = Column(Integer, nullable=False)
     content_hash = Column(String(64), nullable=True)

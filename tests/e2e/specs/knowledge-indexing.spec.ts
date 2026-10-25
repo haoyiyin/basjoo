@@ -11,6 +11,7 @@ import {
 	loginByApi,
 	getDefaultAgent,
 	adminLogin,
+	ensureBoundKb,
 } from "../fixtures/e2e-context";
 
 test.describe("Knowledge Source Flow", () => {
@@ -68,24 +69,8 @@ test.describe("Knowledge Source Flow", () => {
 		// 1. Resolve agent context
 		const context = await resolveAgentContext(request);
 
-		// 2. Complete KB setup via API (required for FileUploadManagement to show content)
-		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		const kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-			{
-				headers: {
-					Authorization: `Bearer ${await loginByApi(request)}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
-		// KB setup may already be completed (409/400) or succeed (200)
-		expect([200, 400, 409]).toContain(kbSetupRes.status());
+		// 2. Ensure a KB is created and bound (FileUploadManagement needs content)
+		await ensureBoundKb(request, context.agentId);
 
 		// 3. Login via UI using shared helper
 		await adminLogin(page);
@@ -138,75 +123,24 @@ test.describe("Knowledge Source Flow", () => {
 		const token = await loginByApi(request);
 		const agent = await getDefaultAgent(request, token);
 
-		// 1. Ensure KB setup - may need to reset first if agent has inconsistent state
-		// (kb_setup_completed=true but kb_id=null from pre-fix test runs)
-		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		let kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agent.id}`,
-			{
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
+		// 1. Ensure a KB exists and is bound to the agent
+		const boundKbId = await ensureBoundKb(request, agent.id);
+		expect(boundKbId).toBeTruthy();
 
-		// Check if we got 409 or 400 but kb_id might be null (inconsistent state from pre-fix runs)
-		if (kbSetupRes.status() === 409 || kbSetupRes.status() === 400) {
-			// Check current agent config
-			const checkRes = await request.get(
-				`${API_BASE}/api/v1/agent?agent_id=${agent.id}`,
-				{ headers: { Authorization: `Bearer ${token}` } },
-			);
-			const checkConfig = (await checkRes.json()) as {
-				kb_id?: string;
-				kb_setup_completed?: boolean;
-			};
-
-			// If kb_id is null but setup is completed, reset and retry
-			if (!checkConfig.kb_id && checkConfig.kb_setup_completed) {
-				const resetRes = await request.post(
-					`${API_BASE}/api/v1/agent:kb-reset?agent_id=${agent.id}`,
-					{ headers: { Authorization: `Bearer ${token}` } },
-				);
-				expect(resetRes.status()).toBe(200);
-				// Retry setup
-				kbSetupRes = await request.post(
-					`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agent.id}`,
-					{
-						headers: {
-							Authorization: `Bearer ${token}`,
-							"Content-Type": "application/json",
-						},
-						data: {
-							embedding_provider: "jina",
-							embedding_model: "jina-embeddings-v3",
-							jina_api_key: jinaApiKey,
-						},
-					},
-				);
-			}
-		}
-		// Setup should succeed (200) or be already completed (409)
-		expect([200, 409]).toContain(kbSetupRes.status());
-
-		// 2. Verify agent config shows kb_id with diagnostic output
-		const agentConfigRes = await request.get(
-			`${API_BASE}/api/v1/agent?agent_id=${agent.id}`,
+		// 2. Verify the derived status endpoint reports the binding
+		const statusRes = await request.get(
+			`${API_BASE}/api/v1/agent:kb-status?agent_id=${agent.id}`,
 			{ headers: { Authorization: `Bearer ${token}` } },
 		);
-		expect(agentConfigRes.status()).toBe(200);
-		const config = (await agentConfigRes.json()) as {
-			kb_id?: string;
+		expect(statusRes.status()).toBe(200);
+		const status = (await statusRes.json()) as {
+			kb_id?: string | null;
 			kb_setup_completed?: boolean;
+			kb?: { id: string } | null;
 		};
-		// Agent should have kb_id bound after setup
-		expect(config.kb_id, `KB setup failed: kb_id is null. Setup response status: ${kbSetupRes.status()}, kb_setup_completed: ${config.kb_setup_completed}`).toBeTruthy();
+		expect(status.kb_id).toBe(boundKbId);
+		expect(status.kb_setup_completed).toBe(true);
+		expect(status.kb?.id).toBe(boundKbId);
 
 		// 3. Chat should succeed (uses mock LLM in test mode, but verifies flow)
 		const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {

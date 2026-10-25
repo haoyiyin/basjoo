@@ -12,6 +12,7 @@ import {
 	resolveAgentContext,
 	loginByApi,
 	adminLogin,
+	ensureBoundKb,
 } from "../fixtures/e2e-context";
 
 const TEST_URL = "https://example.com/test-page";
@@ -24,23 +25,8 @@ test.describe("URL Bug Fixes", () => {
 		// 1. Resolve agent context and login
 		const context = await resolveAgentContext(request);
 
-		// 2. Complete KB setup via API (required for URL management)
-		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		const kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-			{
-				headers: {
-					Authorization: `Bearer ${await loginByApi(request)}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
-		expect([200, 400, 409]).toContain(kbSetupRes.status());
+		// 2. Ensure a KB is created and bound (URL management requires a binding)
+		await ensureBoundKb(request, context.agentId);
 
 		// 3. Login via UI
 		await adminLogin(page);
@@ -96,24 +82,8 @@ test.describe("URL Bug Fixes", () => {
 		// 1. Resolve agent context and login
 		const context = await resolveAgentContext(request);
 
-		// 2. Complete KB setup via API
-		const jinaApiKey =
-			process.env.E2E_JINA_API_KEY || "test_jina_api_key_for_e2e";
-		const kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-			{
-				headers: {
-					Authorization: `Bearer ${await loginByApi(request)}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
-		expect([200, 400, 409]).toContain(kbSetupRes.status());
+		// 2. Ensure a KB is created and bound
+		await ensureBoundKb(request, context.agentId);
 
 		// 3. Add a test URL via API first to ensure we have something to clear
 		const token = await loginByApi(request);

@@ -1,21 +1,27 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../services/api";
+import type { KbStatusPayload } from "../services/api";
 
 interface AgentKbStatusState {
 	loading: boolean;
 	error: string | null;
+	/** True only when the agent has a bound KB whose status is `active`. */
 	kbSetupCompleted: boolean;
-	raw: Awaited<ReturnType<typeof api.kbStatus>> | null;
+	raw: KbStatusPayload | null;
 	recheck: () => Promise<void>;
 }
 
+/**
+ * Derived KB binding state for one agent.
+ *
+ * The backend computes `kb_setup_completed` from `agent.kb_id` plus the KB
+ * status, so this hook never inspects legacy agent embedding fields.
+ */
 export function useAgentKbStatus(agentId: string | null): AgentKbStatusState {
 	const [loading, setLoading] = useState<boolean>(Boolean(agentId));
 	const [error, setError] = useState<string | null>(null);
 	const [kbSetupCompleted, setKbSetupCompleted] = useState(false);
-	const [raw, setRaw] = useState<Awaited<
-		ReturnType<typeof api.kbStatus>
-	> | null>(null);
+	const [raw, setRaw] = useState<KbStatusPayload | null>(null);
 
 	const fetchStatus = useCallback(async () => {
 		if (!agentId) return;
@@ -24,7 +30,7 @@ export function useAgentKbStatus(agentId: string | null): AgentKbStatusState {
 		try {
 			const status = await api.kbStatus(agentId);
 			setRaw(status);
-			setKbSetupCompleted(Boolean(status.kb_setup_completed));
+			setKbSetupCompleted(status.kb_setup_completed);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to load KB status");
 		} finally {
