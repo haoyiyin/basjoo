@@ -1,26 +1,27 @@
 {
-  "name": "basjoo-frontend-nextjs",
+  "name": "basjoo-frontend",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "i18next": "^25.7.4",
     "i18next-browser-languagedetector": "^8.2.0",
-    "next": "^14.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-i18next": "^16.5.1",
     "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.16.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
@@ -28,11 +29,9 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.0.2",
-    "eslint": "^8.57.1",
-    "eslint-config-next": "^14.2.0",
     "jsdom": "^29.1.1",
-    "react-router-dom": "^7.16.0",
     "typescript": "~5.6.2",
+    "vite": "^8.3.5",
     "vitest": "^4.1.4"
   }
 }
