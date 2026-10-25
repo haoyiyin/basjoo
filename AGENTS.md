@@ -36,6 +36,9 @@ Docker-oriented AI customer support platform:
 - Widget build (typecheck + ESM + IIFE bundles): `cd widget && npm run build`.
 - Sync widget bundle into the backend: `npm run sync-widget` (root; copies `widget/dist/basjoo-widget.min.js` → `backend/static/sdk.js`).
 - Backend tests: `cd backend && pytest` (uses `pytest.ini`; `Test*` classes, `test_*` funcs).
+- In the dev image, mount the **repo root** and point `SCRAPLING_SERVICE_MAIN` at it, or the 4 `test_scrapling_discover_*` BFS tests self-skip and the green run silently loses that coverage:
+  `docker run --rm --network host -e REDIS_URL=redis://127.0.0.1:6379/0 -e SCRAPLING_SERVICE_MAIN=/repo/scrapling-service/main.py -v "$PWD":/repo -w /repo/backend --entrypoint python3 basjoo-backend-dev:latest -m pytest -q -p no:cacheprovider`
+  (`--network host` + `REDIS_URL` are both mandatory: with `redis:6379` unresolvable every login test pays a 134 s connect timeout.)
 - E2E (smoke, dev env): `npm run test:e2e` (auto-starts `docker compose --profile dev`).
 - E2E (prod-like): `npm run test:e2e:prod` (requires `docker compose --profile prod up -d` first).
 - E2E (all): `npm run test:e2e:all`. E2E (widget cross-origin): `npm run test:e2e:widget`.
