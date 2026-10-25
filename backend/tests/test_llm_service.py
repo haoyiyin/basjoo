@@ -3,7 +3,12 @@ import types
 
 import pytest
 
-from services.llm_service import GoogleProvider, OpenAINativeProvider, OpenAIProvider
+from services.llm_service import (
+    GOOGLE_OPENAI_BASE_URL,
+    OpenAINativeProvider,
+    OpenAIProvider,
+    get_llm_service,
+)
 
 
 class _FakeStreamResponse:
@@ -67,41 +72,6 @@ class _FakeOpenAICompletionsWithChunks:
     async def create(self, **kwargs):
         self.calls.append(kwargs)
         return _FakeAsyncStream(self._chunks)
-
-
-class _FakeGooglePart:
-    def __init__(self, text=None, thought=False):
-        self.text = text
-        self.thought = thought
-
-
-class _FakeGoogleContent:
-    def __init__(self, parts):
-        self.parts = parts
-
-
-class _FakeGoogleCandidate:
-    def __init__(self, parts):
-        self.content = _FakeGoogleContent(parts)
-
-
-class _FakeGoogleResponse:
-    def __init__(self, parts, text=None):
-        self.candidates = [_FakeGoogleCandidate(parts)] if parts is not None else []
-        self.text = text
-
-
-class _FakeGenerativeModel:
-    def __init__(self, _model, *, stream_chunks=None, response=None):
-        self.stream_chunks = stream_chunks or []
-        self.response = response
-        self.calls = []
-
-    async def generate_content_async(self, prompt, **kwargs):
-        self.calls.append({"prompt": prompt, **kwargs})
-        if kwargs.get("stream"):
-            return _FakeAsyncStream(self.stream_chunks)
-        return self.response
 
 
 @pytest.mark.asyncio
@@ -169,64 +139,66 @@ async def test_openai_compatible_ignores_reasoning_content(monkeypatch):
 
     assert chunks == ["final answer"]
 
+@pytest.mark.asyncio
+async def test_google_provider_uses_openai_compatible_endpoint():
+    provider = get_llm_service(
+        provider_type="google",
+        api_key="k",
+        model="gemini-2.5-flash",
+    )
+
+    assert isinstance(provider, OpenAIProvider)
+    assert str(provider.client.base_url).rstrip("/").endswith("/v1beta/openai")
+    assert provider.model == "gemini-2.5-flash"
+
 
 @pytest.mark.asyncio
-async def test_google_provider_filters_thought_parts(monkeypatch):
-    fake_model = _FakeGenerativeModel(
-        "gemma-4-31b-it",
-        stream_chunks=[
-            _FakeGoogleResponse([
-                _FakeGooglePart(text="internal thought ", thought=True),
-                _FakeGooglePart(text="visible ", thought=False),
-            ]),
-            _FakeGoogleResponse([
-                _FakeGooglePart(text="answer", thought=False),
-            ]),
-        ],
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://generativelanguage.googleapis.com/v1beta",
+        "https://generativelanguage.googleapis.com/v1beta/",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+        None,
+        "",
+    ],
+)
+async def test_google_provider_normalises_user_supplied_api_base(api_base):
+    provider = get_llm_service(
+        provider_type="google",
+        api_key="k",
+        model="gemini-2.5-flash",
+        api_base=api_base,
     )
-    fake_genai_module = types.SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=lambda _model: fake_model,
-    )
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai_module)
 
-    provider = GoogleProvider(api_key="test-key", model="gemma-4-31b-it")
-    provider.client = fake_model
+    assert isinstance(provider, OpenAIProvider)
+    assert str(provider.client.base_url).rstrip("/") == GOOGLE_OPENAI_BASE_URL
+
+
+@pytest.mark.asyncio
+async def test_google_provider_stream_ignores_reasoning_content():
+    fake_client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(
+            completions=_FakeOpenAICompletionsWithChunks(
+                [
+                    _FakeOpenAIChunk(reasoning_content="internal thought "),
+                    _FakeOpenAIChunk(content="final answer"),
+                ]
+            )
+        )
+    )
+
+    provider = get_llm_service(
+        provider_type="google",
+        api_key="k",
+        model="gemini-2.5-flash",
+    )
+    provider.client = fake_client
 
     chunks = []
     async for chunk in provider.chat_completion(
         messages=[{"role": "user", "content": "Hello"}],
-    ):
-        chunks.append(chunk)
-
-    assert chunks == ["visible ", "answer"]
-
-
-@pytest.mark.asyncio
-async def test_google_provider_filters_thought_parts_non_streaming(monkeypatch):
-    fake_model = _FakeGenerativeModel(
-        "gemma-4-31b-it",
-        response=_FakeGoogleResponse(
-            [
-                _FakeGooglePart(text="internal thought ", thought=True),
-                _FakeGooglePart(text="final answer", thought=False),
-            ],
-            text="internal thought final answer",
-        ),
-    )
-    fake_genai_module = types.SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=lambda _model: fake_model,
-    )
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai_module)
-
-    provider = GoogleProvider(api_key="test-key", model="gemma-4-31b-it")
-    provider.client = fake_model
-
-    chunks = []
-    async for chunk in provider.chat_completion(
-        messages=[{"role": "user", "content": "Hello"}],
-        stream=False,
     ):
         chunks.append(chunk)
 
@@ -234,75 +206,39 @@ async def test_google_provider_filters_thought_parts_non_streaming(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_google_provider_handles_empty_parts(monkeypatch):
-    fake_model = _FakeGenerativeModel(
-        "gemma-4-31b-it",
-        response=_FakeGoogleResponse([], text="internal thought final answer"),
+async def test_google_branch_omits_stream_options_but_openai_sends_them():
+    google_provider = get_llm_service(
+        provider_type="google",
+        api_key="k",
+        model="gemini-2.5-flash",
     )
-    fake_genai_module = types.SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=lambda _model: fake_model,
+    google_completions = _FakeOpenAICompletionsWithChunks([])
+    google_provider.client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=google_completions)
     )
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai_module)
 
-    provider = GoogleProvider(api_key="test-key", model="gemma-4-31b-it")
-    provider.client = fake_model
-
-    chunks = []
-    async for chunk in provider.chat_completion(
+    async for _ in google_provider.chat_completion(
         messages=[{"role": "user", "content": "Hello"}],
-        stream=False,
+        stream=True,
     ):
-        chunks.append(chunk)
+        pass
 
-    assert chunks == []
+    assert "stream_options" not in google_completions.calls[0]
 
-
-@pytest.mark.asyncio
-async def test_google_provider_handles_empty_candidates(monkeypatch):
-    fake_model = _FakeGenerativeModel(
-        "gemma-4-31b-it",
-        response=_FakeGoogleResponse(None, text="internal thought final answer"),
+    openai_provider = get_llm_service(
+        provider_type="openai",
+        api_key="k",
+        model="gpt-4o",
     )
-    fake_genai_module = types.SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=lambda _model: fake_model,
+    openai_completions = _FakeOpenAICompletionsWithChunks([])
+    openai_provider.client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=openai_completions)
     )
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai_module)
 
-    provider = GoogleProvider(api_key="test-key", model="gemma-4-31b-it")
-    provider.client = fake_model
-
-    chunks = []
-    async for chunk in provider.chat_completion(
+    async for _ in openai_provider.chat_completion(
         messages=[{"role": "user", "content": "Hello"}],
-        stream=False,
+        stream=True,
     ):
-        chunks.append(chunk)
+        pass
 
-    assert chunks == []
-
-
-@pytest.mark.asyncio
-async def test_google_provider_falls_back_to_text_without_candidates(monkeypatch):
-    fake_model = _FakeGenerativeModel(
-        "gemma-4-31b-it",
-        response=types.SimpleNamespace(text="final answer"),
-    )
-    fake_genai_module = types.SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=lambda _model: fake_model,
-    )
-    monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai_module)
-
-    provider = GoogleProvider(api_key="test-key", model="gemma-4-31b-it")
-    provider.client = fake_model
-
-    chunks = []
-    async for chunk in provider.chat_completion(
-        messages=[{"role": "user", "content": "Hello"}],
-        stream=False,
-    ):
-        chunks.append(chunk)
-
-    assert chunks == ["final answer"]
+    assert openai_completions.calls[0]["stream_options"] == {"include_usage": True}

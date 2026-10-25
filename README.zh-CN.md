@@ -5,7 +5,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
 [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Qdrant](https://img.shields.io/badge/Qdrant-向量检索-blue)](https://qdrant.tech/)
 [![Scrapling](https://img.shields.io/badge/Scrapling-网页抓取-green)](https://github.com/D4Vinci/Scrapling)
@@ -22,7 +22,6 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 - **Redis**：限流、缓存相关能力
 - **Qdrant**：向量检索与文档索引（自研多租户 KB）
 - **Scrapling 微服务**：网页内容抓取（curl_cffi + readability-lxml）
-- **PostgreSQL**：应用数据持久化存储
 - **nginx**：Docker 部署下的反向代理
 
 ## 系统要求
@@ -136,10 +135,9 @@ Widget 提供访客侧聊天入口，支持会话持久化、多语言文案、�
 - SQLAlchemy async + SQLite
 - Redis（限流、缓存）
 - Qdrant REST API（向量检索、文档摄入、混合检索）
-- PostgreSQL（应用数据持久化）
 - Scrapling 微服务（curl_cffi + readability-lxml 网页内容提取）
 - APScheduler
-- OpenAI 兼容接口、Anthropic、Google Gemini 等服务商 SDK
+- OpenAI 兼容接口层（DeepSeek、Gemini（经 Google OpenAI 兼容端点）、Anthropic、xAI、OpenRouter 等）
 
 ### 前端
 
@@ -183,7 +181,6 @@ bash scripts/prod_stability_check.sh
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:8000`
 - Qdrant: `http://localhost:6333`
-- PostgreSQL: `127.0.0.1:5432`
 - Redis: `127.0.0.1:6379`
 
 开发环境前端和后端端口以 `3000:3000`、`8000:8000` 方式绑定，因此同一网络中可访问宿主机的其它设备也可以访问。
@@ -478,7 +475,6 @@ Basjoo 基于以下优秀的开源项目构建：
 - **[Scrapling](https://github.com/D4Vinci/Scrapling)** — 隐身网页抓取，支持 TLS 指纹伪装（curl_cffi）。驱动 Basjoo 的 URL 内容提取微服务。
 - **[FastAPI](https://github.com/tiangolo/fastapi)** — 驱动 Basjoo 后端 API 的 Web 框架。
 - **[Next.js](https://github.com/vercel/next.js)** — 驱动 Basjoo 管理后台的 React 框架。
-- **[pgvector](https://github.com/pgvector/pgvector)** — PostgreSQL 开源向量相似性搜索。
 
 ## 贡献者
 

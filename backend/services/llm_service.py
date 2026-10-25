@@ -3,8 +3,7 @@ LLM 服务抽象层 - 支持多个 AI 提供商
 
 支持的提供商：
 - OpenAI Native (官方接口)
-- OpenAI Compatible (兼容接口，如DeepSeek)
-- Google (Gemini)
+- OpenAI Compatible (兼容接口，如DeepSeek / Google Gemini OpenAI 兼容层)
 - Mock (用于测试)
 """
 
@@ -155,26 +154,20 @@ async def run_with_timeout(awaitable: Awaitable[T], timeout_seconds: int) -> T:
     return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
 
 
-def get_google_visible_text_parts(response_or_chunk: object) -> List[str]:
-    candidates = getattr(response_or_chunk, "candidates", None)
-    if candidates is not None:
-        if not candidates:
-            return []
+GOOGLE_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
-        content = getattr(candidates[0], "content", None)
-        parts = getattr(content, "parts", None) if content else None
-        if parts is None:
-            return []
 
-        visible_parts = []
-        for part in parts:
-            text = getattr(part, "text", None)
-            if text and not getattr(part, "thought", False):
-                visible_parts.append(text)
-        return visible_parts
+def _google_openai_base(api_base: Optional[str]) -> str:
+    """Normalise a user-supplied Google API base to the OpenAI-compatible surface."""
+    if not api_base:
+        return GOOGLE_OPENAI_BASE_URL
 
-    text = getattr(response_or_chunk, "text", None)
-    return [text] if text else []
+    normalised = api_base.rstrip("/")
+    if normalised.endswith("/openai"):
+        return normalised
+    if normalised.endswith("/v1beta"):
+        return f"{normalised}/openai"
+    return normalised
 
 
 # ========== 抽象基类 ==========
@@ -365,6 +358,7 @@ class OpenAIProvider(BaseLLMService):
         base_url: str = "https://api.openai.com/v1",
         model: str = "gpt-3.5-turbo",
         timeout: int = 30,
+        send_stream_options: bool = True,
     ):
         """
         初始化 OpenAI 客户端
@@ -374,10 +368,13 @@ class OpenAIProvider(BaseLLMService):
             base_url: API 基础 URL
             model: 模型名称
             timeout: 请求超时时间（秒）
+            send_stream_options: 是否在流式请求中发送 stream_options
+            （部分兼容层不保证支持 include_usage）
         """
         super().__init__(model=model, timeout=timeout)
         from openai import AsyncOpenAI
 
+        self.send_stream_options = send_stream_options
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -416,7 +413,7 @@ class OpenAIProvider(BaseLLMService):
                 "temperature": 0.7 if temperature is None else temperature,
                 "max_tokens": 2000 if max_tokens is None else max_tokens,
             }
-            if stream:
+            if stream and self.send_stream_options:
                 request_params["stream_options"] = {"include_usage": True}
 
             logger.info(
@@ -603,148 +600,6 @@ class OpenAINativeProvider(BaseLLMService):
         return sorted(chat_models, reverse=True)
 
 
-# ========== Google Provider ==========
-
-
-class GoogleProvider(BaseLLMService):
-    """Google Gemini API 提供商"""
-
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "gemini-pro",
-        timeout: int = 30,
-    ):
-        """
-        初始化 Google 客户端
-
-        Args:
-            api_key: API 密钥
-            model: 模型名称
-            timeout: 请求超时时间（秒）
-        """
-        super().__init__(model=model, timeout=timeout)
-        try:
-            import google.generativeai as genai
-
-            self.api_key = api_key
-            genai.configure(api_key=api_key)
-            self.client = genai.GenerativeModel(model)
-        except ImportError:
-            raise ImportError(
-                "Google Generative AI SDK 未安装。请运行: pip install google-generativeai"
-            )
-
-    async def chat_completion(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: Optional[str] = None,
-        stream: bool = True,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-    ) -> AsyncGenerator[str, None]:
-        """
-        Google Gemini 聊天完成
-
-        Args:
-            messages: 消息列表
-            system_prompt: 系统提示词
-            stream: 是否流式返回
-
-        Yields:
-            str: 消息片段
-        """
-        try:
-            prompt_parts = []
-
-            if system_prompt:
-                prompt_parts.append(f"System: {system_prompt}")
-
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-
-                if role == "system":
-                    prompt_parts.append(f"System: {content}")
-                elif role == "user":
-                    prompt_parts.append(f"User: {content}")
-                elif role == "assistant":
-                    prompt_parts.append(f"Assistant: {content}")
-
-            full_prompt = "\n\n".join(prompt_parts)
-
-            generation_config = {
-                "temperature": 0.7 if temperature is None else temperature,
-                "max_output_tokens": 2000 if max_tokens is None else max_tokens,
-            }
-
-            async def create_stream_response():
-                return await self.client.generate_content_async(
-                    full_prompt,
-                    stream=True,
-                    generation_config=generation_config,
-                )
-
-            async def create_response():
-                return await self.client.generate_content_async(
-                    full_prompt,
-                    generation_config=generation_config,
-                )
-
-            if stream:
-                response = await retry_llm_operation(
-                    "google chat request",
-                    create_stream_response,
-                )
-                async for chunk in response:
-                    for text in get_google_visible_text_parts(chunk):
-                        yield text
-                        await asyncio.sleep(0)
-            else:
-                response = await retry_llm_operation(
-                    "google chat request",
-                    create_response,
-                )
-                for text in get_google_visible_text_parts(response):
-                    yield text
-
-        except LLMError:
-            raise
-        except Exception as e:
-            logger.error(f"Google API 调用失败: {str(e)}")
-            raise classify_llm_error(e) from e
-
-    async def test_connection(self) -> bool:
-        """测试 Google API 连通性"""
-        try:
-            await run_with_timeout(
-                self.client.generate_content_async(
-                    "Hello", generation_config={"max_output_tokens": 5}
-                ),
-                settings.llm_test_timeout_seconds,
-            )
-            return True
-        except Exception as e:
-            classified = classify_llm_error(e)
-            logger.error(f"Google API 连接测试失败 [{classified.code}]: {str(e)}")
-            return False
-
-    @staticmethod
-    async def list_models(api_key: str) -> List[str]:
-        """获取可用模型列表"""
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key)
-        models = []
-        for m in genai.list_models():
-            if "generateContent" in m.supported_generation_methods:
-                # 提取模型名称
-                model_name = m.name.replace("models/", "")
-                if model_name.startswith("gemini"):
-                    models.append(model_name)
-        return sorted(models, reverse=True)
-
-
 # ========== 工厂函数 ==========
 
 
@@ -793,10 +648,12 @@ def get_llm_service(
         )
 
     elif resolved_provider_type == "google":
-        logger.info("使用 Google Provider")
-        return GoogleProvider(
+        logger.info("使用 Google Provider (OpenAI Compatible)")
+        return OpenAIProvider(
             api_key=resolved_api_key,
-            model=resolved_model or "gemini-pro",
+            base_url=_google_openai_base(resolved_api_base),
+            model=resolved_model or "gemini-2.5-flash",
+            send_stream_options=False,
         )
 
     elif resolved_provider_type == "anthropic":

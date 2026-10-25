@@ -1,7 +1,6 @@
 # FastAPI 和服务器
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
-websockets==13.1
 python-multipart==0.0.12
 
 # 数据库 - SQLite
@@ -14,22 +13,12 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1  # 固定版本，bcrypt>=4.1.0与passlib不兼容
 python-dotenv==1.0.1
 
-# OpenAI API
+# OpenAI API (also used for Anthropic / Google Gemini OpenAI-compatible surfaces)
 openai==1.54.0
 httpx==0.27.2
 
-# Anthropic Claude API
-anthropic==0.40.0
-
-# Google Gemini API
-google-generativeai==0.8.3
-
-# URL抓取 - 通过 Scrapling 微服务处理，后端无需额外依赖
-requests==2.31.0
-
 # Redis - 缓存、限流、任务队列
 redis==5.2.1
-aioredis==2.0.1
 
 # CORS - starlette由fastapi自动管理，移除版本锁定
 # starlette==0.41.2

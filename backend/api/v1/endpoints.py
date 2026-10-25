@@ -2238,7 +2238,7 @@ async def list_available_models(
     根据提供商类型和API Key获取可用的模型列表
     """
     from api.v1.schemas import ModelsListRequest, ModelsListResponse
-    from services.llm_service import OpenAINativeProvider, GoogleProvider
+    from services.llm_service import OpenAINativeProvider
 
     api_key = request.api_key
 
@@ -2263,7 +2263,11 @@ async def list_available_models(
                 model_prefixes=("deepseek-",),
             )
         elif request.provider_type == "google":
-            models = await GoogleProvider.list_models(api_key)
+            models = await OpenAINativeProvider.list_models(
+                api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                model_prefixes=("gemini-", "gemma-"),
+            )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
