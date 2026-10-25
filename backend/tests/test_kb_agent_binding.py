@@ -1,415 +1,226 @@
-"""Tests for agent-scoped tenant KB binding contract.
+"""Agent ⇄ KB binding contract, exercised through `KbService.bind_agent`.
 
-Ensures every agent that uses KB features has a tenant-scoped KnowledgeBase
-bound through agent.kb_id, with proper tenant isolation.
+Binding is decoupled from the KB lifecycle: unbinding keeps every document, chunk
+and vector, and rebinding makes the previous agent's content retrievable by the
+new one. Binding is strictly one-to-one and explicit — there is no auto-create
+path, so an unbound agent is simply unbound.
 """
 
-from unittest.mock import patch
-
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 import database
-from models import Agent, KnowledgeBase, Tenant, Workspace
+from models import Agent, KbChunk, KbDocument, KnowledgeBase, Workspace
 from services.kb_service import KbService
 
+EMBED_DIMENSION = 1024
 
-@pytest.mark.asyncio
-async def test_kb_service_has_get_or_create_agent_kb_method():
-    """KbService should have get_or_create_agent_kb method for binding agents to KBs."""
-    svc = KbService()
-    assert hasattr(svc, "get_or_create_agent_kb")
+@pytest.fixture(autouse=True)
+def fake_qdrant(monkeypatch):
+    from services.qdrant_service import QdrantKbService
 
+    calls: list[tuple] = []
 
-@pytest.mark.asyncio
-async def test_get_or_create_agent_kb_returns_tuple(setup_test_db):
-    """get_or_create_agent_kb should return (tenant, kb) tuple."""
+    async def ensure_collection(self, kb_id, dimension):
+        calls.append(("ensure", kb_id, dimension))
+        return f"kb_{str(kb_id).replace('-', '')[:12]}"
+
+    async def delete_collection(self, kb_id):
+        calls.append(("delete", kb_id))
+        return True
+
+    monkeypatch.setattr(QdrantKbService, "ensure_collection", ensure_collection)
+    monkeypatch.setattr(QdrantKbService, "delete_collection", delete_collection)
+    return calls
+
+async def _workspace_id() -> int:
     async with database.AsyncSessionLocal() as session:
-        # Get existing agent from fixture
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
-        )
-        agent = result.scalar_one()
-        agent_id = agent.id
+        workspace = (
+            await session.execute(select(Workspace).order_by(Workspace.id).limit(1))
+        ).scalar_one_or_none()
+        if workspace is None:
+            workspace = Workspace(
+                name="Binding Workspace", owner_email="binding@example.com"
+            )
+            session.add(workspace)
+            await session.commit()
+        return workspace.id
 
-        # Create KbService with the test session
-        kb_svc = KbService(session=session)
-        result = await kb_svc.get_or_create_agent_kb(agent_id)
+async def _create_kb(workspace_id: int, name: str, *, status: str = "active") -> str:
+    kb = await KbService().create_knowledge_base(
+        workspace_id,
+        name,
+        embedding_provider="jina",
+        embedding_model="jina-embeddings-v3",
+        embedding_base_url="https://api.jina.ai/v1",
+        embedding_api_key="enc:test-encrypted-key",
+        embedding_dimension=EMBED_DIMENSION,
+        embedding_batch_size=4,
+    )
+    if status != "active":
+        async with database.AsyncSessionLocal() as session:
+            row = await session.get(KnowledgeBase, kb.id)
+            object.__setattr__(row, "status", status)
+            await session.commit()
+    return kb.id
 
-        # Should return a tuple of (tenant, kb)
-        assert result is not None
-        assert len(result) == 2
-        tenant, kb = result
-        assert isinstance(tenant, Tenant)
-        assert isinstance(kb, KnowledgeBase)
-
-
-@pytest.mark.asyncio
-async def test_agent_kb_binding_is_tenant_isolated(setup_test_db):
-    """KB bound to agent must belong to the correct tenant and not be shared."""
+async def _create_agent(workspace_id: int, name: str) -> str:
     async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
+        agent = Agent(
+            workspace_id=workspace_id,
+            name=name,
+            model="deepseek-v4-flash",
+            api_base="https://api.deepseek.com/v1",
+            provider_type="deepseek",
         )
-        agent = result.scalar_one()
-        agent_id = agent.id
+        session.add(agent)
+        await session.commit()
+        return agent.id
 
-        kb_svc = KbService(session=session)
-        tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id)
-
-        # Verify tenant isolation
-        assert kb.tenant_id == tenant.id
-
-        # Verify we can retrieve the KB with correct tenant
-        kb_fetched = await kb_svc.get_knowledge_base(tenant.id, kb.id)
-        assert kb_fetched is not None
-        assert kb_fetched.id == kb.id
-
-        # A different tenant should not be able to access this KB
-        different_tenant_id = "different-tenant-uuid"
-        kb_from_wrong_tenant = await kb_svc.get_knowledge_base(
-            different_tenant_id, kb.id
-        )
-        assert kb_from_wrong_tenant is None
-
-
-@pytest.mark.asyncio
-async def test_agent_with_existing_kb_returns_existing(setup_test_db):
-    """If agent already has a KB bound, return it instead of creating new."""
+async def _seed_contents(kb_id: str, source_agent_id: str | None = None) -> str:
     async with database.AsyncSessionLocal() as session:
-        # Create tenant and KB first
-        tenant = Tenant(name="Existing Tenant", slug="existing-tenant")
-        session.add(tenant)
+        doc = KbDocument(
+            kb_id=kb_id,
+            filename="legacy-notes.txt",
+            file_type="txt",
+            status="ready",
+            chunk_count=1,
+            file_size=12,
+            source_agent_id=source_agent_id,
+        )
+        session.add(doc)
         await session.flush()
-
-        kb = KnowledgeBase(
-            tenant_id=tenant.id,
-            name="Existing KB",
-            qdrant_collection="kb_existing_test",
+        session.add(
+            KbChunk(kb_id=kb_id, doc_id=doc.id, vector_id="vec-1", chunk_index=0)
         )
-        session.add(kb)
-        await session.flush()
-
-        # Get existing agent and bind KB
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
-        )
-        agent = result.scalar_one()
-        agent.kb_id = kb.id
         await session.commit()
+        return doc.id
 
-        agent_id = agent.id
-        existing_kb_id = kb.id
-        existing_tenant_id = tenant.id
-
-        kb_svc = KbService(session=session)
-        tenant_result, kb_result = await kb_svc.get_or_create_agent_kb(agent_id)
-
-        # Should return existing, not create new
-        assert kb_result.id == existing_kb_id
-        assert tenant_result.id == existing_tenant_id
-
-
-@pytest.mark.asyncio
-async def test_kb_setup_completed_reflects_real_binding(setup_test_db):
-    """kb_setup_completed should reflect actual KB binding, not just boolean flag."""
+async def _counts(kb_id: str) -> tuple[int, int]:
     async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
+        docs = await session.scalar(
+            select(func.count(KbDocument.id)).where(KbDocument.kb_id == kb_id)
         )
-        agent = result.scalar_one()
+        chunks = await session.scalar(
+            select(func.count(KbChunk.id)).where(KbChunk.kb_id == kb_id)
+        )
+    return docs or 0, chunks or 0
 
-        # Set flag but no KB
-        agent.kb_setup_completed = True
-        agent.kb_id = None
-        await session.commit()
-
-        agent_id = agent.id
-
-        kb_svc = KbService(session=session)
-        tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id)
-
-        # After binding, agent should have both flag and real KB
-        result = await session.execute(select(Agent).where(Agent.id == agent_id))
-        agent = result.scalar_one()
-        assert agent.kb_id is not None
-        assert agent.kb_id == kb.id
-
+# ---- binding ---------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_kb_service_requires_tenant_id_for_all_operations():
-    """All KB service operations must require tenant_id to enforce isolation."""
-    kb_svc = KbService()
+async def test_bind_sets_agent_kb_id(setup_test_db):
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Bindable KB")
+    agent_id = await _create_agent(workspace_id, "Bindable Agent")
 
-    # Should raise ValueError when tenant_id is None or empty
-    with pytest.raises(ValueError, match="tenant_id"):
-        await kb_svc.get_knowledge_base(None, "some-kb-id")
+    agent = await KbService().bind_agent(agent_id, workspace_id, kb_id)
 
-    with pytest.raises(ValueError, match="tenant_id"):
-        await kb_svc.get_knowledge_base("", "some-kb-id")
-
-
-@pytest.mark.asyncio
-async def test_agent_kb_binding_creates_qdrant_collection(setup_test_db):
-    """When binding agent to KB, Qdrant collection should be created."""
+    assert agent.kb_id == kb_id
     async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
-        )
-        agent = result.scalar_one()
+        assert (await session.get(Agent, agent_id)).kb_id == kb_id
 
-        # Clear any existing KB binding
-        agent.kb_id = None
-        await session.commit()
+@pytest.mark.asyncio
+async def test_bind_twice_is_idempotent(setup_test_db):
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Idempotent KB")
+    agent_id = await _create_agent(workspace_id, "Idempotent Agent")
 
-        agent_id = agent.id
+    service = KbService()
+    await service.bind_agent(agent_id, workspace_id, kb_id)
+    agent = await service.bind_agent(agent_id, workspace_id, kb_id)
 
-        kb_svc = KbService(session=session)
-        tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id)
+    assert agent.kb_id == kb_id
 
-        # KB should have a valid qdrant_collection name
+@pytest.mark.asyncio
+async def test_binding_creates_the_qdrant_collection(setup_test_db, fake_qdrant):
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Qdrant KB")
+
+    async with database.AsyncSessionLocal() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
         assert kb.qdrant_collection is not None
         assert kb.qdrant_collection.startswith("kb_")
 
+    assert ("ensure", kb_id, EMBED_DIMENSION) in fake_qdrant
 
 @pytest.mark.asyncio
-async def test_kb_setup_endpoint_creates_kb_binding(client, default_agent_id):
-    """KB setup endpoint should create/bind tenant-scoped KB when agent has no kb_id."""
+async def test_unbind_leaves_contents_untouched(setup_test_db, fake_qdrant):
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Keeps Contents KB")
+    agent_id = await _create_agent(workspace_id, "Keeps Contents Agent")
+    await _seed_contents(kb_id, source_agent_id=agent_id)
+    before = await _counts(kb_id)
+    assert before == (1, 1)
+
+    service = KbService()
+    await service.bind_agent(agent_id, workspace_id, kb_id)
+    agent = await service.bind_agent(agent_id, workspace_id, None)
+
+    assert agent.kb_id is None
+    assert await _counts(kb_id) == before
+    assert not [c for c in fake_qdrant if c == ("delete", kb_id)]
+
     async with database.AsyncSessionLocal() as session:
-        # Get agent and ensure it has no KB binding
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        agent.kb_id = None
-        agent.kb_setup_completed = False
-        await session.commit()
-
-    # Mock Qdrant to avoid external calls
-    with patch("services.kb_service.QdrantKbService.ensure_collection") as mock_ensure:
-        mock_ensure.return_value = None
-
-        # Call kb-setup endpoint
-        response = await client.post(
-            f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
-            json={
-                "embedding_provider": "jina",
-                "jina_api_key": "test_jina_key_for_kb_setup",
-            },
-        )
-
-    assert response.status_code == 200, (
-        f"Expected 200, got {response.status_code}: {response.text}"
-    )
-    data = response.json()
-
-    # Verify kb_setup_completed is True
-    assert data["kb_setup_completed"] is True
-
-    # Verify agent now has kb_id bound
-    async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        assert agent.kb_id is not None
-
-        # Verify the KB exists and belongs to a tenant
-        result = await session.execute(
-            select(KnowledgeBase).where(KnowledgeBase.id == agent.kb_id)
-        )
-        kb = result.scalar_one_or_none()
-        assert kb is not None
-        assert kb.tenant_id is not None
-
-        # Verify we can retrieve with tenant isolation
-        kb_svc = KbService(session=session)
-        kb_fetched = await kb_svc.get_knowledge_base(kb.tenant_id, kb.id)
-        assert kb_fetched is not None
-        assert kb_fetched.id == kb.id
-
+        assert await session.get(KnowledgeBase, kb_id) is not None
 
 @pytest.mark.asyncio
-async def test_kb_setup_endpoint_returns_existing_kb_if_already_bound(
-    client, default_agent_id
-):
-    """KB setup endpoint should return existing KB if agent already has kb_id."""
+async def test_rebind_keeps_the_previous_kbs_contents(setup_test_db):
+    workspace_id = await _workspace_id()
+    first_kb = await _create_kb(workspace_id, "First KB")
+    second_kb = await _create_kb(workspace_id, "Second KB")
+    agent_id = await _create_agent(workspace_id, "Rebinding Agent")
+    await _seed_contents(first_kb)
+    before = await _counts(first_kb)
+
+    service = KbService()
+    await service.bind_agent(agent_id, workspace_id, first_kb)
+    agent = await service.bind_agent(agent_id, workspace_id, second_kb)
+
+    assert agent.kb_id == second_kb
+    assert await _counts(first_kb) == before
     async with database.AsyncSessionLocal() as session:
-        # Create tenant and KB first
-        tenant = Tenant(name="Existing Tenant", slug="existing-tenant")
-        session.add(tenant)
-        await session.flush()
-
-        kb = KnowledgeBase(
-            tenant_id=tenant.id,
-            name="Existing KB",
-            qdrant_collection="kb_existing_test",
-        )
-        session.add(kb)
-        await session.flush()
-
-        # Bind to agent
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        agent.kb_id = kb.id
-        agent.kb_setup_completed = True
-        await session.commit()
-
-        existing_kb_id = kb.id
-
-    # Call kb-setup endpoint - should return 409 conflict since already completed
-    response = await client.post(
-        f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
-        json={
-            "embedding_provider": "jina",
-            "jina_api_key": "test_jina_key_for_kb_setup",
-        },
-    )
-
-    # Should return 409 since kb_setup_completed is already True
-    assert response.status_code == 409, (
-        f"Expected 409, got {response.status_code}: {response.text}"
-    )
-
+        assert await session.get(KnowledgeBase, first_kb) is not None
 
 @pytest.mark.asyncio
-async def test_kb_setup_reconciles_stale_kb_binding(client, default_agent_id):
-    """Regression: kb_id present but kb_setup_completed=False should be reconciled.
+async def test_bind_one_kb_to_two_agents_is_rejected(setup_test_db):
+    from fastapi import HTTPException
 
-    This tests the bug where kb_reset sets kb_setup_completed=False but leaves kb_id,
-    causing subsequent kb_setup to return success without actually completing setup.
-    """
-    async with database.AsyncSessionLocal() as session:
-        # Create tenant and KB first
-        tenant = Tenant(name="Stale Test Tenant", slug="stale-test-tenant")
-        session.add(tenant)
-        await session.flush()
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Contended KB")
+    agent_a = await _create_agent(workspace_id, "Contender A")
+    agent_b = await _create_agent(workspace_id, "Contender B")
 
-        kb = KnowledgeBase(
-            tenant_id=tenant.id,
-            name="Stale Test KB",
-            qdrant_collection="kb_stale_test",
-        )
-        session.add(kb)
-        await session.flush()
+    service = KbService()
+    await service.bind_agent(agent_a, workspace_id, kb_id)
 
-        # Bind to agent but set kb_setup_completed=False (stale state after reset)
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        agent.kb_id = kb.id
-        agent.kb_setup_completed = False  # Stale: has kb_id but not completed
-        agent.embedding_provider = "jina"
-        await session.commit()
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bind_agent(agent_b, workspace_id, kb_id)
 
-    # Mock Qdrant to avoid external calls
-    with patch("services.kb_service.QdrantKbService.ensure_collection") as mock_ensure:
-        mock_ensure.return_value = None
-
-        # Call kb-setup endpoint
-        response = await client.post(
-            f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
-            json={
-                "embedding_provider": "jina",
-                "jina_api_key": "test_jina_key_for_kb_setup",
-            },
-        )
-
-    # Should succeed (200) and complete setup
-    assert response.status_code == 200, (
-        f"Expected 200, got {response.status_code}: {response.text}"
-    )
-    data = response.json()
-
-    # Key assertions: setup should be completed
-    assert data["kb_setup_completed"] is True, (
-        "kb_setup_completed should be True after setup"
-    )
-    assert data["kb_id"] is not None, "kb_id should be set"
-
-    # Verify DB state is consistent
-    async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        assert agent.kb_setup_completed is True, (
-            "DB agent.kb_setup_completed should be True"
-        )
-        assert agent.kb_id is not None, "DB agent.kb_id should still be set"
-
+    assert exc_info.value.status_code == 409
+    assert str(exc_info.value.detail) == "KB is already bound to another agent"
 
 @pytest.mark.asyncio
-async def test_kb_reset_then_reinitialize_flow(client, default_agent_id):
-    """Regression: reset followed by reinitialize should complete successfully.
+async def test_unbound_agent_stays_unbound(setup_test_db):
+    """No implicit KB creation: an agent without kb_id is simply unbound."""
+    workspace_id = await _workspace_id()
+    agent_id = await _create_agent(workspace_id, "Never Bound Agent")
 
-    Tests the full cycle: setup -> reset -> reinitialize.
-    """
-    # Mock Qdrant to avoid external calls
-    with patch("services.kb_service.QdrantKbService.ensure_collection") as mock_ensure:
-        mock_ensure.return_value = None
+    async with database.AsyncSessionLocal() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent.kb_id is None
+        assert not hasattr(KbService, "get_or_create_agent_kb")
 
-        # Step 1: Initial setup
-        response = await client.post(
-            f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
-            json={
-                "embedding_provider": "jina",
-                "jina_api_key": "test_jina_key_for_kb_setup",
-            },
-        )
-        assert response.status_code == 200, f"Initial setup failed: {response.text}"
-        data = response.json()
-        assert data["kb_setup_completed"] is True, "Initial setup should complete"
-        initial_kb_id = data["kb_id"]
+@pytest.mark.asyncio
+async def test_bind_inactive_kb_is_rejected(setup_test_db):
+    from fastapi import HTTPException
 
-        # Step 2: Reset
-        response = await client.post(
-            f"/api/v1/agent:kb-reset?agent_id={default_agent_id}",
-        )
-        assert response.status_code == 200, f"Reset failed: {response.text}"
+    workspace_id = await _workspace_id()
+    broken_kb = await _create_kb(workspace_id, "Broken KB", status="error")
+    agent_id = await _create_agent(workspace_id, "Broken KB Agent")
 
-        # Verify reset state
-        async with database.AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Agent).where(Agent.id == default_agent_id)
-            )
-            agent = result.scalar_one()
-            assert agent.kb_setup_completed is False, (
-                "After reset, kb_setup_completed should be False"
-            )
-            # kb_id may or may not be cleared depending on implementation
+    with pytest.raises(HTTPException) as exc_info:
+        await KbService().bind_agent(agent_id, workspace_id, broken_kb)
 
-        # Step 3: Re-initialize - this is the bug! Should succeed and complete
-        response = await client.post(
-            f"/api/v1/agent:kb-setup?agent_id={default_agent_id}",
-            json={
-                "embedding_provider": "jina",
-                "jina_api_key": "test_jina_key_for_kb_setup",
-            },
-        )
-        assert response.status_code == 200, f"Re-initialize failed: {response.text}"
-        data = response.json()
-
-        # This is the key assertion that fails before the fix
-        assert data["kb_setup_completed"] is True, (
-            "Re-initialize should complete successfully"
-        )
-        assert data["kb_id"] is not None, "Re-initialize should have kb_id"
+    assert exc_info.value.status_code == 400
+    assert str(exc_info.value.detail) == "KB is not active"

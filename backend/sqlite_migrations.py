@@ -76,6 +76,9 @@ def run_sqlite_migrations(database_url: str) -> None:
             # Dedicated per-column backfills (after all columns definitely exist)
             _backfill_agents(cursor)
 
+        # ── knowledge bases (workspace scope + KB-owned embedding config) ──
+        _migrate_knowledge_bases(cursor)
+
         # ── agent_members ─────────────────────────────────────────────────
         if _table_exists(cursor, "agents") and _table_exists(cursor, "admin_users"):
             cursor.execute(
@@ -528,4 +531,295 @@ def _backfill_agents(cursor: sqlite3.Cursor):
             "UPDATE agents SET restricted_reply = ? "
             "WHERE restricted_reply IS NULL OR restricted_reply = ''",
             (restricted_reply_default,),
+        )
+
+# ---- knowledge base migration ----------------------------------------------
+
+def _fallback_embedding_dimension(model: str | None) -> int:
+    """Stdlib mirror of ``services.qdrant_service.get_embedding_dimension``.
+
+    The migration module must stay importable without the app's dependencies, so
+    the mapping is duplicated here. Used only to backfill ``embedding_dimension``
+    for rows created before the column existed.
+    """
+    name = (model or "").lower()
+    if "text-embedding-3-large" in name:
+        return 3072
+    if "text-embedding-3-small" in name or "ada" in name:
+        return 1536
+    if "jina-embeddings-v2-base-en" in name:
+        return 768
+    return 1024
+
+def _resolve_embedding_dimension(model: str | None) -> int:
+    """Prefer the live mapping; fall back to the stdlib copy if unavailable."""
+    try:
+        from services.qdrant_service import get_embedding_dimension
+
+        return get_embedding_dimension(model or "")
+    except Exception:
+        return _fallback_embedding_dimension(model)
+
+def _migrate_knowledge_bases(cursor: sqlite3.Cursor) -> None:
+    """Move the KB to workspace scope and make it own its embedding config.
+
+    Order matters: columns first, then backfills, then dedupe, then the partial
+    unique index on ``agents.kb_id`` (which would reject the legacy duplicates).
+    Every step is idempotent.
+    """
+    if not _table_exists(cursor, "knowledge_bases"):
+        return
+
+    # 1. New columns.
+    added = _ensure_columns(
+        cursor,
+        "knowledge_bases",
+        [
+            ("workspace_id", "INTEGER"),
+            ("embedding_provider", "TEXT DEFAULT 'jina'"),
+            ("embedding_api_key", "TEXT"),
+            ("embedding_batch_size", "INTEGER DEFAULT 4"),
+            ("embedding_dimension", "INTEGER"),
+        ],
+    )
+    if added:
+        print(f"✓ Added {added} column(s) to knowledge_bases")
+
+    if _table_exists(cursor, "kb_documents"):
+        added = _ensure_columns(cursor, "kb_documents", [("source_agent_id", "TEXT")])
+        if added:
+            print(f"✓ Added {added} column(s) to kb_documents")
+
+    has_agents = _table_exists(cursor, "agents")
+    has_workspaces = _table_exists(cursor, "workspaces")
+
+    # 2. Backfill workspace_id from the bound agent, else the canonical workspace.
+    if has_agents:
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET workspace_id = (
+                SELECT agents.workspace_id FROM agents
+                WHERE agents.kb_id = knowledge_bases.id
+                LIMIT 1
+            )
+            WHERE workspace_id IS NULL
+            """
+        )
+        if cursor.rowcount > 0:
+            print(f"✓ Backfilled workspace_id for {cursor.rowcount} knowledge base(s)")
+
+    if has_workspaces:
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET workspace_id = (SELECT MIN(id) FROM workspaces)
+            WHERE workspace_id IS NULL
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled workspace_id for {cursor.rowcount} unbound knowledge base(s)"
+            )
+
+    # 3. Workspace index (create_all builds it on fresh installs).
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_knowledge_bases_workspace_id "
+        "ON knowledge_bases(workspace_id)"
+    )
+
+    # 4. Copy the embedding config off the bound agent, only where the KB has no
+    # real value yet. The KB column defaults (`jina`, `BAAI/bge-m3`, batch size 4)
+    # are what the new columns hold on rows that predate them, so they count as
+    # "no value": the agent that was actually serving the KB had the live config.
+    if has_agents:
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET embedding_provider = (
+                SELECT agents.embedding_provider FROM agents
+                WHERE agents.kb_id = knowledge_bases.id LIMIT 1
+            )
+            WHERE (embedding_provider IS NULL OR embedding_provider = ''
+                   OR embedding_provider = 'jina')
+              AND EXISTS (
+                SELECT 1 FROM agents
+                WHERE agents.kb_id = knowledge_bases.id
+                  AND agents.embedding_provider IS NOT NULL
+                  AND agents.embedding_provider != ''
+              )
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled embedding_provider for {cursor.rowcount} knowledge base(s)"
+            )
+
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET embedding_model = (
+                SELECT agents.embedding_model FROM agents
+                WHERE agents.kb_id = knowledge_bases.id LIMIT 1
+            )
+            WHERE (embedding_model IS NULL OR embedding_model = ''
+                   OR embedding_model = 'BAAI/bge-m3')
+              AND EXISTS (
+                SELECT 1 FROM agents
+                WHERE agents.kb_id = knowledge_bases.id
+                  AND agents.embedding_model IS NOT NULL
+                  AND agents.embedding_model != ''
+              )
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled embedding_model for {cursor.rowcount} knowledge base(s)"
+            )
+
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET embedding_base_url = (
+                SELECT agents.embedding_api_base FROM agents
+                WHERE agents.kb_id = knowledge_bases.id LIMIT 1
+            )
+            WHERE (embedding_base_url IS NULL OR embedding_base_url = '')
+              AND EXISTS (
+                SELECT 1 FROM agents
+                WHERE agents.kb_id = knowledge_bases.id
+                  AND agents.embedding_api_base IS NOT NULL
+                  AND agents.embedding_api_base != ''
+              )
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled embedding_base_url for {cursor.rowcount} knowledge base(s)"
+            )
+
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET embedding_batch_size = (
+                SELECT agents.embedding_batch_size FROM agents
+                WHERE agents.kb_id = knowledge_bases.id LIMIT 1
+            )
+            WHERE (embedding_batch_size IS NULL OR embedding_batch_size = 4)
+              AND EXISTS (
+                SELECT 1 FROM agents
+                WHERE agents.kb_id = knowledge_bases.id
+                  AND agents.embedding_batch_size IS NOT NULL
+                  AND agents.embedding_batch_size != 4
+              )
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled embedding_batch_size for {cursor.rowcount} knowledge base(s)"
+            )
+
+        # Keys are already Fernet-encrypted with the same `enc:` marker — copy
+        # verbatim, never decrypt in SQL.
+        cursor.execute(
+            """
+            UPDATE knowledge_bases
+            SET embedding_api_key = (
+                SELECT CASE
+                    WHEN agents.embedding_provider = 'jina' THEN agents.jina_api_key
+                    WHEN agents.embedding_provider = 'siliconflow' THEN agents.siliconflow_api_key
+                    ELSE COALESCE(agents.jina_api_key, agents.siliconflow_api_key)
+                END
+                FROM agents
+                WHERE agents.kb_id = knowledge_bases.id LIMIT 1
+            )
+            WHERE embedding_api_key IS NULL
+              AND EXISTS (
+                SELECT 1 FROM agents
+                WHERE agents.kb_id = knowledge_bases.id
+                  AND COALESCE(
+                        CASE
+                            WHEN agents.embedding_provider = 'jina' THEN agents.jina_api_key
+                            WHEN agents.embedding_provider = 'siliconflow' THEN agents.siliconflow_api_key
+                            ELSE COALESCE(agents.jina_api_key, agents.siliconflow_api_key)
+                        END,
+                        ''
+                  ) != ''
+              )
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled embedding_api_key for {cursor.rowcount} knowledge base(s)"
+            )
+
+    # 5. Provenance for legacy URL documents. Manual uploads stay NULL (unknown).
+    if _table_exists(cursor, "kb_documents") and has_agents:
+        cursor.execute(
+            r"""
+            UPDATE kb_documents
+            SET source_agent_id = (
+                SELECT agents.id FROM agents
+                WHERE agents.kb_id = kb_documents.kb_id LIMIT 1
+            )
+            WHERE source_agent_id IS NULL
+              AND filename LIKE 'url\_%' ESCAPE '\'
+            """
+        )
+        if cursor.rowcount > 0:
+            print(
+                f"✓ Backfilled source_agent_id for {cursor.rowcount} URL document(s)"
+            )
+
+    # 5b. Measured width for rows created before the column existed.
+    cursor.execute(
+        "SELECT id, embedding_model FROM knowledge_bases "
+        "WHERE embedding_dimension IS NULL"
+    )
+    rows = cursor.fetchall()
+    for kb_id, model in rows:
+        cursor.execute(
+            "UPDATE knowledge_bases SET embedding_dimension = ? WHERE id = ?",
+            (_resolve_embedding_dimension(model), kb_id),
+        )
+    if rows:
+        print(f"✓ Backfilled embedding_dimension for {len(rows)} knowledge base(s)")
+
+    # 6. One KB ⇄ one agent: drop the extra bindings before the unique index.
+    if has_agents:
+        cursor.execute(
+            """
+            SELECT kb_id FROM agents
+            WHERE kb_id IS NOT NULL
+            GROUP BY kb_id
+            HAVING COUNT(*) > 1
+            """
+        )
+        duplicate_kb_ids = [row[0] for row in cursor.fetchall()]
+        dropped = 0
+        for kb_id in duplicate_kb_ids:
+            cursor.execute(
+                """
+                SELECT rowid, id, created_at FROM agents
+                WHERE kb_id = ?
+                ORDER BY COALESCE(created_at, ''), rowid
+                """,
+                (kb_id,),
+            )
+            bindings = cursor.fetchall()
+            for row in bindings[1:]:
+                cursor.execute(
+                    "UPDATE agents SET kb_id = NULL WHERE rowid = ?", (row[0],)
+                )
+                dropped += 1
+        if dropped:
+            print(
+                f"✓ Dropped {dropped} duplicate KB binding(s) "
+                f"across {len(duplicate_kb_ids)} knowledge base(s)"
+            )
+
+        # 7. Partial unique index: fresh installs get it from `Agent.kb_id unique=True`.
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_kb_id "
+            "ON agents(kb_id) WHERE kb_id IS NOT NULL"
         )

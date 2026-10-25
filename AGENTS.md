@@ -5,7 +5,7 @@ This is the primary reference for AI coding agents (Pi, Claude, Cursor, Aider, e
 
 ## Project overview
 Docker-oriented AI customer support platform:
-- FastAPI backend with multi-tenant KB (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, quotas.
+- FastAPI backend with workspace-scoped knowledge bases (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, quotas.
 - Vite SPA admin dashboard in `frontend-nextjs/` (React 18 + react-router 7; the directory name is a leftover from the former Next.js app).
 - Embeddable TypeScript widget in `widget/` (localStorage sessions, SSE, human takeover).
 - Supporting: Scrapling microservice, Qdrant (vector DB), Redis, nginx.
@@ -36,6 +36,9 @@ Docker-oriented AI customer support platform:
 - Widget build (typecheck + ESM + IIFE bundles): `cd widget && npm run build`.
 - Sync widget bundle into the backend: `npm run sync-widget` (root; copies `widget/dist/basjoo-widget.min.js` → `backend/static/sdk.js`).
 - Backend tests: `cd backend && pytest` (uses `pytest.ini`; `Test*` classes, `test_*` funcs).
+- In the dev image, mount the **repo root** and point `SCRAPLING_SERVICE_MAIN` at it, or the 4 `test_scrapling_discover_*` BFS tests self-skip and the green run silently loses that coverage:
+  `docker run --rm --network host -e REDIS_URL=redis://127.0.0.1:6379/0 -e SCRAPLING_SERVICE_MAIN=/repo/scrapling-service/main.py -v "$PWD":/repo -w /repo/backend --entrypoint python3 basjoo-backend-dev:latest -m pytest -q -p no:cacheprovider`
+  (`--network host` + `REDIS_URL` are both mandatory: with `redis:6379` unresolvable every login test pays a 134 s connect timeout.)
 - E2E (smoke, dev env): `npm run test:e2e` (auto-starts `docker compose --profile dev`).
 - E2E (prod-like): `npm run test:e2e:prod` (requires `docker compose --profile prod up -d` first).
 - E2E (all): `npm run test:e2e:all`. E2E (widget cross-origin): `npm run test:e2e:widget`.
@@ -49,10 +52,13 @@ Docker-oriented AI customer support platform:
 - **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
 
 ## Architecture boundaries
-- `backend/main.py` owns the app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`, `/api/tenants`), static asset routes (`/sdk.js`, `/basjoo-logo.png`, `/widget-demo`), and scheduler/Redis lifespan.
+- `backend/main.py` owns the app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`, legacy `/api/tenants`), static asset routes (`/sdk.js`, `/basjoo-logo.png`, `/widget-demo`), and scheduler/Redis lifespan.
 - KB stack (`kb_service.py`, `kb_document_processor.py`, `kb_retrieval_service.py`, `qdrant_service.py`):
-  - One tenant per agent's KB (`Tenant` → `KnowledgeBase` → `KbDocument` → `KbChunk`).
-  - One Qdrant collection per KB (`kb_<12 hex chars>`, Cosine distance), plus a `tenant_id` payload filter — physical + logical isolation.
+  - A `KnowledgeBase` exists on its own (`KnowledgeBase` → `KbDocument` → `KbChunk`), scoped by `workspace_id`. It is **not** derived from an agent: `agents.kb_id` is a nullable UNIQUE pointer, so at most one agent uses a KB and a KB can outlive every agent. Create/reset/delete live on `/api/v1/knowledge-bases` (`backend/api/v1/kb_endpoints.py`).
+  - Binding is the only link: `PUT /api/v1/agents/{agent_id}/knowledge-base {"kb_id": ...|null}`. Deleting an agent (soft delete) clears `agents.kb_id` in the same transaction — the KB, its documents and its chunks survive and can be bound to another agent. Never add a "the agent's KB" accessor; go through the binding.
+  - One Qdrant collection per KB (`kb_<12 hex chars>`, Cosine distance), filtered by `workspace_id` only. `Tenant` still exists as a table but **no KB request path reads it** — do not reintroduce tenant-derived isolation.
+  - `knowledge_bases.embedding_dimension` is measured by probe (one real embedding call) when the KB is created, so the collection and the provider always agree; on mismatch `qdrant_service` raises instead of silently writing wrong-size vectors.
+  - Each KB owns its embedding config (`embedding_provider`, `embedding_model`, `embedding_base_url`, encrypted key). Retrieval and ingestion read the key from the **KB**, never from the agent — that is the #11 fix.
   - Chunking defaults: `chunk_size=512`, `chunk_overlap=64`; embeddings upserted in batches of ≤100.
   - Retrieval: query embed → Qdrant top `top_k * 2` → post-filter by score → cap at `top_k`. Effective threshold = explicit arg > `agent.similarity_threshold` > service default `0.6`. Agent default is `0.01` (`DEFAULT_AGENT_SIMILARITY_THRESHOLD`); the settings slider maps `0–100` → `0.00–0.100` (×1000).
 - Task concurrency is guarded by a shared `TaskLock` (`services/task_lock.py`, `TaskType` enum) in URL/index/KB-reset endpoints.
@@ -67,9 +73,10 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 
 ## When changing areas
 - **New LLM provider**: extend `backend/services/llm_service.py` (`provider_type` branch), update the `Agent` model/config, expose it in `src/components/AISettingsForm.tsx`.
-- **New knowledge source type**: extend the shared ingestion path (`services/kb_document_processor.py` + `services/document_parser.py`) and surface it through the **agent-scoped** endpoints in `backend/api/v1/endpoints.py`. Do not extend `kb_document_endpoints.py` — see "Known dead code".
+- **New knowledge source type**: extend the shared ingestion path (`services/kb_document_processor.py` + `services/document_parser.py`) and surface it through the **agent-scoped** endpoints in `backend/api/v1/endpoints.py` (which resolve the KB via `agents.kb_id`) or through `backend/api/v1/kb_endpoints.py` if it belongs to the KB rather than the agent.
 - **UI change**: update `src/views/` or `src/components/`; add i18n strings in `src/locales/{zh-CN,en-US}/`; verify responsiveness.
-- **Post-agent-creation KB onboarding**: in `src/views/Agents.tsx`, after `api.createAgent` succeeds set `onboardingAgentId`. That triggers `KBSetupWizard` (via `useAgentKbStatus` + `kbStatus` API + `kb_setup_completed`). On complete/skip call `recheck()`, then `navigate("/agents/{id}/dashboard")`.
+- **KB create/bind UX**: KBs are created and bound **outside** the agent. The agent list offers three choices per unbound agent (bind an existing KB / create one in `KbFormModal` / skip). `src/components/KBSetupGuard.tsx` blocks knowledge-dependent views and links to `/knowledge-bases`; it never sets up a KB inline. `KBSetupWizard` no longer exists — do not reintroduce an inline wizard.
+- **KB status is derived**: `GET /api/v1/agent:kb-status?agent_id=` computes `kb_setup_completed` from the binding plus `KnowledgeBase.status`. `Agent.kb_setup_completed` is a dead column; never read it, and don't put the flag back on the `/api/v1/agent` payload.
 - **Chat streaming issues**: inspect SSE in `backend/api/v1/endpoints.py`, `sse_utils.py`, the widget parser, and the error middleware.
 - **Indexing/retrieval problems**: check `kb_retrieval_service.py`, `qdrant_service.py`, threshold, `is_indexed` on `URLSource`, and `sources:summary` / `index:status`.
 - **Large exploration/analysis**: use `rg`/`search_files` and read targeted ranges rather than dumping whole files (`endpoints.py` is ~3.9k lines).
@@ -90,7 +97,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - Limits: ≤5 files per request, 20 MB per file, extensions `txt md html pdf docx xlsx`.
 - `/files:list` reads `KbDocument` (excluding `url_*` rows); `/urls:list` reads `URLSource`.
 
-**Agent-scoped KB endpoints are the live path.** The tenant-scoped REST surface (`POST/GET/DELETE /api/tenants/{tenant_id}/knowledge_bases/{kb_id}/documents`, `/config`, `/reset`, and `POST /api/tenants/{tid}/agents/{aid}/retrieve`) exists in code but has no caller in the frontend, widget, or e2e suite. Treat it as unshipped.
+**KB endpoints are the live path, in two layers:** the KB's own lifecycle on `/api/v1/knowledge-bases` (list/create/detail/reset/delete, `kb_endpoints.py`) and the agent-scoped data surface on `/api/v1` (`files:*`, `urls:*`, `sources:summary`, `index:*`) which resolves the KB *through* `agents.kb_id`. `backend/api/v1/kb_document_endpoints.py` and the `/api/tenants/...` KB surface are gone — do not resurrect them.
 
 ### Frontend
 - Centralized API/SSE client plus the `kbStatus` helper in `src/services/api.ts`.
@@ -104,28 +111,28 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - Maintains backward compatibility for existing script embeds (agent ID persistence, `?agent_id=` and `?agentId=` query params).
 
 ## Known dead code (do not extend, do not "fix" by wiring up)
-Left over from the Next.js → Vite migration and from the abandoned tenant-KB REST surface. Removing these is a separate cleanup task; touching them inside an unrelated change is noise.
+Left over from the Next.js → Vite migration. Removing these is a separate cleanup task; touching them inside an unrelated change is noise.
 
 **Frontend**
 - `src/views/AgentSettings 2.tsx` (1,630 lines) — accidental Finder duplicate, not routed and not imported anywhere. It is the only consumer of `api.clearAgentError`, `useTheme`, and ~100 i18n keys, so deleting it strands those keys too.
 - `src/utils/textSanitizer.ts` — zero imports.
 - `src/views/Chat.tsx` + route `/chat/:sessionId` — no link or `navigate()` targets it; `Sessions.tsx` handles messages inline. Orphan route.
 - `src/views/Setup.tsx` + route `/setup` — legacy AI-config wizard with no inbound link (`Login.tsx` points at `/register`). Orphan route.
-- `"use client"` at the top of 14 files — Next.js directive, a no-op under Vite.
+- `"use client"` at the top of some files — Next.js directive, a no-op under Vite.
 - Unused methods in `src/services/api.ts`: `checkHealth`, `getIndexInfo`, `listModels`, `discoverURLs`, `getAdminSessions`, `getAdminSessionMessages`, `getJinaKeyStatus`, `updateJinaApiKey`, `clearAgentError`.
   - `clearAgentError` posts to `/api/v1/agent:clear-error`, an endpoint that **does not exist** in the backend. Do not call it.
 - ~300 of 680 keys per locale file are unreferenced (`labels.*` bulk, the removed Q&A import feature, playground index-rebuild strings, `theme.*`).
 
 **Backend**
-- `backend/api/v1/kb_document_endpoints.py` (333 lines, 10 routes, prefix `/api/tenants`) — no frontend, widget, e2e, or backend test calls it. `kb_service` / `kb_document_processor` / `kb_retrieval_service` are live; this router is not.
 - `backend/services/file_service.py` — imported as `svc_list_files` / `svc_upload_files` / `svc_delete_file` / `svc_clear_all_files` in `endpoints.py` but never called. It is the only writer of `KnowledgeFile`, which is why `Agent.file_count` in `build_agent_config_with_stats` is permanently `0` while `/files:list` returns real `KbDocument` rows (agent cards show 0 files).
 - `URLNormalizer` and `check_content_changed` (`services/scraper.py`, re-exported by `services/__init__.py`) — imported, never called. URL normalization actually happens via `models.normalize_url`.
 - `POST /api/v1/urls:repair-indexed-status` — one-off data repair from a historical bug, no caller.
-- `POST /api/v1/contexts`, `GET /api/v1/models:list`, `GET /api/v1/agent:jina-key-status`, `PUT /api/v1/agent:jina-key` — no product caller (one e2e spec uses `/contexts`).
+- `POST /api/v1/contexts`, `GET /api/v1/models:list` — no product caller (one e2e spec uses `/contexts`). The per-agent embedding routes (`agent:jina-key-status`, `agent:jina-key`, `agent:kb-setup`, `agent:test-jina-api`) were **removed**: embedding config belongs to the KB now.
+- `Agent.embedding_provider` / `embedding_model` / `embedding_api_base` / `embedding_batch_size` / `kb_setup_completed` — deprecated columns kept for one release so an old SQLite file still migrates. No code reads or writes them except the migration that backfills the KB.
 - `backend/migrations/*.py` (11 scripts, ~930 lines) — nothing invokes them; `backend/sqlite_migrations.py` is the real migration path (auto-runs on startup).
 - `bootstrap-env.sh` + `backend/env_bootstrap.py` — copied into the image but never imported by `docker-entrypoint.py`; nothing calls the shell wrapper.
 - `IndexJob` model — never instantiated. `/index:rebuild` returns a `job_id` that is never persisted.
-- `Tenant.slug` / `Tenant.plan`, `ChatSession.visitor_region` — written, never read.
+- `Tenant` (table + `/api/tenants` router) — the KB stack no longer reads it; workspaces are the isolation unit. `Tenant.slug` / `Tenant.plan`, `ChatSession.visitor_region` — written, never read.
 
 **Repository hygiene**
 - Tracked artifacts: `E2E_TEST_REPORT.md`, `E2E_BUG_REPORT.md`, `E2E_RAW_OUTPUT.txt`, `tests/playwright-report/index.html` (559 KB), `package-lock 2.json`, `widget/example/basjoo-widget.js` (stale build output).

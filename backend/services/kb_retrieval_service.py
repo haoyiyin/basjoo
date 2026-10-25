@@ -1,11 +1,16 @@
-"""KB retrieval service: validate agent/kb/tenant, embed query, Qdrant search + threshold filter."""
+"""KB retrieval service: resolve agent → KB, embed the query with the KB's own
+embedding config, search the KB's collection, threshold-filter.
+
+No tenant parameter: a KB is scoped to a workspace and lives in its own Qdrant
+collection, so physical isolation replaces the old payload-level tenant filter.
+"""
 
 import logging
 from typing import Any
 
 from sqlalchemy import select
 
-from database import AsyncSessionLocal
+import database
 from models import Agent, KnowledgeBase
 from services.document_parser import DocumentParser
 from services.kb_document_processor import get_embedding_api_key
@@ -13,7 +18,6 @@ from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
 
 logger = logging.getLogger(__name__)
-
 
 class KbRetrievalService:
     def __init__(self):
@@ -24,26 +28,21 @@ class KbRetrievalService:
 
     async def retrieve(
         self,
-        tenant_id: str | None,
         agent_id: str,
         query: str,
         top_k: int = 5,
         threshold: float | None = None,
     ) -> list[dict[str, Any]]:
-        """Retrieve top-K chunks from agent's bound KB with double isolation.
-
-        If tenant_id is None (chat path), the effective tenant for the Qdrant
-        payload filter is derived from the agent's KB (ensuring isolation is still
-        enforced by the specific KB's tenant_id).
+        """Retrieve top-K chunks from the KB bound to *agent_id*.
 
         Returns: [{"text":, "doc_id":, "chunk_index":, "score":, "filename":?}, ...]
-        Returns [] if agent has no kb_id bound or validation fails.
+        Returns [] if the agent has no kb_id bound or validation fails.
         """
         if not agent_id:
             return []
 
-        async with AsyncSessionLocal() as session:
-            # 1. Validate agent exists and get kb_id (outer join so agent without kb still found)
+        async with database.AsyncSessionLocal() as session:
+            # 1. Resolve the agent and its bound KB (outer join: unbound agents still load)
             stmt = (
                 select(Agent, KnowledgeBase)
                 .join(KnowledgeBase, Agent.kb_id == KnowledgeBase.id, isouter=True)
@@ -62,19 +61,8 @@ class KbRetrievalService:
                 )
                 return []
 
-            # 2. Derive effective tenant and enforce match
-            # When tenant_id is None (chat path), derive from KB to allow retrieval
-            # When tenant_id is explicit, it must match KB's tenant
-            effective_tenant = tenant_id or kb.tenant_id
-            if tenant_id is not None and kb.tenant_id != tenant_id:
-                logger.warning(
-                    f"Tenant mismatch: requested {tenant_id} but KB {kb.id} belongs to {kb.tenant_id}"
-                )
-                return []
-
-            # 3. Embed query (single item, reuse existing parser)
-            # Get decrypted API key from agent based on embedding_provider
-            api_key = get_embedding_api_key(agent)
+            # 2. Embed the query with the KB's own provider config and key
+            api_key = get_embedding_api_key(kb)
 
             try:
                 embeddings = await self.parser.embed_texts(
@@ -87,16 +75,14 @@ class KbRetrievalService:
                 logger.warning(f"Query embed failed: {e}")
                 return []
 
-            # 4. Search with double isolation (collection + payload filter)
-            # Use effective_tenant (derived from KB when tenant_id is None)
+            # 3. Search this KB's collection (physical isolation, kb_id payload filter)
             raw_hits = await self.qdrant.search_kb(
                 kb_id=kb.id,
-                tenant_id=effective_tenant,
                 query_vector=query_vec,
                 top_k=top_k * 2,  # fetch extra for threshold filtering
             )
 
-            # 5. Post-filter by threshold and cap at top_k
+            # 4. Post-filter by threshold and cap at top_k
             # Use explicit threshold > agent config > service default
             agent_threshold = getattr(agent, "similarity_threshold", None)
             if threshold is not None:
@@ -105,6 +91,7 @@ class KbRetrievalService:
                 eff_threshold = agent_threshold
             else:
                 eff_threshold = self.default_threshold
+
             results = []
             for h in raw_hits:
                 p = h.get("payload", {})
@@ -128,7 +115,7 @@ class KbRetrievalService:
                     break
 
             logger.info(
-                f"KB retrieve tenant={tenant_id} agent={agent_id} kb={kb.id} "
+                f"KB retrieve agent={agent_id} kb={kb.id} "
                 f"got {len(results)} chunks (threshold={eff_threshold})"
             )
             return results

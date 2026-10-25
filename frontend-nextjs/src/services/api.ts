@@ -84,12 +84,6 @@ export interface Agent {
 	api_key_set?: boolean;
 	api_key_masked?: string;
 	api_base?: string;
-	jina_api_key?: string;
-	jina_api_key_set?: boolean;
-	jina_api_key_masked?: string;
-	siliconflow_api_key?: string;
-	siliconflow_api_key_set?: boolean;
-	siliconflow_api_key_masked?: string;
 	provider_type?: ProviderType;
 	azure_endpoint?: string;
 	azure_deployment_name?: string;
@@ -98,12 +92,9 @@ export interface Agent {
 	google_project_id?: string;
 	google_region?: string;
 	provider_config?: Record<string, string | number | boolean>;
-	embedding_provider?: EmbeddingProvider;
-	embedding_api_base?: string | null;
-	embedding_api_key_set?: boolean;
-	embedding_model: string;
-	embedding_batch_size?: number;
-	kb_setup_completed?: boolean;
+	kb_id?: string | null;
+	kb_name?: string | null;
+	kb_status?: string | null;
 	crawl_max_depth?: number;
 	crawl_max_pages?: number;
 	top_k: number;
@@ -132,6 +123,94 @@ export interface Agent {
 	active_session_count?: number;
 	created_at: string;
 	updated_at?: string;
+}
+
+/** Lifecycle state of a knowledge base, mirrored from `KnowledgeBase.status`. */
+export type KbStatus = "active" | "resetting" | "processing" | "error";
+
+/** Compact agent reference embedded in a KB detail payload. */
+export interface KbAgentRef {
+	id: string;
+	name: string;
+}
+
+/** Workspace-scoped knowledge base: config plus document/chunk counters. */
+export interface KnowledgeBaseDetail {
+	id: string;
+	name: string;
+	workspace_id?: number;
+	embedding_provider: EmbeddingProvider;
+	embedding_model: string;
+	embedding_base_url: string | null;
+	embedding_batch_size: number;
+	embedding_dimension: number | null;
+	chunk_size: number;
+	chunk_overlap: number;
+	status: KbStatus;
+	is_locked: boolean;
+	error_message: string | null;
+	document_count: number;
+	ready_document_count: number;
+	total_chunks: number;
+	bound_agent: KbAgentRef | null;
+	created_at?: string | null;
+}
+
+/** Payload for `POST /api/v1/knowledge-bases`. The key is probed before persisting. */
+export interface KnowledgeBaseCreateInput {
+	name: string;
+	embedding_provider: EmbeddingProvider;
+	embedding_model: string;
+	embedding_base_url?: string | null;
+	embedding_api_key: string;
+	embedding_batch_size?: number;
+	chunk_size?: number;
+	chunk_overlap?: number;
+}
+
+/** Payload for `PATCH /api/v1/knowledge-bases/{id}` (non-embedding fields only). */
+export interface KnowledgeBaseUpdateInput {
+	name?: string;
+	chunk_size?: number;
+	chunk_overlap?: number;
+}
+
+/** Payload for `POST /api/v1/knowledge-bases/{id}/reset`. */
+export interface KnowledgeBaseResetInput {
+	embedding_provider: EmbeddingProvider;
+	embedding_model: string;
+	embedding_base_url?: string | null;
+	embedding_api_key?: string;
+	embedding_batch_size?: number;
+}
+
+/** Payload for `POST /api/v1/knowledge-bases/test-embedding`. */
+export interface EmbeddingTestInput {
+	embedding_provider: EmbeddingProvider;
+	embedding_model: string;
+	embedding_base_url?: string | null;
+	embedding_api_key: string;
+}
+
+/** Result of the embedding provider probe. */
+export interface EmbeddingTestResult {
+	success: boolean;
+	dimension: number | null;
+	message: string;
+}
+
+/** Derived knowledge base status for one agent. */
+export interface KbStatusPayload {
+	agent_id: string;
+	kb_id: string | null;
+	kb_setup_completed: boolean;
+	kb: {
+		id: string;
+		name: string;
+		embedding_provider: EmbeddingProvider;
+		embedding_model: string;
+		status: KbStatus;
+	} | null;
 }
 
 export interface AgentMember {
@@ -647,62 +726,107 @@ class APIService {
 		);
 	}
 
-	async getJinaKeyStatus(agentId: string): Promise<{
-		agent_id: string;
-		configured: boolean;
-		embedding_provider?: EmbeddingProvider;
-	}> {
-		return this.request(`/api/v1/agent:jina-key-status?agent_id=${agentId}`);
-	}
-
-	async updateJinaApiKey(
-		agentId: string,
-		jina_api_key: string,
-	): Promise<{ agent_id: string; configured: boolean }> {
-		return this.request(`/api/v1/agent:jina-key?agent_id=${agentId}`, {
-			method: "PUT",
-			body: JSON.stringify({ jina_api_key }),
-		});
-	}
-
 	async getQuota(agentId: string): Promise<Quota> {
 		return this.request<Quota>(`/api/v1/quota?agent_id=${agentId}`);
 	}
 
-	// KB Setup
-	async kbStatus(agentId: string): Promise<{
-		agent_id: string;
-		kb_setup_completed: boolean;
-		embedding_provider: EmbeddingProvider;
-		embedding_model: string;
-		embedding_api_base: string | null;
-		embedding_batch_size: number | null;
-		embedding_api_key_set: boolean;
+	// Knowledge base APIs (workspace-scoped, independent of any agent)
+	async kbStatus(agentId: string): Promise<KbStatusPayload> {
+		return this.request<KbStatusPayload>(
+			`/api/v1/agent:kb-status?agent_id=${agentId}`,
+		);
+	}
+
+	async listKnowledgeBases(): Promise<{
+		knowledge_bases: KnowledgeBaseDetail[];
+		total: number;
 	}> {
-		return this.request(`/api/v1/agent:kb-status?agent_id=${agentId}`);
+		return this.request<{
+			knowledge_bases: KnowledgeBaseDetail[];
+			total: number;
+		}>("/api/v1/knowledge-bases");
 	}
 
-	async kbSetup(
+	async createKnowledgeBase(
+		input: KnowledgeBaseCreateInput,
+	): Promise<KnowledgeBaseDetail> {
+		return this.request<KnowledgeBaseDetail>("/api/v1/knowledge-bases", {
+			method: "POST",
+			body: JSON.stringify(input),
+		});
+	}
+
+	async getKnowledgeBase(kbId: string): Promise<KnowledgeBaseDetail> {
+		return this.request<KnowledgeBaseDetail>(
+			`/api/v1/knowledge-bases/${kbId}`,
+		);
+	}
+
+	async updateKnowledgeBase(
+		kbId: string,
+		input: KnowledgeBaseUpdateInput,
+	): Promise<KnowledgeBaseDetail> {
+		return this.request<KnowledgeBaseDetail>(
+			`/api/v1/knowledge-bases/${kbId}`,
+			{
+				method: "PATCH",
+				body: JSON.stringify(input),
+			},
+		);
+	}
+
+	async resetKnowledgeBase(
+		kbId: string,
+		input: KnowledgeBaseResetInput,
+	): Promise<{
+		status: string;
+		kb_id: string;
+		requeued_documents: number;
+		doc_ids: string[];
+	}> {
+		return this.request<{
+			status: string;
+			kb_id: string;
+			requeued_documents: number;
+			doc_ids: string[];
+		}>(`/api/v1/knowledge-bases/${kbId}/reset`, {
+			method: "POST",
+			body: JSON.stringify(input),
+		});
+	}
+
+	async deleteKnowledgeBase(kbId: string): Promise<{ deleted: boolean }> {
+		return this.request<{ deleted: boolean }>(
+			`/api/v1/knowledge-bases/${kbId}`,
+			{
+				method: "DELETE",
+			},
+		);
+	}
+
+	async bindAgentKnowledgeBase(
 		agentId: string,
-		config: {
-			embedding_provider: EmbeddingProvider;
-			embedding_model: string;
-			embedding_api_base?: string;
-			embedding_batch_size?: number;
-			jina_api_key?: string;
-			siliconflow_api_key?: string;
-		},
-	): Promise<Agent> {
-		return this.request(`/api/v1/agent:kb-setup?agent_id=${agentId}`, {
-			method: "POST",
-			body: JSON.stringify(config),
+		kbId: string | null,
+	): Promise<{ agent: Agent; knowledge_base: KnowledgeBaseDetail | null }> {
+		return this.request<{
+			agent: Agent;
+			knowledge_base: KnowledgeBaseDetail | null;
+		}>(`/api/v1/agents/${agentId}/knowledge-base`, {
+			method: "PUT",
+			body: JSON.stringify({ kb_id: kbId }),
 		});
 	}
 
-	async kbReset(agentId: string): Promise<{ message: string }> {
-		return this.request(`/api/v1/agent:kb-reset?agent_id=${agentId}`, {
-			method: "POST",
-		});
+	async testEmbeddingConfig(
+		input: EmbeddingTestInput,
+	): Promise<EmbeddingTestResult> {
+		return this.request<EmbeddingTestResult>(
+			"/api/v1/knowledge-bases/test-embedding",
+			{
+				method: "POST",
+				body: JSON.stringify(input),
+			},
+		);
 	}
 
 	// URL Management APIs
@@ -982,29 +1106,6 @@ class APIService {
 			method: "POST",
 			body: JSON.stringify(overrides ?? {}),
 		});
-	}
-
-	async testJinaApi(
-		agentId: string,
-		overrides?: Partial<Agent>,
-	): Promise<{ success: boolean; message: string }> {
-		return this.request(`/api/v1/agent:test-jina-api?agent_id=${agentId}`, {
-			method: "POST",
-			body: JSON.stringify(overrides ?? {}),
-		});
-	}
-
-	async testEmbeddingApi(
-		agentId: string,
-		overrides?: Partial<Agent>,
-	): Promise<{ success: boolean; message: string }> {
-		return this.request(
-			`/api/v1/agent:test-embedding-api?agent_id=${agentId}`,
-			{
-				method: "POST",
-				body: JSON.stringify(overrides ?? {}),
-			},
-		);
 	}
 
 	// Admin API methods

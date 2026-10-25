@@ -1,4 +1,8 @@
-"""KB document upload processor: save, background process (parse→chunk→embed→Qdrant), delete, progress."""
+"""KB document upload processor: save, background process (parse→chunk→embed→Qdrant), delete, progress.
+
+The KB owns its embedding config (provider/model/base URL/encrypted key) since the
+KB-decoupling change; nothing here reads agent-side embedding columns.
+"""
 
 import contextlib
 import logging
@@ -12,22 +16,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import database
 from core.encryption import decrypt_api_key
-from models import Agent, KbChunk, KbDocument
+from models import KbChunk, KbDocument, KnowledgeBase
 from services.document_parser import DocumentParser, INVALID_TEXT_EMPTY_MESSAGE
-from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
 
 logger = logging.getLogger(__name__)
 
 # Configurable upload root - defaults to /app/data/kb_uploads in production,
 # can be overridden via environment variable for tests
-import os
-
 UPLOAD_ROOT = Path(os.environ.get("KB_UPLOAD_ROOT", "/app/data/kb_uploads"))
 
 PROCESSING_ERROR_MESSAGE_MAX_LENGTH = 500
 PROCESSING_ERROR_MESSAGE_FALLBACK = "DOCUMENT_PROCESSING_FAILED"
-
 
 def _format_processing_error_message(exc: Exception) -> str:
     """Return a bounded, non-localized technical cause for persistence."""
@@ -38,82 +38,79 @@ def _format_processing_error_message(exc: Exception) -> str:
         safe_message = PROCESSING_ERROR_MESSAGE_FALLBACK
     return safe_message[:PROCESSING_ERROR_MESSAGE_MAX_LENGTH]
 
+def get_embedding_api_key(kb: KnowledgeBase | None) -> str | None:
+    """Resolve the decrypted embedding API key from the KB that owns it.
 
-def get_embedding_api_key(agent: Agent | None) -> str | None:
-    """Get decrypted embedding API key from agent based on embedding_provider.
-    
-    Args:
-        agent: The Agent model instance (or None)
-        
-    Returns:
-        Decrypted API key for the configured embedding provider, or None if not found.
+    This is the only key resolver in the codebase: the key travels with the KB, so
+    there is no provider branching and no agent argument. Agents do not carry
+    embedding credentials any more.
     """
-    if not agent:
-        return None
-    
-    embedding_provider = getattr(agent, "embedding_provider", "jina")
-    if embedding_provider == "jina":
-        return decrypt_api_key(getattr(agent, "jina_api_key", None))
-    elif embedding_provider == "siliconflow":
-        return decrypt_api_key(getattr(agent, "siliconflow_api_key", None))
-    elif embedding_provider == "custom":
-        # For custom provider, use jina_api_key as fallback
-        return decrypt_api_key(getattr(agent, "jina_api_key", None))
-    return None
-
+    return decrypt_api_key(getattr(kb, "embedding_api_key", None)) or None
 
 class KbDocumentProcessor:
     def __init__(self):
         self.parser = DocumentParser()
         self.qdrant = QdrantKbService()
-        self.kb_svc = KbService()
 
-    def _ensure_upload_dir(self, tenant_id: str, kb_id: str, doc_id: str) -> Path:
-        d = UPLOAD_ROOT / tenant_id / kb_id / doc_id
+    def _ensure_upload_dir(self, workspace_id: int | str, kb_id: str, doc_id: str) -> Path:
+        d = UPLOAD_ROOT / str(workspace_id) / kb_id / doc_id
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     async def create_document_record(
         self,
-        tenant_id: str,
+        workspace_id: int,
         kb_id: str,
         filename: str,
         file_size: int,
+        *,
+        source_agent_id: str | None,
         db: AsyncSession,
     ) -> KbDocument:
-        """Create pending record (called from endpoint before background)."""
-        if not tenant_id:
-            raise ValueError("tenant_id required")
+        """Create pending record (called from endpoint before background).
+
+        Also tags the row with the ingestion source agent so per-agent scoping
+        (URL clear-all, `files:list?source=own`) stays possible on a shared KB.
+        """
+        if not workspace_id:
+            raise ValueError("workspace_id required")
         doc = KbDocument(
             kb_id=kb_id,
-            tenant_id=tenant_id,
             filename=filename,
             file_size=file_size,
+            source_agent_id=source_agent_id,
             status="pending",
         )
         db.add(doc)
         await db.flush()
+        # Transient (non-column) hint so `save_uploaded_file` can build the
+        # workspace-scoped path without another round-trip.
+        object.__setattr__(doc, "_workspace_id", workspace_id)
         return doc
 
     def save_uploaded_file(self, doc: KbDocument, content: bytes, ext: str) -> str:
-        """Save bytes to disk, return storage_path."""
-        tenant_id = str(getattr(doc, "tenant_id", ""))
+        """Save bytes to ``UPLOAD_ROOT/<workspace_id>/<kb_id>/<doc_id>/<filename>``."""
+        workspace_id = getattr(doc, "_workspace_id", None)
+        if workspace_id is None:
+            raise ValueError(
+                "document record is missing its workspace scope; "
+                "create it through create_document_record"
+            )
         kb_id = str(getattr(doc, "kb_id", ""))
         doc_id = str(getattr(doc, "id", ""))
         filename = str(getattr(doc, "filename", ""))
-        d = self._ensure_upload_dir(tenant_id, kb_id, doc_id)
+        d = self._ensure_upload_dir(workspace_id, kb_id, doc_id)
         safe_name = "".join(c for c in filename if c.isalnum() or c in "._-")[:200]
         path = d / safe_name
         with open(path, "wb") as f:
             f.write(content)
         return str(path)
 
-    async def process_document(self, doc_id: str, tenant_id: str, kb_id: str):
+    async def process_document(self, doc_id: str, kb_id: str):
         """Background task entrypoint. Updates status, parses, chunks, embeds, upserts."""
         async with database.AsyncSessionLocal() as session:
-            # fetch with tenant filter
             stmt = select(KbDocument).where(
-                KbDocument.id == doc_id, KbDocument.tenant_id == tenant_id
+                KbDocument.id == doc_id, KbDocument.kb_id == kb_id
             )
             res = await session.execute(stmt)
             doc = res.scalar_one_or_none()
@@ -124,8 +121,10 @@ class KbDocumentProcessor:
             await session.commit()
 
             try:
-                # get KB config (tenant enforced inside kb_svc)
-                kb = await self.kb_svc.get_knowledge_base(tenant_id, kb_id)
+                # The KB owns everything we need: chunking and embedding config.
+                kb = await session.scalar(
+                    select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+                )
                 if not kb:
                     raise ValueError("KB not found")
 
@@ -143,32 +142,34 @@ class KbDocumentProcessor:
                 if not chunks:
                     raise ValueError("No chunks generated")
 
-                # embed (retry inside or simple)
                 model = cast(str, getattr(kb, "embedding_model", "BAAI/bge-m3"))
                 base_url = cast(str | None, getattr(kb, "embedding_base_url", None))
+                api_key = get_embedding_api_key(kb)
 
-                # Get agent for this KB to decrypt embedding API key
-                agent_stmt = select(Agent).where(Agent.kb_id == kb_id)
-                agent_result = await session.execute(agent_stmt)
-                agent = agent_result.scalar_one_or_none()
-                api_key = get_embedding_api_key(agent)
-
-                embeddings = await self.parser.embed_texts(chunks, model, base_url, api_key=api_key)
+                embeddings = await self.parser.embed_texts(
+                    chunks, model, base_url, api_key=api_key
+                )
                 if len(embeddings) != len(chunks):
                     raise ValueError("Embedding count mismatch")
+
+                # Legacy KB rows may predate the column: self-heal with the
+                # MEASURED width instead of trusting the model name.
+                measured_dimension = len(embeddings[0]) if embeddings else 0
+                if measured_dimension and getattr(kb, "embedding_dimension", None) != measured_dimension:
+                    object.__setattr__(kb, "embedding_dimension", measured_dimension)
 
                 # prepare Qdrant points (batch)
                 points = []
                 chunk_records = []
                 # Get metadata for source info (URL for crawled pages)
                 doc_metadata = getattr(doc, "metadata_json", None) or {}
+                source_agent_id = getattr(doc, "source_agent_id", None)
 
                 for idx, (chunk_text, emb) in enumerate(
                     zip(chunks, embeddings, strict=True)
                 ):
                     point_id = str(uuid.uuid4())
                     payload = {
-                        "tenant_id": tenant_id,
                         "kb_id": kb_id,
                         "doc_id": doc_id,
                         "chunk_index": idx,
@@ -178,13 +179,13 @@ class KbDocumentProcessor:
                         "source_type": doc_metadata.get("source_type", "file"),
                         "source_url": doc_metadata.get("source_url", ""),
                         "source_title": doc_metadata.get("source_title", ""),
+                        "source_agent_id": source_agent_id,
                     }
                     points.append({"id": point_id, "vector": emb, "payload": payload})
 
                     ch = KbChunk(
                         kb_id=kb_id,
                         doc_id=doc_id,
-                        tenant_id=tenant_id,
                         vector_id=point_id,
                         chunk_index=idx,
                     )
@@ -213,12 +214,8 @@ class KbDocumentProcessor:
                 )
                 await session.commit()
 
-    async def get_document_progress(
-        self, tenant_id: str, doc_id: str, db: AsyncSession
-    ) -> dict:
-        stmt = select(KbDocument).where(
-            KbDocument.id == doc_id, KbDocument.tenant_id == tenant_id
-        )
+    async def get_document_progress(self, doc_id: str, db: AsyncSession) -> dict:
+        stmt = select(KbDocument).where(KbDocument.id == doc_id)
         res = await db.execute(stmt)
         doc = res.scalar_one_or_none()
         if not doc:
@@ -229,23 +226,17 @@ class KbDocumentProcessor:
             "error_message": getattr(doc, "error_message", None),
         }
 
-    async def delete_document(
-        self, tenant_id: str, kb_id: str, doc_id: str, db: AsyncSession
-    ):
+    async def delete_document(self, kb_id: str, doc_id: str, db: AsyncSession):
         """Full delete: Qdrant points → chunks → doc → file."""
         # 1. Qdrant
         await self.qdrant.delete_points_by_doc_id(kb_id, doc_id)
 
-        # 2. chunks (tenant filter)
-        await db.execute(
-            delete(KbChunk).where(
-                KbChunk.doc_id == doc_id, KbChunk.tenant_id == tenant_id
-            )
-        )
+        # 2. chunks
+        await db.execute(delete(KbChunk).where(KbChunk.doc_id == doc_id))
 
         # 3. doc
         stmt = select(KbDocument).where(
-            KbDocument.id == doc_id, KbDocument.tenant_id == tenant_id
+            KbDocument.id == doc_id, KbDocument.kb_id == kb_id
         )
         res = await db.execute(stmt)
         doc = res.scalar_one_or_none()

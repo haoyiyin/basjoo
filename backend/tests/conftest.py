@@ -115,6 +115,47 @@ async def prepare_test_db_dir():
     yield
 
 
+TEST_KB_EMBEDDING_PROVIDER = "jina"
+TEST_KB_EMBEDDING_MODEL = "jina-embeddings-v3"
+TEST_KB_EMBEDDING_DIMENSION = 1024
+TEST_KB_EMBEDDING_KEY = "test-kb-embedding-key"
+
+def make_test_kb(
+    workspace_id: int,
+    name: str,
+    *,
+    status: str = "active",
+    embedding_provider: str = TEST_KB_EMBEDDING_PROVIDER,
+    embedding_model: str = TEST_KB_EMBEDDING_MODEL,
+    embedding_dimension: int = TEST_KB_EMBEDDING_DIMENSION,
+):
+    """Build an unsaved KnowledgeBase row for fixtures.
+
+    Inserted directly (no Qdrant round-trip) so the DB fixtures stay hermetic; the
+    API layer is the only thing under test here, not the vector store.
+    """
+    import uuid
+
+    from core.encryption import encrypt_api_key
+    from models import KnowledgeBase
+
+    kb_id = str(uuid.uuid4())
+    return KnowledgeBase(
+        id=kb_id,
+        workspace_id=workspace_id,
+        name=name,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        embedding_base_url="https://api.jina.ai/v1",
+        embedding_api_key=encrypt_api_key(TEST_KB_EMBEDDING_KEY),
+        embedding_batch_size=4,
+        embedding_dimension=embedding_dimension,
+        qdrant_collection=f"kb_{kb_id.replace('-', '')[:12]}",
+        chunk_size=512,
+        chunk_overlap=64,
+        status=status,
+    )
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def setup_test_db(prepare_test_db_dir):
     db_path = TEST_DB_DIR / f"test_{uuid4().hex}.db"
@@ -123,22 +164,26 @@ async def setup_test_db(prepare_test_db_dir):
     await init_db()
 
     async with database.AsyncSessionLocal() as session:
-        from models import Agent, Workspace, WorkspaceQuota
+        from models import Agent, KnowledgeBase, Workspace, WorkspaceQuota
 
-        result = await session.execute(select(Agent).where(Agent.is_active))
-        agent = result.scalar_one_or_none()
-        if not agent:
-            workspace_result = await session.execute(
-                select(Workspace).order_by(Workspace.id).limit(1)
+        workspace_result = await session.execute(
+            select(Workspace).order_by(Workspace.id).limit(1)
+        )
+        workspace = workspace_result.scalar_one_or_none()
+        if not workspace:
+            workspace = Workspace(
+                name="Test Workspace", owner_email="test@example.com"
             )
-            workspace = workspace_result.scalar_one_or_none()
-            if not workspace:
-                workspace = Workspace(
-                    name="Test Workspace", owner_email="test@example.com"
-                )
-                session.add(workspace)
-                await session.flush()
-                session.add(WorkspaceQuota(workspace_id=workspace.id))
+            session.add(workspace)
+            await session.flush()
+            session.add(WorkspaceQuota(workspace_id=workspace.id))
+            await session.flush()
+
+        result = await session.execute(
+            select(Agent).where(Agent.is_active).order_by(Agent.created_at)
+        )
+        agent = result.scalars().first()
+        if not agent:
             agent = Agent(
                 workspace_id=workspace.id,
                 name="Test Agent",
@@ -146,17 +191,55 @@ async def setup_test_db(prepare_test_db_dir):
                 model="deepseek-v4-flash",
                 api_base="https://api.deepseek.com/v1",
                 provider_type="deepseek",
-                jina_api_key="test_jina_key",
             )
             session.add(agent)
-            await session.commit()
-        elif not agent.jina_api_key:
-            agent.jina_api_key = "test_jina_key"
-            await session.commit()
+            await session.flush()
+
+        # Every test agent starts with an active KB bound; embedding config lives
+        # on the KB now, so no agent-side key is needed.
+        if not agent.kb_id:
+            bound_kb = make_test_kb(workspace.id, "Bound Test KB")
+            session.add(bound_kb)
+            await session.flush()
+            agent.kb_id = bound_kb.id
+
+        unbound_exists = await session.scalar(
+            select(KnowledgeBase.id).where(KnowledgeBase.name == "Unbound Test KB")
+        )
+        if not unbound_exists:
+            session.add(make_test_kb(workspace.id, "Unbound Test KB"))
+
+        await session.commit()
 
     await reset_quota()
     yield
 
+@pytest_asyncio.fixture(loop_scope="function")
+async def bound_kb_id(setup_test_db):
+    """The KB bound to the default test agent."""
+    async with database.AsyncSessionLocal() as session:
+        from models import Agent
+
+        agent = (
+            await session.execute(
+                select(Agent).where(Agent.is_active).order_by(Agent.created_at)
+            )
+        ).scalars().first()
+        assert agent is not None and agent.kb_id, "Default agent must have a KB bound"
+        return agent.kb_id
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def unbound_kb_id(setup_test_db):
+    """A second, active KB that no agent is bound to."""
+    async with database.AsyncSessionLocal() as session:
+        from models import KnowledgeBase
+
+        kb_id = await session.scalar(
+            select(KnowledgeBase.id).where(KnowledgeBase.name == "Unbound Test KB")
+        )
+        assert kb_id, "setup_test_db must seed the unbound KB"
+        return kb_id
 
 @pytest_asyncio.fixture(loop_scope="function")
 async def default_agent_id(setup_test_db):

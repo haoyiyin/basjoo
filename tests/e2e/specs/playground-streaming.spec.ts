@@ -8,6 +8,7 @@ import {
 	resolveAgentContext,
 	loginByApi,
 	API_BASE,
+	ensureBoundKb,
 } from "../fixtures/e2e-context";
 
 test.describe("Playground Streaming Chat", () => {
@@ -122,76 +123,12 @@ test.describe("Playground Streaming Chat", () => {
 test.describe("Playground KB Context Retrieval", () => {
 	test("chat request succeeds after KB setup with indexed content", async ({ page, request }) => {
 		test.setTimeout(90_000);
-		// This test verifies the full flow: KB setup -> indexed content -> chat uses context
-		// 1. Get context and ensure KB is set up
+		// This test verifies the full flow: KB binding -> indexed content -> chat uses context
+		// 1. Get context and ensure a KB is created and bound
 		const context = await resolveAgentContext(request);
 		const token = await loginByApi(request);
-
-		// Ensure KB setup is complete - may need to reset first if agent has stale key
-		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		let kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-			{
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
-
-		// If setup returned 409/400, check if key needs updating - may need reset
-		if (kbSetupRes.status() === 409 || kbSetupRes.status() === 400) {
-			const checkRes = await request.get(
-				`${API_BASE}/api/v1/agent?agent_id=${context.agentId}`,
-				{ headers: { Authorization: `Bearer ${token}` } },
-			);
-			const checkConfig = await checkRes.json() as {
-				kb_id?: string;
-				kb_setup_completed?: boolean;
-				jina_api_key_masked?: string;
-			};
-			// If using fallback key (tes***_e2e), reset and retry with real key
-			if (checkConfig.jina_api_key_masked?.includes("_e2e") && jinaApiKey !== "test_jina_key_for_e2e") {
-				const resetRes = await request.post(
-					`${API_BASE}/api/v1/agent:kb-reset?agent_id=${context.agentId}`,
-					{ headers: { Authorization: `Bearer ${token}` } },
-				);
-				expect(resetRes.status()).toBe(200);
-				// Retry setup with real key
-				kbSetupRes = await request.post(
-					`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-					{
-						headers: {
-							Authorization: `Bearer ${token}`,
-							"Content-Type": "application/json",
-						},
-						data: {
-							embedding_provider: "jina",
-							embedding_model: "jina-embeddings-v3",
-							jina_api_key: jinaApiKey,
-						},
-					},
-				);
-			}
-		}
-		// KB setup should succeed (200) or be already completed (409)
-		expect([200, 409]).toContain(kbSetupRes.status());
-
-		// Verify kb_id is valid before continuing
-		const agentCheckRes = await request.get(
-			`${API_BASE}/api/v1/agent?agent_id=${context.agentId}`,
-			{ headers: { Authorization: `Bearer ${token}` } },
-		);
-		expect(agentCheckRes.status()).toBe(200);
-		const agentCheckData = await agentCheckRes.json() as { kb_id?: string; kb_setup_completed?: boolean };
-		if (!agentCheckData.kb_id) {
-			throw new Error(`KB setup failed: kb_id is null. Setup status: ${kbSetupRes.status()}, kb_setup_completed: ${agentCheckData.kb_setup_completed}`);
-		}
+		const boundKbId = await ensureBoundKb(request, context.agentId);
+		expect(boundKbId).toBeTruthy();
 
 		// 2. Upload a file with unique content via agent-scoped file upload endpoint
 		// Upload file with unique test content
@@ -291,23 +228,8 @@ test.describe("Playground KB Context Retrieval", () => {
 		const token = await loginByApi(request);
 		const context = await resolveAgentContext(request);
 
-		// Ensure KB setup
-		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		const kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-			{
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
-		expect([200, 400, 409]).toContain(kbSetupRes.status());
+		// Ensure a KB is created and bound
+		await ensureBoundKb(request, context.agentId);
 
 		// Chat request should succeed
 		const chatRes = await request.post(

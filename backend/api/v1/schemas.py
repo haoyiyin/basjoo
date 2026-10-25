@@ -233,87 +233,125 @@ class FileUploadResponse(BaseModel):
     errors: List[str] = Field(default_factory=list, description="错误信息")
 
 
-# ========== KB Document Schemas ==========
+# ========== Knowledge Base Schemas ==========
 
+EMBEDDING_PROVIDERS = ("jina", "siliconflow", "custom")
 
-class KbDocumentItem(BaseModel):
-    """KB 文档项"""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    filename: str
-    file_type: Optional[str] = Field(None, description="MIME type of the file (e.g., 'text/plain', 'application/pdf')")
-    status: Literal["pending", "processing", "ready", "error"] = "pending"
-    chunk_count: int = 0
-    error_message: Optional[str] = None
-    created_at: Optional[datetime] = None
-
-
-class KbDocumentUploadResponse(BaseModel):
-    """KB 文档上传响应"""
-
-    uploaded: int = 0
-    failed: int = 0
-    documents: List[KbDocumentItem] = Field(default_factory=list)
-
-
-class KbDocumentProgressResponse(BaseModel):
-    """KB 文档索引进度响应"""
-
-    status: str
-    chunk_count: int = 0
-    error_message: Optional[str] = None
-
-
-# ========== KB Config/Reset Schemas ==========
-
-
-class KbConfigResponse(BaseModel):
-    """KB embedding configuration response"""
+class KbAgentRef(BaseModel):
+    """Agent reference embedded in a KB detail payload"""
 
     id: str
     name: str
+
+class KbDetail(BaseModel):
+    """Knowledge base detail (config + counts + bound agent)"""
+
+    id: str
+    name: str
+    workspace_id: Optional[int] = None
+    embedding_provider: str
     embedding_model: str
     embedding_base_url: Optional[str] = None
-    vector_backend: str
-    chunk_size: int
-    chunk_overlap: int
-    is_locked: bool
-    status: str
-
-
-class KbConfigUpdate(BaseModel):
-    """KB config update request (embedding fields blocked when locked)"""
-
-    name: Optional[str] = None
-    chunk_size: Optional[int] = None
-    chunk_overlap: Optional[int] = None
-    embedding_model: Optional[str] = None
-    embedding_base_url: Optional[str] = None
-
-
-class KbResetRequest(BaseModel):
-    """KB reset request (change embedding model + reindex)"""
-
-    new_embedding_model: str
-    new_embedding_base_url: Optional[str] = None
-
-
-class KbDetailResponse(KbConfigResponse):
-    """KB detail with document/chunk counts"""
-
+    embedding_batch_size: int = 4
+    embedding_dimension: Optional[int] = None
+    chunk_size: int = 512
+    chunk_overlap: int = 64
+    status: str = "active"
+    is_locked: bool = False
+    error_message: Optional[str] = None
     document_count: int = 0
     ready_document_count: int = 0
     total_chunks: int = 0
+    bound_agent: Optional[KbAgentRef] = None
 
+class KbListResponse(BaseModel):
+    """Knowledge base list response"""
+
+    knowledge_bases: List[KbDetail] = Field(default_factory=list)
+    total: int = 0
+
+class _KbChunkShape(BaseModel):
+    """Chunk sizing fields shared by the create and update payloads"""
+
+    chunk_size: int = Field(512, ge=128, le=2048)
+    chunk_overlap: int = Field(64, ge=0, le=512)
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def validate_chunk_overlap(cls, value: int, info) -> int:
+        chunk_size = info.data.get("chunk_size")
+        if chunk_size is not None and value >= chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        return value
+
+class KbCreateRequest(_KbChunkShape):
+    """Create a knowledge base (the provider probe validates the key)"""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    embedding_provider: Literal["jina", "siliconflow", "custom"] = "jina"
+    embedding_model: str = Field(..., min_length=1, max_length=100)
+    embedding_base_url: Optional[str] = Field(None, max_length=500)
+    embedding_api_key: str = Field(..., min_length=1)
+    embedding_batch_size: int = Field(4, ge=1, le=64)
+
+class KbUpdateRequest(BaseModel):
+    """Update KB config. Embedding fields are rejected (409) once contents exist."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    chunk_size: Optional[int] = Field(None, ge=128, le=2048)
+    chunk_overlap: Optional[int] = Field(None, ge=0, le=512)
+    embedding_provider: Optional[Literal["jina", "siliconflow", "custom"]] = None
+    embedding_model: Optional[str] = Field(None, min_length=1, max_length=100)
+    embedding_base_url: Optional[str] = Field(None, max_length=500)
+    embedding_api_key: Optional[str] = Field(None, min_length=1)
+
+class KbResetRequest(BaseModel):
+    """Reset a KB: change the embedding config and reindex every document"""
+
+    embedding_provider: Literal["jina", "siliconflow", "custom"] = "jina"
+    embedding_model: str = Field(..., min_length=1, max_length=100)
+    embedding_base_url: Optional[str] = Field(None, max_length=500)
+    embedding_api_key: Optional[str] = Field(None, min_length=1)
+    embedding_batch_size: Optional[int] = Field(None, ge=1, le=64)
+
+class KbEmbeddingTestRequest(BaseModel):
+    """Probe an embedding provider without persisting anything"""
+
+    embedding_provider: Literal["jina", "siliconflow", "custom"] = "jina"
+    embedding_model: str = Field(..., min_length=1, max_length=100)
+    embedding_base_url: Optional[str] = Field(None, max_length=500)
+    embedding_api_key: str = Field(..., min_length=1)
+
+class KbEmbeddingTestResponse(BaseModel):
+    """Result of the embedding provider probe"""
+
+    success: bool
+    dimension: Optional[int] = None
+    message: str
+
+class KbResetResponse(BaseModel):
+    """Reset result with the documents queued for reindexing"""
+
+    status: str
+    kb_id: str
+    requeued_documents: int = 0
+    doc_ids: List[str] = Field(default_factory=list)
 
 class KbDeleteResponse(BaseModel):
     """KB delete response"""
 
     deleted: bool = True
-    message: Optional[str] = None
 
+class KbBindRequest(BaseModel):
+    """Bind (or unbind, with kb_id=null) a knowledge base to an agent"""
+
+    kb_id: Optional[str] = None
+
+class KbBindResponse(BaseModel):
+    """Binding result: the updated agent plus its KB detail"""
+
+    agent: "AgentConfig"
+    knowledge_base: Optional[KbDetail] = None
 
 # ========== Agent Management Schemas ==========
 
@@ -339,16 +377,6 @@ class AgentConfig(BaseModel):
         None, description="Masked API key (sk-***...abc)"
     )
     api_base: Optional[str] = None
-    jina_api_key_set: bool = Field(
-        default=False, description="Whether Jina API key is configured"
-    )
-    jina_api_key_masked: Optional[str] = Field(None, description="Masked Jina API key")
-    siliconflow_api_key_set: bool = Field(
-        default=False, description="Whether SiliconFlow embedding API key is configured"
-    )
-    siliconflow_api_key_masked: Optional[str] = Field(
-        None, description="Masked SiliconFlow embedding API key"
-    )
     provider_type: Optional[
         Literal[
             "openai",
@@ -380,18 +408,6 @@ class AgentConfig(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Literal["jina", "siliconflow", "custom"] = Field(
-        "jina",
-        description="Embedding provider: jina, siliconflow, or custom",
-    )
-    embedding_api_base: Optional[str] = Field(
-        None, description="Embedding API base URL"
-    )
-    embedding_api_key_set: bool = Field(
-        default=False,
-        description="Whether the selected embedding provider has an effective API key configured",
-    )
-    embedding_model: str
     configuration_error: Optional[str] = Field(
         None,
         description="Non-fatal configuration problem (e.g. invalid custom embedding base); present only when the backend degraded gracefully so the admin can fix it",
@@ -436,12 +452,6 @@ class AgentConfig(BaseModel):
     )
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: int = Field(default=30, description="Chat history retention days")
-    embedding_batch_size: int = Field(
-        default=4, ge=1, le=64, description="Embedding batch size"
-    )
-    kb_setup_completed: bool = Field(
-        default=False, description="Whether the knowledge base setup has been completed"
-    )
     is_active: bool
     deleted_at: Optional[datetime] = None
     purge_after: Optional[datetime] = None
@@ -452,6 +462,10 @@ class AgentConfig(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
     kb_id: Optional[str] = Field(None, description="Bound knowledge base ID (optional)")
+    kb_name: Optional[str] = Field(None, description="Name of the bound knowledge base")
+    kb_status: Optional[str] = Field(
+        None, description="Status of the bound knowledge base (active/resetting/error)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -477,8 +491,6 @@ class AgentUpdateRequest(BaseModel):
     temperature: Optional[float] = Field(None, ge=0, le=2)
     api_key: Optional[str] = Field(None, min_length=0)
     api_base: Optional[str] = Field(None, min_length=1)
-    jina_api_key: Optional[str] = Field(None, min_length=0)
-    siliconflow_api_key: Optional[str] = Field(None, min_length=0)
     provider_type: Optional[
         Literal[
             "openai",
@@ -506,13 +518,6 @@ class AgentUpdateRequest(BaseModel):
     provider_config: Optional[Dict[str, Any]] = Field(
         None, description="Provider-specific configuration"
     )
-    embedding_provider: Optional[Literal["jina", "siliconflow", "custom"]] = Field(
-        None, description="Embedding provider: jina, siliconflow, or custom"
-    )
-    embedding_api_base: Optional[str] = Field(
-        None, description="Embedding API base URL"
-    )
-    embedding_model: Optional[str] = Field(None, min_length=1)
     crawl_max_depth: Optional[int] = Field(
         None, ge=0, le=5, description="Crawl depth for site crawling"
     )
@@ -556,9 +561,6 @@ class AgentUpdateRequest(BaseModel):
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: Optional[int] = Field(
         None, ge=1, le=365, description="Chat history retention days"
-    )
-    embedding_batch_size: Optional[int] = Field(
-        None, ge=1, le=64, description="Embedding batch size"
     )
 
     @field_validator("allowed_widget_origins")
@@ -832,28 +834,5 @@ class SourcesSummaryResponse(BaseModel):
     files: SourcesFileSummary
     has_pending: bool = Field(..., description="是否有待处理内容")
 
-
-# ========== KB Retrieval Schemas ==========
-
-
-class RetrieveRequest(BaseModel):
-    """Retrieval request body"""
-
-    query: str = Field(..., min_length=1, max_length=1000)
-    top_k: int = Field(5, ge=1, le=20)
-
-
-class RetrieveChunk(BaseModel):
-    """Single retrieval result (no vector_id or collection exposed)"""
-
-    text: str
-    doc_id: str
-    chunk_index: int
-    score: float
-    filename: Optional[str] = None
-
-
-class RetrieveResponse(BaseModel):
-    """Wrapper for consistency"""
-
-    results: List[RetrieveChunk] = []
+# AgentConfig is declared after the KB schemas (KbBindResponse embeds it).
+KbBindResponse.model_rebuild()

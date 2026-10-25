@@ -18,16 +18,12 @@ import {
 	resolveAgentContext,
 	loginByApi,
 	API_BASE,
+	ensureBoundKb,
 } from "../fixtures/e2e-context";
 import { readFileSync } from "fs";
 
 // ── helpers ──────────────────────────────────────────────────────────
 
-interface KbStatus {
-	kb_id?: string;
-	kb_setup_completed?: boolean;
-	jina_api_key_masked?: string;
-}
 
 interface FileItem {
 	id?: string;
@@ -201,64 +197,9 @@ function makeFile(filename: string, content: Buffer, mime: string) {
 }
 
 async function kbSetup(request: any, agentId: string, token: string) {
-	const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-	let res = await request.post(
-		`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agentId}`,
-		{
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": "application/json",
-			},
-			data: {
-				embedding_provider: "jina",
-				embedding_model: "jina-embeddings-v3",
-				jina_api_key: jinaApiKey,
-			},
-		},
-	);
-	if (res.status() === 409 || res.status() === 400) {
-		const checkRes = await request.get(
-			`${API_BASE}/api/v1/agent?agent_id=${agentId}`,
-			{
-				headers: { Authorization: `Bearer ${token}` },
-			},
-		);
-		const cfg: KbStatus = await checkRes.json();
-		if (
-			cfg.jina_api_key_masked?.includes("_e2e") &&
-			jinaApiKey !== "test_jina_key_for_e2e"
-		) {
-			await request.post(
-				`${API_BASE}/api/v1/agent:kb-reset?agent_id=${agentId}`,
-				{
-					headers: { Authorization: `Bearer ${token}` },
-				},
-			);
-			res = await request.post(
-				`${API_BASE}/api/v1/agent:kb-setup?agent_id=${agentId}`,
-				{
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"Content-Type": "application/json",
-					},
-					data: {
-						embedding_provider: "jina",
-						embedding_model: "jina-embeddings-v3",
-						jina_api_key: jinaApiKey,
-					},
-				},
-			);
-		}
-	}
-	expect([200, 409]).toContain(res.status());
-	const check = await request.get(
-		`${API_BASE}/api/v1/agent?agent_id=${agentId}`,
-		{
-			headers: { Authorization: `Bearer ${token}` },
-		},
-	);
-	const data: KbStatus = await check.json();
-	if (!data.kb_id) throw new Error(`KB setup failed: no kb_id`);
+	// KB lifecycle is decoupled: create (or reuse) a KB and bind it explicitly.
+	const kbId = await ensureBoundKb(request, agentId);
+	if (!kbId) throw new Error("KB setup failed: no kb_id");
 }
 
 /** Delete all files for a clean test state */

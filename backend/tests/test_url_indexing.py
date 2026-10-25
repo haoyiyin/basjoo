@@ -16,7 +16,183 @@ import pytest
 from sqlalchemy import select
 
 import database
-from models import Agent, KnowledgeBase, KbDocument, Tenant, URLSource
+from models import Agent, KbDocument, URLSource
+
+# ========== Hermetic harness ==========
+#
+# These tests drive routes that schedule *real* background work
+# (`process_url_refetch`, `process_index_rebuild`) and one route that fetches
+# synchronously (`urls:discover` -> SiteCrawler). Under httpx/ASGITransport a
+# BackgroundTasks callback runs inline before the response is returned, so any
+# un-stubbed hop reaches the outside world:
+#
+#   test -> urls:create -> process_url_refetch -> URLScraper.fetch
+#        -> ScraplingClient.fetch -> POST http://scrapling-service:8001/fetch
+#           (DNS failure -> 60 s connect timeout, then the same again from
+#            refetch, index:rebuild and crawl_site...)
+#
+# That is what made one `urls:create` test take ~122 s and the file ~10 min.
+#
+# The fixtures below make the file hermetic WITHOUT weakening any assertion:
+# * `hermetic_url_network` (autouse) replaces the background entry points at
+#   the module object the router imports them from, and stubs the HTTP layer of
+#   the scrapling client (fetch + discover) plus the embedding call, so neither
+#   the background task nor `urls:discover` can touch a socket.
+# * Nothing is asserted *through* these stubs; the tests that DO care about
+#   dispatch already re-patch `services.url_service.process_url_refetch`
+#   themselves and keep their `assert_called_once` checks.
+# * A socket guard turns any accidental outbound connection into an immediate,
+#   loud failure instead of a 60 s timeout, so a regression cannot silently
+#   reintroduce the slow path.
+
+#: Canned body returned by the stubbed `ScraplingClient.fetch`.
+HERMETIC_PAGE = {
+    "success": True,
+    "title": "Hermetic Page",
+    "content": (
+        "Hermetic test content. This paragraph exists so the document parser has "
+        "enough readable text to produce at least one chunk for the KB pipeline."
+    ),
+    "content_hash": "hermetic-content-hash",
+    "metadata": {"status_code": 200, "final_url": "https://example.com/hermetic"},
+}
+
+#: Deterministic 8-dim embedding so Qdrant/collection code never sees a
+#: provider call. Width is irrelevant to these tests (`embedding_dimension` is
+#: only persisted, never compared against a live collection here).
+HERMETIC_EMBEDDING = [0.01] * 8
+
+
+async def _hermetic_scrapling_fetch(self, url, *args, **kwargs):
+    data = dict(HERMETIC_PAGE)
+    data["metadata"] = dict(HERMETIC_PAGE["metadata"], final_url=url)
+    return data
+
+
+async def _hermetic_scrapling_discover(self, url, max_depth=1, max_pages=20):
+    """One-page discovery: the seed URL at depth 0, nothing else."""
+    return [(url, 0)]
+
+
+async def _hermetic_embed_texts(self, texts, model, base_url, api_key=None):
+    return [list(HERMETIC_EMBEDDING) for _ in texts]
+
+
+async def _hermetic_url_refetch(*args, **kwargs):
+    """Stand-in for `services.url_service.process_url_refetch` (no network)."""
+    return None
+
+
+async def _hermetic_index_rebuild(*args, **kwargs):
+    """Stand-in for `services.url_service.process_index_rebuild` (no network)."""
+    return None
+
+
+async def _hermetic_site_crawl(*args, **kwargs):
+    """Stand-in for `services.url_service.process_site_crawl` (no network).
+
+    `urls:crawl_site` dispatches it with `asyncio.create_task`, i.e. it is not a
+    BackgroundTasks callback and would otherwise keep running after the test.
+    """
+    return None
+
+
+@pytest.fixture(autouse=True)
+def hermetic_url_network(monkeypatch):
+    """Deny outbound sockets and stub the fetch/embed seams for this module.
+
+    Applies to every test in this file. Nothing here asserts anything, so a
+    test that wants to check dispatch re-patches the seam itself (with
+    `unittest.mock.patch`, which wins because it is applied later).
+    """
+    import socket
+
+    from services import scrapling_client as scrapling_client_module
+    from services.document_parser import DocumentParser
+    from services.scrapling_client import ScraplingClient
+
+    # 1. HTTP layer of the scrapling microservice client (fetch + discover).
+    monkeypatch.setattr(
+        ScraplingClient, "fetch", _hermetic_scrapling_fetch, raising=True
+    )
+    monkeypatch.setattr(
+        ScraplingClient, "discover_subpages", _hermetic_scrapling_discover, raising=True
+    )
+    # `services.scraper.URLScraper` holds a client instance, so patching the
+    # class is enough for every `SiteCrawler` built inside a background task.
+    monkeypatch.setattr(scrapling_client_module, "_default_client", None)
+
+    # 2. Embedding provider call (OpenAI-compatible HTTP) used by the KB pipeline.
+    monkeypatch.setattr(
+        DocumentParser, "embed_texts", _hermetic_embed_texts, raising=True
+    )
+
+    # 3. Background entry points, patched where the router imports them.
+    import services.url_service as url_service_module
+
+    monkeypatch.setattr(
+        url_service_module, "process_url_refetch", _hermetic_url_refetch, raising=True
+    )
+    monkeypatch.setattr(
+        url_service_module, "process_index_rebuild", _hermetic_index_rebuild, raising=True
+    )
+    monkeypatch.setattr(
+        url_service_module, "process_site_crawl", _hermetic_site_crawl, raising=True
+    )
+
+    # 4. DNS: resolve only the synthetic hosts this file uses, to a fixed public
+    #    IP, so `validate_url_safe` still runs its real checks (scheme,
+    #    credentials, localhost, IP literals, blocked ranges) with no resolver
+    #    round-trip. Unknown hostnames are reported as unresolvable: fail-closed,
+    #    so a test that starts pointing at a real site breaks loudly instead of
+    #    quietly dialling the internet.
+    import services.url_safety as url_safety_module
+
+    safe_test_hosts = {"example.com", "example1.com", "example2.com"}
+
+    def _hermetic_resolve(hostname):
+        host = (hostname or "").lower()
+        if host in safe_test_hosts or host.startswith("example-"):
+            return True, ""
+        if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost"):
+            return False, "Resolved to blocked IP 127.0.0.1"
+        return False, f"DNS resolution failed: {hostname} is not a hermetic test host"
+
+    monkeypatch.setattr(
+        url_safety_module, "_resolve_and_check", _hermetic_resolve, raising=True
+    )
+
+    # 5. Socket guard: fail fast instead of waiting out a connect timeout.
+    #    Local SQLite/Redis on 127.0.0.1 stay reachable so fixtures still work;
+    #    anything else raises immediately.
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    allowed_hosts = {"127.0.0.1", "::1", "localhost"}
+
+    def _is_allowed(address):
+        if not isinstance(address, tuple):
+            return False
+        host = address[0]
+        return host in allowed_hosts
+
+    def guard_connect(self, address):
+        if not _is_allowed(address):
+            raise OSError(
+                f"hermetic network guard: blocked outbound connection to {address!r}"
+            )
+        return real_connect(self, address)
+
+    def guard_connect_ex(self, address):
+        if not _is_allowed(address):
+            raise OSError(
+                f"hermetic network guard: blocked outbound connection to {address!r}"
+            )
+        return real_connect_ex(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guard_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guard_connect_ex)
+
+    yield
 
 
 @pytest.mark.asyncio
@@ -44,18 +220,6 @@ async def test_url_status_transitions_to_success_after_indexing(
     client, default_agent_id
 ):
     """URL added for an agent should progress to success and be marked indexed."""
-    async with database.AsyncSessionLocal() as session:
-        # Ensure agent has KB bound
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        if not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=session)
-            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-
     # Mock the URL fetching to avoid external calls
     mock_page_result = {
         "url": "https://example.com/test-page",
@@ -235,18 +399,6 @@ async def test_task_lock_prevents_duplicate_indexing(client, default_agent_id):
     - INDEX_REBUILD while URL_CRAWL/URL_REFETCH/URL_FETCH is running
     - URL_CRAWL/URL_REFETCH/URL_FETCH while INDEX_REBUILD is running
     """
-    async with database.AsyncSessionLocal() as session:
-        # Ensure agent has KB bound
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        if not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=session)
-            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-
     from services.task_lock import task_lock, TaskType
 
     # Acquire a URL_REFETCH lock
@@ -278,18 +430,6 @@ async def test_url_content_upserts_to_qdrant(client, default_agent_id):
     so we verify the pipeline was triggered by checking the refetch
     endpoint returns success and creates a job.
     """
-    async with database.AsyncSessionLocal() as session:
-        # Ensure agent has KB bound
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        if not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=session)
-            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-
     # Create URL and trigger refetch - should succeed and queue job
     with patch("services.crawler.SiteCrawler.crawl_single_page") as mock_crawl:
         mock_crawl.return_value = type(
@@ -327,18 +467,6 @@ async def test_url_content_upserts_to_qdrant(client, default_agent_id):
 @pytest.mark.asyncio
 async def test_url_indexed_flag_reflects_success(client, default_agent_id):
     """URLSource.is_indexed should be True when indexing succeeds."""
-    async with database.AsyncSessionLocal() as session:
-        # Ensure agent has KB bound
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        if not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=session)
-            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-
     # Create a URL source with success status and is_indexed=True
     async with database.AsyncSessionLocal() as session:
         url_source = URLSource(
@@ -533,7 +661,7 @@ async def test_is_indexed_true_on_process_success(client, default_agent_id):
     This test verifies the fix logic: after process_document returns,
     we check doc.status and only set is_indexed=True if status=='ready'.
     """
-    from models import KnowledgeBase, KbDocument
+    from models import KbDocument
     import uuid
 
     async with database.AsyncSessionLocal() as session:
@@ -542,25 +670,13 @@ async def test_is_indexed_true_on_process_success(client, default_agent_id):
             select(Agent).where(Agent.id == default_agent_id)
         )
         agent = result.scalar_one()
-        if not agent.kb_id:
-            new_kb_id = str(uuid.uuid4())
-            kb = KnowledgeBase(
-                id=new_kb_id,
-                tenant_id=agent.workspace_id,
-                name=f"Agent {default_agent_id} KB",
-                embedding_model="BAAI/bge-m3",
-                qdrant_collection=f"kb_{new_kb_id}",
-            )
-            session.add(kb)
-            await session.flush()
-            agent.kb_id = kb.id
+        assert agent.kb_id is not None, "Fixture must bind a KB to the test agent"
         kb_id = agent.kb_id
 
         # Create a KbDocument in "ready" status (simulating successful processing)
         doc = KbDocument(
             id=str(uuid.uuid4()),
             kb_id=kb_id,
-            tenant_id=agent.workspace_id,
             filename="test.txt",
             file_size=100,
             status="ready",  # Successful processing
@@ -587,7 +703,7 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
     This test verifies the bug fix where is_indexed was unconditionally set to True
     after process_document(), even when document processing failed internally.
     """
-    from models import KnowledgeBase, KbDocument
+    from models import KbDocument
     from services.kb_document_processor import KbDocumentProcessor
     import uuid
 
@@ -597,18 +713,7 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
             select(Agent).where(Agent.id == default_agent_id)
         )
         agent = result.scalar_one()
-        if not agent.kb_id:
-            new_kb_id = str(uuid.uuid4())
-            kb = KnowledgeBase(
-                id=new_kb_id,
-                tenant_id=agent.workspace_id,
-                name=f"Agent {default_agent_id} KB",
-                embedding_model="BAAI/bge-m3",
-                qdrant_collection=f"kb_{new_kb_id}",
-            )
-            session.add(kb)
-            await session.flush()
-            agent.kb_id = kb.id
+        assert agent.kb_id is not None, "Fixture must bind a KB to the test agent"
         kb_id = agent.kb_id
 
         # Create URL source
@@ -631,10 +736,11 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
     async with database.AsyncSessionLocal() as session:
         # Create document record
         doc = await processor.create_document_record(
-            tenant_id=1,  # agent.workspace_id
-            kb_id=kb_id,
-            filename=f"url_{url_id}.txt",
-            file_size=100,
+            agent.workspace_id,
+            kb_id,
+            f"url_{url_id}.txt",
+            100,
+            source_agent_id=default_agent_id,
             db=session,
         )
         # Set storage_path and file_type as url_service.py does
@@ -650,7 +756,7 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
         side_effect=Exception("Simulated parse failure"),
     ):
         # Process the document - this should set status="error" internally
-        await processor.process_document(doc_id, "1", kb_id)
+        await processor.process_document(doc_id, kb_id)
 
     # Verify document is in error status
     async with database.AsyncSessionLocal() as session:
@@ -792,18 +898,6 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(
     from services.crawler import CrawlPageResult
     from unittest.mock import patch
 
-    async with database.AsyncSessionLocal() as session:
-        # Ensure agent has KB bound
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        if not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=session)
-            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-
     # Create URL source first via API
     url = "https://example.com/test-metadata"
     create_response = await client.post(
@@ -855,18 +949,6 @@ async def test_create_urls_auto_dispatches_background_fetch(client, default_agen
     """
     from unittest.mock import patch
 
-    async with database.AsyncSessionLocal() as session:
-        # Ensure agent has KB bound
-        result = await session.execute(
-            select(Agent).where(Agent.id == default_agent_id)
-        )
-        agent = result.scalar_one()
-        if not agent.kb_id:
-            from services.kb_service import KbService
-
-            kb_svc = KbService(session=session)
-            await kb_svc.get_or_create_agent_kb(default_agent_id, session=session)
-
     # Mock process_url_refetch to verify it gets called
     with patch("services.url_service.process_url_refetch") as mock_refetch:
         mock_refetch.return_value = None
@@ -899,13 +981,32 @@ async def test_clear_all_urls_response_schema(client, default_agent_id):
     Frontend expects {message: string, deleted_count: number} but backend
     was only returning {success: True}.
     """
-    # Create some URLs first
+    import uuid
+
+    # Create some URLs first, plus the two documents their ingestion produced.
     url_data = {"urls": ["https://example1.com", "https://example2.com"]}
     create_response = await client.post(
         f"/api/v1/urls:create?agent_id={default_agent_id}",
         json=url_data,
     )
     assert create_response.status_code == 200
+
+    async with database.AsyncSessionLocal() as session:
+        agent = (
+            await session.execute(select(Agent).where(Agent.id == default_agent_id))
+        ).scalar_one()
+        assert agent.kb_id is not None
+        for suffix in ("1", "2"):
+            session.add(
+                KbDocument(
+                    id=str(uuid.uuid4()),
+                    kb_id=agent.kb_id,
+                    source_agent_id=default_agent_id,
+                    filename=f"url_{suffix}.txt",
+                    status="ready",
+                )
+            )
+        await session.commit()
 
     # Clear all URLs
     response = await client.post(f"/api/v1/urls:clear_all?agent_id={default_agent_id}")
@@ -921,9 +1022,93 @@ async def test_clear_all_urls_response_schema(client, default_agent_id):
     )
     assert isinstance(data["message"], str), "message should be a string"
     assert isinstance(data["deleted_count"], int), "deleted_count should be an int"
+    # `deleted_count` is the number of KB documents removed (the expensive side
+    # effect), and both URLs are reported separately.
     assert data["deleted_count"] == 2, (
         f"Expected deleted_count=2, got {data['deleted_count']}"
     )
+    assert data["deleted_url_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_clear_all_urls_is_scoped_to_source_agent(
+    client, default_agent_id, bound_kb_id
+):
+    """Clearing agent A's URLs must never delete documents agent B ingested.
+
+    Two agents can share one KB, so `urls:clear_all` scopes on
+    `KbDocument.source_agent_id`. Legacy rows with no provenance stay put.
+    """
+    from models import Agent, KbDocument, URLSource
+
+    async with database.AsyncSessionLocal() as session:
+        agent_a = await session.get(Agent, default_agent_id)
+        agent_b = Agent(
+            workspace_id=agent_a.workspace_id,
+            name="Agent B",
+            model="deepseek-v4-flash",
+            api_base="https://api.deepseek.com/v1",
+            provider_type="deepseek",
+        )
+        session.add(agent_b)
+        await session.flush()
+
+        doc_a = KbDocument(
+            kb_id=bound_kb_id,
+            source_agent_id=agent_a.id,
+            filename=f"url_{agent_a.id}_a.txt",
+            status="ready",
+        )
+        doc_b = KbDocument(
+            kb_id=bound_kb_id,
+            source_agent_id=agent_b.id,
+            filename=f"url_{agent_b.id}_b.txt",
+            status="ready",
+        )
+        legacy_doc = KbDocument(
+            kb_id=bound_kb_id,
+            source_agent_id=None,
+            filename="url_legacy.txt",
+            status="ready",
+        )
+        session.add_all([doc_a, doc_b, legacy_doc])
+        session.add_all(
+            [
+                URLSource(
+                    agent_id=agent_a.id,
+                    url="https://example.com/a",
+                    normalized_url="https://example.com/a",
+                    status="success",
+                ),
+                URLSource(
+                    agent_id=agent_b.id,
+                    url="https://example.com/b",
+                    normalized_url="https://example.com/b",
+                    status="success",
+                ),
+            ]
+        )
+        await session.commit()
+        doc_a_id, doc_b_id, legacy_doc_id = doc_a.id, doc_b.id, legacy_doc.id
+
+    response = await client.post(f"/api/v1/urls:clear_all?agent_id={default_agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["deleted_count"] == 1, data
+    assert data["deleted_url_count"] == 1
+
+    async with database.AsyncSessionLocal() as session:
+        assert await session.get(KbDocument, doc_a_id) is None, "agent A's doc is gone"
+        assert await session.get(KbDocument, doc_b_id) is not None, (
+            "agent B's doc must survive agent A's clear_all"
+        )
+        assert await session.get(KbDocument, legacy_doc_id) is not None, (
+            "legacy rows without provenance must survive"
+        )
+        remaining_urls = (
+            await session.execute(select(URLSource.agent_id))
+        ).scalars().all()
+        assert remaining_urls and remaining_urls[0] != default_agent_id
 
 
 # ========== KB Indexing Diagnostics Gap Tests ==========
@@ -950,20 +1135,8 @@ async def test_url_list_exposes_indexing_error_for_fetch_success_process_failure
             select(Agent).where(Agent.id == default_agent_id)
         )
         agent = result.scalar_one()
-        if not agent.kb_id:
-            new_kb_id = str(uuid.uuid4())
-            kb = KnowledgeBase(
-                id=new_kb_id,
-                tenant_id=agent.workspace_id,
-                name=f"Agent {default_agent_id} KB",
-                embedding_model="BAAI/bge-m3",
-                qdrant_collection=f"kb_{new_kb_id}",
-            )
-            session.add(kb)
-            await session.flush()
-            agent.kb_id = kb.id
+        assert agent.kb_id is not None, "Fixture must bind a KB to the test agent"
         kb_id = agent.kb_id
-        tenant_id = str(agent.workspace_id)
 
         # Create URL: fetch succeeded, but indexing failed
         url_source = URLSource(
@@ -983,7 +1156,7 @@ async def test_url_list_exposes_indexing_error_for_fetch_success_process_failure
         doc = KbDocument(
             id=str(uuid.uuid4()),
             kb_id=kb_id,
-            tenant_id=tenant_id,
+            source_agent_id=default_agent_id,
             filename="url_content.txt",
             status="error",
             error_message="Embedding API rate limit exceeded",
@@ -1036,19 +1209,7 @@ async def test_url_list_exposes_indexing_status_field(client, default_agent_id):
             select(Agent).where(Agent.id == default_agent_id)
         )
         agent = result.scalar_one()
-        if not agent.kb_id:
-            new_kb_id = str(uuid.uuid4())
-            kb = KnowledgeBase(
-                id=new_kb_id,
-                tenant_id=agent.workspace_id,
-                name="Test KB",
-                embedding_model="BAAI/bge-m3",
-                qdrant_collection=f"kb_{new_kb_id}",
-            )
-            session.add(kb)
-            await session.flush()
-            agent.kb_id = kb.id
-            await session.commit()
+        assert agent.kb_id is not None, "Fixture must bind a KB to the test agent"
 
         # Create URL being processed
         url_source = URLSource(
@@ -1085,13 +1246,86 @@ async def test_url_list_exposes_indexing_status_field(client, default_agent_id):
 # ========== Scrapling Service /discover Endpoint Tests ==========
 
 
-def _import_scrapling_module():
-    """Import scrapling-service/main.py with mocked dependencies."""
+def _scrapling_main_path():
+    """Locate `scrapling-service/main.py` without assuming one absolute checkout."""
+    import os
+    from pathlib import Path
+
+    candidates = []
+    if os.environ.get("SCRAPLING_SERVICE_MAIN"):
+        candidates.append(Path(os.environ["SCRAPLING_SERVICE_MAIN"]))
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidates.append(parent / "scrapling-service" / "main.py")
+        candidates.append(parent.parent / "scrapling-service" / "main.py")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _install_scrapling_import_shims() -> None:
+    """Provide the third-party modules `scrapling-service` imports.
+
+    The service's own requirements (`bs4`, `readability-lxml`, `curl_cffi`) are not
+    installed in the backend test image, and the service is not part of this suite's
+    dependency graph. The `/discover` code path only needs `find_all("a", href=True)`,
+    so a thin lxml-backed shim is enough to exercise the real BFS implementation
+    without network access or extra packages.
+    """
     import sys
-    import importlib.util
+    import types
     from unittest.mock import MagicMock
 
-    # Mock curl_cffi if not installed
+    if "bs4" not in sys.modules:
+        import lxml.html
+
+        class _Element:
+            __slots__ = ("_el",)
+
+            def __init__(self, el):
+                self._el = el
+
+            def __getitem__(self, key):
+                return self._el.get(key)
+
+        class BeautifulSoup:
+            def __init__(self, html, parser="lxml"):
+                try:
+                    self._root = lxml.html.fromstring(html or "<html></html>")
+                except Exception:
+                    self._root = lxml.html.fromstring("<html></html>")
+
+            def find_all(self, tag, href=False):
+                return [
+                    _Element(el)
+                    for el in self._root.iter(tag)
+                    if not href or el.get("href")
+                ]
+
+        bs4_module = types.ModuleType("bs4")
+        bs4_module.BeautifulSoup = BeautifulSoup
+        sys.modules["bs4"] = bs4_module
+
+    if "readability" not in sys.modules:
+        readability_module = types.ModuleType("readability")
+
+        class Document:
+            def __init__(self, html, **kwargs):
+                self._html = html or ""
+
+            def summary(self):
+                return self._html
+
+            def title(self):
+                return ""
+
+        readability_module.Document = Document
+        sys.modules["readability"] = readability_module
+
+    # `curl_cffi` drives real HTTP; every call is patched in these tests.
     if "curl_cffi" not in sys.modules:
         curl_cffi_mock = MagicMock()
         curl_cffi_requests_mock = MagicMock()
@@ -1099,9 +1333,23 @@ def _import_scrapling_module():
         sys.modules["curl_cffi"] = curl_cffi_mock
         sys.modules["curl_cffi.requests"] = curl_cffi_requests_mock
 
+
+def _import_scrapling_module():
+    """Import scrapling-service/main.py with shimmed dependencies."""
+    import sys
+    import importlib.util
+
+    _install_scrapling_import_shims()
+
     # Use a unique module name to avoid conflicts
     module_name = f"scrapling_test_{id(_import_scrapling_module)}"
-    scrapling_path = "/Users/yi/Documents/Projects/basjoo/scrapling-service/main.py"
+    scrapling_path = _scrapling_main_path()
+    if scrapling_path is None:
+        pytest.skip(
+            "scrapling-service/main.py is not mounted in this test container; "
+            "set SCRAPLING_SERVICE_MAIN or mount the repository root to exercise "
+            "the /discover BFS implementation"
+        )
     spec = importlib.util.spec_from_file_location(module_name, scrapling_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
