@@ -644,7 +644,7 @@ def get_llm_service(
         logger.info("使用 OpenAI Native Provider")
         return OpenAINativeProvider(
             api_key=resolved_api_key,
-            model=resolved_model or "gpt-4o",
+            model=resolved_model or "gpt-6.1-sol",
         )
 
     elif resolved_provider_type == "google":
@@ -652,7 +652,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=_google_openai_base(resolved_api_base),
-            model=resolved_model or "gemini-2.5-flash",
+            model=resolved_model or "gemini-3.8-flash",
             send_stream_options=False,
         )
 
@@ -661,7 +661,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.anthropic.com/v1",
-            model=resolved_model or "claude-3-5-sonnet-20241022",
+            model=resolved_model or "claude-sonnet-5-5",
         )
 
     elif resolved_provider_type == "xai":
@@ -669,7 +669,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.x.ai/v1",
-            model=resolved_model or "grok-2-latest",
+            model=resolved_model or "grok-4.7",
         )
 
     elif resolved_provider_type == "openrouter":
@@ -677,7 +677,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://openrouter.ai/api/v1",
-            model=resolved_model or "openai/gpt-4o",
+            model=resolved_model or "openai/gpt-6.1-sol",
         )
 
     elif resolved_provider_type == "zai":
@@ -685,7 +685,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.z.ai/v1",
-            model=resolved_model or "z1-preview",
+            model=resolved_model or "glm-5.3",
         )
 
     elif resolved_provider_type == "deepseek":
@@ -701,15 +701,23 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://ark.cn-beijing.volces.com/api/v3",
-            model=resolved_model or "doubao-pro-32k",
+            model=resolved_model or "doubao-seed-2-1-pro-260628",
         )
 
-    elif resolved_provider_type == "aliyun":
+    elif resolved_provider_type == "moonshot":
+        logger.info("使用 Moonshot Provider (OpenAI Compatible)")
+        return OpenAIProvider(
+            api_key=resolved_api_key,
+            base_url=resolved_api_base or "https://api.moonshot.cn/v1",
+            model=resolved_model or "kimi-k3",
+        )
+
+    elif resolved_provider_type in ("aliyun", "aliyun_bailian"):
         logger.info("使用 阿里云 Provider (OpenAI Compatible)")
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            model=resolved_model or "qwen-plus",
+            model=resolved_model or "qwen3.8-flash",
         )
 
     elif resolved_provider_type == "tencentcloud":
@@ -717,7 +725,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.hunyuan.cloud.tencent.com/v1",
-            model=resolved_model or "hunyuan-pro",
+            model=resolved_model or "hy3",
         )
 
     elif resolved_provider_type == "siliconflow":
@@ -725,7 +733,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.siliconflow.cn/v1",
-            model=resolved_model or "deepseek-ai/DeepSeek-V3",
+            model=resolved_model or "deepseek-ai/DeepSeek-V4-Flash",
         )
 
     elif resolved_provider_type == "openai":
@@ -733,7 +741,7 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.openai.com/v1",
-            model=resolved_model or "gpt-4o",
+            model=resolved_model or "gpt-6.1-sol",
         )
 
     else:
@@ -742,5 +750,5 @@ def get_llm_service(
         return OpenAIProvider(
             api_key=resolved_api_key,
             base_url=resolved_api_base or "https://api.openai.com/v1",
-            model=resolved_model or "gpt-4o",
+            model=resolved_model or "gpt-6.1-sol",
         )

@@ -52,6 +52,46 @@ services:
       retries: 5
     profiles: ["prod", "dev"]
 
+  # ============================================
+  # Self-hosted embedding provider (the `local` KB embedding provider)
+  # OpenAI-compatible /v1/embeddings on port 80, no API key. Only reachable from
+  # basjoo-network. There is deliberately NO `depends_on: local-embed` on the
+  # backend: a failed model download must not block the app from starting — the
+  # example seed probes it lazily and self-heals on the next login.
+  # ============================================
+  local-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    container_name: basjoo-local-embed
+    command:
+      - "--model-id"
+      - "ibm-granite/granite-embedding-97m-multilingual-r2"
+      - "--max-client-batch-size"
+      - "32"
+      - "--auto-truncate"
+      - "--max-batch-tokens"
+      - "2048"
+    volumes:
+      - local-embed-cache:/data
+    networks:
+      - basjoo-network
+    restart: unless-stopped
+    profiles: ["prod", "dev"]
+    healthcheck:
+      # TEI cpu-1.8 ships bash but no wget (curl does exist); probe /health via bash TCP,
+      # same style as the qdrant healthcheck above. Verified against a live TEI: exit 0.
+      test:
+        - CMD
+        - bash
+        - -lc
+        - >-
+          exec 3<>/dev/tcp/localhost/80;
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n' >&3;
+          timeout 5 grep -q '200' <&3
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
   scrapling-service:
     build:
       context: ./scrapling-service
@@ -313,3 +353,4 @@ volumes:
   redis-data:
   backend-data:
   qdrant-data:
+  local-embed-cache:

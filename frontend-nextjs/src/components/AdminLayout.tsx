@@ -203,6 +203,23 @@ const navItemsConfig: NavItem[] = [
 			</svg>
 		),
 	},
+	{
+		path: "/settings/account",
+		i18nKey: "navigation.accountSettings",
+		icon: (
+			<svg
+				width="20"
+				height="20"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="2"
+			>
+				<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+				<circle cx="12" cy="7" r="4" />
+			</svg>
+		),
+	},
 ];
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
@@ -218,13 +235,16 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 	const isSupport = admin?.role === "support";
 	const agentBasePath = agentId ? `/agents/${agentId}` : "";
 
-	// Build nav items based on role and context. `/knowledge-bases` is a
-	// workspace-level (root) entry only, so it is dropped from agent scoping.
+	// Build nav items based on role and context. `/knowledge-bases` and
+	// `/settings/account` are workspace-level (root) entries only, so they are
+	// dropped from agent scoping.
 	const scopedNavItems = agentId
 		? navItemsConfig
 				.filter(
 					(item) =>
-						item.path !== "/agents" && item.path !== "/knowledge-bases",
+						item.path !== "/agents" &&
+						item.path !== "/knowledge-bases" &&
+						item.path !== "/settings/account",
 				)
 				.map((item) => ({
 					...item,
@@ -242,7 +262,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 					(item) =>
 						item.path === "/" ||
 						item.path === "/agents" ||
-						item.path === "/knowledge-bases",
+						item.path === "/knowledge-bases" ||
+						item.path === "/settings/account",
 				)
 			: []; // Non-super users at root level should redirect, show no nav
 

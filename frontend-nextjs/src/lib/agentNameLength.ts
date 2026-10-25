@@ -1,4 +1,4 @@
-export const AGENT_NAME_MAX_DISPLAY_WIDTH = 10;
+export const AGENT_NAME_MAX_DISPLAY_WIDTH = 12;
 
 const WIDE_CODE_POINT_RANGES: Array<[number, number]> = [
 	[0x1100, 0x115f],

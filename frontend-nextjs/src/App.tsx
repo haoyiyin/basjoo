@@ -4,7 +4,6 @@ import { AuthLanguageSwitcher } from './components/AuthLanguageSwitcher';
 
 import { Login } from './views/Login';
 import { Register } from './views/Register';
-import { Setup } from './views/Setup';
 import AgentSelector from './views/AgentSelector';
 import AgentPanel from './views/AgentPanel';
 import Agents from './views/Agents';
@@ -15,6 +14,7 @@ import KnowledgeBases from './views/KnowledgeBases';
 import Playground from './views/Playground';
 import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
+import AccountSettings from './views/AccountSettings';
 import URLManagement from './views/URLManagement';
 import { AdminUsers } from './views/AdminUsers';
 import Chat from './views/Chat';
@@ -44,7 +44,6 @@ export function App() {
       <Route element={<AuthLayout />}>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/setup" element={<Setup />} />
       </Route>
 
       <Route element={<DashboardLayout />}>
@@ -62,6 +61,7 @@ export function App() {
         <Route path="/chat/:sessionId" element={<Chat />} />
         <Route path="/files" element={<FileUploadManagement />} />
         <Route path="/settings/agent" element={<AgentSettings />} />
+        <Route path="/settings/account" element={<AccountSettings />} />
 
         <Route path="/knowledge-bases" element={<KnowledgeBases />} />
         <Route path="/sessions" element={<Redirect to="/" />} />

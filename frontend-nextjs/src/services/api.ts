@@ -55,11 +55,16 @@ export type ProviderType =
 	| "zai"
 	| "deepseek"
 	| "volcengine"
+	| "tencentcloud"
 	| "moonshot"
 	| "aliyun_bailian"
 	| "siliconflow";
 
-export type EmbeddingProvider = "jina" | "siliconflow" | "custom";
+export type EmbeddingProvider =
+	| "jina"
+	| "siliconflow"
+	| "custom"
+	| "local";
 export type AgentType =
 	| "website_support"
 	| "ai_clone"

@@ -235,7 +235,8 @@ class FileUploadResponse(BaseModel):
 
 # ========== Knowledge Base Schemas ==========
 
-EMBEDDING_PROVIDERS = ("jina", "siliconflow", "custom")
+# `local` is the self-hosted TEI container (no API key, fixed in-network base URL).
+EMBEDDING_PROVIDERS = ("jina", "siliconflow", "custom", "local")
 
 class KbAgentRef(BaseModel):
     """Agent reference embedded in a KB detail payload"""
@@ -288,10 +289,12 @@ class KbCreateRequest(_KbChunkShape):
     """Create a knowledge base (the provider probe validates the key)"""
 
     name: str = Field(..., min_length=1, max_length=100)
-    embedding_provider: Literal["jina", "siliconflow", "custom"] = "jina"
+    embedding_provider: Literal["jina", "siliconflow", "custom", "local"] = "jina"
     embedding_model: str = Field(..., min_length=1, max_length=100)
     embedding_base_url: Optional[str] = Field(None, max_length=500)
-    embedding_api_key: str = Field(..., min_length=1)
+    # Empty by default: the `local` provider needs no key (the endpoint enforces
+    # the key for every other provider).
+    embedding_api_key: str = Field("", max_length=500)
     embedding_batch_size: int = Field(4, ge=1, le=64)
 
 class KbUpdateRequest(BaseModel):
@@ -300,7 +303,7 @@ class KbUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     chunk_size: Optional[int] = Field(None, ge=128, le=2048)
     chunk_overlap: Optional[int] = Field(None, ge=0, le=512)
-    embedding_provider: Optional[Literal["jina", "siliconflow", "custom"]] = None
+    embedding_provider: Optional[Literal["jina", "siliconflow", "custom", "local"]] = None
     embedding_model: Optional[str] = Field(None, min_length=1, max_length=100)
     embedding_base_url: Optional[str] = Field(None, max_length=500)
     embedding_api_key: Optional[str] = Field(None, min_length=1)
@@ -308,7 +311,7 @@ class KbUpdateRequest(BaseModel):
 class KbResetRequest(BaseModel):
     """Reset a KB: change the embedding config and reindex every document"""
 
-    embedding_provider: Literal["jina", "siliconflow", "custom"] = "jina"
+    embedding_provider: Literal["jina", "siliconflow", "custom", "local"] = "jina"
     embedding_model: str = Field(..., min_length=1, max_length=100)
     embedding_base_url: Optional[str] = Field(None, max_length=500)
     embedding_api_key: Optional[str] = Field(None, min_length=1)
@@ -317,10 +320,11 @@ class KbResetRequest(BaseModel):
 class KbEmbeddingTestRequest(BaseModel):
     """Probe an embedding provider without persisting anything"""
 
-    embedding_provider: Literal["jina", "siliconflow", "custom"] = "jina"
+    embedding_provider: Literal["jina", "siliconflow", "custom", "local"] = "jina"
     embedding_model: str = Field(..., min_length=1, max_length=100)
     embedding_base_url: Optional[str] = Field(None, max_length=500)
-    embedding_api_key: str = Field(..., min_length=1)
+    # Same rule as the create payload: only `local` may be probed without a key.
+    embedding_api_key: str = Field("", max_length=500)
 
 class KbEmbeddingTestResponse(BaseModel):
     """Result of the embedding provider probe"""
@@ -388,6 +392,7 @@ class AgentConfig(BaseModel):
             "zai",
             "deepseek",
             "volcengine",
+            "tencentcloud",
             "moonshot",
             "aliyun_bailian",
             "siliconflow",
@@ -473,7 +478,7 @@ class AgentConfig(BaseModel):
 class AgentUpdateRequest(BaseModel):
     """更新Agent配置请求"""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=10)
+    name: Optional[str] = Field(None, min_length=1, max_length=12)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -502,6 +507,7 @@ class AgentUpdateRequest(BaseModel):
             "zai",
             "deepseek",
             "volcengine",
+            "tencentcloud",
             "moonshot",
             "aliyun_bailian",
             "siliconflow",
@@ -583,7 +589,7 @@ class AgentUpdateRequest(BaseModel):
         return normalized_origins
 
 
-AGENT_NAME_MAX_DISPLAY_WIDTH = 10
+AGENT_NAME_MAX_DISPLAY_WIDTH = 12
 
 
 def _agent_name_display_width(value: str) -> int:
@@ -604,7 +610,7 @@ def _validate_agent_name(value: Any) -> Any:
     if width > AGENT_NAME_MAX_DISPLAY_WIDTH:
         raise ValueError(
             f"Agent name must be at most {AGENT_NAME_MAX_DISPLAY_WIDTH} display units "
-            "(10 ASCII characters or 5 Chinese characters)"
+            "(12 ASCII characters or 6 Chinese characters)"
         )
     return stripped
 
@@ -612,7 +618,7 @@ def _validate_agent_name(value: Any) -> Any:
 class AgentCreateRequest(BaseModel):
     """创建Agent请求"""
 
-    name: str = Field(..., min_length=1, max_length=10)
+    name: str = Field(..., min_length=1, max_length=12)
     description: str | None = Field(None, max_length=200)
     agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = (
         "website_support"

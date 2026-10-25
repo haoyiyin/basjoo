@@ -129,6 +129,13 @@ def test_get_embedding_dimension_is_migration_only_mapping():
     assert qdrant_service.get_embedding_dimension("text-embedding-3-large") == 3072
     assert qdrant_service.get_embedding_dimension("text-embedding-3-small") == 1536
     assert qdrant_service.get_embedding_dimension("ada-002") == 1536
+    # Self-hosted granite-embedding-97m is 384 dimensional.
+    assert (
+        qdrant_service.get_embedding_dimension(
+            "ibm-granite/granite-embedding-97m-multilingual-r2"
+        )
+        == 384
+    )
     assert qdrant_service.get_embedding_dimension("something-unknown") == 1024
 
 # ---- tiny asyncio helper ---------------------------------------------------

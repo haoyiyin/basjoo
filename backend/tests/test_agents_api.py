@@ -147,26 +147,39 @@ async def test_agent_name_accepts_ten_ascii_display_units(client):
 
 
 @pytest.mark.asyncio
-async def test_agent_name_accepts_five_chinese_characters(client):
+async def test_agent_name_accepts_six_chinese_characters(client):
     response = await client.post(
         "/api/v1/agents",
-        json={"name": "客服助手一", "agent_type": "ai_clone"},
+        json={"name": "客服助手一二", "agent_type": "ai_clone"},
     )
 
     assert response.status_code == 201
-    assert response.json()["name"] == "客服助手一"
+    assert response.json()["name"] == "客服助手一二"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["AgentName12", "客服助手一二"])
-async def test_agent_name_rejects_more_than_ten_display_units(client, name):
+async def test_agent_name_accepts_the_builtin_example_name(client):
+    # The seeded example agent is "Basjoo 助手" (11 display units); it must remain a
+    # legal name so an admin can re-save the example untouched.
+    response = await client.post(
+        "/api/v1/agents",
+        json={"name": "Basjoo 助手", "agent_type": "ai_clone"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Basjoo 助手"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["AgentName1234", "客服助手一二三"])
+async def test_agent_name_rejects_more_than_twelve_display_units(client, name):
     response = await client.post(
         "/api/v1/agents",
         json={"name": name, "agent_type": "ai_clone"},
     )
 
     assert response.status_code == 422
-    assert "10" in response.text
+    assert "12" in response.text
 
 
 @pytest.mark.asyncio
@@ -180,8 +193,8 @@ async def test_agent_update_rejects_over_limit_display_width_name(client):
 
     update_response = await client.put(
         f"/api/v1/agent?agent_id={agent_id}",
-        json={"name": "客服助手一二"},
+        json={"name": "客服助手一二三"},
     )
 
     assert update_response.status_code == 422
-    assert "10" in update_response.text
+    assert "12" in update_response.text

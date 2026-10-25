@@ -32,6 +32,10 @@ def get_embedding_dimension(model: str) -> int:
         return 1536
     if "bge-m3" in m or "bge_m3" in m:
         return 1024
+    # Self-hosted TEI granite-embedding-97m (384 dims) — migration mapping only,
+    # live paths still persist the MEASURED width.
+    if "granite-embedding-97m" in m:
+        return 384
     if "jina" in m:
         return 1024
     return 1024  # safe default

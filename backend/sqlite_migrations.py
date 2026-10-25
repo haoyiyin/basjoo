@@ -406,7 +406,7 @@ def _backfill_agents(cursor: sqlite3.Cursor):
         cursor.execute(
             "UPDATE agents SET provider_type = NULL "
             "WHERE provider_type IS NOT NULL "
-            "AND provider_type NOT IN ('openai','openai_native','google','anthropic','xai','openrouter','zai','deepseek','volcengine','moonshot','aliyun_bailian','siliconflow')"
+            "AND provider_type NOT IN ('openai','openai_native','google','anthropic','xai','openrouter','zai','deepseek','volcengine','moonshot','aliyun_bailian','siliconflow','tencentcloud')"
         )
         # Then infer from api_base/model for NULL/empty rows
         cursor.execute(

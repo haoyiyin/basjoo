@@ -34,6 +34,7 @@ from api.v1.schemas import (
     KbUpdateRequest,
 )
 from core.encryption import decrypt_api_key, encrypt_api_key
+from config import settings
 from database import get_db
 from models import AdminUser, Agent, KnowledgeBase, KbDocument
 from services.document_parser import DocumentParser
@@ -48,10 +49,24 @@ PROBE_TEXT = "basjoo-capability-probe"
 PROBE_ERROR_MAX_LENGTH = 300
 
 # Default base URLs per provider. `custom` always requires an explicit base URL.
+# `local` points at the self-hosted TEI container (OpenAI-compatible /v1/embeddings).
 PROVIDER_DEFAULT_BASE_URLS = {
     "jina": "https://api.jina.ai/v1",
     "siliconflow": "https://api.siliconflow.cn/v1",
+    "local": settings.local_embedding_base_url,
 }
+
+def _require_embedding_api_key(provider: str, api_key: Optional[str]) -> None:
+    """Every provider needs a non-empty key except `local`.
+
+    `local` is the self-hosted TEI container inside the private compose network: it
+    takes no credentials, so an empty key is valid there and must stay valid.
+    """
+    if provider != "local" and not (api_key or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Embedding API key is required",
+        )
 
 
 def _require_workspace(current_user: AdminUser) -> int:
@@ -66,7 +81,12 @@ def _require_workspace(current_user: AdminUser) -> int:
 
 
 def _resolve_base_url(provider: str, base_url: Optional[str]) -> Optional[str]:
-    """Resolve the embeddings base URL for a provider, validating `custom`."""
+    """Resolve the embeddings base URL for a provider, validating `custom`.
+
+    `local` follows the same rule as the hosted providers: an explicitly supplied
+    URL wins (a deployment may run TEI somewhere else), otherwise the configured
+    in-network default is used.
+    """
     cleaned = (base_url or "").strip()
     if provider == "custom":
         if not cleaned.startswith(("http://", "https://")):
@@ -92,7 +112,7 @@ async def _probe_provider(
     provider: str,
     model: str,
     base_url: Optional[str],
-    api_key: str,
+    api_key: Optional[str],
 ) -> int:
     """Embed one probe string and return the MEASURED vector length.
 
@@ -245,6 +265,7 @@ async def create_knowledge_base(
     require_super_admin(current_user)
     workspace_id = _require_workspace(current_user)
 
+    _require_embedding_api_key(payload.embedding_provider, payload.embedding_api_key)
     dimension = await _probe_provider(
         payload.embedding_provider,
         payload.embedding_model,
@@ -279,6 +300,7 @@ async def test_embedding(
     require_super_admin(current_user)
     _require_workspace(current_user)
 
+    _require_embedding_api_key(payload.embedding_provider, payload.embedding_api_key)
     dimension = await _probe_provider(
         payload.embedding_provider,
         payload.embedding_model,
@@ -353,6 +375,7 @@ async def reset_knowledge_base(
     api_key = payload.embedding_api_key or decrypt_api_key(
         getattr(kb, "embedding_api_key", None)
     )
+    _require_embedding_api_key(payload.embedding_provider, api_key)
     dimension = await _probe_provider(
         payload.embedding_provider,
         payload.embedding_model,

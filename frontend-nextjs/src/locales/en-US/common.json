@@ -71,6 +71,7 @@
     "sessions": "Sessions",
     "aiSettings": "AI Settings",
     "agentSettings": "Agent Settings",
+    "accountSettings": "Account Settings",
     "administrator": "Administrator",
     "agents": "Agents",
     "users": "Users"
@@ -529,7 +530,8 @@
       "indexRebuildInProgress": "Index rebuild in progress, please wait...",
       "invalidUrl": "Invalid URL, please re-enter"
     },
-    "embeddingGetKey": "Get API Key:"
+    "embeddingGetKey": "Get API Key:",
+    "tencentcloud": "Tencent Hunyuan"
   },
   "personas": {
     "generic": {
@@ -587,7 +589,29 @@
     "appearance": "Appearance",
     "appearanceDesc": "Customize theme and language preferences",
     "theme": "Theme",
-    "language": "Language"
+    "language": "Language",
+    "account": {
+      "title": "Account Settings",
+      "description": "Manage the console language and the sign-in password for this account.",
+      "languageSection": "Language",
+      "languageDescription": "Choose the console language. Your choice is saved on this device.",
+      "languageZh": "Chinese",
+      "languageEn": "English",
+      "passwordSection": "Change password",
+      "passwordDescription": "Update the sign-in password for this account. New passwords need at least 8 characters.",
+      "currentPassword": "Current password",
+      "newPassword": "New password",
+      "confirmPassword": "Confirm new password",
+      "savePassword": "Save password",
+      "passwordChanged": "Password updated",
+      "passwordMismatch": "The two new passwords do not match",
+      "passwordTooShort": "New password must be at least 8 characters",
+      "currentPasswordRequired": "Please enter your current password",
+      "currentPasswordIncorrect": "Current password is incorrect",
+      "accountInfoSection": "Account information",
+      "name": "Name",
+      "email": "Email"
+    }
   },
   "playground": {
     "testAiEffect": "Test your AI Agent conversation",
@@ -808,6 +832,7 @@
     "providerJina": "Jina AI",
     "providerSiliconflow": "SiliconFlow",
     "providerCustom": "Custom (OpenAI compatible)",
+    "providerLocal": "Local (built-in)",
     "model": "Model name",
     "modelRequired": "Please enter a model name",
     "baseUrl": "API base URL",

@@ -25,6 +25,7 @@ const providerLabelKey: Record<EmbeddingProvider, string> = {
 	jina: "kbForm.providerJina",
 	siliconflow: "kbForm.providerSiliconflow",
 	custom: "kbForm.providerCustom",
+	local: "kbForm.providerLocal",
 };
 
 const thStyle = {

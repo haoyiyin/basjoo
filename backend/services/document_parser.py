@@ -15,6 +15,11 @@ except ImportError:
 from constants import ALLOWED_EXTENSIONS
 from services.ssl_utils import create_ssl_context
 
+# One /v1/embeddings round trip carries at most this many inputs. Providers cap it
+# (TEI defaults to 32 and answers 413 above that); chunking still decides how many
+# chunks a document has, this only bounds the request size.
+EMBED_BATCH_SIZE = 32
+
 logger = logging.getLogger(__name__)
 
 INVALID_TEXT_BINARY_MESSAGE = (
@@ -199,21 +204,33 @@ class DocumentParser:
         model: str,
         base_url: str | None,
         api_key: str | None = None,
+        timeout: float = 60.0,
     ) -> list[list[float]]:
-        """OpenAI-compatible /v1/embeddings call. Returns list of embeddings."""
+        """OpenAI-compatible /v1/embeddings call. Returns list of embeddings.
+
+        Batched: providers cap the request size (the self-hosted TEI container
+        defaults to 32 inputs) and answer 413 for anything larger, which used to
+        fail a whole document. ``batch_size`` caps a single round trip; the caller's
+        own chunking still decides how many chunks exist.
+        """
         if not texts:
             return []
         url = (base_url or "https://api.openai.com/v1").rstrip("/") + "/embeddings"
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        payload = {"model": model, "input": texts}
         ssl_context = create_ssl_context()
-        async with httpx.AsyncClient(verify=ssl_context, timeout=60.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            return [item["embedding"] for item in data.get("data", [])]
+        step = EMBED_BATCH_SIZE
+        embeddings: list[list[float]] = []
+        async with httpx.AsyncClient(verify=ssl_context, timeout=timeout) as client:
+            for start in range(0, len(texts), step):
+                payload = {"model": model, "input": texts[start : start + step]}
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                embeddings.extend(
+                    item["embedding"] for item in resp.json().get("data", [])
+                )
+        return embeddings
 
     def parse_with_retry(self, storage_path: str, file_type: str) -> str:
         """Retry wrapper (>=1 retry)."""
