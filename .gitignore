@@ -111,6 +111,7 @@ dmypy.json
 .dockerignore
 !frontend-nextjs/.dockerignore
 !scrapling-service/.dockerignore
+!backend/.dockerignore
 docker-compose.override.yml
 ssl/
 
