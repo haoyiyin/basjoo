@@ -1,168 +1,361 @@
-"""Tests for KB document pipeline: model fields, parser, processor, endpoints."""
+"""KB document pipeline: parser basics, workspace-scoped upload paths, processing.
 
-from unittest.mock import AsyncMock, MagicMock, patch
+The processor reads its embedding config (model, base URL, key, dimension) from
+the KB and writes `source_agent_id` provenance on every chunk payload. There is no
+tenant anywhere in the path or the payload.
+"""
+
+import uuid
+from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 
-from models import KbDocument, KnowledgeBase
+import database
+from models import KnowledgeBase, KbChunk, KbDocument, Workspace, WorkspaceQuota
+from services import kb_document_processor
 from services.document_parser import DocumentParser
-from services.kb_document_processor import KbDocumentProcessor
+from services.kb_document_processor import (
+    PROCESSING_ERROR_MESSAGE_MAX_LENGTH,
+    KbDocumentProcessor,
+    get_embedding_api_key,
+)
+from core.encryption import encrypt_api_key
 from services.kb_service import KbService
 
-
-def test_knowledge_base_has_chunk_params():
-    kb = KnowledgeBase(tenant_id="t1", name="Test", qdrant_collection="kb_test")
-    assert hasattr(kb, "chunk_size")
-    assert hasattr(kb, "chunk_overlap")
-
-
-def test_kb_document_has_error_message():
-    doc = KbDocument(kb_id="kb1", tenant_id="t1", filename="a.txt")
-    assert hasattr(doc, "error_message")
-    assert hasattr(doc, "file_size")
-
-
-def test_document_parser_imports():
-    p = DocumentParser()
-    assert p is not None
-
-
-def test_document_parser_chunk_text():
-    p = DocumentParser()
-    text = "a" * 600
-    chunks = p.chunk_text(text, 512, 64)
-    assert len(chunks) > 1
-    assert len(chunks[0]) == 512
-
-
-def test_document_parser_chunk_small_text():
-    p = DocumentParser()
-    text = "small text"
-    chunks = p.chunk_text(text, 512, 64)
-    assert len(chunks) == 1
-    assert chunks[0] == text
-
-
-def test_document_parser_chunk_empty():
-    p = DocumentParser()
-    chunks = p.chunk_text("", 512, 64)
-    assert chunks == []
-
-
-def test_document_parser_accepts_utf8_non_english_text(tmp_path):
-    """Valid UTF-8 Chinese/non-English text must not be treated as binary."""
-    text = "中文知识库内容可以被读取。\nEspañol con acentos: información útil."
-    path = tmp_path / "readable_multilingual.txt"
-    path.write_bytes(text.encode("utf-8"))
-
-    parsed = DocumentParser().parse(str(path), "txt")
-
-    assert "中文知识库内容" in parsed
-    assert "información útil" in parsed
-
-
-def test_document_parser_supported_exts():
-    from constants import ALLOWED_EXTENSIONS
-
-    assert "txt" in ALLOWED_EXTENSIONS
-    assert "md" in ALLOWED_EXTENSIONS
-    assert "html" in ALLOWED_EXTENSIONS
-    assert "pdf" in ALLOWED_EXTENSIONS
-    assert "docx" in ALLOWED_EXTENSIONS
-    assert "xlsx" in ALLOWED_EXTENSIONS
-
-
-def test_kb_document_processor_imports():
-    proc = KbDocumentProcessor()
-    assert proc is not None
-    assert proc.parser is not None
-    assert proc.qdrant is not None
-    assert proc.kb_svc is not None
-
+DIMENSION = 6
+KB_EMBEDDING_KEY = "pipeline-embedding-key"
 
 _RANDOM_BINARY_BYTES = (
     b"\x00\xff\x10not-a-real-document\x00\x01\x02" + bytes(range(3, 32))
 )
 
+@pytest.fixture(autouse=True)
+def fake_qdrant(monkeypatch):
+    """Record Qdrant traffic instead of talking to a live instance."""
+    from services.qdrant_service import QdrantKbService
 
-async def _create_pending_binary_document(tmp_path, ext: str) -> tuple[str, str, str]:
-    import uuid
-    import database
+    state: dict[str, list] = {"upserts": [], "deletes": []}
 
-    path = tmp_path / f"random_binary.{ext}"
-    path.write_bytes(_RANDOM_BINARY_BYTES)
+    async def ensure_collection(self, kb_id, dimension):
+        return f"kb_{str(kb_id).replace('-', '')[:12]}"
+
+    async def delete_collection(self, kb_id):
+        return True
+
+    async def batch_upsert_points(self, kb_id, points, batch_size=100):
+        state["upserts"].append((kb_id, list(points)))
+        return len(points)
+
+    async def delete_points_by_doc_id(self, kb_id, doc_id):
+        state["deletes"].append((kb_id, doc_id))
+        return 1
+
+    monkeypatch.setattr(QdrantKbService, "ensure_collection", ensure_collection)
+    monkeypatch.setattr(QdrantKbService, "delete_collection", delete_collection)
+    monkeypatch.setattr(
+        QdrantKbService, "batch_upsert_points", batch_upsert_points
+    )
+    monkeypatch.setattr(
+        QdrantKbService, "delete_points_by_doc_id", delete_points_by_doc_id
+    )
+    return state
+
+async def _workspace(email: str = "pipeline@example.com") -> int:
+    async with database.AsyncSessionLocal() as session:
+        workspace = Workspace(name=f"Workspace {email}", owner_email=email)
+        session.add(workspace)
+        await session.flush()
+        session.add(WorkspaceQuota(workspace_id=workspace.id))
+        await session.commit()
+        return workspace.id
+
+async def _create_kb(
+    workspace_id: int,
+    name: str = "Pipeline KB",
+    *,
+    embedding_dimension: int = DIMENSION,
+    embedding_model: str = "test-embedding-model",
+    is_locked: bool = False,
+) -> str:
+    kb = await KbService().create_knowledge_base(
+        workspace_id,
+        name,
+        embedding_provider="custom",
+        embedding_model=embedding_model,
+        embedding_base_url="https://embed.example.com/v1",
+        embedding_api_key=encrypt_api_key(KB_EMBEDDING_KEY),
+        embedding_dimension=embedding_dimension,
+        embedding_batch_size=4,
+    )
+    if is_locked:
+        async with database.AsyncSessionLocal() as session:
+            row = await session.get(KnowledgeBase, kb.id)
+            object.__setattr__(row, "is_locked", True)
+            await session.commit()
+    return kb.id
+
+# ---- parser basics ---------------------------------------------------------
+
+def test_document_parser_chunk_text():
+    parser = DocumentParser()
+    chunks = parser.chunk_text("a" * 600, 512, 64)
+    assert len(chunks) > 1
+    assert len(chunks[0]) == 512
+
+def test_document_parser_chunk_small_text():
+    parser = DocumentParser()
+    chunks = parser.chunk_text("small text", 512, 64)
+    assert chunks == ["small text"]
+
+def test_document_parser_chunk_empty():
+    assert DocumentParser().chunk_text("", 512, 64) == []
+
+def test_document_parser_supported_exts():
+    from constants import ALLOWED_EXTENSIONS
+
+    for ext in ("txt", "md", "html", "pdf", "docx", "xlsx"):
+        assert ext in ALLOWED_EXTENSIONS
+
+def test_processor_imports():
+    processor = KbDocumentProcessor()
+    assert processor.parser is not None
+    assert processor.qdrant is not None
+    assert not hasattr(processor, "kb_svc"), "the processor must not need KbService"
+
+# ---- upload paths ----------------------------------------------------------
+
+def test_save_uploaded_file_uses_workspace_path(setup_test_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(kb_document_processor, "UPLOAD_ROOT", tmp_path)
+
+    workspace_id = 7
+    kb_id = "kb-path-test"
+    doc = KbDocument(
+        id="doc-path-test",
+        kb_id=kb_id,
+        filename="report.pdf",
+        file_type="pdf",
+        status="pending",
+    )
+    object.__setattr__(doc, "_workspace_id", workspace_id)
+
+    processor = KbDocumentProcessor()
+    path = processor.save_uploaded_file(doc, b"%PDF-1.4 fake", "pdf")
+
+    expected_dir = tmp_path / str(workspace_id) / kb_id / "doc-path-test"
+    assert Path(path) == expected_dir / "report.pdf"
+    assert Path(path).exists()
+    assert Path(path).read_bytes() == b"%PDF-1.4 fake"
+
+def test_save_uploaded_file_rejects_a_record_built_by_hand():
+    """Path building needs the workspace scope that only creation supplies."""
+    doc = KbDocument(id="doc-no-scope", kb_id="kb-x", filename="a.txt")
+    with pytest.raises(ValueError, match="workspace scope"):
+        KbDocumentProcessor().save_uploaded_file(doc, b"data", "txt")
+
+@pytest.mark.asyncio
+async def test_create_document_record_writes_provenance(setup_test_db):
+    workspace_id = await _workspace("provenance@example.com")
+    kb_id = await _create_kb(workspace_id)
 
     async with database.AsyncSessionLocal() as session:
-        tenant_id = str(uuid.uuid4())
-        kb_id = str(uuid.uuid4())
-        from models import Tenant
+        doc = await KbDocumentProcessor().create_document_record(
+            workspace_id,
+            kb_id,
+            "manual.txt",
+            5,
+            source_agent_id="agt_provenance",
+            db=session,
+        )
+        await session.commit()
+        doc_id = doc.id
 
-        tenant = Tenant(
-            id=tenant_id,
-            name=f"tenant_{ext}",
-            slug=f"tenant-{ext}-{uuid.uuid4().hex[:8]}",
+    async with database.AsyncSessionLocal() as session:
+        stored = await session.get(KbDocument, doc_id)
+        assert stored.source_agent_id == "agt_provenance"
+        assert stored.status == "pending"
+
+def test_create_document_record_requires_workspace():
+    import asyncio
+
+    with pytest.raises(ValueError, match="workspace_id"):
+        asyncio.run(
+            KbDocumentProcessor().create_document_record(
+                0, "kb", "a.txt", 1, source_agent_id=None, db=None
+            )
         )
-        kb = KnowledgeBase(
-            id=kb_id,
-            tenant_id=tenant_id,
-            name=f"Binary {ext} KB",
-            qdrant_collection=f"kb_{uuid.uuid4().hex}",
-        )
+
+# ---- processing ------------------------------------------------------------
+
+async def _seed_document(
+    kb_id: str,
+    tmp_path,
+    filename: str = "doc.txt",
+    content: bytes = b"Basjoo knowledge content for chunking.",
+    file_type: str = "txt",
+    source_agent_id: str | None = "agt_provenance",
+) -> str:
+    file_path = tmp_path / filename
+    file_path.write_bytes(content)
+    async with database.AsyncSessionLocal() as session:
         doc = KbDocument(
             kb_id=kb_id,
-            tenant_id=tenant_id,
-            filename=f"random_binary.{ext}",
-            file_type=ext,
-            file_size=len(_RANDOM_BINARY_BYTES),
-            storage_path=str(path),
+            filename=filename,
+            file_type=file_type,
+            file_size=len(content),
+            storage_path=str(file_path),
+            source_agent_id=source_agent_id,
             status="pending",
         )
-        session.add_all([tenant, kb, doc])
+        session.add(doc)
         await session.commit()
-        return str(doc.id), tenant_id, kb_id
-
-
-async def _process_document_with_mocked_kb(
-    doc_id: str, tenant_id: str, kb_id: str
-) -> None:
-    mock_kb = MagicMock()
-    mock_kb.id = kb_id
-    mock_kb.tenant_id = tenant_id
-    mock_kb.chunk_size = 512
-    mock_kb.chunk_overlap = 64
-    mock_kb.embedding_model = "BAAI/bge-m3"
-    mock_kb.embedding_base_url = None
-    mock_kb.is_locked = False
-
-    with patch("services.kb_document_processor.QdrantKbService"), patch(
-        "services.kb_service.QdrantKbService"
-    ):
-        processor = KbDocumentProcessor()
-    processor.kb_svc.get_knowledge_base = AsyncMock(return_value=mock_kb)
-
-    await processor.process_document(doc_id, tenant_id, kb_id)
-
+        return doc.id
 
 async def _load_document(doc_id: str) -> KbDocument:
-    import database
-    from sqlalchemy import select
+    async with database.AsyncSessionLocal() as session:
+        return (
+            await session.execute(select(KbDocument).where(KbDocument.id == doc_id))
+        ).scalar_one()
+
+@pytest.mark.asyncio
+async def test_process_document_embeds_and_upserts_with_provenance(
+    setup_test_db, tmp_path, monkeypatch, fake_qdrant
+):
+    workspace_id = await _workspace("process@example.com")
+    kb_id = await _create_kb(workspace_id)
+    doc_id = await _seed_document(kb_id, tmp_path)
+
+    calls: list[dict] = []
+
+    async def fake_embed_texts(self, texts, model, base_url, api_key=None):
+        calls.append(
+            {"texts": list(texts), "model": model, "base_url": base_url, "api_key": api_key}
+        )
+        return [[0.1] * DIMENSION for _ in texts]
+
+    monkeypatch.setattr(
+        "services.document_parser.DocumentParser.embed_texts", fake_embed_texts
+    )
+
+    await KbDocumentProcessor().process_document(doc_id, kb_id)
+
+    doc = await _load_document(doc_id)
+    assert doc.status == "ready", doc.error_message
+    assert doc.chunk_count == 1
+
+    # The KB's config drives the embedding call.
+    assert calls[0]["model"] == "test-embedding-model"
+    assert calls[0]["base_url"] == "https://embed.example.com/v1"
+    assert calls[0]["api_key"] == KB_EMBEDDING_KEY
+
+    kb_id_arg, points = fake_qdrant["upserts"][0]
+    assert kb_id_arg == kb_id
+    payload = points[0]["payload"]
+    assert payload["kb_id"] == kb_id
+    assert payload["doc_id"] == doc_id
+    assert payload["source_agent_id"] == "agt_provenance"
+    assert "tenant_id" not in payload
 
     async with database.AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(KbDocument).where(KbDocument.id == doc_id)
-        )
-        return result.scalar_one()
+        chunks = (
+            await session.execute(select(KbChunk).where(KbChunk.kb_id == kb_id))
+        ).scalars().all()
+    assert len(chunks) == 1
+    assert chunks[0].tenant_id is None
 
+@pytest.mark.asyncio
+async def test_process_document_locks_the_kb_after_indexing(
+    setup_test_db, tmp_path, monkeypatch
+):
+    workspace_id = await _workspace("lock@example.com")
+    kb_id = await _create_kb(workspace_id)
+    doc_id = await _seed_document(kb_id, tmp_path)
+
+    async def fake_embed_texts(self, texts, model, base_url, api_key=None):
+        return [[0.1] * DIMENSION for _ in texts]
+
+    monkeypatch.setattr(
+        "services.document_parser.DocumentParser.embed_texts", fake_embed_texts
+    )
+
+    await KbDocumentProcessor().process_document(doc_id, kb_id)
+
+    async with database.AsyncSessionLocal() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+    assert kb.is_locked is True
+
+@pytest.mark.asyncio
+async def test_process_document_self_heals_the_measured_dimension(
+    setup_test_db, tmp_path, monkeypatch
+):
+    workspace_id = await _workspace("heal@example.com")
+    kb_id = await _create_kb(workspace_id, embedding_dimension=DIMENSION)
+
+    async with database.AsyncSessionLocal() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        kb.embedding_dimension = None
+        await session.commit()
+
+    doc_id = await _seed_document(kb_id, tmp_path)
+
+    async def fake_embed_texts(self, texts, model, base_url, api_key=None):
+        return [[0.1] * 96 for _ in texts]
+
+    monkeypatch.setattr(
+        "services.document_parser.DocumentParser.embed_texts", fake_embed_texts
+    )
+
+    await KbDocumentProcessor().process_document(doc_id, kb_id)
+
+    async with database.AsyncSessionLocal() as session:
+        assert (await session.get(KnowledgeBase, kb_id)).embedding_dimension == 96
+
+@pytest.mark.asyncio
+async def test_process_document_ignores_non_pending_documents(
+    setup_test_db, tmp_path, monkeypatch
+):
+    workspace_id = await _workspace("skip@example.com")
+    kb_id = await _create_kb(workspace_id)
+    doc_id = await _seed_document(kb_id, tmp_path)
+
+    async with database.AsyncSessionLocal() as session:
+        doc = await session.get(KbDocument, doc_id)
+        doc.status = "ready"
+        await session.commit()
+
+    calls: list = []
+
+    async def fake_embed_texts(self, *args, **kwargs):
+        calls.append(args)
+        return []
+
+    monkeypatch.setattr(
+        "services.document_parser.DocumentParser.embed_texts", fake_embed_texts
+    )
+
+    await KbDocumentProcessor().process_document(doc_id, kb_id)
+
+    assert calls == []
+
+@pytest.mark.asyncio
+async def test_process_document_fails_when_the_kb_is_missing(setup_test_db):
+    processor = KbDocumentProcessor()
+    await processor.process_document(str(uuid.uuid4()), "kb_not_there")
+    # No document either: the early return must not raise.
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ext", ["txt", "md", "html"])
 async def test_processor_persists_stable_error_for_binary_renamed_text_files(
     setup_test_db, tmp_path, ext
 ):
-    """Random binary bytes renamed as text-like files fail with a stable stored error."""
-    doc_id, tenant_id, kb_id = await _create_pending_binary_document(tmp_path, ext)
+    workspace_id = await _workspace(f"binary-{ext}@example.com")
+    kb_id = await _create_kb(workspace_id)
+    doc_id = await _seed_document(
+        kb_id, tmp_path, filename=f"random_binary.{ext}", content=_RANDOM_BINARY_BYTES, file_type=ext
+    )
 
-    await _process_document_with_mocked_kb(doc_id, tenant_id, kb_id)
+    await KbDocumentProcessor().process_document(doc_id, kb_id)
 
     doc = await _load_document(doc_id)
     assert doc.status == "error"
@@ -171,18 +364,18 @@ async def test_processor_persists_stable_error_for_binary_renamed_text_files(
         "INVALID_TEXT_BINARY: file appears to be binary or unreadable text"
     )
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ext", ["pdf", "docx", "xlsx"])
 async def test_processor_marks_random_binary_parser_failures_as_error(
     setup_test_db, tmp_path, ext
 ):
-    """Binary payloads with binary document extensions must persist failed processing."""
-    from services.kb_document_processor import PROCESSING_ERROR_MESSAGE_MAX_LENGTH
+    workspace_id = await _workspace(f"binfmt-{ext}@example.com")
+    kb_id = await _create_kb(workspace_id)
+    doc_id = await _seed_document(
+        kb_id, tmp_path, filename=f"random_binary.{ext}", content=_RANDOM_BINARY_BYTES, file_type=ext
+    )
 
-    doc_id, tenant_id, kb_id = await _create_pending_binary_document(tmp_path, ext)
-
-    await _process_document_with_mocked_kb(doc_id, tenant_id, kb_id)
+    await KbDocumentProcessor().process_document(doc_id, kb_id)
 
     doc = await _load_document(doc_id)
     assert doc.status == "error"
@@ -190,217 +383,73 @@ async def test_processor_marks_random_binary_parser_failures_as_error(
     assert doc.error_message
     assert len(doc.error_message) <= PROCESSING_ERROR_MESSAGE_MAX_LENGTH
 
+# ---- deletion --------------------------------------------------------------
 
-def test_kb_retrieval_service_imports():
+@pytest.mark.asyncio
+async def test_delete_document_clears_qdrant_chunks_and_row(
+    setup_test_db, tmp_path, monkeypatch, fake_qdrant
+):
+    workspace_id = await _workspace("delete@example.com")
+    kb_id = await _create_kb(workspace_id)
+    doc_id = await _seed_document(kb_id, tmp_path)
+
+    async def fake_embed_texts(self, texts, model, base_url, api_key=None):
+        return [[0.1] * DIMENSION for _ in texts]
+
+    monkeypatch.setattr(
+        "services.document_parser.DocumentParser.embed_texts", fake_embed_texts
+    )
+    processor = KbDocumentProcessor()
+    await processor.process_document(doc_id, kb_id)
+
+    async with database.AsyncSessionLocal() as session:
+        await processor.delete_document(kb_id, doc_id, session)
+
+    assert (kb_id, doc_id) in fake_qdrant["deletes"]
+
+    async with database.AsyncSessionLocal() as session:
+        assert await session.get(KbDocument, doc_id) is None
+        assert (
+            await session.scalar(select(KbChunk.id).where(KbChunk.doc_id == doc_id))
+        ) is None
+
+@pytest.mark.asyncio
+async def test_delete_document_requires_the_matching_kb(setup_test_db, tmp_path, fake_qdrant):
+    workspace_id = await _workspace("delete-mismatch@example.com")
+    kb_id = await _create_kb(workspace_id)
+    other_kb = await _create_kb(workspace_id, "Other KB")
+    doc_id = await _seed_document(kb_id, tmp_path)
+
+    async with database.AsyncSessionLocal() as session:
+        await KbDocumentProcessor().delete_document(other_kb, doc_id, session)
+
+    async with database.AsyncSessionLocal() as session:
+        assert await session.get(KbDocument, doc_id) is not None
+
+# ---- key resolution / retrieval wiring -------------------------------------
+
+def test_get_embedding_api_key_reads_the_kb(tmp_path):
+    kb = KnowledgeBase(
+        workspace_id=1,
+        name="Key KB",
+        embedding_api_key=None,
+        qdrant_collection=f"kb_{uuid.uuid4().hex[:12]}",
+    )
+    assert get_embedding_api_key(kb) is None
+    assert get_embedding_api_key(None) is None
+
+def test_retrieval_service_imports():
     from services.kb_retrieval_service import KbRetrievalService
 
-    svc = KbRetrievalService()
-    assert svc is not None
-    assert svc.parser is not None
-    assert svc.qdrant is not None
-    assert svc.kb_svc is not None
-    assert svc.default_threshold == 0.6
-
-
-def test_retrieve_endpoint_registered():
-    from api.v1.kb_document_endpoints import router
-    from fastapi.routing import APIRoute
-
-    retrieve_routes = [
-        r for r in router.routes if isinstance(r, APIRoute) and "retrieve" in r.path
-    ]
-    assert len(retrieve_routes) == 1
-    route = retrieve_routes[0]
-    assert "POST" in route.methods
-
-
-@pytest.mark.asyncio
-async def test_embed_texts_receives_api_key():
-    """embed_texts() must receive api_key from agent based on embedding_provider."""
-    mock_kb = MagicMock()
-    mock_kb.id = "kb_123"
-    mock_kb.tenant_id = "tenant_123"
-    mock_kb.embedding_model = "jina-embeddings-v3"
-    mock_kb.embedding_base_url = "https://api.jina.ai/v1"
-    mock_kb.chunk_size = 512
-    mock_kb.chunk_overlap = 64
-    mock_kb.is_locked = False
-
-    mock_agent = MagicMock()
-    mock_agent.id = "agent_123"
-    mock_agent.embedding_provider = "jina"
-    mock_agent.jina_api_key = "enc:encrypted_jina_key"
-    mock_agent.siliconflow_api_key = None
-
-    mock_doc = MagicMock()
-    mock_doc.id = "doc_123"
-    mock_doc.tenant_id = "tenant_123"
-    mock_doc.kb_id = "kb_123"
-    mock_doc.status = "pending"
-    mock_doc.filename = "test.txt"
-    mock_doc.file_type = "txt"
-    mock_doc.storage_path = "/tmp/test.txt"
-    mock_doc.chunk_count = 0
-
-    with patch("services.kb_document_processor.database.AsyncSessionLocal") as mock_session_cls:
-        mock_session = AsyncMock()
-        mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        # Mock KB query
-        kb_result = MagicMock()
-        kb_result.scalar_one_or_none.return_value = mock_doc
-        mock_session.execute.return_value = kb_result
-
-        # Mock agent query
-        agent_result = MagicMock()
-        agent_result.scalar_one_or_none.return_value = mock_agent
-
-        with patch("services.kb_document_processor.select") as mock_select:
-            # First select is for KbDocument, second for Agent
-            mock_select.side_effect = [
-                MagicMock(),  # KbDocument select
-                MagicMock(),  # Agent select
-            ]
-
-            with patch.object(KbDocumentProcessor, "__init__", lambda self: None):
-                with patch("services.kb_document_processor.DocumentParser") as mock_parser_cls:
-                    with patch("services.kb_document_processor.KbService") as mock_kb_svc_cls:
-                        with patch("services.kb_document_processor.QdrantKbService") as mock_qdrant_cls:
-                            with patch("core.encryption.decrypt_api_key") as mock_decrypt:
-                                mock_decrypt.return_value = "decrypted_jina_key"
-
-                                mock_parser = MagicMock()
-                                mock_parser.parse_with_retry.return_value = "test content"
-                                mock_parser.chunk_text.return_value = ["chunk1", "chunk2"]
-                                mock_parser.embed_texts = AsyncMock(return_value=[[0.1] * 384, [0.2] * 384])
-                                mock_parser_cls.return_value = mock_parser
-
-                                mock_kb_svc = MagicMock()
-                                mock_kb_svc.get_knowledge_base = AsyncMock(return_value=mock_kb)
-                                mock_kb_svc_cls.return_value = mock_kb_svc
-
-                                mock_qdrant = MagicMock()
-                                mock_qdrant.batch_upsert_points = AsyncMock(return_value=None)
-                                mock_qdrant_cls.return_value = mock_qdrant
-
-                                processor = KbDocumentProcessor()
-                                processor.parser = mock_parser
-                                processor.qdrant = mock_qdrant
-                                processor.kb_svc = mock_kb_svc
-
-                                # Execute
-                                await processor.process_document("doc_123", "tenant_123", "kb_123")
-
-                                # Verify embed_texts was called with api_key parameter
-                                assert mock_parser.embed_texts.called, "embed_texts was not called"
-                                call_args, call_kwargs = mock_parser.embed_texts.call_args
-                                assert "api_key" in call_kwargs, f"api_key not in kwargs. Got args: {call_args}, kwargs: {call_kwargs}"
-                                # The api_key parameter should be present (value depends on agent lookup)
-                                assert "api_key" in call_kwargs, "api_key parameter must be passed to embed_texts()"
-
+    service = KbRetrievalService()
+    assert service.parser is not None
+    assert service.qdrant is not None
+    assert service.default_threshold == 0.6
 
 def test_jina_default_base_url_from_config():
-    """Verify Jina base URL can be derived from config."""
     from config import settings
-    # The config should have the Jina embedding API base
-    assert hasattr(settings, "jina_embedding_api_base")
-    # It should end with /embeddings
+
     assert settings.jina_embedding_api_base.endswith("/embeddings")
-    # When we strip /embeddings, we get the base URL for the API
-    base_url = settings.jina_embedding_api_base.rstrip("/embeddings")
-    assert base_url == "https://api.jina.ai/v1"
-
-
-def test_kb_service_imports_config():
-    """KbService should be able to access settings from config."""
-    # This is a simple import test to verify the service can access config
-    from services.kb_service import KbService
-    from config import settings
-    # Both should be importable
-    assert KbService is not None
-    assert settings is not None
-
-
-@pytest.mark.asyncio
-async def test_jina_default_base_url(setup_test_db):
-    """When agent has embedding_provider='jina' and no embedding_api_base,
-    the KB should be created with Jina's base URL."""
-    from unittest.mock import AsyncMock, patch
-    import database
-    from sqlalchemy import select
-    from models import Agent
-    from services.kb_service import KbService
-
-    async with database.AsyncSessionLocal() as session:
-        # Get existing agent from fixture
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
-        )
-        agent = result.scalar_one()
-        agent_id = agent.id
-
-        # Set agent to use Jina provider with no base URL
-        agent.embedding_provider = "jina"
-        agent.embedding_api_base = None
-        agent.embedding_model = "jina-embeddings-v3"
-        agent.kb_id = None  # Clear any existing KB binding
-        await session.commit()
-
-        # Mock Qdrant to avoid connection issues
-        with patch.object(KbService, "__init__", lambda self, session=None: None):
-            kb_svc = KbService(session=session)
-            kb_svc.qdrant = AsyncMock()
-            kb_svc.qdrant.ensure_collection = AsyncMock()
-            kb_svc.session = session
-
-            tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session)
-
-            # Verify: KB.embedding_base_url should be Jina's base URL
-            assert kb.embedding_base_url is not None, "embedding_base_url should not be None"
-            assert kb.embedding_base_url == "https://api.jina.ai/v1", f"Expected Jina base URL, got: {kb.embedding_base_url}"
-
-
-@pytest.mark.asyncio
-async def test_siliconflow_default_base_url(setup_test_db):
-    """When agent has embedding_provider='siliconflow' and no embedding_api_base,
-    the KB should be created with SiliconFlow's base URL."""
-    from unittest.mock import AsyncMock, patch
-    import database
-    from sqlalchemy import select
-    from models import Agent
-    from services.kb_service import KbService
-
-    async with database.AsyncSessionLocal() as session:
-        # Get existing agent from fixture
-        result = await session.execute(
-            select(Agent)
-            .where(Agent.is_active == True)
-            .order_by(Agent.created_at)
-            .limit(1)
-        )
-        agent = result.scalar_one()
-        agent_id = agent.id
-
-        # Set agent to use SiliconFlow provider with no base URL
-        agent.embedding_provider = "siliconflow"
-        agent.embedding_api_base = None
-        agent.embedding_model = "BAAI/bge-m3"
-        agent.kb_id = None  # Clear any existing KB binding
-        await session.commit()
-
-        # Mock Qdrant to avoid connection issues
-        with patch.object(KbService, "__init__", lambda self, session=None: None):
-            kb_svc = KbService(session=session)
-            kb_svc.qdrant = AsyncMock()
-            kb_svc.qdrant.ensure_collection = AsyncMock()
-            kb_svc.session = session
-
-            tenant, kb = await kb_svc.get_or_create_agent_kb(agent_id, session)
-
-            # Verify: KB.embedding_base_url should be SiliconFlow's base URL
-            assert kb.embedding_base_url is not None, "embedding_base_url should not be None"
-            assert kb.embedding_base_url == "https://api.siliconflow.cn/v1", f"Expected SiliconFlow base URL, got: {kb.embedding_base_url}"
+    assert settings.jina_embedding_api_base.rstrip("/embeddings") == (
+        "https://api.jina.ai/v1"
+    )

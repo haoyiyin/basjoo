@@ -11,6 +11,7 @@ import Agents from './views/Agents';
 import Dashboard from './views/Dashboard';
 import FileUploadManagement from './views/FileUploadManagement';
 import KnowledgeBaseSetup from './views/KnowledgeBaseSetup';
+import KnowledgeBases from './views/KnowledgeBases';
 import Playground from './views/Playground';
 import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
@@ -62,8 +63,9 @@ export function App() {
         <Route path="/files" element={<FileUploadManagement />} />
         <Route path="/settings/agent" element={<AgentSettings />} />
 
+        <Route path="/knowledge-bases" element={<KnowledgeBases />} />
         <Route path="/sessions" element={<Redirect to="/" />} />
-        <Route path="/knowledge" element={<Redirect to="/" />} />
+        <Route path="/knowledge" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/playground" element={<Redirect to="/" />} />
         <Route path="/urls" element={<Redirect to="/" />} />
         <Route path="/users" element={<Redirect to="/" />} />

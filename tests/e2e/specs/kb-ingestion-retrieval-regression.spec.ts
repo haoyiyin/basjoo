@@ -11,6 +11,7 @@ import {
 	resolveAgentContext,
 	loginByApi,
 	API_BASE,
+	ensureBoundKb,
 } from "../fixtures/e2e-context";
 
 test.describe("KB Ingestion Retrieval Regression", () => {
@@ -19,71 +20,9 @@ test.describe("KB Ingestion Retrieval Regression", () => {
 		const context = await resolveAgentContext(request);
 		const token = await loginByApi(request);
 
-		// 1. Ensure KB setup is complete - may need to reset first if agent has stale key
-		const jinaApiKey = process.env.E2E_JINA_API_KEY || "test_jina_key_for_e2e";
-		let kbSetupRes = await request.post(
-			`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-			{
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				data: {
-					embedding_provider: "jina",
-					embedding_model: "jina-embeddings-v3",
-					jina_api_key: jinaApiKey,
-				},
-			},
-		);
-
-		// If setup returned 409/400, check if key needs updating - may need reset
-		if (kbSetupRes.status() === 409 || kbSetupRes.status() === 400) {
-			const checkRes = await request.get(
-				`${API_BASE}/api/v1/agent?agent_id=${context.agentId}`,
-				{ headers: { Authorization: `Bearer ${token}` } },
-			);
-			const checkConfig = await checkRes.json() as {
-				kb_id?: string;
-				kb_setup_completed?: boolean;
-				jina_api_key_masked?: string;
-			};
-			// If using fallback key (tes***_e2e), reset and retry with real key
-			if (checkConfig.jina_api_key_masked?.includes("_e2e") && jinaApiKey !== "test_jina_key_for_e2e") {
-				const resetRes = await request.post(
-					`${API_BASE}/api/v1/agent:kb-reset?agent_id=${context.agentId}`,
-					{ headers: { Authorization: `Bearer ${token}` } },
-				);
-				expect(resetRes.status()).toBe(200);
-				// Retry setup with real key
-				kbSetupRes = await request.post(
-					`${API_BASE}/api/v1/agent:kb-setup?agent_id=${context.agentId}`,
-					{
-						headers: {
-							Authorization: `Bearer ${token}`,
-							"Content-Type": "application/json",
-						},
-						data: {
-							embedding_provider: "jina",
-							embedding_model: "jina-embeddings-v3",
-							jina_api_key: jinaApiKey,
-						},
-					},
-				);
-			}
-		}
-		// KB setup should succeed (200) or be already completed (409)
-		expect([200, 409]).toContain(kbSetupRes.status());
-
-		// Verify kb_id is valid before continuing
-		const agentCheckRes = await request.get(
-			`${API_BASE}/api/v1/agent?agent_id=${context.agentId}`,
-			{ headers: { Authorization: `Bearer ${token}` } },
-		);
-		expect(agentCheckRes.status()).toBe(200);
-		const agentCheckData = await agentCheckRes.json() as { kb_id?: string; kb_setup_completed?: boolean };
-		if (!agentCheckData.kb_id) {
-			throw new Error(`KB setup failed: kb_id is null. Setup status: ${kbSetupRes.status()}, kb_setup_completed: ${agentCheckData.kb_setup_completed}`);
-		}
+		// 1. Ensure a KB is created and bound to the agent
+		const boundKbId = await ensureBoundKb(request, context.agentId);
+		expect(boundKbId).toBeTruthy();
 
 		// 2. Upload a file with a unique test phrase
 		const uniquePhrase = `KBRetrievalVerificationPhrase-${Date.now()}`;

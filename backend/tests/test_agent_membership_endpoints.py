@@ -6,7 +6,7 @@ async def test_support_denied_on_agent_endpoints(support_client, default_agent_i
     endpoints = [
         ("GET", f"/api/v1/agent?agent_id={default_agent_id}", None),
         ("PUT", f"/api/v1/agent?agent_id={default_agent_id}", {"name": "test"}),
-        ("GET", f"/api/v1/agent:jina-key-status?agent_id={default_agent_id}", None),
+        ("GET", f"/api/v1/agent:kb-status?agent_id={default_agent_id}", None),
         ("GET", f"/api/v1/quota?agent_id={default_agent_id}", None),
         ("GET", "/api/v1/agent:default", None),
         ("GET", f"/api/v1/tasks:status?agent_id={default_agent_id}", None),

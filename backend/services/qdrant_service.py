@@ -1,4 +1,4 @@
-"""Qdrant collection management for per-KB isolation. 幂等 + Cosine + dim lookup."""
+"""Qdrant collection management for per-KB isolation. 幂等 + Cosine + 维度守卫。"""
 
 import logging
 import uuid
@@ -17,26 +17,29 @@ from qdrant_client.models import (
 
 logger = logging.getLogger(__name__)
 
-
 def get_embedding_dimension(model: str) -> int:
-    """模型到向量维度映射（BGE-M3=1024 等）。可扩展。"""
-    m = model.lower()
-    if "bge-m3" in m or "bge_m3" in m or "baai/bge-m3" in m:
-        return 1024
-    if "jina" in m or "jina-embeddings" in m:
-        return 1024
+    """模型到向量维度映射。仅用于历史数据的迁移回填。
+
+    Live code paths pass the MEASURED width to :meth:`QdrantKbService.ensure_collection`
+    instead of deriving it from the model name.
+    """
+    m = (model or "").lower()
+    if "jina-embeddings-v2-base-en" in m:
+        return 768
     if "text-embedding-3-large" in m:
         return 3072
     if "text-embedding-3-small" in m or "ada" in m:
         return 1536
+    if "bge-m3" in m or "bge_m3" in m:
+        return 1024
+    if "jina" in m:
+        return 1024
     return 1024  # safe default
-
 
 def get_kb_collection_name(kb_id: str) -> str:
     """生成知识库对应的 Qdrant collection 名称（kb_ + 前12位无连字符ID）。"""
     short = kb_id.replace("-", "")[:12] if "-" in kb_id else kb_id[:12]
     return f"kb_{short}"
-
 
 class QdrantKbService:
     def __init__(self):
@@ -46,31 +49,55 @@ class QdrantKbService:
             timeout=int(settings.qdrant_timeout),
         )
 
-    async def ensure_collection(self, kb_id: str, embedding_model: str) -> str:
-        """幂等创建 collection。已存在则返回名称。"""
-        collection_name = get_kb_collection_name(kb_id)
-        dim = get_embedding_dimension(embedding_model)
+    async def ensure_collection(self, kb_id: str, dimension: int) -> str:
+        """幂等创建 collection，dimension 是实测向量宽度。
 
+        - 不存在 → 按 ``dimension`` 创建。
+        - 已存在且维度一致 → 幂等返回。
+        - 已存在但维度不同 → 抛 ``RuntimeError``（调用方必须先 reset）。
+        """
+        collection_name = get_kb_collection_name(kb_id)
+        dimension = int(dimension)
+
+        existing_size = await self._existing_vector_size(collection_name)
+        if existing_size is not None:
+            if existing_size != dimension:
+                raise RuntimeError(
+                    f"collection {collection_name} has dimension {existing_size}, "
+                    f"expected {dimension}; use reset"
+                )
+            logger.info(
+                f"Qdrant collection '{collection_name}' already exists (dim={dimension})"
+            )
+            return collection_name
+
+        await self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=dimension, distance=Distance.COSINE),
+        )
+        logger.info(
+            f"Created Qdrant collection '{collection_name}' (dim={dimension}, Cosine)"
+        )
+        return collection_name
+
+    async def _existing_vector_size(self, collection_name: str) -> int | None:
+        """Return the collection's vector width, or None when it does not exist."""
         try:
             info: CollectionInfo | None = await self.client.get_collection(
                 collection_name
             )
-            if info:
-                logger.info(
-                    f"Qdrant collection '{collection_name}' already exists (dim={dim})"
-                )
-                return collection_name
         except Exception:
-            pass  # not found → create
+            return None  # not found → caller creates it
 
-        await self.client.create_collection(
-            collection_name=collection_name,
-            vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
-        )
-        logger.info(
-            f"Created Qdrant collection '{collection_name}' (dim={dim}, Cosine)"
-        )
-        return collection_name
+        if not info:
+            return None
+
+        vectors_config = getattr(getattr(info, "config", None), "params", None)
+        vectors_config = getattr(vectors_config, "vectors", None)
+        size = getattr(vectors_config, "size", None)
+        if size is None:
+            return None
+        return int(size)
 
     async def batch_upsert_points(
         self, kb_id: str, points: list[dict], batch_size: int = 100
@@ -122,20 +149,16 @@ class QdrantKbService:
     async def search_kb(
         self,
         kb_id: str,
-        tenant_id: str,
         query_vector: list[float],
         top_k: int = 5,
     ) -> list[dict]:
-        """Search with double isolation: collection (physical) + payload filter (logical).
+        """Search one KB's collection. Isolation is physical (one collection per KB).
 
         Returns list of {id, score, payload}. Vector data is not returned.
         """
         collection_name = get_kb_collection_name(kb_id)
         qfilter = Filter(
-            must=[
-                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
-                FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
-            ]
+            must=[FieldCondition(key="kb_id", match=MatchValue(value=kb_id))]
         )
         try:
             response = await self.client.query_points(

@@ -10,7 +10,7 @@ from config import settings
 from database import init_db
 from api.endpoints import auth
 from api.v1 import endpoints as v1_endpoints
-from api.v1 import kb_document_endpoints as v1_kb_doc_endpoints
+from api.v1 import kb_endpoints as v1_kb_endpoints
 from services.scheduler import (
     agent_purge_scheduler,
     url_fetch_scheduler,
@@ -135,20 +135,9 @@ async def log_requests(request, call_next):
         from constants import DEFAULT_BODY_SIZE_LIMIT, FILE_UPLOAD_BODY_LIMIT
 
         path = request.url.path
-        path_parts = path.strip("/").split("/")
-        is_kb_document_upload = (
-            request.method.upper() == "POST"
-            and len(path_parts) == 6
-            and path_parts[0] == "api"
-            and path_parts[1] == "tenants"
-            and bool(path_parts[2])
-            and path_parts[3] == "knowledge_bases"
-            and bool(path_parts[4])
-            and path_parts[5] == "documents"
-        )
 
-        # Route-aware sizing: file and KB document uploads accept larger bodies.
-        if path.startswith("/api/v1/files:upload") or is_kb_document_upload:
+        # Route-aware sizing: `/api/v1/files:upload` is the only large-body path.
+        if path.startswith("/api/v1/files:upload"):
             max_size = FILE_UPLOAD_BODY_LIMIT
         else:
             max_size = DEFAULT_BODY_SIZE_LIMIT
@@ -197,7 +186,7 @@ app.include_router(auth.router, prefix="/api/admin", tags=["auth"])
 
 # v1 API
 app.include_router(v1_endpoints.router, tags=["v1"])
-app.include_router(v1_kb_doc_endpoints.router, tags=["kb-documents"])
+app.include_router(v1_kb_endpoints.router, tags=["knowledge-bases"])
 
 
 # SDK.js 路由 - 用于嵌入 widget

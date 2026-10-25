@@ -1,19 +1,54 @@
-"""KnowledgeBase service. 所有查询强制 tenant_id 过滤。"""
+"""KnowledgeBase service.
+
+Every query is scoped to a workspace: ``KnowledgeBase.workspace_id`` is the only
+authority since the KB-decoupling change. There is no tenant parameter anywhere
+and no implicit KB creation — an agent only ever reaches a KB through
+``Agent.kb_id``, set by :meth:`KbService.bind_agent`.
+"""
 
 import logging
+import os
+import shutil
 from pathlib import Path
 
-from sqlalchemy import delete as sa_delete, func, select, update as sa_update
+from sqlalchemy import (
+    delete as sa_delete,
+    func,
+    or_,
+    select,
+    update as sa_update,
+)
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
-from database import AsyncSessionLocal
-from models import Agent, KnowledgeBase, KbChunk, KbDocument, Tenant
-from services.qdrant_service import QdrantKbService, get_kb_collection_name
+import database
+from models import Agent, KnowledgeBase, KbChunk, KbDocument
+from services.qdrant_service import QdrantKbService, get_kb_collection_name, get_embedding_dimension
 from services.task_lock import TaskType, task_lock
 
 logger = logging.getLogger(__name__)
 
+# Root for uploaded KB files: ``UPLOAD_ROOT/<workspace_id>/<kb_id>/<doc_id>/<file>``.
+# Mirrors `services.kb_document_processor.UPLOAD_ROOT` (same env override).
+UPLOAD_ROOT = Path(os.environ.get("KB_UPLOAD_ROOT", "/app/data/kb_uploads"))
+
+# Fields a caller may change through ``update_kb_config``.
+UPDATABLE_FIELDS = {
+    "name",
+    "chunk_size",
+    "chunk_overlap",
+    "embedding_provider",
+    "embedding_model",
+    "embedding_base_url",
+    "embedding_api_key",
+}
+
+EMBEDDING_FIELDS = {
+    "embedding_provider",
+    "embedding_model",
+    "embedding_base_url",
+    "embedding_api_key",
+}
 
 class KbService:
     def __init__(self, session: AsyncSession | None = None):
@@ -23,293 +58,339 @@ class KbService:
     async def _get_session(self) -> AsyncSession:
         if self.session:
             return self.session
-        return AsyncSessionLocal()
+        return database.AsyncSessionLocal()
+
+    def _upload_dir(self, workspace_id: int, kb_id: str) -> Path:
+        return UPLOAD_ROOT / str(workspace_id) / kb_id
+
+    # ── reads ────────────────────────────────────────────────────────────────
+
+    async def list_knowledge_bases(self, workspace_id: int) -> list[KnowledgeBase]:
+        """List the workspace's KBs. A KB outside the workspace is never returned."""
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
+        async with await self._get_session() as session:
+            stmt = (
+                select(KnowledgeBase)
+                .where(KnowledgeBase.workspace_id == workspace_id)
+                .order_by(KnowledgeBase.created_at, KnowledgeBase.id)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_knowledge_base(
+        self, kb_id: str, workspace_id: int
+    ) -> KnowledgeBase | None:
+        """Fetch one KB. A KB from another workspace behaves like a missing KB."""
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
+        async with await self._get_session() as session:
+            stmt = select(KnowledgeBase).where(
+                KnowledgeBase.id == kb_id,
+                KnowledgeBase.workspace_id == workspace_id,
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    async def get_kb_detail(self, kb_id: str, workspace_id: int) -> dict:
+        """Config plus document/chunk counters plus the bound agent (or None)."""
+        kb = await self.get_knowledge_base(kb_id, workspace_id)
+        if not kb:
+            raise ValueError("KB not found")
+
+        async with await self._get_session() as session:
+            doc_count = await session.scalar(
+                select(func.count()).where(KbDocument.kb_id == kb_id)
+            )
+            ready_count = await session.scalar(
+                select(func.count()).where(
+                    KbDocument.kb_id == kb_id,
+                    KbDocument.status == "ready",
+                )
+            )
+            chunk_count = await session.scalar(
+                select(func.count()).where(KbChunk.kb_id == kb_id)
+            )
+            bound_agent = (
+                await session.execute(
+                    select(Agent.id, Agent.name)
+                    .where(
+                        Agent.kb_id == kb_id,
+                        # Defensive: a soft-deleted agent never counts as bound.
+                        Agent.deleted_at.is_(None),
+                        Agent.is_active.is_(True),
+                    )
+                    .limit(1)
+                )
+            ).first()
+
+        return {
+            "id": kb.id,
+            "name": kb.name,
+            "workspace_id": getattr(kb, "workspace_id", None),
+            "embedding_provider": getattr(kb, "embedding_provider", None) or "jina",
+            "embedding_model": kb.embedding_model,
+            "embedding_base_url": getattr(kb, "embedding_base_url", None),
+            "embedding_batch_size": getattr(kb, "embedding_batch_size", None) or 4,
+            "embedding_dimension": getattr(kb, "embedding_dimension", None),
+            "vector_backend": getattr(kb, "vector_backend", "qdrant"),
+            "chunk_size": kb.chunk_size,
+            "chunk_overlap": kb.chunk_overlap,
+            "is_locked": bool(getattr(kb, "is_locked", False)),
+            "status": str(getattr(kb, "status", "active")),
+            "error_message": getattr(kb, "error_message", None),
+            "document_count": doc_count or 0,
+            "ready_document_count": ready_count or 0,
+            "total_chunks": chunk_count or 0,
+            "bound_agent": (
+                {"id": bound_agent[0], "name": bound_agent[1]} if bound_agent else None
+            ),
+        }
+
+    # ── writes ───────────────────────────────────────────────────────────────
 
     async def create_knowledge_base(
-        self, tenant_id: str, name: str, embedding_model: str = "BAAI/bge-m3", **kwargs
+        self,
+        workspace_id: int,
+        name: str,
+        *,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_base_url: str | None,
+        embedding_api_key: str | None,
+        embedding_dimension: int,
+        embedding_batch_size: int = 4,
+        chunk_size: int = 512,
+        chunk_overlap: int = 64,
     ) -> KnowledgeBase:
-        if not tenant_id:
-            raise ValueError("tenant_id is required for all KB operations")
+        """Create a workspace-scoped KB and its Qdrant collection.
+
+        ``embedding_api_key`` is expected to be ALREADY encrypted by the caller
+        (``core.encryption.encrypt_api_key``); the service stores it verbatim and
+        never sees a plaintext key. ``embedding_dimension`` must be the width
+        MEASURED from the provider, never derived from the model name.
+        """
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
 
         async with await self._get_session() as session:
             kb = KnowledgeBase(
-                tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 name=name,
+                embedding_provider=embedding_provider,
                 embedding_model=embedding_model,
-                qdrant_collection="",  # will set after
-                **kwargs,
+                embedding_base_url=embedding_base_url,
+                embedding_api_key=embedding_api_key,
+                embedding_dimension=embedding_dimension,
+                embedding_batch_size=embedding_batch_size,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                qdrant_collection="",  # set after the id is known
+                status="active",
             )
             session.add(kb)
             await session.flush()  # get id
 
-            # set collection name using kb.id
-            # SQLAlchemy Column assignment is a false positive for pyright
             kb_id_str = str(kb.id)
-            object.__setattr__(
-                kb, "qdrant_collection", get_kb_collection_name(kb_id_str)
-            )
+            object.__setattr__(kb, "qdrant_collection", get_kb_collection_name(kb_id_str))
 
-            # ensure Qdrant (幂等)
-            await self.qdrant.ensure_collection(kb_id_str, embedding_model)
+            await self.qdrant.ensure_collection(kb_id_str, embedding_dimension)
 
             await session.commit()
             await session.refresh(kb)
             return kb
 
-    async def list_knowledge_bases(self, tenant_id: str | None) -> list[KnowledgeBase]:
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
-        async with await self._get_session() as session:
-            stmt = select(KnowledgeBase).where(KnowledgeBase.tenant_id == tenant_id)
-            result = await session.execute(stmt)
-            return list(result.scalars().all())
+    async def update_kb_config(
+        self, kb_id: str, workspace_id: int, updates: dict
+    ) -> KnowledgeBase:
+        """Update KB config.
 
-    async def get_knowledge_base(
-        self, tenant_id: str, kb_id: str
-    ) -> KnowledgeBase | None:
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
+        - 423 while the KB is resetting.
+        - Embedding fields -> 409 once the KB is locked (chunks exist).
+        - A model change that alters the vector width -> 409; use reset instead.
+        """
+        from fastapi import HTTPException
+
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
+
         async with await self._get_session() as session:
             stmt = select(KnowledgeBase).where(
                 KnowledgeBase.id == kb_id,
-                KnowledgeBase.tenant_id == tenant_id,
-            )
-            result = await session.execute(stmt)
-            return result.scalar_one_or_none()
-
-    async def get_kb_config(self, tenant_id: str, kb_id: str) -> dict:
-        """Return KB embedding configuration (read-only)."""
-        kb = await self.get_knowledge_base(tenant_id, kb_id)
-        if not kb:
-            raise ValueError("KB not found")
-        return {
-            "id": kb.id,
-            "name": kb.name,
-            "embedding_model": kb.embedding_model,
-            "embedding_base_url": kb.embedding_base_url,
-            "vector_backend": kb.vector_backend,
-            "chunk_size": kb.chunk_size,
-            "chunk_overlap": kb.chunk_overlap,
-            "is_locked": kb.is_locked,
-            "status": kb.status,
-        }
-
-    async def update_kb_config(
-        self, tenant_id: str, kb_id: str, updates: dict
-    ) -> KnowledgeBase:
-        """Update KB config. Embedding fields blocked when is_locked=True."""
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
-        async with await self._get_session() as session:
-            stmt = (
-                select(KnowledgeBase)
-                .where(
-                    KnowledgeBase.id == kb_id,
-                    KnowledgeBase.tenant_id == tenant_id,
-                )
-                .with_for_update()
+                KnowledgeBase.workspace_id == workspace_id,
             )
             res = await session.execute(stmt)
             kb = res.scalar_one_or_none()
             if not kb:
                 raise ValueError("KB not found")
-            kb_status = str(getattr(kb, "status", "active"))
-            if kb_status == "resetting":
-                from fastapi import HTTPException
 
+            if str(getattr(kb, "status", "active")) == "resetting":
                 raise HTTPException(423, "KB is resetting, config changes locked")
-            # embedding fields: only allowed when not locked
-            embedding_fields = {"embedding_model", "embedding_base_url"}
-            kb_is_locked = bool(getattr(kb, "is_locked", False))
-            for f in embedding_fields:
-                if f in updates and kb_is_locked:
-                    from fastapi import HTTPException
 
-                    raise HTTPException(
-                        409,
-                        "Embedding config locked (has chunks). Use reset first.",
+            if bool(getattr(kb, "is_locked", False)):
+                for field in EMBEDDING_FIELDS:
+                    if field in updates:
+                        raise HTTPException(
+                            409,
+                            "Embedding config locked (has chunks). Use reset first.",
+                        )
+
+            new_model = updates.get("embedding_model")
+            if new_model and new_model != getattr(kb, "embedding_model", None):
+                current_dim = getattr(kb, "embedding_dimension", None) or (
+                    get_embedding_dimension(str(getattr(kb, "embedding_model", "")))
+                )
+                if get_embedding_dimension(str(new_model)) != current_dim:
+                    chunk_count = await session.scalar(
+                        select(func.count()).where(KbChunk.kb_id == kb_id)
                     )
-            for k, v in updates.items():
-                if hasattr(kb, k) and k not in {"id", "tenant_id", "created_at"}:
-                    object.__setattr__(kb, k, v)
+                    if chunk_count:
+                        raise HTTPException(
+                            409,
+                            "Embedding model changes the vector dimension. "
+                            "Use reset first.",
+                        )
+
+            for key, value in updates.items():
+                if key in UPDATABLE_FIELDS:
+                    object.__setattr__(kb, key, value)
+
             await session.commit()
             await session.refresh(kb)
             return kb
 
-    async def get_kb_detail(self, tenant_id: str, kb_id: str) -> dict:
-        """Return KB config plus document/chunk counts."""
-        kb = await self.get_knowledge_base(tenant_id, kb_id)
-        if not kb:
-            raise ValueError("KB not found")
-        async with await self._get_session() as session:
-            doc_count = await session.scalar(
-                select(func.count()).where(
-                    KbDocument.kb_id == kb_id,
-                    KbDocument.tenant_id == tenant_id,
-                )
-            )
-            ready_count = await session.scalar(
-                select(func.count()).where(
-                    KbDocument.kb_id == kb_id,
-                    KbDocument.tenant_id == tenant_id,
-                    KbDocument.status == "ready",
-                )
-            )
-            chunk_count = await session.scalar(
-                select(func.count()).where(
-                    KbChunk.kb_id == kb_id,
-                    KbChunk.tenant_id == tenant_id,
-                )
-            )
-        return {
-            **(await self.get_kb_config(tenant_id, kb_id)),
-            "document_count": doc_count or 0,
-            "ready_document_count": ready_count or 0,
-            "total_chunks": chunk_count or 0,
-        }
+    async def delete_knowledge_base(self, kb_id: str, workspace_id: int) -> None:
+        """Delete an unbound KB: vectors, chunks, documents, files and the row.
 
-    async def delete_knowledge_base(self, tenant_id: str, kb_id: str) -> None:
-        """Delete KB after checking no agents reference it."""
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
+        409 while any agent is bound. A KB from another workspace is a no-op.
+        """
+        from fastapi import HTTPException
+
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
+
         async with await self._get_session() as session:
-            # Check agent references
-            from models import Agent
+            kb = await session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.id == kb_id,
+                    KnowledgeBase.workspace_id == workspace_id,
+                )
+            )
+            if not kb:
+                logger.info(f"KB {kb_id} not in workspace {workspace_id}; nothing to delete")
+                return
 
             agent_ref = await session.scalar(
-                select(Agent.id).where(Agent.kb_id == kb_id).limit(1)
+                select(Agent.id)
+                .where(
+                    Agent.kb_id == kb_id,
+                    # Defensive: a soft-deleted agent must not keep the KB undeletable.
+                    Agent.deleted_at.is_(None),
+                    Agent.is_active.is_(True),
+                )
+                .limit(1)
             )
             if agent_ref:
-                from fastapi import HTTPException
+                raise HTTPException(409, "KB is bound to an agent. Unbind it first.")
 
-                raise HTTPException(400, "KB referenced by agent(s). Unbind first.")
-            kb = await session.get(KnowledgeBase, kb_id)
-            if not kb:
-                return
-            # Delete Qdrant
             await self.qdrant.delete_collection(kb_id)
-            # Delete chunks + docs
-            await session.execute(
-                sa_delete(KbChunk).where(
-                    KbChunk.kb_id == kb_id, KbChunk.tenant_id == tenant_id
-                )
-            )
-            await session.execute(
-                sa_delete(KbDocument).where(
-                    KbDocument.kb_id == kb_id, KbDocument.tenant_id == tenant_id
-                )
-            )
-            # Physical files
-            import shutil
 
-            upload_dir = Path("/app/data/kb_uploads") / tenant_id / kb_id
+            await session.execute(sa_delete(KbChunk).where(KbChunk.kb_id == kb_id))
+            await session.execute(sa_delete(KbDocument).where(KbDocument.kb_id == kb_id))
+
+            upload_dir = self._upload_dir(workspace_id, kb_id)
             if upload_dir.exists():
                 shutil.rmtree(upload_dir, ignore_errors=True)
-            # Delete KB
+
             await session.delete(kb)
             await session.commit()
 
     async def reset_knowledge_base(
         self,
-        tenant_id: str,
         kb_id: str,
-        new_model: str,
-        new_base_url: str | None,
+        workspace_id: int,
+        *,
+        embedding_provider: str | None = None,
+        embedding_model: str,
+        embedding_base_url: str | None,
+        embedding_api_key: str | None = None,
+        embedding_dimension: int,
+        embedding_batch_size: int | None = None,
     ) -> dict:
-        """Atomic reset: clear Qdrant, recreate, reset docs, trigger reindex.
+        """Rebuild the collection at a new width and re-queue every document.
 
-        Returns dict with status info for the caller to trigger reindex.
+        The API layer validates the key and measures ``embedding_dimension``
+        before calling; this method only persists what it is given. Deleting and
+        recreating the collection is what actually changes the vector width.
         """
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
+        from fastapi import HTTPException
 
-        # Row lock + status check
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
+
         async with await self._get_session() as session:
-            stmt = (
-                select(KnowledgeBase)
-                .where(
+            kb = await session.scalar(
+                select(KnowledgeBase).where(
                     KnowledgeBase.id == kb_id,
-                    KnowledgeBase.tenant_id == tenant_id,
+                    KnowledgeBase.workspace_id == workspace_id,
                 )
-                .with_for_update()
             )
-            res = await session.execute(stmt)
-            kb = res.scalar_one_or_none()
             if not kb:
                 raise ValueError("KB not found")
             if str(getattr(kb, "status", "active")) == "resetting":
-                from fastapi import HTTPException
-
                 raise HTTPException(423, "Reset already in progress")
-            # Mark as resetting
             object.__setattr__(kb, "status", "resetting")
             object.__setattr__(kb, "error_message", None)
             await session.commit()
 
-        # Acquire distributed lock
         task_id = f"reset_{kb_id}"
         acquired, err = await task_lock.acquire_task(kb_id, TaskType.KB_RESET, task_id)
         if not acquired:
-            from fastapi import HTTPException
-
-            # Rollback status
             async with await self._get_session() as session:
                 kb = await session.get(KnowledgeBase, kb_id)
                 if kb:
                     object.__setattr__(kb, "status", "error")
-                    object.__setattr__(kb, "error_message", f"Lock failed: {err}")
+                    object.__setattr__(kb, "error_message", f"Lock failed: {err}"[:500])
                 await session.commit()
             raise HTTPException(423, f"Reset lock failed: {err}")
 
         try:
-            # 1. Delete Qdrant collection (idempotent)
+            # 1. Drop the collection, 2. recreate it at the new (measured) width.
             await self.qdrant.delete_collection(kb_id)
+            await self.qdrant.ensure_collection(kb_id, embedding_dimension)
 
-            # 2. Recreate with new model
-            await self.qdrant.ensure_collection(kb_id, new_model)
-
-            # 3. Clear chunks, reset docs, update KB config
             async with await self._get_session() as session:
-                await session.execute(
-                    sa_delete(KbChunk).where(
-                        KbChunk.kb_id == kb_id, KbChunk.tenant_id == tenant_id
-                    )
-                )
+                await session.execute(sa_delete(KbChunk).where(KbChunk.kb_id == kb_id))
                 await session.execute(
                     sa_update(KbDocument)
-                    .where(
-                        KbDocument.kb_id == kb_id,
-                        KbDocument.tenant_id == tenant_id,
-                    )
+                    .where(KbDocument.kb_id == kb_id)
                     .values(status="pending", chunk_count=0, error_message=None)
                 )
+
                 kb = await session.get(KnowledgeBase, kb_id)
                 if kb:
-                    object.__setattr__(kb, "embedding_model", new_model)
-                    object.__setattr__(kb, "embedding_base_url", new_base_url)
+                    object.__setattr__(kb, "embedding_provider", embedding_provider or getattr(kb, "embedding_provider", "jina"))
+                    object.__setattr__(kb, "embedding_model", embedding_model)
+                    object.__setattr__(kb, "embedding_base_url", embedding_base_url)
+                    object.__setattr__(kb, "embedding_dimension", int(embedding_dimension))
+                    if embedding_api_key is not None:
+                        object.__setattr__(kb, "embedding_api_key", embedding_api_key)
+                    if embedding_batch_size is not None:
+                        object.__setattr__(kb, "embedding_batch_size", int(embedding_batch_size))
                     object.__setattr__(kb, "is_locked", False)
                     object.__setattr__(kb, "status", "active")
+                    object.__setattr__(kb, "error_message", None)
                 await session.commit()
 
-            # 4. Get doc IDs for reindex
             async with await self._get_session() as session:
                 docs = await session.execute(
-                    select(KbDocument.id).where(
-                        KbDocument.kb_id == kb_id,
-                        KbDocument.tenant_id == tenant_id,
-                    )
+                    select(KbDocument.id).where(KbDocument.kb_id == kb_id)
                 )
                 doc_ids = [row[0] for row in docs.all()]
 
-            return {
-                "status": "active",
-                "doc_ids": doc_ids,
-                "tenant_id": tenant_id,
-                "kb_id": kb_id,
-            }
+            return {"status": "active", "kb_id": kb_id, "doc_ids": doc_ids}
 
         except Exception as e:
-            # Failure: set error, unlock
             async with await self._get_session() as session:
                 kb = await session.get(KnowledgeBase, kb_id)
                 if kb:
@@ -321,122 +402,98 @@ class KbService:
         finally:
             await task_lock.release_task(kb_id, task_id)
 
-    async def get_or_create_agent_kb(
-        self, agent_id: str, session: AsyncSession | None = None
-    ) -> tuple[Tenant, KnowledgeBase]:
-        """Get or create a tenant-scoped KnowledgeBase for an agent.
+    # ── binding ──────────────────────────────────────────────────────────────
 
-        If the agent already has a kb_id bound, return the existing KB and its tenant.
-        Otherwise, create a new tenant, create a new KB bound to that tenant,
-        bind it to the agent, and set kb_setup_completed=True.
+    async def bind_agent(
+        self, agent_id: str, workspace_id: int, kb_id: str | None
+    ) -> Agent:
+        """Bind, rebind or unbind an agent's KB. Contents are never touched.
 
-        Args:
-            agent_id: The agent ID to bind
-            session: Optional existing session to use (for endpoint integration).
-                    If not provided, creates a new session.
-
-        Returns:
-            Tuple of (tenant, knowledge_base)
+        ``kb_id is None`` unbinds. A KB outside the workspace behaves like a
+        missing KB (404), a non-active KB is 400, and a KB already bound to a
+        different agent is 409. Re-binding the current KB is idempotent.
         """
-        if not agent_id:
-            raise ValueError("agent_id is required")
+        from fastapi import HTTPException
 
-        # Use provided session or get new one
-        if session is not None:
-            return await self._get_or_create_agent_kb_with_session(agent_id, session)
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
 
-        # Create new session context
         async with await self._get_session() as session:
-            return await self._get_or_create_agent_kb_with_session(agent_id, session)
+            agent = await session.get(Agent, agent_id)
+            if not agent:
+                raise HTTPException(404, f"Agent {agent_id} not found")
 
-    async def _get_or_create_agent_kb_with_session(
-        self, agent_id: str, session: AsyncSession
-    ) -> tuple[Tenant, KnowledgeBase]:
-        """Internal implementation using provided session."""
-        # Get agent with its current kb_id
-        result = await session.execute(select(Agent).where(Agent.id == agent_id))
-        agent = result.scalar_one_or_none()
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-
-        # If agent already has KB bound, reconcile state
-        if agent.kb_id:
-            result = await session.execute(
-                select(KnowledgeBase, Tenant)
-                .join(Tenant, KnowledgeBase.tenant_id == Tenant.id)
-                .where(KnowledgeBase.id == agent.kb_id)
-            )
-            row = result.first()
-            if row:
-                kb, tenant = row[0], row[1]
-                # Reconcile: ensure kb_setup_completed is True and Qdrant collection exists
-                agent.kb_setup_completed = True
-                # Re-ensure Qdrant collection using current embedding model
-                embedding_model = (
-                    getattr(agent, "embedding_model", None) or kb.embedding_model
-                )
-                await self.qdrant.ensure_collection(str(kb.id), embedding_model)
+            if kb_id is None:
+                object.__setattr__(agent, "kb_id", None)
                 await session.commit()
-                await session.refresh(kb)
-                await session.refresh(tenant)
-                return tenant, kb
-            else:
-                # KB record not found - clear stale binding and fall through to create new
-                agent.kb_id = None
+                await session.refresh(agent)
+                return agent
 
-        # Create new tenant for this agent's workspace
-        from uuid import uuid4
-
-        tenant = Tenant(
-            id=str(uuid4()),
-            name=f"Tenant for Agent {agent.name}",
-            slug=f"agent-{agent_id[:8]}",
-        )
-        session.add(tenant)
-        await session.flush()
-
-        # Get agent's embedding config
-        embedding_model = getattr(agent, "embedding_model", None) or "BAAI/bge-m3"
-        embedding_base_url = getattr(agent, "embedding_api_base", None)
-        embedding_provider = getattr(agent, "embedding_provider", None) or "jina"
-
-        # Apply default base URL based on provider when not explicitly set
-        if embedding_base_url is None:
-            if embedding_provider == "jina":
-                embedding_base_url = settings.jina_embedding_api_base.rstrip(
-                    "/embeddings"
+            kb = await session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.id == kb_id,
+                    KnowledgeBase.workspace_id == workspace_id,
                 )
-            elif embedding_provider == "siliconflow":
-                embedding_base_url = "https://api.siliconflow.cn/v1"
+            )
+            if not kb:
+                raise HTTPException(404, "Knowledge base not found")
 
-        # Create new KB
-        kb = KnowledgeBase(
-            tenant_id=tenant.id,
-            name=f"KB for Agent {agent.name}",
-            embedding_model=embedding_model,
-            embedding_base_url=embedding_base_url,
-            qdrant_collection="",  # Will be set below
-        )
-        session.add(kb)
-        await session.flush()
+            if str(getattr(kb, "status", "active")) != "active":
+                raise HTTPException(400, "KB is not active")
 
-        # Set qdrant_collection name
-        kb_id_str = str(kb.id)
-        object.__setattr__(kb, "qdrant_collection", get_kb_collection_name(kb_id_str))
+            if agent.kb_id == kb_id:
+                return agent  # idempotent
 
-        # Ensure Qdrant collection exists
-        await self.qdrant.ensure_collection(kb_id_str, embedding_model)
+            # A soft-deleted agent that still points at this KB (a row written by a
+            # release that did not clear the binding on delete) would keep the
+            # UNIQUE index busy and every rebind would fail with a 409. Release it
+            # here so old databases heal on the next bind.
+            await session.execute(
+                sa_update(Agent)
+                .where(
+                    Agent.kb_id == kb_id,
+                    Agent.id != agent_id,
+                    or_(Agent.deleted_at.is_not(None), Agent.is_active.is_(False)),
+                )
+                .values(kb_id=None)
+            )
 
-        # Bind KB to agent and mark setup complete
-        agent.kb_id = kb.id
-        agent.kb_setup_completed = True
+            other_agent = await session.scalar(
+                select(Agent.id)
+                .where(
+                    Agent.kb_id == kb_id,
+                    Agent.id != agent_id,
+                    # Defensive: a soft-deleted agent never blocks a fresh binding.
+                    Agent.deleted_at.is_(None),
+                    Agent.is_active.is_(True),
+                )
+                .limit(1)
+            )
+            if other_agent:
+                raise HTTPException(409, "KB is already bound to another agent")
 
-        await session.commit()
-        await session.refresh(kb)
-        await session.refresh(tenant)
+            object.__setattr__(agent, "kb_id", kb_id)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                # Defence for the race the partial unique index exists for.
+                raise HTTPException(409, "KB is already bound to another agent") from exc
 
-        logger.info(
-            f"Created and bound KB {kb.id} (tenant {tenant.id}) to agent {agent_id}"
-        )
+            await session.refresh(agent)
+            logger.info(f"Bound KB {kb_id} to agent {agent_id}")
+            return agent
 
-        return tenant, kb
+    async def unbind_kb_from_agents(self, kb_id: str) -> int:
+        """Drop every binding pointing at *kb_id*. Returns the number cleared.
+
+        Deliberately ignores `deleted_at`/`is_active`: soft-deleted agents still
+        hold the UNIQUE value, and leaving one set would make the KB permanently
+        unbindable.
+        """
+        async with await self._get_session() as session:
+            result = await session.execute(
+                sa_update(Agent).where(Agent.kb_id == kb_id).values(kb_id=None)
+            )
+            await session.commit()
+            return result.rowcount or 0
