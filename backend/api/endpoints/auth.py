@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Deque, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -23,6 +24,7 @@ from collections import defaultdict, deque
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 # In-memory login rate limiter (fallback when Redis is unavailable)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
@@ -95,6 +97,12 @@ class UpdateAdminRequest(BaseModel):
     password: Optional[str] = None
     is_active: Optional[bool] = None
     role: Optional[str] = None
+
+class ChangePasswordRequest(BaseModel):
+    """Self-service password change (account settings page)."""
+
+    current_password: str
+    new_password: str
 
 
 class RegistrationSettingsResponse(BaseModel):
@@ -190,6 +198,28 @@ def validate_admin_role(role: str):
             detail="Invalid role",
         )
 
+async def _ensure_example_agent_quietly(workspace_id: Optional[int]) -> None:
+    """Seed the built-in example agent, never at the cost of the request.
+
+    Called after a successful registration/login. The local embedding container may
+    be down (or still downloading the model), so any exception — including an
+    import failure — is logged and swallowed: the caller still returns a token.
+    The seed itself is idempotent, so the next login simply retries.
+    """
+    if not workspace_id:
+        return
+    try:
+        from services.example_seed import ensure_example_agent
+
+        await ensure_example_agent(workspace_id)
+    except Exception as exc:
+        logger.warning(
+            "Example agent seed skipped for workspace %s (%s: %s)",
+            workspace_id,
+            type(exc).__name__,
+            exc,
+        )
+
 
 @router.post("/register", response_model=LoginResponse)
 async def register(
@@ -247,6 +277,9 @@ async def register(
         )
 
     access_token = auth_service.create_access_token(data={"sub": str(admin.id)})
+
+    await _ensure_example_agent_quietly(admin.workspace_id)
+
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -551,6 +584,10 @@ async def login(
 
     access_token = auth_service.create_access_token(data={"sub": str(admin.id)})
 
+    # A brand-new deployment has no agent yet: this is where the built-in example
+    # appears for the very first super admin. Non-fatal by design.
+    await _ensure_example_agent_quietly(admin.workspace_id)
+
     return LoginResponse(
         access_token=access_token,
         admin={
@@ -570,3 +607,30 @@ async def get_me(current_admin: AdminUser = Depends(get_current_admin)):
         name=current_admin.name,
         role=current_admin.role,
     )
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_own_password(
+    req: ChangePasswordRequest,
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change the caller's own password (account settings page).
+
+    Independent of the admin-management `PATCH /users/{admin_id}` flow, which keeps
+    its own rules (super-admin only, optional password).
+    """
+    if not AuthService.verify_password(req.current_password, current_admin.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+
+    if len(req.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password too short",
+        )
+
+    current_admin.hashed_password = AuthService.hash_password(req.new_password)
+    await db.commit()
+    return None

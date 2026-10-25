@@ -10,6 +10,7 @@ export const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
 	jina: "jina-embeddings-v3",
 	siliconflow: "BAAI/bge-m3",
 	custom: "text-embedding-v4",
+	local: "ibm-granite/granite-embedding-97m-multilingual-r2",
 };
 
 /**
@@ -82,6 +83,9 @@ export default function KbFormModal({
 
 	const isCreate = mode === "create";
 	const baseUrlRequired = provider === "custom";
+	// The bundled local provider needs neither an API key nor a base URL: the
+	// backend resolves both from its own settings.
+	const isLocalProvider = provider === "local";
 	const errorMessage = formError ?? submitError ?? null;
 
 	const handleProviderChange = (next: EmbeddingProvider) => {
@@ -90,6 +94,9 @@ export default function KbFormModal({
 		setTestResult(null);
 		if (next !== "custom") {
 			setBaseUrl("");
+		}
+		if (next === "local") {
+			setApiKey("");
 		}
 	};
 
@@ -103,7 +110,7 @@ export default function KbFormModal({
 		if (baseUrlRequired && !isHttpUrl(baseUrl)) {
 			return t("kbForm.baseUrlInvalid");
 		}
-		if (isCreate && !apiKey.trim()) {
+		if (isCreate && !isLocalProvider && !apiKey.trim()) {
 			return t("kbForm.apiKeyRequired");
 		}
 		if (chunkOverlap >= chunkSize) {
@@ -117,7 +124,7 @@ export default function KbFormModal({
 		embedding_provider: provider,
 		embedding_model: model.trim(),
 		embedding_base_url: baseUrlRequired ? baseUrl.trim() : null,
-		embedding_api_key: apiKey.trim(),
+		embedding_api_key: isLocalProvider ? "" : apiKey.trim(),
 		embedding_batch_size: batchSize,
 		chunk_size: chunkSize,
 		chunk_overlap: chunkOverlap,
@@ -132,7 +139,7 @@ export default function KbFormModal({
 				embedding_provider: provider,
 				embedding_model: model.trim(),
 				embedding_base_url: baseUrlRequired ? baseUrl.trim() : null,
-				embedding_api_key: apiKey.trim(),
+				embedding_api_key: isLocalProvider ? "" : apiKey.trim(),
 			});
 			setTestResult(result);
 		} catch (err) {
@@ -281,6 +288,7 @@ export default function KbFormModal({
 								{t("kbForm.providerSiliconflow")}
 							</option>
 							<option value="custom">{t("kbForm.providerCustom")}</option>
+							<option value="local">{t("kbForm.providerLocal")}</option>
 						</select>
 					</div>
 
@@ -313,23 +321,27 @@ export default function KbFormModal({
 					)}
 
 					<div>
-						<label style={labelStyle} htmlFor="kb-form-api-key">
-							{t("kbForm.apiKey")}
-						</label>
-						<input
-							id="kb-form-api-key"
-							type="password"
-							value={apiKey}
-							onChange={(event) => {
-								setApiKey(event.target.value);
-								setTestResult(null);
-							}}
-							placeholder={
-								isCreate
-									? t("kbForm.apiKeyPlaceholder")
-									: t("kbForm.apiKeyKeepPlaceholder")
-							}
-						/>
+						{!isLocalProvider && (
+							<>
+								<label style={labelStyle} htmlFor="kb-form-api-key">
+									{t("kbForm.apiKey")}
+								</label>
+								<input
+									id="kb-form-api-key"
+									type="password"
+									value={apiKey}
+									onChange={(event) => {
+										setApiKey(event.target.value);
+										setTestResult(null);
+									}}
+									placeholder={
+										isCreate
+											? t("kbForm.apiKeyPlaceholder")
+											: t("kbForm.apiKeyKeepPlaceholder")
+									}
+								/>
+							</>
+						)}
 						<div
 							style={{
 								display: "flex",
@@ -342,7 +354,7 @@ export default function KbFormModal({
 								type="button"
 								className="btn-secondary"
 								onClick={handleTest}
-								disabled={testing || !apiKey.trim()}
+								disabled={testing || (!isLocalProvider && !apiKey.trim())}
 							>
 								{testing ? t("status.testing") : t("kbForm.testConnection")}
 							</button>

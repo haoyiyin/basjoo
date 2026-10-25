@@ -367,30 +367,30 @@ describe("Agents lifecycle actions", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("limits created agent names to ten display units", async () => {
+	it("limits created agent names to twelve display units", async () => {
 		renderAgents([activeAgent]);
 		await screen.findByText("Active Agent");
 
 		const input = screen.getByPlaceholderText("agents.namePlaceholder");
-		fireEvent.change(input, { target: { value: "客服助手一二" } });
+		fireEvent.change(input, { target: { value: "客服助手一二三" } });
 
-		expect(input).toHaveValue("客服助手一");
+		expect(input).toHaveValue("客服助手一二");
 	});
 
-	it("submits a ten ASCII character agent name", async () => {
+	it("submits a twelve ASCII character agent name", async () => {
 		renderAgents([activeAgent]);
 		await screen.findByText("Active Agent");
 
 		fireEvent.change(screen.getByPlaceholderText("agents.namePlaceholder"), {
-			target: { value: "AgentName1" },
+			target: { value: "AgentName123" },
 		});
 		fireEvent.click(screen.getByText("agents.create"));
 
 		await waitFor(() => {
 			expect(mockedApi.createAgent).toHaveBeenCalledWith(
 				expect.objectContaining({
-					name: "AgentName1",
-					widget_title: "AgentName1",
+					name: "AgentName123",
+					widget_title: "AgentName123",
 				}),
 			);
 		});

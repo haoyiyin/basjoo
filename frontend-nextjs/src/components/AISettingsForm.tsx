@@ -305,6 +305,8 @@ export default function AISettingsForm({
 				return "https://api.deepseek.com/v1";
 			case "volcengine":
 				return "https://ark.cn-beijing.volces.com/api/v3";
+			case "tencentcloud":
+				return "https://api.hunyuan.cloud.tencent.com/v1";
 			case "moonshot":
 				return "https://api.moonshot.cn/v1";
 			case "aliyun_bailian":
@@ -321,30 +323,32 @@ export default function AISettingsForm({
 	const getDefaultModel = (provider: ProviderType): string => {
 		switch (provider) {
 			case "openai_native":
-				return "gpt-4o";
+				return "gpt-6.1-sol";
 			case "google":
-				return "gemini-pro";
+				return "gemini-3.8-flash";
 			case "anthropic":
-				return "claude-3-5-sonnet-20241022";
+				return "claude-sonnet-5-5";
 			case "xai":
-				return "grok-2-latest";
+				return "grok-4.7";
 			case "openrouter":
-				return "openai/gpt-4o";
+				return "openai/gpt-6.1-sol";
 			case "zai":
-				return "z1-preview";
+				return "glm-5.3";
 			case "deepseek":
 				return DEFAULT_DEEPSEEK_MODEL;
 			case "volcengine":
-				return "doubao-pro-32k";
+				return "doubao-seed-2-1-pro-260628";
+			case "tencentcloud":
+				return "hy3";
 			case "moonshot":
-				return "moonshot-v1-8k";
+				return "kimi-k3";
 			case "aliyun_bailian":
-				return "qwen-plus";
+				return "qwen3.8-flash";
 			case "siliconflow":
-				return "deepseek-ai/DeepSeek-V3";
+				return "deepseek-ai/DeepSeek-V4-Flash";
 			case "openai":
 			default:
-				return "gpt-4o";
+				return "gpt-6.1-sol";
 		}
 	};
 
@@ -562,6 +566,7 @@ export default function AISettingsForm({
 						<option value="zai">z.ai</option>
 						<option value="volcengine">{t("labels.volcengine")}</option>
 						<option value="moonshot">{t("labels.moonshot")}</option>
+						<option value="tencentcloud">{t("labels.tencentcloud")}</option>
 						<option value="aliyun_bailian">{t("labels.aliyun_bailian")}</option>
 						<option value="siliconflow">
 							{t("labels.siliconflow", { defaultValue: "SiliconFlow" })}

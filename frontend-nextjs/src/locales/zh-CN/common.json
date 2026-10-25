@@ -71,6 +71,7 @@
     "sessions": "会话中心",
     "aiSettings": "AI 设置",
     "agentSettings": "智能体设置",
+    "accountSettings": "账号设置",
     "administrator": "管理员",
     "agents": "智能体",
     "users": "用户管理"
@@ -529,7 +530,8 @@
       "indexRebuildInProgress": "索引重建中，请稍候...",
       "invalidUrl": "无效网址，请重新输入"
     },
-    "embeddingGetKey": "获取 API Key:"
+    "embeddingGetKey": "获取 API Key:",
+    "tencentcloud": "腾讯混元"
   },
   "personas": {
     "generic": {
@@ -587,7 +589,29 @@
     "appearance": "外观设置",
     "appearanceDesc": "自定义主题和语言偏好",
     "theme": "主题",
-    "language": "语言"
+    "language": "语言",
+    "account": {
+      "title": "账号设置",
+      "description": "管理控制台界面语言与当前账号的登录密码。",
+      "languageSection": "语言",
+      "languageDescription": "选择控制台界面语言，选择会自动保存在本机。",
+      "languageZh": "中文",
+      "languageEn": "英文",
+      "passwordSection": "修改密码",
+      "passwordDescription": "修改当前登录账号的密码，新密码至少需要 8 个字符。",
+      "currentPassword": "当前密码",
+      "newPassword": "新密码",
+      "confirmPassword": "确认新密码",
+      "savePassword": "保存密码",
+      "passwordChanged": "密码已更新",
+      "passwordMismatch": "两次输入的新密码不一致",
+      "passwordTooShort": "新密码至少需要 8 个字符",
+      "currentPasswordRequired": "请输入当前密码",
+      "currentPasswordIncorrect": "当前密码不正确",
+      "accountInfoSection": "账号信息",
+      "name": "名称",
+      "email": "邮箱"
+    }
   },
   "playground": {
     "testAiEffect": "测试您的 AI Agent 对话效果",
@@ -808,6 +832,7 @@
     "providerJina": "Jina AI",
     "providerSiliconflow": "SiliconFlow",
     "providerCustom": "自定义（OpenAI 兼容）",
+    "providerLocal": "本地嵌入（内置）",
     "model": "模型名称",
     "modelRequired": "请填写模型名称",
     "baseUrl": "API 基础 URL",

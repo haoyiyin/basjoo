@@ -273,13 +273,17 @@ async def process_url_refetch(
                     await session.commit()
 
                     # Re-fetch document to check actual processing status
-                    # (process_document catches exceptions internally and sets status="error")
+                    # (process_document catches exceptions internally and sets status="error").
+                    # `populate_existing` is REQUIRED: the session is built with
+                    # expire_on_commit=False, so the identity map would otherwise hand back
+                    # the row as it was BEFORE process_document's own session wrote to it —
+                    # which read as status="pending" and left every URL is_indexed=False.
                     from models import KbDocument
 
                     doc_result = await session.execute(
-                        select(KbDocument).where(
-                            KbDocument.id == doc.id, KbDocument.kb_id == kb_id
-                        )
+                        select(KbDocument)
+                        .where(KbDocument.id == doc.id, KbDocument.kb_id == kb_id)
+                        .execution_options(populate_existing=True)
                     )
                     updated_doc = doc_result.scalar_one_or_none()
 

@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # Jina Embedding API
     jina_embedding_api_base: str = "https://api.jina.ai/v1/embeddings"
 
+    # Local (self-hosted) embedding provider — a Text Embeddings Inference container
+    # exposing the OpenAI-compatible /v1/embeddings endpoint on the compose network.
+    # The `local` KB provider uses these as its defaults; no API key involved.
+    local_embedding_base_url: str = "http://local-embed:80/v1"
+    local_embedding_model: str = "ibm-granite/granite-embedding-97m-multilingual-r2"
+
     # Scrapling 微服务
     scrapling_service_url: str = "http://scrapling-service:8001"
     scraping_provider: str = "local_scrapling"

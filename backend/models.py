@@ -114,6 +114,7 @@ class Agent(Base):
             "moonshot",
             "aliyun_bailian",
             "siliconflow",
+            "tencentcloud",
             name="llm_provider",
         ),
         nullable=True,

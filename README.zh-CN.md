@@ -26,15 +26,19 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 
 ## 系统要求
 
-Basjoo 以 Docker 容器方式运行。所有 LLM 推理和 Embedding 调用均走外部 API（OpenAI、DeepSeek、Anthropic、Gemini、Jina、SiliconFlow），**无需 GPU**。
+Basjoo 以 Docker 容器方式运行。LLM 推理始终走外部 API（OpenAI、DeepSeek、Anthropic、Gemini、Kimi、通义、混元、SiliconFlow 或任意 OpenAI 兼容接口）。Embedding 也可以走外部 API，但默认部署同时自带一个**本地嵌入容器**（`local-embed`，纯 CPU，常驻约 1.2 GB），因此全新安装无需任何第三方密钥就能拥有可用的知识库。两种方式都**无需 GPU**。
 
 | | 最低配置 | 推荐配置 |
 |---|---|---|
 | CPU | 2 vCPU | 2–4 vCPU |
 | 内存 | 4 GB | 8 GB |
-| 磁盘 | 20 GB | 50 GB |
+| 磁盘 | 25 GB | 50 GB |
 | 操作系统 | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
 | Docker | 20.10+ | 最新版 |
+
+以上配置已包含自带的嵌入容器。其模型（`ibm-granite/granite-embedding-97m-multilingual-r2`，约 400 MB）在首次启动时下载一次并存入 `local-embed-cache` 卷；下载期间整套服务照常可用，内置示例智能体会在下次登录时创建。
+
+如需改用托管 Embedding API，请用 `jina` / `siliconflow` / `custom` 供应商新建知识库，并停掉 `local-embed` 服务。
 
 ## 自动部署
 

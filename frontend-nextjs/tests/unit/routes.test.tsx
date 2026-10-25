@@ -15,9 +15,6 @@ vi.mock("../../src/views/Login", () => ({
 vi.mock("../../src/views/Register", () => ({
 	Register: () => <div>view:Register</div>,
 }));
-vi.mock("../../src/views/Setup", () => ({
-	Setup: () => <div>view:Setup</div>,
-}));
 vi.mock("../../src/views/AgentSelector", () => ({
 	default: () => <div>view:AgentSelector</div>,
 }));
@@ -47,6 +44,9 @@ vi.mock("../../src/views/Sessions", () => ({
 }));
 vi.mock("../../src/views/AgentSettings", () => ({
 	default: () => <div>view:AgentSettings</div>,
+}));
+vi.mock("../../src/views/AccountSettings", () => ({
+	default: () => <div>view:AccountSettings</div>,
 }));
 vi.mock("../../src/views/URLManagement", () => ({
 	default: () => <div>view:URLManagement</div>,
@@ -90,7 +90,6 @@ function currentPath(): string {
 const routes: Array<[path: string, view: string]> = [
 	["/login", "view:Login"],
 	["/register", "view:Register"],
-	["/setup", "view:Setup"],
 	["/agent-selector", "view:AgentSelector"],
 	["/", "view:AgentPanel"],
 	["/agents", "view:Agents"],
@@ -106,6 +105,7 @@ const routes: Array<[path: string, view: string]> = [
 	["/chat/some-session", "view:Chat"],
 	["/files", "view:FileUploadManagement"],
 	["/settings/agent", "view:AgentSettings"],
+	["/settings/account", "view:AccountSettings"],
 ];
 
 describe("route table", () => {

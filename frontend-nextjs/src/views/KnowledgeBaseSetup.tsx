@@ -17,6 +17,7 @@ const providerLabelKey: Record<EmbeddingProvider, string> = {
 	jina: "kbForm.providerJina",
 	siliconflow: "kbForm.providerSiliconflow",
 	custom: "kbForm.providerCustom",
+	local: "kbForm.providerLocal",
 };
 
 const statusBadgeClass: Record<KbStatus, string> = {
@@ -163,6 +164,8 @@ export default function KnowledgeBaseSetup({
 				return t("labels.embeddingProviderSiliconFlow");
 			case "custom":
 				return t("labels.embeddingProviderCustom");
+			case "local":
+				return t("kbForm.providerLocal");
 			default:
 				return provider;
 		}

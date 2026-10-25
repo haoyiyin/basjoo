@@ -22,15 +22,23 @@ The stack also uses **SQLite** for application data, **Redis** for rate limiting
 
 ## System requirements
 
-Basjoo runs as a set of Docker containers. All LLM inference and embedding calls are made to external APIs (OpenAI, DeepSeek, Anthropic, Gemini, Jina, SiliconFlow), so **no GPU is required**.
+Basjoo runs as a set of Docker containers. LLM inference is always delegated to an external API (OpenAI, DeepSeek, Anthropic, Gemini, Kimi, Qwen, Hunyuan, SiliconFlow, or any OpenAI-compatible endpoint). Embeddings can be delegated too, but the default deployment also ships a **self-hosted embedding container** (`local-embed`, CPU-only, ~1.2 GB resident) so a fresh install has a working knowledge base with no third-party key. **No GPU is required** either way.
 
 | | Minimum | Recommended |
 |---|---|---|
 | CPU | 2 vCPU | 2–4 vCPU |
 | RAM | 4 GB | 8 GB |
-| Disk | 20 GB | 50 GB |
+| Disk | 25 GB | 50 GB |
 | OS | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
 | Docker | 20.10+ | latest |
+
+The figures above already include the built-in embedding container. Its model
+(`ibm-granite/granite-embedding-97m-multilingual-r2`, ~400 MB) is downloaded once
+into the `local-embed-cache` volume on first start; the stack stays usable while
+that download runs, and the built-in example agent is created on the next login.
+
+To run embeddings against a hosted API instead, create the knowledge base with the
+`jina` / `siliconflow` / `custom` provider and stop the `local-embed` service.
 
 ## Automatic deployment
 
