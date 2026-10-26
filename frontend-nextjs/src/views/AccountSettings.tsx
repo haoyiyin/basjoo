@@ -128,7 +128,11 @@ export default function AccountSettings() {
 
   return (
     <AdminLayout>
-      <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: '800px', margin: '0 auto' }}>
+      <div
+        className="admin-page"
+        data-testid="account-settings-page"
+        style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: '800px', margin: '0 auto', minWidth: 0 }}
+      >
         <h1 style={{
           fontSize: isMobile ? 'var(--text-2xl)' : 'var(--text-3xl)',
           fontWeight: 700,

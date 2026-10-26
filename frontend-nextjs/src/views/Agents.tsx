@@ -9,7 +9,6 @@ import { useAuth } from "../context/AuthContext";
 import {
 	Agent,
 	AgentCreateInput,
-	AgentType,
 	KnowledgeBaseDetail,
 	api,
 } from "../services/api";
@@ -20,33 +19,6 @@ import {
 	getAgentNameDisplayWidth,
 	trimToAgentNameMaxDisplayWidth,
 } from "../lib/agentNameLength";
-
-const agentTypeOptions: Array<{
-	value: AgentType;
-	labelKey: string;
-	descriptionKey: string;
-}> = [
-	{
-		value: "website_support",
-		labelKey: "agents.types.websiteSupport",
-		descriptionKey: "agents.typeDescriptions.websiteSupport",
-	},
-	{
-		value: "ai_clone",
-		labelKey: "agents.types.aiClone",
-		descriptionKey: "agents.typeDescriptions.aiClone",
-	},
-	{
-		value: "sales_outreach",
-		labelKey: "agents.types.salesOutreach",
-		descriptionKey: "agents.typeDescriptions.salesOutreach",
-	},
-	{
-		value: "custom",
-		labelKey: "agents.types.custom",
-		descriptionKey: "agents.typeDescriptions.custom",
-	},
-];
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 200;
 
@@ -87,8 +59,6 @@ export default function Agents() {
 	const [form, setForm] = useState<AgentCreateInput>({
 		name: "",
 		description: "",
-		agent_type: "website_support",
-		channel_mode: "web_widget",
 	});
 	const { admin } = useAuth();
 	const isSuperAdmin = admin?.role === "super_admin";
@@ -180,8 +150,6 @@ export default function Agents() {
 			setForm({
 				name: "",
 				description: "",
-				agent_type: "website_support",
-				channel_mode: "web_widget",
 			});
 			await openKbChooser(created, "onboarding");
 		} catch (err) {
@@ -332,10 +300,13 @@ export default function Agents() {
 	return (
 		<AdminLayout>
 			<div
+				className="admin-page"
+				data-testid="agents-page"
 				style={{
 					padding: isMobile ? "var(--space-4)" : "var(--space-8)",
 					maxWidth: "1200px",
 					margin: "0 auto",
+					minWidth: 0,
 				}}
 			>
 				<div
@@ -710,61 +681,6 @@ export default function Agents() {
 								count: agentNameDisplayWidth,
 								max: AGENT_NAME_MAX_DISPLAY_WIDTH,
 							})}
-						</div>
-						<label
-							style={{
-								display: "block",
-								color: "var(--color-text-secondary)",
-								fontSize: "var(--text-sm)",
-								marginBottom: "var(--space-2)",
-							}}
-						>
-							{t("agents.type")}
-						</label>
-						<div
-							style={{
-								display: "grid",
-								gap: "var(--space-2)",
-								marginBottom: "var(--space-4)",
-							}}
-						>
-							{agentTypeOptions.map((option) => (
-								<button
-									key={option.value}
-									type="button"
-									onClick={() =>
-										setForm((prev) => ({ ...prev, agent_type: option.value }))
-									}
-									style={{
-										textAlign: "left",
-										padding: "var(--space-3)",
-										borderRadius: "var(--radius-md)",
-										border: `1px solid ${form.agent_type === option.value ? "var(--color-accent-primary)" : "var(--color-border)"}`,
-										background:
-											form.agent_type === option.value
-												? "hsla(188deg, 90%, 50%, 0.08)"
-												: "transparent",
-										cursor: "pointer",
-									}}
-								>
-									<div
-										style={{
-											color: "var(--color-text-primary)",
-											fontWeight: 600,
-										}}
-									>
-										{t(option.labelKey)}
-									</div>
-									<div
-										style={{
-											color: "var(--color-text-muted)",
-											fontSize: "var(--text-xs)",
-										}}
-									>
-										{t(option.descriptionKey)}
-									</div>
-								</button>
-							))}
 						</div>
 						<label
 							style={{

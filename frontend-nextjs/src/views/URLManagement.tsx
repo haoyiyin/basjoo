@@ -3,27 +3,29 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
-import { api } from '../services/api'
-import type { URLSource, Agent } from '../services/api';
-import AdminLayout from '../components/AdminLayout';
+import { api } from '../services/api';
+import type { Agent, URLSource } from '../services/api';
 import HelpTooltip from '../components/HelpTooltip';
-import KBSetupGuard from '../components/KBSetupGuard';
 import { useIsMobile, useIsTablet } from '../hooks/useMediaQuery';
-import SourcesSummary from '../components/SourcesSummary';
 
-interface TaskStatus {
-  is_crawling: boolean;
-  is_rebuilding: boolean;
-  can_modify_index: boolean;
-  active_tasks: string[];
+interface KbIndexState {
+  status: string;
 }
 
+/**
+ * URL source panel for one knowledge base.
+ *
+ * Embedded by `KnowledgeBaseDetail` on `/knowledge-bases/:kbId`: it takes the KB
+ * id from the route and uses only the canonical kb-scoped source routes, so it
+ * works for an unbound KB too. The auto-fetch toggle is agent-preconditioned —
+ * it is hidden unless the KB has a bound agent (the toggle PATCHes that agent).
+ */
 export default function URLManagement() {
   const { t } = useTranslation('common');
-  const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
+  const { kbId } = useParams<{ kbId: string }>();
   const isMobile = useIsMobile();
   const isTablet = useIsTablet();
-  const [agentId, setAgentId] = useState<string | null>(null);
+
   const [urls, setUrls] = useState<URLSource[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -36,19 +38,19 @@ export default function URLManagement() {
   const [fetchIntervalDays, setFetchIntervalDays] = useState(7);
   const [crawlMaxDepth, setCrawlMaxDepth] = useState(2);
   const [crawlMaxPages, setCrawlMaxPages] = useState(20);
-  const [agent, setAgent] = useState<Agent | null>(null);
+  const [boundAgent, setBoundAgent] = useState<Agent | null>(null);
   const [crawlPolling, setCrawlPolling] = useState(false);
   const [crawlStartCount, setCrawlStartCount] = useState(0);
-  const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
-  const [refreshTrigger, _setRefreshTrigger] = useState(0);
+  const [indexState, setIndexState] = useState<KbIndexState | null>(null);
   const [clearing, setClearing] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [pollingStopped, setPollingStopped] = useState(false);
   const [deletingUrlId, setDeletingUrlId] = useState<number | null>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isMountedRef = useRef(false);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopPollingRequestedRef = useRef(false);
+  const crawlPollingRef = useRef(false);
+  crawlPollingRef.current = crawlPolling;
+
   // Auto-complete URL with https:// if missing protocol
   const normalizeUrl = (url: string): string => {
     const trimmed = url.trim();
@@ -65,103 +67,67 @@ export default function URLManagement() {
     }
   };
 
-  useEffect(() => {
-    loadDefaultAgent();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeAgentId]);
-
-  const loadDefaultAgent = async () => {
+  // The auto-fetch settings live on the bound agent, not on the KB. An unbound
+  // KB simply has no agent to PATCH, so the toggle stays hidden.
+  const loadBoundAgent = useCallback(async () => {
+    if (!kbId) return;
     try {
-      if (!routeAgentId) return;
-      const data = await api.getAgent(routeAgentId);
-      setAgent(data);
-      setAgentId(data.id);
-      setAutoFetchEnabled(data.enable_auto_fetch || false);
-      setFetchIntervalDays(data.url_fetch_interval_days || 7);
-      setCrawlMaxDepth(data.crawl_max_depth ?? 2);
-      setCrawlMaxPages(data.crawl_max_pages ?? 20);
+      const kb = await api.getKnowledgeBase(kbId);
+      if (!kb.bound_agent) {
+        setBoundAgent(null);
+        return;
+      }
+      const agent = await api.getAgent(kb.bound_agent.id);
+      setBoundAgent(agent);
+      setAutoFetchEnabled(agent.enable_auto_fetch || false);
+      setFetchIntervalDays(agent.url_fetch_interval_days || 7);
+      setCrawlMaxDepth(agent.crawl_max_depth ?? 2);
+      setCrawlMaxPages(agent.crawl_max_pages ?? 20);
     } catch (error) {
-      alert(`${t('labels.urlManagement.loadAgentFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      console.error('Failed to load the bound agent:', error);
+      setBoundAgent(null);
     }
-  };
+  }, [kbId]);
 
-  const loadURLs = useCallback(async () => {
-    if (!agentId) return;
+  useEffect(() => {
+    void loadBoundAgent();
+  }, [loadBoundAgent]);
+
+  const loadUrls = useCallback(async () => {
+    if (!kbId) return;
     setLoading(true);
     try {
-      const data = await api.listURLs(agentId);
+      const data = await api.listKbUrls(kbId);
       setUrls(data.urls);
       setTotal(data.total);
 
       const hasPendingOrFetching = data.urls.some(
-        (url) => url.status === 'pending' || url.status === 'fetching'
+        (url) => url.status === 'pending' || url.status === 'fetching',
       );
-      // 只有 pending/fetching 的 URL 才启动轮询
-      if (hasPendingOrFetching && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
+      // Only pending/fetching URLs start polling.
+      if (
+        hasPendingOrFetching &&
+        !crawlPollingRef.current &&
+        !stopPollingRequestedRef.current
+      ) {
         setCrawlStartCount(data.total);
         setCrawlPolling(true);
       }
     } catch (error) {
-      alert(`${t('labels.urlManagement.loadFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      console.error('Failed to load URLs:', error);
     } finally {
       setLoading(false);
     }
-  }, [agentId, t]);
-
-  // Stable refs for functions used inside interval callbacks.
-  const agentIdRef = useRef(agentId);
-  agentIdRef.current = agentId;
-  const crawlPollingRef = useRef(crawlPolling);
-  crawlPollingRef.current = crawlPolling;
-  const loadURLsRef = useRef(loadURLs);
-  loadURLsRef.current = loadURLs;
+  }, [kbId]);
 
   useEffect(() => {
-    isMountedRef.current = true;
-    if (agentId) {
-      void loadURLs();
-      const pollTaskStatus = async () => {
-        if (!isMountedRef.current || !agentIdRef.current) return;
-        try {
-          const status = await api.getTasksStatus(agentIdRef.current);
-          if (!isMountedRef.current) return;
-          setTaskStatus(prev => {
-            if (
-              prev &&
-              prev.is_crawling === status.is_crawling &&
-              prev.is_rebuilding === status.is_rebuilding &&
-              prev.can_modify_index === status.can_modify_index &&
-              prev.active_tasks.length === status.active_tasks.length &&
-              prev.active_tasks.every((task, index) => task === status.active_tasks[index])
-            ) {
-              return prev;
-            }
-            return status;
-          });
-          if (status.is_crawling && !crawlPollingRef.current && !stopPollingRequestedRef.current) {
-            setCrawlPolling(true);
-          }
-          // Note: Don't immediately stop URL polling when is_crawling becomes false.
-          // The URL polling loop has its own stop conditions that ensure at least
-          // one more poll cycle runs after crawl completes, so newly created URLs
-          // (including error records) are picked up before stopping.
-        } catch (error) {
-          console.error('Failed to poll task status:', error);
-        }
-      };
-      void pollTaskStatus();
-      taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
+    if (kbId) {
+      void loadUrls();
     }
-    return () => {
-      isMountedRef.current = false;
-      if (taskStatusIntervalRef.current) {
-        clearInterval(taskStatusIntervalRef.current);
-      }
-    };
-  }, [agentId, loadURLs]);
+  }, [kbId, loadUrls]);
 
   const handleAddURL = async () => {
-    if (!agentId) return;
+    if (!kbId) return;
     if (!newUrl.trim()) {
       alert(t('labels.urlManagement.enterUrl'));
       return;
@@ -170,23 +136,23 @@ export default function URLManagement() {
     stopPollingRequestedRef.current = false;
     setAdding(true);
     try {
-      const result = await api.createURLs(agentId, [newUrl]);
-      const createdCount = result.urls.length;
-      alert(t('labels.urlManagement.addedCount', { count: createdCount }));
-
-      // Start crawl polling if auto-fetch was queued
+      const result = await api.createKbUrls(kbId, [newUrl]);
+      alert(
+        t('labels.urlManagement.addedCount', { count: result.urls.length }),
+      );
       if (result.auto_fetch_queued && result.job_id) {
         setCrawlPolling(true);
       }
-
       setNewUrl('');
-      await loadURLs();
+      await loadUrls();
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : '';
       if (errMsg.includes('Invalid URL')) {
         alert(t('labels.urlManagement.invalidUrl'));
       } else {
-        alert(`${t('labels.urlManagement.addFailed')}: ${errMsg || t('errors.unknown')}`);
+        alert(
+          `${t('labels.urlManagement.addFailed')}: ${errMsg || t('errors.unknown')}`,
+        );
       }
     } finally {
       setAdding(false);
@@ -194,19 +160,23 @@ export default function URLManagement() {
   };
 
   const handleRefetch = async () => {
-    if (!agentId) return;
+    if (!kbId) return;
     if (!confirm(t('labels.urlManagement.confirmRefetch'))) return;
 
     stopPollingRequestedRef.current = false;
     setRefetching(true);
     try {
-      const result = await api.refetchURLs(agentId, undefined, true);
+      const result = await api.refetchKbUrls(kbId, undefined, true);
       setCrawlStartCount(total);
       setCrawlPolling(true);
-      await loadURLs();
+      await loadUrls();
       alert(t('labels.urlManagement.refetchStarted', { jobId: result.job_id }));
     } catch (error) {
-      alert(`${t('labels.urlManagement.refetchFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      alert(
+        `${t('labels.urlManagement.refetchFailed')}: ${
+          error instanceof Error ? error.message : t('errors.unknown')
+        }`,
+      );
     } finally {
       setRefetching(false);
     }
@@ -215,8 +185,8 @@ export default function URLManagement() {
   const stopPolling = useCallback(async () => {
     stopPollingRequestedRef.current = true;
     try {
-      if (agentId) {
-        await api.cancelURLTasks(agentId);
+      if (kbId) {
+        await api.cancelKbUrlTasks(kbId);
       }
     } catch (error) {
       console.error('Failed to cancel URL tasks:', error);
@@ -228,32 +198,29 @@ export default function URLManagement() {
     setCrawlPolling(false);
     setPollingStopped(true);
     window.setTimeout(() => setPollingStopped(false), 2000);
-  }, [agentId]);
+  }, [kbId]);
 
-  // Polling effect for crawl progress
+  // Polling effect for crawl progress.
   useEffect(() => {
-    if (!crawlPolling || !agentId) return;
+    if (!crawlPolling || !kbId) return;
 
     let pollCount = 0;
     let lastUrlCount = crawlStartCount;
-    let consecutiveNoChange = 0; // 连续无变化次数
+    let consecutiveNoChange = 0;
 
     const pollURLs = async () => {
       pollCount++;
 
       try {
-        // 同时查询 URL 列表、任务状态和索引状态
-        const [data, tasksStatus, indexStatus] = await Promise.all([
-          api.listURLs(agentId),
-          api.getTasksStatus(agentId),
-          api.getIndexStatus(agentId).catch(() => null) // 优雅降级，如果 API 不存在
+        const [data, status] = await Promise.all([
+          api.listKbUrls(kbId),
+          api.getKbIndexStatus(kbId).catch(() => null),
         ]);
 
-        // 更新 URL 列表
         setUrls(data.urls);
         setTotal(data.total);
+        setIndexState(status);
 
-        // 检查是否有新 URL 被添加
         const newUrlsAdded = data.total > lastUrlCount;
         if (newUrlsAdded) {
           lastUrlCount = data.total;
@@ -262,27 +229,21 @@ export default function URLManagement() {
           consecutiveNoChange++;
         }
 
-        // 计算索引相关状态
         const hasPendingOrFetching = data.urls.some(
-          (url) => url.status === 'pending' || url.status === 'fetching'
+          (url) => url.status === 'pending' || url.status === 'fetching',
         );
-        // Backend index status: idle, indexing, rebuilding
-        const isBackendIndexing = indexStatus !== null &&
-          (indexStatus.status === 'indexing' || indexStatus.status === 'rebuilding');
+        // The KB index task is the only backend-side work signal available for
+        // an unbound KB (there is no agent to ask for `tasks:status`).
+        const backendBusy =
+          status !== null &&
+          (status.status === 'indexing' || status.status === 'rebuilding');
 
-        // 停止条件（必须全部满足）：
-        // 1. 没有 pending/fetching 的 URL
-        // 2. 后端报告没有正在进行的抓取任务 (is_crawling = false)
-        // 3. 没有正在重建索引 (is_rebuilding = false)
-        // 4. 没有正在处理的索引任务 (backend status is not indexing/rebuilding)
-        // 5. 已经轮询了至少 3 次
-        // 6. 连续 2 次没有新 URL 增加（确保数据已稳定）
-        // Note: success-but-unindexed is NOT an active state indicator - may be terminal failure
+        // Stop requires: no queued URL, no backend index work, at least 3 polls
+        // and one poll with a stable URL count. success-but-unindexed is NOT an
+        // active signal — it may be a terminal failure.
         const shouldStop =
           !hasPendingOrFetching &&
-          !tasksStatus.is_crawling &&
-          !tasksStatus.is_rebuilding &&
-          !isBackendIndexing &&
+          !backendBusy &&
           pollCount > 3 &&
           consecutiveNoChange >= 1;
 
@@ -292,13 +253,13 @@ export default function URLManagement() {
             pollingIntervalRef.current = null;
           }
           setCrawlPolling(false);
-          // 轮询停止后，最后刷新一次 URL 列表
-          await loadURLs();
+          await loadUrls();
           return;
         }
 
-        // 备选停止条件：如果轮询超过 30 次仍没有变化，可能是抓取失败
-        if (consecutiveNoChange > 30 && !tasksStatus.is_crawling && !tasksStatus.is_rebuilding && !isBackendIndexing) {
+        // Fallback: 30 unchanged polls with no backend work means the crawl is
+        // stuck; stop and let the operator retry.
+        if (consecutiveNoChange > 30 && !backendBusy) {
           await stopPolling();
         }
       } catch (error) {
@@ -306,10 +267,8 @@ export default function URLManagement() {
       }
     };
 
-    // Initial poll - 立即执行第一次
     void pollURLs();
 
-    // Set up interval
     pollingIntervalRef.current = setInterval(() => {
       void pollURLs();
     }, 2000);
@@ -320,7 +279,7 @@ export default function URLManagement() {
         pollingIntervalRef.current = null;
       }
     };
-  }, [crawlPolling, agentId, crawlStartCount, stopPolling, loadURLs]);
+  }, [crawlPolling, kbId, crawlStartCount, stopPolling, loadUrls]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -332,9 +291,7 @@ export default function URLManagement() {
   }, []);
 
   const handleCrawlSite = async () => {
-    if (!agentId) {
-      return;
-    }
+    if (!kbId) return;
     if (!newUrl.trim()) {
       alert(t('labels.urlManagement.enterUrl'));
       return;
@@ -346,7 +303,7 @@ export default function URLManagement() {
     setCrawling(true);
     setCrawlStartCount(total);
     try {
-      await api.crawlSite(agentId, normalizedUrl, crawlMaxDepth, crawlMaxPages);
+      await api.crawlKbSite(kbId, normalizedUrl, crawlMaxDepth, crawlMaxPages);
       setNewUrl('');
       setCrawlPolling(true);
     } catch (error) {
@@ -355,7 +312,11 @@ export default function URLManagement() {
       if (errMsg.includes('Invalid URL')) {
         alert(t('labels.urlManagement.invalidUrl'));
       } else {
-        alert(`${t('labels.urlManagement.crawlFailed')}: ${errMsg || t('errors.unknown')}`);
+        alert(
+          `${t('labels.urlManagement.crawlFailed')}: ${
+            errMsg || t('errors.unknown')
+          }`,
+        );
       }
     } finally {
       setCrawling(false);
@@ -364,88 +325,130 @@ export default function URLManagement() {
 
   const getStatusBadge = (status: string) => {
     const styles: Record<string, { className: string; label: string }> = {
-      success: { className: 'badge badge-success', label: t('status.successBadge') },
+      success: {
+        className: 'badge badge-success',
+        label: t('status.successBadge'),
+      },
       failed: { className: 'badge badge-error', label: t('status.failed') },
-      fetching: { className: 'badge badge-warning badge-pulse', label: t('status.fetching') },
-      pending: { className: 'badge badge-info badge-pulse', label: t('status.pending') },
+      fetching: {
+        className: 'badge badge-warning badge-pulse',
+        label: t('status.fetching'),
+      },
+      pending: {
+        className: 'badge badge-info badge-pulse',
+        label: t('status.pending'),
+      },
     };
     return styles[status] || { className: 'badge', label: status };
   };
 
-  const getIndexStatusBadge = (url: URLSource): { className: string; label: string; showRebuild: boolean } | null => {
+  const getIndexStatusBadge = (
+    url: URLSource,
+  ): { className: string; label: string; showRebuild: boolean } | null => {
     if (url.status !== 'success') {
       return { className: 'badge', label: 'Not ready', showRebuild: false };
     }
 
     switch (url.indexing_status) {
       case 'ready':
-        return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+        return {
+          className: 'badge badge-success',
+          label: 'Indexed',
+          showRebuild: false,
+        };
       case 'processing':
-        return { className: 'badge badge-info', label: 'Indexing...', showRebuild: false };
+        return {
+          className: 'badge badge-info',
+          label: 'Indexing...',
+          showRebuild: false,
+        };
       case 'error':
-        return { className: 'badge badge-error', label: 'Index Error', showRebuild: true };
+        return {
+          className: 'badge badge-error',
+          label: 'Index Error',
+          showRebuild: true,
+        };
       case 'pending':
       default:
         if (url.is_indexed) {
-          return { className: 'badge badge-success', label: 'Indexed', showRebuild: false };
+          return {
+            className: 'badge badge-success',
+            label: 'Indexed',
+            showRebuild: false,
+          };
         }
-        return { className: 'badge badge-warning', label: 'Not Indexed', showRebuild: true };
+        return {
+          className: 'badge badge-warning',
+          label: 'Not Indexed',
+          showRebuild: true,
+        };
     }
   };
 
   const handleRebuildIndex = async () => {
-    if (!agentId) return;
+    if (!kbId) return;
     try {
-      await api.rebuildIndex(agentId);
-      // Poll for status updates
-      setTimeout(() => loadURLs(), 1000);
+      await api.rebuildKbIndex(kbId);
+      setTimeout(() => void loadUrls(), 1000);
     } catch (error) {
       console.error('Failed to rebuild index:', error);
     }
   };
 
   const handleDelete = async (urlId: number) => {
-    if (!agentId) return;
+    if (!kbId) return;
     if (!confirm(t('labels.urlManagement.confirmDelete'))) return;
 
     setDeletingUrlId(urlId);
     try {
-      await api.deleteURL(agentId, urlId);
-      await loadURLs();
+      await api.deleteKbUrl(kbId, urlId);
+      await loadUrls();
     } catch (error) {
-      alert(`${t('labels.urlManagement.deleteFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      alert(
+        `${t('labels.urlManagement.deleteFailed')}: ${
+          error instanceof Error ? error.message : t('errors.unknown')
+        }`,
+      );
     } finally {
       setDeletingUrlId(null);
     }
   };
 
   const handleClearAll = () => {
-    if (!agentId) return;
+    if (!kbId) return;
     if (urls.length === 0) return;
     setShowClearConfirm(true);
   };
 
   const confirmClearAll = async () => {
-    if (!agentId) return;
+    if (!kbId) return;
 
     setClearing(true);
     try {
-      const result = await api.clearAllUrls(agentId);
+      const result = await api.clearKbUrls(kbId);
       setShowClearConfirm(false);
-      await loadURLs();
-      alert(t('labels.urlManagement.clearSuccess', { count: result.deleted_count }));
+      await loadUrls();
+      alert(
+        t('labels.urlManagement.clearSuccess', {
+          count: result.deleted_count ?? 0,
+        }),
+      );
     } catch (error) {
-      alert(`${t('labels.urlManagement.clearFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      alert(
+        `${t('labels.urlManagement.clearFailed')}: ${
+          error instanceof Error ? error.message : t('errors.unknown')
+        }`,
+      );
     } finally {
       setClearing(false);
     }
   };
 
   const handleSaveAutoFetchSettings = async () => {
-    if (!agent) return;
+    if (!boundAgent) return;
     setSaving(true);
     try {
-      await api.updateAgent(agent.id, {
+      await api.updateAgent(boundAgent.id, {
         enable_auto_fetch: autoFetchEnabled,
         url_fetch_interval_days: fetchIntervalDays,
         crawl_max_depth: crawlMaxDepth,
@@ -453,17 +456,23 @@ export default function URLManagement() {
       });
       alert(t('labels.urlManagement.autoFetchSaved'));
     } catch (error) {
-      alert(`${t('errors.saveFailed')}: ${error instanceof Error ? error.message : t('errors.unknown')}`);
+      alert(
+        `${t('errors.saveFailed')}: ${
+          error instanceof Error ? error.message : t('errors.unknown')
+        }`,
+      );
     } finally {
       setSaving(false);
     }
   };
 
+  const backendBusy =
+    indexState !== null &&
+    (indexState.status === 'indexing' || indexState.status === 'rebuilding');
+
   return (
-    <AdminLayout>
-      {agentId ? (
-        <KBSetupGuard agentId={agentId}>
-          {showClearConfirm && (
+    <section data-testid="kb-url-panel" className="url-panel" style={{ minWidth: 0 }}>
+      {showClearConfirm && (
         <div
           style={{
             position: 'fixed',
@@ -486,13 +495,33 @@ export default function URLManagement() {
               padding: 'var(--space-6)',
             }}
           >
-            <h3 style={{ margin: 0, marginBottom: 'var(--space-3)', fontSize: 'var(--text-lg)', color: 'var(--color-text-primary)' }}>
+            <h3
+              style={{
+                margin: 0,
+                marginBottom: 'var(--space-3)',
+                fontSize: 'var(--text-lg)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
               {t('labels.urlManagement.clearAll')}
             </h3>
-            <p style={{ margin: 0, marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+            <p
+              style={{
+                margin: 0,
+                marginBottom: 'var(--space-5)',
+                color: 'var(--color-text-secondary)',
+                lineHeight: 1.6,
+              }}
+            >
               {t('labels.urlManagement.confirmClearAll')}
             </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 'var(--space-3)',
+              }}
+            >
               <button
                 type="button"
                 className="btn-ghost"
@@ -506,472 +535,549 @@ export default function URLManagement() {
                 className="btn-primary"
                 onClick={confirmClearAll}
                 disabled={clearing}
-                style={{ background: 'var(--color-error)', borderColor: 'var(--color-error)' }}
+                style={{
+                  background: 'var(--color-error)',
+                  borderColor: 'var(--color-error)',
+                }}
               >
-                {clearing ? t('labels.urlManagement.clearing') : t('buttons.confirm')}
+                {clearing
+                  ? t('labels.urlManagement.clearing')
+                  : t('buttons.confirm')}
               </button>
             </div>
           </div>
         </div>
       )}
-      <div style={{
-        padding: isMobile ? 'var(--space-4)' : 'var(--space-8)',
-        maxWidth: '1400px',
-        margin: '0 auto',
-      }}>
-        <header style={{
-          marginBottom: 'var(--space-8)',
+
+      <header
+        style={{
+          marginBottom: 'var(--space-6)',
           display: 'flex',
           flexDirection: isMobile ? 'column' : 'row',
           alignItems: isMobile ? 'flex-start' : 'center',
           justifyContent: 'space-between',
-          gap: isMobile ? 'var(--space-4)' : '0',
-        }}>
-          <div>
-            <h1 style={{
-              fontSize: 'var(--text-3xl)',
+          gap: isMobile ? 'var(--space-3)' : 'var(--space-4)',
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <h2
+            style={{
+              fontSize: isMobile ? 'var(--text-xl)' : 'var(--text-2xl)',
               fontWeight: 700,
               color: 'var(--color-text-primary)',
-              marginBottom: 'var(--space-2)',
-            }}>
-              {t('labels.urlManagement.title')}
-            </h1>
-            <p style={{
-              color: 'var(--color-text-secondary)',
-            }}>
-              {t('labels.urlManagement.description')}
-            </p>
-          </div>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-4)',
-          }}>
-            {total > 0 && (
-              <span className="badge badge-info" style={{ fontSize: 'var(--text-sm)', padding: 'var(--space-2) var(--space-4)' }}>
-                {t('labels.urlManagement.total', { total: String(total) })}
-              </span>
-            )}
-          </div>
-        </header>
+              marginBottom: 'var(--space-1)',
+            }}
+          >
+            {t('labels.urlManagement.title')}
+          </h2>
+          <p style={{ color: 'var(--color-text-secondary)' }}>
+            {t('labels.urlManagement.description')}
+          </p>
+        </div>
+        {total > 0 && (
+          <span
+            className="badge badge-info"
+            style={{ fontSize: 'var(--text-sm)', padding: 'var(--space-2) var(--space-4)' }}
+          >
+            {t('labels.urlManagement.total', { total: String(total) })}
+          </span>
+        )}
+      </header>
 
-        <div style={{
+      <div
+        style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr' : isTablet ? '1fr 1fr' : '1fr 1fr 300px',
-          gridTemplateRows: isMobile ? 'auto' : isTablet ? 'auto auto auto' : 'auto auto',
+          gridTemplateColumns: isMobile
+            ? 'minmax(0, 1fr)'
+            : isTablet
+              ? 'minmax(0, 1fr)'
+              : 'minmax(0, 1fr) minmax(0, 1fr) 300px',
           gap: 'var(--space-6)',
-        }}>
-          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', gridColumn: isMobile ? 'auto' : '1', gridRow: isMobile ? 'auto' : '1' }}>
-            <h2 style={{
+          alignItems: 'start',
+        }}
+      >
+        <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', minWidth: 0 }}>
+          <h3
+            style={{
               fontSize: 'var(--text-lg)',
               fontWeight: 600,
-              marginBottom: 'var(--space-6)',
+              marginBottom: 'var(--space-5)',
               color: 'var(--color-text-primary)',
               display: 'flex',
               alignItems: 'center',
               gap: 'var(--space-3)',
-            }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="16" />
-                <line x1="8" y1="12" x2="16" y2="12" />
-              </svg>
-                    {t('labels.urlManagement.addUrl')}
-              <HelpTooltip
-                title={t('labels.urlManagement.addUrlHelpTitle')}
-                content={[
-                  t('labels.urlManagement.addUrlHelpContent1'),
-                  t('labels.urlManagement.addUrlHelpContent2'),
-                  t('labels.urlManagement.addUrlHelpContent3'),
-                  t('labels.urlManagement.addUrlHelpContent4'),
-                  "",
-                  t('labels.urlManagement.addUrlHelpDetail'),
-                  t('labels.urlManagement.addUrlHelpBullet1'),
-                  t('labels.urlManagement.addUrlHelpBullet2'),
-                  t('labels.urlManagement.addUrlHelpBullet3'),
-                  t('labels.urlManagement.addUrlHelpBullet4')
-                ]}
-                position="top"
-                size="sm"
-              />
-            </h2>
+            }}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="16" />
+              <line x1="8" y1="12" x2="16" y2="12" />
+            </svg>
+            {t('labels.urlManagement.addUrl')}
+            <HelpTooltip
+              title={t('labels.urlManagement.addUrlHelpTitle')}
+              content={[
+                t('labels.urlManagement.addUrlHelpContent1'),
+                t('labels.urlManagement.addUrlHelpContent2'),
+                t('labels.urlManagement.addUrlHelpContent3'),
+                t('labels.urlManagement.addUrlHelpContent4'),
+                '',
+                t('labels.urlManagement.addUrlHelpDetail'),
+                t('labels.urlManagement.addUrlHelpBullet1'),
+                t('labels.urlManagement.addUrlHelpBullet2'),
+                t('labels.urlManagement.addUrlHelpBullet3'),
+                t('labels.urlManagement.addUrlHelpBullet4'),
+              ]}
+              position="top"
+              size="sm"
+            />
+          </h3>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-              <div>
-                <label style={{
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-4)',
+            }}
+          >
+            <div>
+              <label
+                style={{
                   display: 'block',
                   marginBottom: 'var(--space-2)',
                   fontSize: 'var(--text-sm)',
                   fontWeight: 500,
                   color: 'var(--color-text-secondary)',
-                }}>
-                  {t('labels.urlManagement.webpageUrl')}
-                  <HelpTooltip
-                    title={t('labels.urlManagement.webpageUrlHelpTitle')}
-                    content={[
-                      t('labels.urlManagement.webpageUrlHelpContent1'),
-                      t('labels.urlManagement.webpageUrlHelpContent2'),
-                      t('labels.urlManagement.webpageUrlHelpContent3')
-                    ]}
-                    position="top"
-                    size="sm"
-                  />
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="text"
-                    value={newUrl}
-                    onChange={(e) => setNewUrl(e.target.value)}
-                    onBlur={handleUrlBlur}
-                    placeholder={t('labels.urlManagement.urlPlaceholder')}
-                    style={{ paddingLeft: 'var(--space-12)' }}
-                  />
+                }}
+              >
+                {t('labels.urlManagement.webpageUrl')}
+                <HelpTooltip
+                  title={t('labels.urlManagement.webpageUrlHelpTitle')}
+                  content={[
+                    t('labels.urlManagement.webpageUrlHelpContent1'),
+                    t('labels.urlManagement.webpageUrlHelpContent2'),
+                    t('labels.urlManagement.webpageUrlHelpContent3'),
+                  ]}
+                  position="top"
+                  size="sm"
+                />
+              </label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  value={newUrl}
+                  onChange={(e) => setNewUrl(e.target.value)}
+                  onBlur={handleUrlBlur}
+                  placeholder={t('labels.urlManagement.urlPlaceholder')}
+                  style={{ paddingLeft: 'var(--space-12)', width: '100%' }}
+                />
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  style={{
+                    position: 'absolute',
+                    left: 'var(--space-4)',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+              </div>
+            </div>
+
+            <button
+              onClick={handleAddURL}
+              disabled={adding || !newUrl.trim()}
+              style={{
+                width: '100%',
+                padding: 'var(--space-3)',
+                background: 'var(--color-accent-gradient)',
+                color: 'var(--color-text-inverse)',
+                border: 'none',
+                borderRadius: 'var(--radius-md)',
+                cursor: adding || !newUrl.trim() ? 'not-allowed' : 'pointer',
+                opacity: adding || !newUrl.trim() ? 0.5 : 1,
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 'var(--space-2)',
+              }}
+            >
+              {adding ? (
+                <>
+                  <div className="spinner" />
+                  {t('labels.urlManagement.adding')}
+                </>
+              ) : (
+                <>
                   <svg
-                    width="18"
-                    height="18"
+                    width="16"
+                    height="16"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2"
-                    style={{
-                      position: 'absolute',
-                      left: 'var(--space-4)',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      color: 'var(--color-text-muted)',
-                    }}
                   >
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="16" />
+                    <line x1="8" y1="12" x2="16" y2="12" />
                   </svg>
-                </div>
-              </div>
+                  {t('labels.urlManagement.singlePageCrawl')}
+                </>
+              )}
+            </button>
 
+            <button
+              onClick={handleCrawlSite}
+              disabled={crawling || backendBusy || !newUrl.trim()}
+              className="btn-secondary"
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 'var(--space-2)',
+                background: 'linear-gradient(135deg, #8B5CF6, #6366F1)',
+                color: 'white',
+                border: 'none',
+              }}
+            >
+              {crawling ? (
+                <>
+                  <div className="spinner" />
+                  {t('labels.urlManagement.crawling')}
+                </>
+              ) : (
+                <>
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                  </svg>
+                  {t('labels.urlManagement.crawlSite')}
+                </>
+              )}
+            </button>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : '1fr 1fr',
+                gap: 'var(--space-4)',
+              }}
+            >
+              <div>
+                <label
+                  style={{
+                    display: 'block',
+                    marginBottom: 'var(--space-2)',
+                    fontSize: 'var(--text-sm)',
+                    fontWeight: 500,
+                    color: 'var(--color-text-secondary)',
+                  }}
+                >
+                  {t('labels.urlManagement.crawlDepth')}
+                  <HelpTooltip
+                    title={t('labels.urlManagement.crawlDepth')}
+                    content={[t('labels.urlManagement.crawlDepthDesc')]}
+                    position="top"
+                    size="sm"
+                  />
+                </label>
+                <input
+                  type="number"
+                  value={crawlMaxDepth}
+                  onChange={(e) =>
+                    setCrawlMaxDepth(
+                      Math.max(1, Math.min(5, parseInt(e.target.value) || 2)),
+                    )
+                  }
+                  min={1}
+                  max={5}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div>
+                <label
+                  style={{
+                    display: 'block',
+                    marginBottom: 'var(--space-2)',
+                    fontSize: 'var(--text-sm)',
+                    fontWeight: 500,
+                    color: 'var(--color-text-secondary)',
+                  }}
+                >
+                  {t('labels.urlManagement.crawlMaxPages')}
+                  <HelpTooltip
+                    title={t('labels.urlManagement.crawlMaxPages')}
+                    content={[t('labels.urlManagement.crawlMaxPagesDesc')]}
+                    position="top"
+                    size="sm"
+                  />
+                </label>
+                <input
+                  type="number"
+                  value={crawlMaxPages}
+                  onChange={(e) =>
+                    setCrawlMaxPages(
+                      Math.max(1, Math.min(500, parseInt(e.target.value) || 20)),
+                    )
+                  }
+                  min={1}
+                  max={500}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </div>
+
+            <div
+              style={{
+                borderTop: '1px solid var(--color-border)',
+                paddingTop: 'var(--space-4)',
+              }}
+            >
               <button
-                onClick={handleAddURL}
-                disabled={adding || !newUrl.trim()}
+                onClick={handleRefetch}
+                disabled={refetching}
+                className="btn-secondary"
                 style={{
                   width: '100%',
-                  padding: 'var(--space-3)',
-                  background: 'var(--color-accent-gradient)',
-                  color: 'var(--color-text-inverse)',
-                  border: 'none',
-                  borderRadius: 'var(--radius-md)',
-                  cursor: adding || !newUrl.trim() ? 'not-allowed' : 'pointer',
-                  opacity: adding || !newUrl.trim() ? 0.5 : 1,
-                  fontWeight: 600,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 'var(--space-2)',
                 }}
               >
-                {adding ? (
+                {refetching ? (
                   <>
                     <div className="spinner" />
-                    {t('labels.urlManagement.adding')}
+                    {t('labels.urlManagement.refetching')}
                   </>
                 ) : (
                   <>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="16" />
-                      <line x1="8" y1="12" x2="16" y2="12" />
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path d="M23 4v6h-6M1 20v-6h6" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
                     </svg>
-              {t('labels.urlManagement.singlePageCrawl')}
+                    {t('labels.urlManagement.refetchAll')}
                   </>
                 )}
               </button>
-
-              <button
-                  onClick={handleCrawlSite}
-                  disabled={crawling || taskStatus?.is_crawling || !newUrl.trim()}
-                  className="btn-secondary"
-                  style={{
-                    width: '100%',
-                    marginTop: 'var(--space-3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 'var(--space-2)',
-                    background: 'linear-gradient(135deg, #8B5CF6, #6366F1)',
-                    color: 'white',
-                    border: 'none',
-                  }}
-                >
-                  {crawling ? (
-                    <>
-                      <div className="spinner" />
-                      {t('labels.urlManagement.crawling')}
-                    </>
-                  ) : (
-                    <>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <circle cx="12" cy="12" r="10" />
-                        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                      </svg>
-                      {t('labels.urlManagement.crawlSite')}
-                    </>
-                  )}
-                </button>
-
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
-                gap: 'var(--space-4)',
-                marginTop: 'var(--space-4)',
-              }}>
-                <div>
-                  <label style={{
-                    display: 'block',
-                    marginBottom: 'var(--space-2)',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    color: 'var(--color-text-secondary)',
-                  }}>
-                    {t('labels.urlManagement.crawlDepth')}
-                    <HelpTooltip
-                      title={t('labels.urlManagement.crawlDepth')}
-                      content={[t('labels.urlManagement.crawlDepthDesc')]}
-                      position="top"
-                      size="sm"
-                    />
-                  </label>
-                  <input
-                    type="number"
-                    value={crawlMaxDepth}
-                    onChange={(e) => setCrawlMaxDepth(Math.max(1, Math.min(5, parseInt(e.target.value) || 2)))}
-                    min={1}
-                    max={5}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-                <div>
-                  <label style={{
-                    display: 'block',
-                    marginBottom: 'var(--space-2)',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    color: 'var(--color-text-secondary)',
-                  }}>
-                    {t('labels.urlManagement.crawlMaxPages')}
-                    <HelpTooltip
-                      title={t('labels.urlManagement.crawlMaxPages')}
-                      content={[t('labels.urlManagement.crawlMaxPagesDesc')]}
-                      position="top"
-                      size="sm"
-                    />
-                  </label>
-                  <input
-                    type="number"
-                    value={crawlMaxPages}
-                    onChange={(e) => setCrawlMaxPages(Math.max(1, Math.min(500, parseInt(e.target.value) || 20)))}
-                    min={1}
-                    max={500}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-                
-
-              </div>
-
-              <div style={{
-                borderTop: '1px solid var(--color-border)',
-                paddingTop: 'var(--space-4)',
-                marginTop: 'var(--space-4)',
-              }}>
-                <button
-                  onClick={handleRefetch}
-                  disabled={refetching}
-                  className="btn-secondary"
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 'var(--space-2)',
-                  }}
-                >
-                  {refetching ? (
-                    <>
-                      <div className="spinner" />
-                      {t('labels.urlManagement.refetching')}
-                    </>
-                  ) : (
-                    <>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M23 4v6h-6M1 20v-6h6" />
-                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                      </svg>
-                      {t('labels.urlManagement.refetchAll')}
-                    </>
-                  )}
-                </button>
-              </div>
             </div>
           </div>
+        </div>
 
-          
-          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '2', gridRow: isMobile ? 'auto' : '1', display: 'flex', flexDirection: 'column' }}>
-              <div style={{
+        {/* Auto fetch: only meaningful when the KB is bound to an agent. */}
+        {boundAgent && (
+          <div
+            data-testid="kb-url-autofetch"
+            className="liquid-glass-card"
+            style={{ padding: 'var(--space-6)', minWidth: 0 }}
+          >
+            <div
+              style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'var(--space-3)',
                 marginBottom: 'var(--space-4)',
-              }}>
-              <div style={{
-                width: '40px',
-                height: '40px',
-                background: 'linear-gradient(135deg, #F59E0B, #F97316)',
-                borderRadius: 'var(--radius-md)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+              }}
+            >
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  background: 'linear-gradient(135deg, #F59E0B, #F97316)',
+                  borderRadius: 'var(--radius-md)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="white"
+                  strokeWidth="2"
+                >
                   <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 0 1 9-9" />
                 </svg>
               </div>
-              <div>
-                <h2 style={{
-                  fontSize: 'var(--text-lg)',
-                  fontWeight: 600,
-                  color: 'var(--color-text-primary)',
-                }}>
+              <div style={{ minWidth: 0 }}>
+                <h3
+                  style={{
+                    fontSize: 'var(--text-lg)',
+                    fontWeight: 600,
+                    color: 'var(--color-text-primary)',
+                  }}
+                >
                   {t('labels.urlManagement.autoFetch')}
-                </h2>
-                <p style={{
-                  fontSize: 'var(--text-sm)',
-                  color: 'var(--color-text-muted)',
-                }}>
+                </h3>
+                <p
+                  style={{
+                    fontSize: 'var(--text-sm)',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
                   {t('labels.urlManagement.autoFetchDescription')}
                 </p>
               </div>
             </div>
 
-            <div style={{
-              display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
-              alignItems: isMobile ? 'stretch' : 'center',
-              justifyContent: 'space-between',
-              gap: isMobile ? 'var(--space-3)' : 'var(--space-4)',
-              padding: 'var(--space-4)',
-              background: 'var(--color-bg-tertiary)',
-              borderRadius: 'var(--radius-md)',
-              marginBottom: 'var(--space-4)',
-            }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: isMobile ? 'column' : 'row',
+                alignItems: isMobile ? 'stretch' : 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--space-3)',
+                padding: 'var(--space-4)',
+                background: 'var(--color-bg-tertiary)',
+                borderRadius: 'var(--radius-md)',
+                marginBottom: 'var(--space-4)',
+              }}
+            >
               <div style={{ minWidth: 0 }}>
-                <div style={{
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 500,
-                  color: 'var(--color-text-primary)',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}>
+                <div
+                  style={{
+                    fontSize: 'var(--text-sm)',
+                    fontWeight: 500,
+                    color: 'var(--color-text-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                >
                   {t('labels.urlManagement.enableAutoFetch')}
                   <HelpTooltip
                     title={t('labels.urlManagement.enableAutoFetchHelpTitle')}
                     content={[
                       t('labels.urlManagement.enableAutoFetchHelpContent1'),
                       t('labels.urlManagement.enableAutoFetchHelpContent2'),
-                      t('labels.urlManagement.enableAutoFetchHelpContent3')
+                      t('labels.urlManagement.enableAutoFetchHelpContent3'),
                     ]}
                     position="top"
                     size="sm"
                   />
                 </div>
-                <div style={{
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-muted)',
-                  marginTop: 'var(--space-1)',
-                }}>
+                <div
+                  style={{
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--color-text-muted)',
+                    marginTop: 'var(--space-1)',
+                  }}
+                >
                   {t('labels.urlManagement.enableAutoFetchDesc')}
                 </div>
               </div>
               <button
                 onClick={() => setAutoFetchEnabled(!autoFetchEnabled)}
                 aria-pressed={autoFetchEnabled}
+                aria-label={t('labels.urlManagement.enableAutoFetch')}
                 style={{
                   width: isMobile ? '56px' : '48px',
                   height: isMobile ? '32px' : '28px',
+                  minHeight: '44px',
                   alignSelf: isMobile ? 'flex-start' : 'auto',
-                  borderRadius: isMobile ? '16px' : '14px',
+                  borderRadius: '999px',
                   border: 'none',
-                  background: autoFetchEnabled ? 'var(--color-accent-primary)' : 'var(--color-bg-secondary)',
+                  background: autoFetchEnabled
+                    ? 'var(--color-accent-primary)'
+                    : 'var(--color-bg-secondary)',
                   cursor: 'pointer',
                   position: 'relative',
                   transition: 'background 0.2s',
                   touchAction: 'manipulation',
                 }}
               >
-                <span style={{
-                  position: 'absolute',
-                  top: '2px',
-                  left: autoFetchEnabled ? (isMobile ? '26px' : '22px') : '2px',
-                  width: isMobile ? '28px' : '24px',
-                  height: isMobile ? '28px' : '24px',
-                  borderRadius: isMobile ? '14px' : '12px',
-                  background: 'white',
-                  transition: 'left 0.2s',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                }} />
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    left: autoFetchEnabled ? (isMobile ? '26px' : '22px') : '2px',
+                    width: isMobile ? '28px' : '24px',
+                    height: isMobile ? '28px' : '24px',
+                    borderRadius: '999px',
+                    background: 'white',
+                    transition: 'left 0.2s',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  }}
+                />
               </button>
             </div>
 
             {autoFetchEnabled && (
-              <div style={{
-                display: 'flex',
-                flexDirection: isMobile ? 'column' : 'row',
-                alignItems: isMobile ? 'stretch' : 'center',
-                gap: 'var(--space-4)',
-                marginBottom: 'var(--space-4)',
-              }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{
+              <div style={{ marginBottom: 'var(--space-4)' }}>
+                <label
+                  style={{
                     display: 'block',
                     marginBottom: 'var(--space-2)',
                     fontSize: 'var(--text-sm)',
                     fontWeight: 500,
                     color: 'var(--color-text-secondary)',
-                  }}>
-                    {t('labels.urlManagement.fetchInterval')}
-                    <HelpTooltip
-                      title={t('labels.urlManagement.fetchIntervalHelpTitle')}
-                      content={[
-                        t('labels.urlManagement.fetchIntervalHelpContent1'),
-                        t('labels.urlManagement.fetchIntervalHelpContent2'),
-                        t('labels.urlManagement.fetchIntervalHelpContent3')
-                      ]}
-                      position="top"
-                      size="sm"
-                    />
-                  </label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    <input
-                      type="number"
-                      value={fetchIntervalDays}
-                      onChange={(e) => setFetchIntervalDays(Math.max(1, parseInt(e.target.value) || 7))}
-                      min={1}
-                      max={30}
-                      style={{
-                        width: isMobile ? '100%' : '120px',
-                        maxWidth: isMobile ? '160px' : '120px',
-                      }}
-                    />
-                    <span style={{
+                  }}
+                >
+                  {t('labels.urlManagement.fetchInterval')}
+                </label>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <input
+                    type="number"
+                    aria-label={t('labels.urlManagement.fetchInterval')}
+                    value={fetchIntervalDays}
+                    onChange={(e) =>
+                      setFetchIntervalDays(
+                        Math.max(1, parseInt(e.target.value) || 7),
+                      )
+                    }
+                    min={1}
+                    max={30}
+                    style={{ width: '120px', maxWidth: '100%' }}
+                  />
+                  <span
+                    style={{
                       color: 'var(--color-text-secondary)',
                       fontSize: 'var(--text-sm)',
-                    }}>
-                      {t('labels.urlManagement.days')}
-                    </span>
-                  </div>
-                  <p style={{
-                    marginTop: 'var(--space-2)',
-                    fontSize: 'var(--text-xs)',
-                    color: 'var(--color-text-muted)',
-                  }}>
-                    {t('labels.urlManagement.fetchIntervalDesc')}
-                  </p>
+                    }}
+                  >
+                    {t('labels.urlManagement.days')}
+                  </span>
                 </div>
               </div>
             )}
@@ -1002,7 +1108,14 @@ export default function URLManagement() {
                 </>
               ) : (
                 <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
                     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
                     <polyline points="17 21 17 13 7 13 7 21" />
                     <polyline points="7 3 7 8 15 8" />
@@ -1012,325 +1125,381 @@ export default function URLManagement() {
               )}
             </button>
           </div>
-          
-          <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', height: 'fit-content', minWidth: 0, overflow: 'hidden', gridColumn: isMobile ? 'auto' : '1 / span 2', gridRow: isMobile ? 'auto' : '2' }}>
-            <div style={{
+        )}
+
+        <div
+          className="liquid-glass-card"
+          style={{
+            padding: 'var(--space-6)',
+            minWidth: 0,
+            gridColumn: isMobile ? 'auto' : isTablet ? 'auto' : '1 / -1',
+          }}
+        >
+          <div
+            style={{
               display: 'flex',
               flexDirection: isMobile ? 'column' : 'row',
               alignItems: isMobile ? 'stretch' : 'center',
               justifyContent: 'space-between',
-              marginBottom: 'var(--space-6)',
+              marginBottom: 'var(--space-5)',
               flexWrap: 'wrap',
               gap: 'var(--space-2)',
-            }}>
-              <h2 style={{
+            }}
+          >
+            <h3
+              style={{
                 fontSize: 'var(--text-lg)',
                 fontWeight: 600,
                 color: 'var(--color-text-primary)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'var(--space-3)',
-              }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="8" y1="6" x2="21" y2="6" />
-                  <line x1="8" y1="12" x2="21" y2="12" />
-                  <line x1="8" y1="18" x2="21" y2="18" />
-                  <line x1="3" y1="6" x2="3.01" y2="6" />
-                  <line x1="3" y1="12" x2="3.01" y2="12" />
-                  <line x1="3" y1="18" x2="3.01" y2="18" />
-                </svg>
-                {t('labels.urlManagement.urlList')}
-              </h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', width: isMobile ? '100%' : 'auto' }}>
-                {crawlPolling && (
-                  <button
-                    onClick={stopPolling}
-                    className="btn-ghost"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 'var(--space-2)',
-                      color: 'var(--color-warning)',
-                      minHeight: isMobile ? '44px' : undefined,
-                      width: isMobile ? '100%' : 'auto',
-                    }}
-                  >
-                    <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                    {t('labels.urlManagement.stopPolling')}
-                  </button>
-                )}
-                {pollingStopped && !crawlPolling && (
-                  <span
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-2)',
-                      color: 'var(--color-success)',
-                      fontSize: 'var(--text-sm)',
-                      width: isMobile ? '100%' : 'auto',
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                    {t('labels.urlManagement.pollingStopped')}
-                  </span>
-                )}
-                {urls.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    disabled={clearing}
-                    className="btn-ghost"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 'var(--space-2)',
-                      color: 'var(--color-error)',
-                      opacity: clearing ? 0.5 : 1,
-                      cursor: clearing ? 'not-allowed' : 'pointer',
-                      minHeight: isMobile ? '44px' : undefined,
-                      width: isMobile ? '100%' : 'auto',
-                    }}
-                  >
-                    {clearing ? (
-                      <>
-                        <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                        {t('labels.urlManagement.clearing')}
-                      </>
-                    ) : (
-                      <>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="3 6 5 6 21 6" />
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                        {t('labels.urlManagement.clearAll')}
-                      </>
-                    )}
-                  </button>
-                )}
+              }}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <line x1="8" y1="6" x2="21" y2="6" />
+                <line x1="8" y1="12" x2="21" y2="12" />
+                <line x1="8" y1="18" x2="21" y2="18" />
+                <line x1="3" y1="6" x2="3.01" y2="6" />
+                <line x1="3" y1="12" x2="3.01" y2="12" />
+                <line x1="3" y1="18" x2="3.01" y2="18" />
+              </svg>
+              {t('labels.urlManagement.urlList')}
+            </h3>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                flexWrap: 'wrap',
+                width: isMobile ? '100%' : 'auto',
+              }}
+            >
+              {crawlPolling && (
                 <button
-                  onClick={loadURLs}
-                  disabled={loading}
+                  onClick={stopPolling}
                   className="btn-ghost"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     gap: 'var(--space-2)',
-                    minHeight: isMobile ? '44px' : undefined,
-                    width: isMobile ? '100%' : 'auto',
+                    color: 'var(--color-warning)',
+                    minHeight: '44px',
                   }}
                 >
-                  {loading ? (
-                    <div className="spinner" />
-                  ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M23 4v6h-6M1 20v-6h6" />
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                    </svg>
-                  )}
-                  {t('buttons.refresh')}
+                  <div
+                    className="spinner"
+                    style={{ width: '14px', height: '14px' }}
+                  />
+                  {t('labels.urlManagement.stopPolling')}
                 </button>
-              </div>
+              )}
+              {pollingStopped && !crawlPolling && (
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                    color: 'var(--color-success)',
+                    fontSize: 'var(--text-sm)',
+                  }}
+                >
+                  {t('labels.urlManagement.pollingStopped')}
+                </span>
+              )}
+              {urls.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  disabled={clearing}
+                  className="btn-ghost"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 'var(--space-2)',
+                    color: 'var(--color-error)',
+                    opacity: clearing ? 0.5 : 1,
+                    cursor: clearing ? 'not-allowed' : 'pointer',
+                    minHeight: '44px',
+                  }}
+                >
+                  {clearing ? (
+                    <>
+                      <div
+                        className="spinner"
+                        style={{ width: '14px', height: '14px' }}
+                      />
+                      {t('labels.urlManagement.clearing')}
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                      {t('labels.urlManagement.clearAll')}
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => void loadUrls()}
+                disabled={loading}
+                className="btn-ghost"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 'var(--space-2)',
+                  minHeight: '44px',
+                }}
+              >
+                {loading ? (
+                  <div className="spinner" />
+                ) : (
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M23 4v6h-6M1 20v-6h6" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  </svg>
+                )}
+                {t('buttons.refresh')}
+              </button>
             </div>
+          </div>
 
-            {(crawlPolling || taskStatus?.is_crawling) && (
-              <div style={{
+          {crawlPolling && (
+            <div
+              style={{
                 padding: 'var(--space-3) var(--space-4)',
-                background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.1))',
+                background:
+                  'linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.1))',
                 borderRadius: 'var(--radius-md)',
                 marginBottom: 'var(--space-4)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'var(--space-3)',
                 border: '1px solid rgba(139, 92, 246, 0.3)',
-              }}>
-                <div className="spinner" style={{ width: '16px', height: '16px' }} />
-                <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
-                  {t('labels.urlManagement.crawlInProgress')}
-                </span>
-                <span style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('labels.urlManagement.crawlDiscovered', { count: total - crawlStartCount })}
-                </span>
-              </div>
-            )}
+              }}
+            >
+              <div className="spinner" style={{ width: '16px', height: '16px' }} />
+              <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
+                {t('labels.urlManagement.crawlInProgress')}
+              </span>
+            </div>
+          )}
 
-            {/* Crawl error banner */}
-            {!crawlPolling && !taskStatus?.is_crawling && urls.some(u => u.status === 'failed' && u.last_error) && (
-              <div style={{
-                padding: 'var(--space-3) var(--space-4)',
-                background: 'rgba(239, 68, 68, 0.08)',
-                borderRadius: 'var(--radius-md)',
-                marginBottom: 'var(--space-4)',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 'var(--space-3)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-              }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-error)" strokeWidth="2" style={{ marginTop: '2px', flexShrink: 0 }}>
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="8" x2="12" y2="12" />
-                  <line x1="12" y1="16" x2="12.01" y2="16" />
-                </svg>
-                <div style={{ flex: 1 }}>
-                  <span style={{ color: 'var(--color-error)', fontWeight: 500, fontSize: 'var(--text-sm)' }}>
-                    {t('labels.urlManagement.crawlError') || 'Crawl errors occurred'}
-                  </span>
-                  <div style={{ marginTop: 'var(--space-1)' }}>
-                    {urls
-                      .filter(u => u.status === 'failed' && u.last_error)
-                      .slice(0, 3)
-                      .map(u => (
-                        <p key={u.id} style={{
+          {/* Crawl error banner */}
+          {!crawlPolling &&
+            urls.some((u) => u.status === 'failed' && u.last_error) && (
+              <div
+                style={{
+                  padding: 'var(--space-3) var(--space-4)',
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  borderRadius: 'var(--radius-md)',
+                  marginBottom: 'var(--space-4)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                }}
+              >
+                <span
+                  style={{
+                    color: 'var(--color-error)',
+                    fontWeight: 500,
+                    fontSize: 'var(--text-sm)',
+                  }}
+                >
+                  {t('labels.urlManagement.crawlError')}
+                </span>
+                <div style={{ marginTop: 'var(--space-1)' }}>
+                  {urls
+                    .filter((u) => u.status === 'failed' && u.last_error)
+                    .slice(0, 3)
+                    .map((u) => (
+                      <p
+                        key={u.id}
+                        style={{
                           fontSize: 'var(--text-xs)',
                           color: 'var(--color-text-secondary)',
                           margin: '2px 0',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
-                        }}>
-                          {u.url}: {u.last_error}
-                        </p>
-                      ))}
-                    {urls.filter(u => u.status === 'failed' && u.last_error).length > 3 && (
-                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                        +{urls.filter(u => u.status === 'failed' && u.last_error).length - 3} more...
+                        }}
+                      >
+                        {u.url}: {u.last_error}
                       </p>
-                    )}
-                  </div>
+                    ))}
                 </div>
               </div>
             )}
 
-            <div style={{
+          <div
+            style={{
               maxHeight: '600px',
               overflow: 'auto',
               display: 'flex',
               flexDirection: 'column',
               gap: 'var(--space-3)',
-            }}>
-              {urls.length === 0 ? (
-                <div style={{
+            }}
+          >
+            {urls.length === 0 ? (
+              <div
+                style={{
                   textAlign: 'center',
                   padding: 'var(--space-12)',
                   color: 'var(--color-text-muted)',
-                }}>
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: '0 auto var(--space-4)' }}>
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                  </svg>
-                  <p style={{ fontSize: 'var(--text-base)' }}>{t('labels.urlManagement.noUrls')}</p>
-                  <p style={{ fontSize: 'var(--text-sm)', marginTop: 'var(--space-2)' }}>{t('labels.urlManagement.pleaseAddUrl')}</p>
-                </div>
-              ) : (
-                urls.map((url) => (
+                }}
+              >
+                <p style={{ fontSize: 'var(--text-base)' }}>
+                  {t('labels.urlManagement.noUrls')}
+                </p>
+                <p
+                  style={{
+                    fontSize: 'var(--text-sm)',
+                    marginTop: 'var(--space-2)',
+                  }}
+                >
+                  {t('labels.urlManagement.pleaseAddUrl')}
+                </p>
+              </div>
+            ) : (
+              urls.map((url) => (
+                <div
+                  key={url.id}
+                  style={{
+                    padding: 'var(--space-4)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
                   <div
-                    key={url.id}
-                    className="liquid-glass-card"
                     style={{
-                      padding: 'var(--space-4)',
-                      borderRadius: 'var(--radius-md)',
-                    }}
-                  >
-                    <div style={{
                       display: 'flex',
                       flexDirection: isMobile ? 'column' : 'row',
                       alignItems: isMobile ? 'stretch' : 'flex-start',
                       justifyContent: 'space-between',
                       gap: 'var(--space-4)',
-                    }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
                           display: 'flex',
                           alignItems: 'center',
                           gap: 'var(--space-2)',
                           marginBottom: 'var(--space-2)',
                           flexWrap: 'wrap',
-                        }}>
-                          <span className={getStatusBadge(url.status).className}>
-                            {getStatusBadge(url.status).label}
+                        }}
+                      >
+                        <span className={getStatusBadge(url.status).className}>
+                          {getStatusBadge(url.status).label}
+                        </span>
+                        {getIndexStatusBadge(url) && (
+                          <span className={getIndexStatusBadge(url)!.className}>
+                            {getIndexStatusBadge(url)!.label}
                           </span>
-                          {getIndexStatusBadge(url) && (
-                            <span className={getIndexStatusBadge(url)!.className}>
-                              {getIndexStatusBadge(url)!.label}
-                            </span>
-                          )}
-                          {url.status === 'success' && !url.is_indexed && (
-                            <button
-                              onClick={handleRebuildIndex}
-                              className="btn-ghost"
-                              style={{
-                                fontSize: 'var(--text-xs)',
-                                padding: '2px 8px',
-                                color: 'var(--color-accent-primary)',
-                              }}
-                              title="Rebuild index"
-                            >
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M23 4v6h-6M1 20v-6h6" />
-                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                              </svg>
-                              Reindex
-                            </button>
-                          )}
-                        </div>
-                        <a
-                          href={url.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        )}
+                        {url.status === 'success' && !url.is_indexed && (
+                          <button
+                            onClick={handleRebuildIndex}
+                            className="btn-ghost"
+                            style={{
+                              fontSize: 'var(--text-xs)',
+                              padding: '2px 8px',
+                              color: 'var(--color-accent-primary)',
+                              minHeight: '44px',
+                            }}
+                          >
+                            {t('buttons.rebuild')}
+                          </button>
+                        )}
+                      </div>
+                      <a
+                        href={url.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          fontSize: 'var(--text-sm)',
+                          color: 'var(--color-accent-primary)',
+                          textDecoration: 'none',
+                          display: 'block',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {url.url}
+                      </a>
+                      {url.title && (
+                        <p
                           style={{
-                            fontSize: 'var(--text-sm)',
-                            color: 'var(--color-accent-primary)',
-                            textDecoration: 'none',
-                            display: 'block',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {url.url}
-                        </a>
-                        {url.title && (
-                          <p style={{
                             fontSize: 'var(--text-sm)',
                             color: 'var(--color-text-secondary)',
                             marginTop: 'var(--space-1)',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
-                          }}>
-                            {url.title}
-                          </p>
-                        )}
-                        {url.last_fetch_at && (
-                          <p style={{
+                          }}
+                        >
+                          {url.title}
+                        </p>
+                      )}
+                      {url.last_fetch_at && (
+                        <p
+                          style={{
                             fontSize: 'var(--text-xs)',
                             color: 'var(--color-text-muted)',
                             marginTop: 'var(--space-2)',
-                          }}>
-                            {t('labels.urlManagement.lastFetch')}: {new Date(url.last_fetch_at).toLocaleString()}
-                          </p>
-                        )}
-                        {/* Indexing error display */}
-                        {url.status === 'success' && !url.is_indexed && url.indexing_error && (
-                          <p style={{
-                            fontSize: 'var(--text-xs)',
-                            color: 'var(--color-error)',
-                            marginTop: 'var(--space-2)',
-                            padding: 'var(--space-1) var(--space-2)',
-                            background: 'rgba(239, 68, 68, 0.1)',
-                            borderRadius: 'var(--radius-sm)',
-                            borderLeft: '2px solid var(--color-error)',
-                          }}>
+                          }}
+                        >
+                          {t('labels.urlManagement.lastFetch')}:{' '}
+                          {new Date(url.last_fetch_at).toLocaleString()}
+                        </p>
+                      )}
+                      {/* Indexing error display */}
+                      {url.status === 'success' &&
+                        !url.is_indexed &&
+                        url.indexing_error && (
+                          <p
+                            style={{
+                              fontSize: 'var(--text-xs)',
+                              color: 'var(--color-error)',
+                              marginTop: 'var(--space-2)',
+                              padding: 'var(--space-1) var(--space-2)',
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              borderRadius: 'var(--radius-sm)',
+                              borderLeft: '2px solid var(--color-error)',
+                            }}
+                          >
                             {url.indexing_error}
                           </p>
                         )}
-                        {/* Fetch error display */}
-                        {url.status === 'failed' && url.last_error && (
-                          <p style={{
+                      {/* Fetch error display */}
+                      {url.status === 'failed' && url.last_error && (
+                        <p
+                          style={{
                             fontSize: 'var(--text-xs)',
                             color: 'var(--color-error)',
                             marginTop: 'var(--space-2)',
@@ -1338,68 +1507,54 @@ export default function URLManagement() {
                             background: 'rgba(239, 68, 68, 0.1)',
                             borderRadius: 'var(--radius-sm)',
                             borderLeft: '2px solid var(--color-error)',
-                          }}>
-                            {url.last_error}
-                          </p>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => handleDelete(url.id)}
-                        disabled={deletingUrlId === url.id}
-                        className="btn-ghost"
-                        style={{
-                          color: 'var(--color-error)',
-                          padding: isMobile ? '10px 12px' : 'var(--space-2)',
-                          opacity: deletingUrlId === url.id ? 0.5 : 1,
-                          cursor: deletingUrlId === url.id ? 'not-allowed' : 'pointer',
-                          minHeight: isMobile ? '44px' : undefined,
-                          minWidth: isMobile ? '44px' : undefined,
-                          alignSelf: isMobile ? 'flex-end' : 'auto',
-                        }}
-                      >
-                        {deletingUrlId === url.id ? (
-                          <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                        ) : (
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                          </svg>
-                        )}
-                      </button>
+                          }}
+                        >
+                          {url.last_error}
+                        </p>
+                      )}
                     </div>
+                    <button
+                      onClick={() => handleDelete(url.id)}
+                      disabled={deletingUrlId === url.id}
+                      className="btn-ghost"
+                      aria-label={t('buttons.delete')}
+                      style={{
+                        color: 'var(--color-error)',
+                        padding: 'var(--space-2)',
+                        opacity: deletingUrlId === url.id ? 0.5 : 1,
+                        cursor:
+                          deletingUrlId === url.id ? 'not-allowed' : 'pointer',
+                        minHeight: '44px',
+                        minWidth: '44px',
+                        alignSelf: isMobile ? 'flex-end' : 'auto',
+                      }}
+                    >
+                      {deletingUrlId === url.id ? (
+                        <div
+                          className="spinner"
+                          style={{ width: '14px', height: '14px' }}
+                        />
+                      ) : (
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      )}
+                    </button>
                   </div>
-                ))
-              )}
-            </div>
+                </div>
+              ))
+            )}
           </div>
-
-          {/* Sources Summary - Desktop: right side, Mobile: bottom */}
-          {!isMobile && !isTablet && agentId && (
-            <div style={{ position: 'sticky', top: 'var(--space-8)', gridColumn: '3', gridRow: '1' }}>
-              <SourcesSummary
-                agentId={agentId}
-                refreshTrigger={refreshTrigger}
-              />
-            </div>
-          )}
         </div>
-
-        {/* Mobile: Sources Summary at bottom */}
-        {(isMobile || isTablet) && agentId && (
-          <div style={{ marginTop: 'var(--space-6)', gridColumn: isTablet ? '1 / span 2' : 'auto' }}>
-            <SourcesSummary
-              agentId={agentId}
-              refreshTrigger={refreshTrigger}
-            />
-          </div>
-        )}
       </div>
-        </KBSetupGuard>
-      ) : (
-        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', textAlign: 'center' }}>
-          <div className="spinner" />
-        </div>
-      )}
-    </AdminLayout>
+    </section>
   );
 }

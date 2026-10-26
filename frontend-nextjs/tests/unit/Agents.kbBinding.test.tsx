@@ -251,24 +251,36 @@ describe("Agents knowledge-base column", () => {
 // --- Agent-scoped knowledge page and the knowledge guard ---------------------
 // Both live in the same file set as the list view above: they are the same
 // binding surface, just entered from a single agent.
+//
+// `/agents/:agentId/knowledge` is now a redirect-only view (KnowledgeBaseSetup):
+// it reads kbStatus(agentId) and forwards to the bound KB source page, or to
+// the KB list with `?bindAgent=` when the agent has no KB. The inline wizard
+// that used to live here is gone; the assertions below describe the redirect.
 
-function renderAgentKnowledgePage() {
+function renderAgentKnowledgePage(agentId = "agt_bound") {
 	const router = createMemoryRouter(
 		[
 			{
 				path: "/agents/:agentId/knowledge",
 				element: <KnowledgeBaseSetup />,
 			},
-			{ path: "/knowledge-bases", element: <div>KnowledgeBasesPage</div> },
+			{
+				path: "/knowledge-bases",
+				element: <div>KnowledgeBasesPage</div>,
+			},
+			{
+				path: "/knowledge-bases/:kbId",
+				element: <div>KnowledgeBaseDetailPage</div>,
+			},
 		],
-		{ initialEntries: ["/agents/agt_bound/knowledge"] },
+		{ initialEntries: [`/agents/${agentId}/knowledge`] },
 	);
 	render(<RouterProvider router={router} />);
 	return router;
 }
 
 describe("agent knowledge page", () => {
-	it("shows the bound knowledge base with its config and a link to the KB list", async () => {
+	it("redirects a bound agent to its knowledge-base source page", async () => {
 		mockedApi.kbStatus.mockResolvedValue({
 			agent_id: "agt_bound",
 			kb_id: "kb_bound",
@@ -281,34 +293,39 @@ describe("agent knowledge page", () => {
 				status: "active",
 			},
 		});
-		mockedApi.getKnowledgeBase.mockResolvedValue({
-			...unboundKb,
-			id: "kb_bound",
-			name: "Product Docs",
-			embedding_provider: "siliconflow",
-			embedding_model: "BAAI/bge-m3",
-			document_count: 4,
-			ready_document_count: 3,
-			total_chunks: 21,
-			bound_agent: { id: "agt_bound", name: "Bound Agent" },
+
+		const router = renderAgentKnowledgePage("agt_bound");
+
+		await waitFor(() => {
+			expect(router.state.location.pathname).toBe("/knowledge-bases/kb_bound");
 		});
-
-		renderAgentKnowledgePage();
-
-		await screen.findByText("Product Docs");
-		expect(mockedApi.getKnowledgeBase).toHaveBeenCalledWith("kb_bound");
-		expect(screen.getByText("3/4")).toBeInTheDocument();
-		expect(screen.getByText("21")).toBeInTheDocument();
-		expect(screen.getByTestId("kb-unbind")).toBeInTheDocument();
-		expect(
-			screen.getByRole("link", { name: "knowledgeBases.openList" }),
-		).toHaveAttribute("href", "/knowledge-bases");
-		// The wizard and its reset dialog are gone from this page.
+		expect(mockedApi.kbStatus).toHaveBeenCalledWith("agt_bound");
+		// The legacy agent-scoped inline wizard/config surface is gone.
 		expect(screen.queryByTestId("kb-wizard")).not.toBeInTheDocument();
-		expect(mockedApi.resetKnowledgeBase).not.toHaveBeenCalled();
+		expect(screen.queryByTestId("kb-unbind")).not.toBeInTheDocument();
+		expect(mockedApi.getKnowledgeBase).not.toHaveBeenCalled();
 	});
 
-	it("unbinds the agent's knowledge base from the page", async () => {
+	it("redirects an unbound agent to the KB list with the bind query", async () => {
+		mockedApi.kbStatus.mockResolvedValue({
+			agent_id: "agt_free",
+			kb_id: null,
+			kb_setup_completed: false,
+			kb: null,
+		});
+
+		const router = renderAgentKnowledgePage("agt_free");
+
+		await waitFor(() => {
+			expect(router.state.location.pathname).toBe("/knowledge-bases");
+		});
+		expect(router.state.location.search).toContain("bindAgent=agt_free");
+		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
+		expect(screen.queryByTestId("kb-bind-existing")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("kb-bind-submit")).not.toBeInTheDocument();
+	});
+
+	it("no longer renders the inline wizard and never unbinds from this page", async () => {
 		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 		mockedApi.kbStatus.mockResolvedValue({
 			agent_id: "agt_bound",
@@ -322,66 +339,19 @@ describe("agent knowledge page", () => {
 				status: "active",
 			},
 		});
-		mockedApi.getKnowledgeBase.mockResolvedValue({
-			...unboundKb,
-			id: "kb_bound",
-			name: "Product Docs",
-		});
-		mockedApi.bindAgentKnowledgeBase.mockResolvedValue({
-			agent: { ...boundAgent, kb_id: null },
-			knowledge_base: null,
-		});
 
-		renderAgentKnowledgePage();
-		await screen.findByText("Product Docs");
-		fireEvent.click(screen.getByTestId("kb-unbind"));
+		const router = renderAgentKnowledgePage("agt_bound");
 
 		await waitFor(() => {
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_bound",
-				null,
-			);
+			expect(router.state.location.pathname).toBe("/knowledge-bases/kb_bound");
 		});
+		expect(screen.queryByTestId("kb-wizard")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("kb-unbind")).not.toBeInTheDocument();
+		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
+		expect(mockedApi.resetKnowledgeBase).not.toHaveBeenCalled();
+		expect(mockedApi.getKnowledgeBase).not.toHaveBeenCalled();
+		expect(confirmSpy).not.toHaveBeenCalled();
 		confirmSpy.mockRestore();
-	});
-
-	it("binds an existing unbound knowledge base for an agent without one", async () => {
-		mockedApi.kbStatus.mockResolvedValue({
-			agent_id: "agt_bound",
-			kb_id: null,
-			kb_setup_completed: false,
-			kb: null,
-		});
-		mockedApi.listKnowledgeBases.mockResolvedValue({
-			knowledge_bases: [
-				unboundKb,
-				{ ...unboundKb, id: "kb_other", name: "Taken KB", bound_agent: { id: "agt_2", name: "Other" } },
-				{ ...unboundKb, id: "kb_error", name: "Broken KB", status: "error" },
-			],
-			total: 3,
-		});
-
-		renderAgentKnowledgePage();
-
-		const bindButton = await screen.findByTestId("kb-bind-existing");
-		expect(screen.getByText("kb.setupRequired")).toBeInTheDocument();
-		fireEvent.click(bindButton);
-		const select = await screen.findByLabelText("knowledgeBases.bindTitle");
-		const optionValues = Array.from(
-			(select as HTMLSelectElement).options,
-		).map((option) => option.value);
-		expect(optionValues).toEqual(["", "kb_free"]);
-		fireEvent.change(select, {
-			target: { value: "kb_free" },
-		});
-		fireEvent.click(screen.getByTestId("kb-bind-submit"));
-
-		await waitFor(() => {
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_bound",
-				"kb_free",
-			);
-		});
 	});
 });
 
@@ -436,7 +406,7 @@ describe("KBSetupGuard", () => {
 		expect(screen.getByText("guarded content")).toBeInTheDocument();
 	});
 
-	it("blocking mode routes to the KB list and the agent knowledge page", async () => {
+	it("blocking mode links to the KB list and offers no agent knowledge page link", async () => {
 		mockedApi.kbStatus.mockResolvedValue({
 			agent_id: "agt_bound",
 			kb_id: null,
@@ -448,10 +418,11 @@ describe("KBSetupGuard", () => {
 		expect(
 			await screen.findByRole("link", { name: "kb.guardOpenList" }),
 		).toHaveAttribute("href", "/knowledge-bases");
+		// Setup happens in /knowledge-bases now; the agent knowledge page link
+		// (and the inline wizard it used to open) is gone.
 		expect(
-			screen.getByRole("link", { name: "kb.guardAgentPage" }),
-		).toHaveAttribute("href", "/agents/agt_bound/knowledge");
-		// The wizard modal never appears in the render tree.
+			screen.queryByRole("link", { name: "kb.guardAgentPage" }),
+		).not.toBeInTheDocument();
 		expect(screen.queryByTestId("kb-wizard")).not.toBeInTheDocument();
 		expect(screen.queryByText("guarded content")).not.toBeInTheDocument();
 	});

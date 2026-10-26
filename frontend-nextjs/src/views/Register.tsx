@@ -121,6 +121,8 @@ export const Register = () => {
 
 	return (
 		<div
+			className="auth-page"
+			data-testid="register-page"
 			style={{
 				minHeight: "100vh",
 				display: "flex",
@@ -128,6 +130,7 @@ export const Register = () => {
 				justifyContent: "center",
 				padding: "var(--space-6)",
 				position: "relative",
+				minWidth: 0,
 			}}
 		>
 			{/* Liquid blob background */}

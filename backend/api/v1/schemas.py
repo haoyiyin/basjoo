@@ -367,8 +367,6 @@ class AgentConfig(BaseModel):
     workspace_id: Optional[int] = None
     name: str
     description: Optional[str] = None
-    agent_type: str = Field(default="website_support")
-    channel_mode: str = Field(default="web_widget")
     avatar: Optional[str] = None
     system_prompt: str
     model: str
@@ -486,10 +484,6 @@ class AgentUpdateRequest(BaseModel):
         return _validate_agent_name(value)
 
     description: Optional[str] = Field(None, max_length=200)
-    agent_type: Optional[
-        Literal["website_support", "ai_clone", "sales_outreach", "custom"]
-    ] = None
-    channel_mode: Optional[Literal["web_widget", "whatsapp", "email", "custom"]] = None
     avatar: Optional[str] = Field(None, max_length=500)
     system_prompt: Optional[str] = Field(None, min_length=1)
     model: Optional[str] = Field(None, min_length=1)
@@ -620,10 +614,6 @@ class AgentCreateRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=12)
     description: str | None = Field(None, max_length=200)
-    agent_type: Literal["website_support", "ai_clone", "sales_outreach", "custom"] = (
-        "website_support"
-    )
-    channel_mode: Literal["web_widget", "whatsapp", "email", "custom"] = "web_widget"
 
     @field_validator("name", mode="before")
     @classmethod
@@ -708,6 +698,16 @@ class URLCancelResponse(BaseModel):
     cancelled: int
     task_ids: List[str]
     message: str
+
+# ========== KB-scoped source schemas ==========
+
+class KbIndexStatusResponse(BaseModel):
+    """Index task status for one knowledge base (kb-scoped twin of IndexStatusResponse)"""
+
+    kb_id: str
+    job_id: Optional[str] = None
+    status: str
+    result: Optional[Dict[str, Any]] = None
 
 
 # ========== Quota Schemas ==========

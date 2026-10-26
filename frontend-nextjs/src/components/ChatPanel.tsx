@@ -31,6 +31,7 @@ interface ChatPanelProps {
 	input: string;
 	isLoading: boolean;
 	isSettingsSaving?: boolean;
+	sendDisabled?: boolean;
 	agent: Agent | null;
 	onInputChange: (value: string) => void;
 	onSendMessage: () => void;
@@ -155,6 +156,7 @@ function ChatPanel({
 	input,
 	isLoading,
 	isSettingsSaving = false,
+	sendDisabled = false,
 	agent,
 	onInputChange,
 	onSendMessage,
@@ -772,7 +774,7 @@ function ChatPanel({
 					<button
 						onClick={onSendMessage}
 						aria-label={t("buttons.send")}
-						disabled={isLoading || isSettingsSaving || !input.trim()}
+						disabled={isLoading || isSettingsSaving || sendDisabled || !input.trim()}
 						style={{
 							padding: "var(--space-3) var(--space-5)",
 							background: "var(--color-accent-gradient)",
@@ -782,15 +784,18 @@ function ChatPanel({
 							fontWeight: 600,
 							fontSize: "var(--text-sm)",
 							cursor:
-								isLoading || isSettingsSaving || !input.trim()
+								isLoading || isSettingsSaving || sendDisabled || !input.trim()
 									? "not-allowed"
 									: "pointer",
-							opacity: isLoading || isSettingsSaving || !input.trim() ? 0.5 : 1,
+							opacity:
+								isLoading || isSettingsSaving || sendDisabled || !input.trim()
+									? 0.5
+									: 1,
 							display: "flex",
 							alignItems: "center",
 							gap: "var(--space-2)",
 							boxShadow:
-								isLoading || isSettingsSaving || !input.trim()
+								isLoading || isSettingsSaving || sendDisabled || !input.trim()
 									? "none"
 									: "0 0 20px hsla(188deg, 90%, 50%, 0.3)",
 							transition: "all var(--transition-fast)",

@@ -195,9 +195,22 @@ def test_empty_model_string_falls_back_to_default(provider_type):
     assert service.model == EXPECTED_DEFAULTS[provider_type][0]
 
 
-def test_missing_api_key_still_returns_mock_service():
-    """没有 api key 时的 mock 兜底逻辑不应被本次改动破坏。"""
-    service = get_llm_service(api_key="", model=None, provider_type="moonshot")
+def test_missing_api_key_raises_instead_of_returning_mock():
+    """The production path must never fall through to Mock (issue #19).
+
+    Wave 1 changed `get_llm_service` so that ``use_mock=False`` + no key raises
+    ``ValueError("api_key required")``. This file used to pin the old silent
+    Mock fallback and was deliberately left RED for the api-surface lane.
+    """
+    with pytest.raises(ValueError, match="api_key required"):
+        get_llm_service(api_key="", model=None, provider_type="moonshot")
+
+
+def test_explicit_mock_still_returns_mock_service():
+    """`use_mock=True` remains the only way to get a Mock service."""
+    service = get_llm_service(
+        use_mock=True, api_key="", model=None, provider_type="moonshot"
+    )
 
     assert isinstance(service, MockLLMService)
 

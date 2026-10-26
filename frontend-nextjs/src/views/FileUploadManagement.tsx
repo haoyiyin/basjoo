@@ -5,77 +5,60 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { api } from "../services/api";
 import type { FileItem } from "../services/api";
-import AdminLayout from "../components/AdminLayout";
-import KBSetupGuard from "../components/KBSetupGuard";
 import { useIsMobile } from "../hooks/useMediaQuery";
-import SourcesSummary from "../components/SourcesSummary";
 
-interface TaskStatus {
-	is_crawling: boolean;
-	is_rebuilding: boolean;
-	can_modify_index: boolean;
-	active_tasks: string[];
-}
-
+/**
+ * File source panel for one knowledge base.
+ *
+ * Embedded by `KnowledgeBaseDetail` on `/knowledge-bases/:kbId`: it takes the KB
+ * id from the route and uses only the canonical kb-scoped source routes, so an
+ * unbound KB can ingest files with no agent involved.
+ */
 export default function FileUploadManagement() {
 	const { t } = useTranslation("common");
-	const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
+	const { kbId } = useParams<{ kbId: string }>();
 	const isMobile = useIsMobile();
-	const [agentId, setAgentId] = useState<string | null>(null);
 	const [files, setFiles] = useState<FileItem[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 	const [uploading, setUploading] = useState(false);
 	const [uploadProgress, setUploadProgress] = useState<string | null>(null);
-	const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
-	const [refreshTrigger, setRefreshTrigger] = useState(0);
 	const [clearing, setClearing] = useState(false);
 	const [showClearConfirm, setShowClearConfirm] = useState(false);
 	const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 	const [dragActive, setDragActive] = useState(false);
-	const taskStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
-	const filesPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-	const isMountedRef = useRef(false);
+	const filesPollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+		null,
+	);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
-	useEffect(() => {
-		loadDefaultAgent();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [routeAgentId]);
-
-	const loadDefaultAgent = async () => {
-		try {
-			if (!routeAgentId) return;
-			const data = await api.getAgent(routeAgentId);
-			setAgentId(data.id);
-		} catch (error) {
-			alert(
-				`${t("errors.loadAgentFailed")}: ${error instanceof Error ? error.message : t("errors.unknown")}`,
-			);
-		}
-	};
-
 	const loadFiles = useCallback(async () => {
-		if (!agentId) return;
+		if (!kbId) return;
 		setLoading(true);
 		try {
-			const data = await api.listFiles(agentId);
+			const data = await api.listKbFiles(kbId);
 			setFiles(data.files);
-		} catch (error) {
-			alert(
-				`${t("errors.loadFailed")}: ${error instanceof Error ? error.message : t("errors.unknown")}`,
+			setError(null);
+		} catch (err) {
+			setError(
+				`${t("errors.loadFailed")}: ${err instanceof Error ? err.message : t("errors.unknown")}`,
 			);
 		} finally {
 			setLoading(false);
 		}
-	}, [agentId, t]);
+	}, [kbId, t]);
 
-	// Stable refs for functions used inside interval callbacks.
-	const agentIdRef = useRef(agentId);
-	agentIdRef.current = agentId;
+	// Stable ref so the polling interval always calls the newest loader.
 	const loadFilesRef = useRef(loadFiles);
 	loadFilesRef.current = loadFiles;
 
-	// File status polling - auto-refresh when files are processing/pending
+	useEffect(() => {
+		if (kbId) {
+			void loadFiles();
+		}
+	}, [kbId, loadFiles]);
+
+	// File status polling - auto-refresh while any file is still processing.
 	useEffect(() => {
 		const hasProcessingFiles = files.some(
 			(f) => f.status === "processing" || f.status === "pending",
@@ -84,7 +67,7 @@ export default function FileUploadManagement() {
 		if (hasProcessingFiles && !filesPollingIntervalRef.current) {
 			let pollCount = 0;
 			const maxPolls = 100; // Safety limit to prevent infinite polling
-			filesPollingIntervalRef.current = setInterval(async () => {
+			filesPollingIntervalRef.current = setInterval(() => {
 				pollCount++;
 				if (pollCount > maxPolls) {
 					if (filesPollingIntervalRef.current) {
@@ -93,19 +76,17 @@ export default function FileUploadManagement() {
 					}
 					return;
 				}
-				await loadFilesRef.current();
-				setRefreshTrigger((prev) => prev + 1);
+				void loadFilesRef.current();
 			}, 3000);
 		} else if (!hasProcessingFiles && filesPollingIntervalRef.current) {
 			clearInterval(filesPollingIntervalRef.current);
 			filesPollingIntervalRef.current = null;
 		}
 
-		// Note: No cleanup here to avoid clearing interval on files change
-		// The interval is managed by the conditions above
+		// Note: no cleanup here — the interval is managed by the condition above.
 	}, [files]);
 
-	// Cleanup files polling interval on unmount
+	// Cleanup on unmount.
 	useEffect(() => {
 		return () => {
 			if (filesPollingIntervalRef.current) {
@@ -114,49 +95,6 @@ export default function FileUploadManagement() {
 			}
 		};
 	}, []);
-
-	useEffect(() => {
-		isMountedRef.current = true;
-		if (agentId) {
-			let pollCount = 0;
-			const maxPolls = 100; // Safety limit to prevent infinite polling
-
-			void loadFilesRef.current();
-			const pollTaskStatus = async () => {
-				if (!isMountedRef.current || !agentIdRef.current) return;
-				pollCount++;
-				if (pollCount > maxPolls) {
-					if (taskStatusIntervalRef.current) {
-						clearInterval(taskStatusIntervalRef.current);
-						taskStatusIntervalRef.current = null;
-					}
-					return;
-				}
-				try {
-					const status = await api.getTasksStatus(agentIdRef.current);
-					if (!isMountedRef.current) return;
-					setTaskStatus((prev) => ({
-						...prev,
-						is_crawling: status.is_crawling ?? false,
-						is_rebuilding: status.is_rebuilding ?? false,
-						can_modify_index: status.can_modify_index ?? true,
-						active_tasks: status.active_tasks ?? [],
-					}));
-				} catch (error) {
-					console.error("Failed to poll task status:", error);
-				}
-			};
-			void pollTaskStatus();
-			taskStatusIntervalRef.current = setInterval(pollTaskStatus, 3000);
-		}
-		return () => {
-			isMountedRef.current = false;
-			if (taskStatusIntervalRef.current) {
-				clearInterval(taskStatusIntervalRef.current);
-				taskStatusIntervalRef.current = null;
-			}
-		};
-	}, [agentId]);
 
 	const handleDrag = (e: React.DragEvent) => {
 		e.preventDefault();
@@ -173,23 +111,23 @@ export default function FileUploadManagement() {
 		e.stopPropagation();
 		setDragActive(false);
 		if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-			handleFiles(Array.from(e.dataTransfer.files));
+			void handleFiles(Array.from(e.dataTransfer.files));
 		}
 	};
 
 	const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files && e.target.files.length > 0) {
-			handleFiles(Array.from(e.target.files));
+			void handleFiles(Array.from(e.target.files));
 		}
 	};
 
 	const handleFiles = async (selectedFiles: File[]) => {
-		if (!agentId || selectedFiles.length === 0) return;
+		if (!kbId || selectedFiles.length === 0) return;
 
 		setUploading(true);
 		setUploadProgress(t("files.uploading", { count: selectedFiles.length }));
 		try {
-			const result = await api.uploadFiles(agentId, selectedFiles);
+			const result = await api.uploadKbFiles(kbId, selectedFiles);
 			if (result.failed > 0) {
 				alert(
 					t("files.uploadPartial", {
@@ -199,10 +137,9 @@ export default function FileUploadManagement() {
 				);
 			}
 			await loadFiles();
-			setRefreshTrigger((prev) => prev + 1);
-		} catch (error) {
+		} catch (err) {
 			alert(
-				`${t("files.uploadFailed")}: ${error instanceof Error ? error.message : t("errors.unknown")}`,
+				`${t("files.uploadFailed")}: ${err instanceof Error ? err.message : t("errors.unknown")}`,
 			);
 		} finally {
 			setUploading(false);
@@ -214,17 +151,16 @@ export default function FileUploadManagement() {
 	};
 
 	const handleDelete = async (fileId: string) => {
-		if (!agentId) return;
+		if (!kbId) return;
 		if (!confirm(t("files.confirmDelete"))) return;
 
 		setDeletingFileId(fileId);
 		try {
-			await api.deleteFile(agentId, fileId);
+			await api.deleteKbFile(kbId, fileId);
 			await loadFiles();
-			setRefreshTrigger((prev) => prev + 1);
-		} catch (error) {
+		} catch (err) {
 			alert(
-				`${t("errors.deleteFailed")}: ${error instanceof Error ? error.message : t("errors.unknown")}`,
+				`${t("errors.deleteFailed")}: ${err instanceof Error ? err.message : t("errors.unknown")}`,
 			);
 		} finally {
 			setDeletingFileId(null);
@@ -232,24 +168,27 @@ export default function FileUploadManagement() {
 	};
 
 	const handleClearAll = () => {
-		if (!agentId) return;
+		if (!kbId) return;
 		if (files.length === 0) return;
 		setShowClearConfirm(true);
 	};
 
 	const confirmClearAll = async () => {
-		if (!agentId) return;
+		if (!kbId) return;
 
 		setClearing(true);
 		try {
-			const result = await api.clearAllFiles(agentId);
+			const result = await api.clearKbFiles(kbId);
 			setShowClearConfirm(false);
 			await loadFiles();
-			setRefreshTrigger((prev) => prev + 1);
-			alert(t("files.clearSuccess", { count: result.deleted_count }));
-		} catch (error) {
 			alert(
-				`${t("files.clearFailed")}: ${error instanceof Error ? error.message : t("errors.unknown")}`,
+				t("files.clearSuccess", {
+					count: result.deleted_count ?? 0,
+				}),
+			);
+		} catch (err) {
+			alert(
+				`${t("files.clearFailed")}: ${err instanceof Error ? err.message : t("errors.unknown")}`,
 			);
 		} finally {
 			setClearing(false);
@@ -279,42 +218,6 @@ export default function FileUploadManagement() {
 				</svg>
 			);
 		}
-		if (type.includes("csv") || type.includes("json")) {
-			return (
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-				>
-					<rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-					<line x1="3" y1="9" x2="21" y2="9" />
-					<line x1="3" y1="15" x2="21" y2="15" />
-					<line x1="9" y1="3" x2="9" y2="21" />
-				</svg>
-			);
-		}
-		if (type.includes("doc")) {
-			return (
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-				>
-					<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-					<polyline points="14 2 14 8 20 8" />
-					<line x1="16" y1="13" x2="8" y2="13" />
-					<line x1="16" y1="17" x2="8" y2="17" />
-					<polyline points="10 9 9 9 8 9" />
-				</svg>
-			);
-		}
-		// Default text file icon
 		return (
 			<svg
 				width="16"
@@ -348,625 +251,522 @@ export default function FileUploadManagement() {
 	};
 
 	return (
-		<AdminLayout>
-			{agentId ? (
-				<KBSetupGuard agentId={agentId} mode="banner">
-					{showClearConfirm && (
-						<div
-							style={{
-								position: "fixed",
-								inset: 0,
-								background: "rgba(15, 23, 42, 0.6)",
-								backdropFilter: "blur(8px)",
-								WebkitBackdropFilter: "blur(8px)",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								padding: "var(--space-4)",
-								zIndex: 1000,
-							}}
-						>
-							<div
-								className="glass-modal"
-								style={{
-									width: "100%",
-									maxWidth: "420px",
-									padding: "var(--space-6)",
-								}}
-							>
-								<h3
-									style={{
-										margin: 0,
-										marginBottom: "var(--space-3)",
-										fontSize: "var(--text-lg)",
-										color: "var(--color-text-primary)",
-									}}
-								>
-									{t("files.clearAll")}
-								</h3>
-								<p
-									style={{
-										margin: 0,
-										marginBottom: "var(--space-5)",
-										color: "var(--color-text-secondary)",
-										lineHeight: 1.6,
-									}}
-								>
-									{t("files.confirmClearAll")}
-								</p>
-								<div
-									style={{
-										display: "flex",
-										justifyContent: "flex-end",
-										gap: "var(--space-3)",
-									}}
-								>
-									<button
-										type="button"
-										className="btn-ghost"
-										onClick={() => setShowClearConfirm(false)}
-										disabled={clearing}
-									>
-										{t("buttons.cancel")}
-									</button>
-									<button
-										type="button"
-										className="btn-primary"
-										onClick={confirmClearAll}
-										disabled={clearing}
-										style={{
-											background: "var(--color-error)",
-											borderColor: "var(--color-error)",
-										}}
-									>
-										{clearing ? t("files.clearing") : t("buttons.confirm")}
-									</button>
-								</div>
-							</div>
-						</div>
-					)}
+		<section data-testid="kb-file-panel" className="file-panel" style={{ minWidth: 0 }}>
+			{showClearConfirm && (
+				<div
+					style={{
+						position: "fixed",
+						inset: 0,
+						background: "rgba(15, 23, 42, 0.6)",
+						backdropFilter: "blur(8px)",
+						WebkitBackdropFilter: "blur(8px)",
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+						padding: "var(--space-4)",
+						zIndex: 1000,
+					}}
+				>
 					<div
+						className="glass-modal"
 						style={{
-							padding: isMobile ? "var(--space-4)" : "var(--space-8)",
-							maxWidth: "1400px",
-							margin: "0 auto",
+							width: "100%",
+							maxWidth: "420px",
+							padding: "var(--space-6)",
 						}}
 					>
-						<header
+						<h3
 							style={{
-								marginBottom: "var(--space-8)",
-								display: "flex",
-								flexDirection: isMobile ? "column" : "row",
-								alignItems: isMobile ? "flex-start" : "center",
-								justifyContent: "space-between",
-								gap: isMobile ? "var(--space-4)" : "0",
+								margin: 0,
+								marginBottom: "var(--space-3)",
+								fontSize: "var(--text-lg)",
+								color: "var(--color-text-primary)",
 							}}
 						>
-							<div>
-								<h1
-									style={{
-										fontSize: isMobile ? "var(--text-2xl)" : "var(--text-3xl)",
-										fontWeight: 700,
-										color: "var(--color-text-primary)",
-										marginBottom: "var(--space-2)",
-									}}
-								>
-									{t("navigation.fileManagement")}
-								</h1>
-								<p
-									style={{
-										color: "var(--color-text-secondary)",
-									}}
-								>
-									{t("files.description")}
-								</p>
-							</div>
+							{t("files.clearAll")}
+						</h3>
+						<p
+							style={{
+								margin: 0,
+								marginBottom: "var(--space-5)",
+								color: "var(--color-text-secondary)",
+								lineHeight: 1.6,
+							}}
+						>
+							{t("files.confirmClearAll")}
+						</p>
+						<div
+							style={{
+								display: "flex",
+								justifyContent: "flex-end",
+								gap: "var(--space-3)",
+							}}
+						>
+							<button
+								type="button"
+								className="btn-ghost"
+								onClick={() => setShowClearConfirm(false)}
+								disabled={clearing}
+							>
+								{t("buttons.cancel")}
+							</button>
+							<button
+								type="button"
+								className="btn-primary"
+								onClick={confirmClearAll}
+								disabled={clearing}
+								style={{
+									background: "var(--color-error)",
+									borderColor: "var(--color-error)",
+								}}
+							>
+								{clearing ? t("files.clearing") : t("buttons.confirm")}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			<header style={{ marginBottom: "var(--space-6)" }}>
+				<h2
+					style={{
+						fontSize: isMobile ? "var(--text-xl)" : "var(--text-2xl)",
+						fontWeight: 700,
+						color: "var(--color-text-primary)",
+						marginBottom: "var(--space-1)",
+					}}
+				>
+					{t("navigation.fileManagement")}
+				</h2>
+				<p style={{ color: "var(--color-text-secondary)" }}>
+					{t("files.description")}
+				</p>
+			</header>
+
+			{error && (
+				<div
+					role="alert"
+					style={{
+						padding: "var(--space-3) var(--space-4)",
+						borderRadius: "var(--radius-md)",
+						fontSize: "var(--text-sm)",
+						background: "var(--color-error-bg)",
+						border: "1px solid var(--color-error)",
+						color: "var(--color-error)",
+						marginBottom: "var(--space-4)",
+					}}
+				>
+					{error}
+				</div>
+			)}
+
+			<div style={{ display: "grid", gap: "var(--space-6)", minWidth: 0 }}>
+				<div className="liquid-glass-card" style={{ padding: "var(--space-6)" }}>
+					<h3
+						style={{
+							fontSize: "var(--text-lg)",
+							fontWeight: 600,
+							marginBottom: "var(--space-5)",
+							color: "var(--color-text-primary)",
+							display: "flex",
+							alignItems: "center",
+							gap: "var(--space-3)",
+						}}
+					>
+						<svg
+							width="20"
+							height="20"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+						>
+							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+							<polyline points="17 8 12 3 7 8" />
+							<line x1="12" y1="3" x2="12" y2="15" />
+						</svg>
+						{t("files.uploadTitle")}
+					</h3>
+
+					<div
+						onDragEnter={handleDrag}
+						onDragLeave={handleDrag}
+						onDragOver={handleDrag}
+						onDrop={handleDrop}
+						onClick={() => fileInputRef.current?.click()}
+						style={{
+							border: `2px dashed ${dragActive ? "var(--color-accent-primary)" : "var(--color-border)"}`,
+							borderRadius: "var(--radius-xl)",
+							padding: isMobile ? "var(--space-5)" : "var(--space-8)",
+							textAlign: "center",
+							cursor: "pointer",
+							background: dragActive
+								? "hsla(188deg, 90%, 50%, 0.06)"
+								: "var(--color-bg-tertiary)",
+							transition: "all var(--transition-base)",
+						}}
+					>
+						<input
+							ref={fileInputRef}
+							type="file"
+							multiple
+							accept=".pdf,.txt,.md,.html,.docx,.xlsx"
+							onChange={handleFileInput}
+							style={{ display: "none" }}
+						/>
+						<svg
+							width="48"
+							height="48"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="1.5"
+							style={{
+								margin: "0 auto var(--space-4)",
+								color: "var(--color-text-muted)",
+							}}
+						>
+							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+							<polyline points="17 8 12 3 7 8" />
+							<line x1="12" y1="3" x2="12" y2="15" />
+						</svg>
+						<p
+							style={{
+								fontSize: "var(--text-base)",
+								color: "var(--color-text-primary)",
+								fontWeight: 500,
+								marginBottom: "var(--space-2)",
+							}}
+						>
+							{t("files.dropzoneText")}
+						</p>
+						<p
+							style={{
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-muted)",
+							}}
+						>
+							{t("files.supportedFormats")}
+						</p>
+					</div>
+
+					{(uploading || uploadProgress) && (
+						<div
+							style={{
+								marginTop: "var(--space-4)",
+								padding: "var(--space-3)",
+								background: "rgba(6, 182, 212, 0.1)",
+								borderRadius: "var(--radius-md)",
+								display: "flex",
+								alignItems: "center",
+								gap: "var(--space-2)",
+								color: "var(--color-accent-primary)",
+								fontSize: "var(--text-sm)",
+							}}
+						>
 							<div
+								className="spinner"
+								style={{ width: "14px", height: "14px" }}
+							/>
+							{uploadProgress ?? t("files.uploading", { count: 0 })}
+						</div>
+					)}
+				</div>
+
+				<div className="liquid-glass-card" style={{ padding: "var(--space-6)" }}>
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "space-between",
+							marginBottom: "var(--space-5)",
+							gap: "var(--space-3)",
+							flexWrap: "wrap",
+						}}
+					>
+						<h3
+							style={{
+								fontSize: "var(--text-lg)",
+								fontWeight: 600,
+								color: "var(--color-text-primary)",
+								display: "flex",
+								alignItems: "center",
+								gap: "var(--space-3)",
+							}}
+						>
+							<svg
+								width="20"
+								height="20"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+							>
+								<line x1="8" y1="6" x2="21" y2="6" />
+								<line x1="8" y1="12" x2="21" y2="12" />
+								<line x1="8" y1="18" x2="21" y2="18" />
+								<line x1="3" y1="6" x2="3.01" y2="6" />
+								<line x1="3" y1="12" x2="3.01" y2="12" />
+								<line x1="3" y1="18" x2="3.01" y2="18" />
+							</svg>
+							{t("files.fileList")}
+						</h3>
+						<div
+							style={{
+								display: "flex",
+								alignItems: "center",
+								gap: "var(--space-2)",
+								flexWrap: "wrap",
+							}}
+						>
+							{files.length > 0 && (
+								<button
+									type="button"
+									onClick={handleClearAll}
+									disabled={clearing}
+									className="btn-ghost"
+									style={{
+										display: "flex",
+										alignItems: "center",
+										gap: "var(--space-2)",
+										color: "var(--color-error)",
+										opacity: clearing ? 0.5 : 1,
+										cursor: clearing ? "not-allowed" : "pointer",
+										minHeight: "44px",
+									}}
+								>
+									{clearing ? t("files.clearing") : t("files.clearAll")}
+								</button>
+							)}
+							<button
+								onClick={() => void loadFiles()}
+								disabled={loading}
+								className="btn-ghost"
 								style={{
 									display: "flex",
 									alignItems: "center",
-									gap: "var(--space-4)",
-									flexWrap: "wrap",
-								}}
-							></div>
-						</header>
-
-						<div
-							className="responsive-grid-2"
-							style={{
-								display: "grid",
-								gridTemplateColumns: isMobile ? "1fr" : "1fr 300px",
-								gap: "var(--space-6)",
-							}}
-						>
-							<div
-								style={{
-									display: "flex",
-									flexDirection: "column",
-									gap: "var(--space-6)",
+									gap: "var(--space-2)",
+									minHeight: "44px",
 								}}
 							>
-								<div
-									className="liquid-glass-card"
-									style={{ padding: "var(--space-6)" }}
+								{loading ? (
+									<div className="spinner" />
+								) : (
+									<svg
+										width="16"
+										height="16"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+									>
+										<path d="M23 4v6h-6M1 20v-6h6" />
+										<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+									</svg>
+								)}
+								{t("buttons.refresh")}
+							</button>
+						</div>
+					</div>
+
+					<div
+						style={{
+							maxHeight: "500px",
+							overflow: "auto",
+							display: "flex",
+							flexDirection: "column",
+							gap: "var(--space-3)",
+						}}
+					>
+						{files.length === 0 ? (
+							<div
+								style={{
+									textAlign: "center",
+									padding: "var(--space-12)",
+									color: "var(--color-text-muted)",
+								}}
+							>
+								<p style={{ fontSize: "var(--text-base)" }}>
+									{t("files.noFiles")}
+								</p>
+								<p
+									style={{
+										fontSize: "var(--text-sm)",
+										marginTop: "var(--space-2)",
+									}}
 								>
-									<h2
-										style={{
-											fontSize: "var(--text-lg)",
-											fontWeight: 600,
-											marginBottom: "var(--space-6)",
-											color: "var(--color-text-primary)",
-											display: "flex",
-											alignItems: "center",
-											gap: "var(--space-3)",
-										}}
-									>
-										<svg
-											width="20"
-											height="20"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="2"
-										>
-											<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-											<polyline points="17 8 12 3 7 8" />
-											<line x1="12" y1="3" x2="12" y2="15" />
-										</svg>
-										{t("files.uploadTitle")}
-									</h2>
-
-									<div
-										onDragEnter={handleDrag}
-										onDragLeave={handleDrag}
-										onDragOver={handleDrag}
-										onDrop={handleDrop}
-										onClick={() => fileInputRef.current?.click()}
-										style={{
-											border: `2px dashed ${dragActive ? "var(--color-accent-primary)" : "var(--color-border)"}`,
-											borderRadius: "var(--radius-xl)",
-											padding: "var(--space-8)",
-											textAlign: "center",
-											cursor: "pointer",
-											background: dragActive
-												? "hsla(188deg, 90%, 50%, 0.06)"
-												: "var(--color-bg-tertiary)",
-											transition: "all var(--transition-base)",
-											transform: dragActive ? "scale(1.01)" : "scale(1)",
-											boxShadow: dragActive
-												? "inset 0 0 30px hsla(188deg, 90%, 50%, 0.08)"
-												: "none",
-										}}
-									>
-										<input
-											ref={fileInputRef}
-											type="file"
-											multiple
-											accept=".pdf,.txt,.md,.html,.docx,.xlsx"
-											onChange={handleFileInput}
-											style={{ display: "none" }}
-										/>
-										<svg
-											width="48"
-											height="48"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="1.5"
-											style={{
-												margin: "0 auto var(--space-4)",
-												color: "var(--color-text-muted)",
-											}}
-										>
-											<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-											<polyline points="17 8 12 3 7 8" />
-											<line x1="12" y1="3" x2="12" y2="15" />
-										</svg>
-										<p
-											style={{
-												fontSize: "var(--text-base)",
-												color: "var(--color-text-primary)",
-												fontWeight: 500,
-												marginBottom: "var(--space-2)",
-											}}
-										>
-											{t("files.dropzoneText")}
-										</p>
-										<p
-											style={{
-												fontSize: "var(--text-sm)",
-												color: "var(--color-text-muted)",
-											}}
-										>
-											{t("files.supportedFormats")}
-										</p>
-									</div>
-
-									{uploadProgress && (
-										<div
-											style={{
-												marginTop: "var(--space-4)",
-												padding: "var(--space-3)",
-												background: "rgba(6, 182, 212, 0.1)",
-												borderRadius: "var(--radius-md)",
-												display: "flex",
-												alignItems: "center",
-												gap: "var(--space-2)",
-												color: "var(--color-accent-primary)",
-												fontSize: "var(--text-sm)",
-											}}
-										>
-											<div
-												className="spinner"
-												style={{ width: "14px", height: "14px" }}
-											/>
-											{uploadProgress}
-										</div>
-									)}
-								</div>
-
+									{t("files.uploadHint")}
+								</p>
+							</div>
+						) : (
+							files.map((file) => (
 								<div
-									className="liquid-glass-card"
-									style={{ padding: "var(--space-6)" }}
+									key={file.id}
+									style={{
+										padding: "var(--space-4)",
+										background:
+											file.status === "ready"
+												? "var(--color-bg-tertiary)"
+												: file.status === "processing" ||
+														file.status === "uploading" ||
+														file.status === "pending"
+													? "rgba(245, 158, 11, 0.1)"
+													: "rgba(239, 68, 68, 0.1)",
+										borderRadius: "var(--radius-md)",
+										border:
+											file.status === "ready"
+												? "1px solid var(--color-border)"
+												: file.status === "processing" ||
+														file.status === "uploading" ||
+														file.status === "pending"
+													? "2px solid var(--color-warning)"
+													: "2px solid var(--color-error)",
+									}}
 								>
 									<div
 										style={{
 											display: "flex",
 											alignItems: "center",
 											justifyContent: "space-between",
-											marginBottom: "var(--space-6)",
+											gap: "var(--space-4)",
 										}}
 									>
-										<h2
-											style={{
-												fontSize: "var(--text-lg)",
-												fontWeight: 600,
-												color: "var(--color-text-primary)",
-												display: "flex",
-												alignItems: "center",
-												gap: "var(--space-3)",
-											}}
-										>
-											<svg
-												width="20"
-												height="20"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="2"
-											>
-												<line x1="8" y1="6" x2="21" y2="6" />
-												<line x1="8" y1="12" x2="21" y2="12" />
-												<line x1="8" y1="18" x2="21" y2="18" />
-												<line x1="3" y1="6" x2="3.01" y2="6" />
-												<line x1="3" y1="12" x2="3.01" y2="12" />
-												<line x1="3" y1="18" x2="3.01" y2="18" />
-											</svg>
-											{t("files.fileList")}
-										</h2>
-										<div
-											style={{
-												display: "flex",
-												alignItems: "center",
-												gap: "var(--space-2)",
-											}}
-										>
-											{files.length > 0 && (
-												<button
-													type="button"
-													onClick={handleClearAll}
-													disabled={clearing}
-													className="btn-ghost"
-													style={{
-														display: "flex",
-														alignItems: "center",
-														gap: "var(--space-2)",
-														color: "var(--color-error)",
-														opacity: clearing ? 0.5 : 1,
-														cursor: clearing ? "not-allowed" : "pointer",
-													}}
-												>
-													{clearing ? (
-														<>
-															<div
-																className="spinner"
-																style={{ width: "14px", height: "14px" }}
-															/>
-															{t("files.clearing")}
-														</>
-													) : (
-														<>
-															<svg
-																width="16"
-																height="16"
-																viewBox="0 0 24 24"
-																fill="none"
-																stroke="currentColor"
-																strokeWidth="2"
-															>
-																<polyline points="3 6 5 6 21 6" />
-																<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-															</svg>
-															{t("files.clearAll")}
-														</>
-													)}
-												</button>
-											)}
-											<button
-												onClick={() => void loadFiles()}
-												disabled={loading}
-												className="btn-ghost"
+										<div style={{ flex: 1, minWidth: 0 }}>
+											<div
 												style={{
 													display: "flex",
 													alignItems: "center",
 													gap: "var(--space-2)",
+													marginBottom: "var(--space-2)",
+													flexWrap: "wrap",
 												}}
 											>
-												{loading ? (
-													<div className="spinner" />
-												) : (
-													<svg
-														width="16"
-														height="16"
-														viewBox="0 0 24 24"
-														fill="none"
-														stroke="currentColor"
-														strokeWidth="2"
-													>
-														<path d="M23 4v6h-6M1 20v-6h6" />
-														<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-													</svg>
-												)}
-												{t("buttons.refresh")}
-											</button>
-										</div>
-									</div>
-
-									<div
-										style={{
-											maxHeight: "500px",
-											overflow: "auto",
-											display: "flex",
-											flexDirection: "column",
-											gap: "var(--space-3)",
-										}}
-									>
-										{files.length === 0 ? (
+												<span className={getStatusBadge(file.status).className}>
+													{getStatusBadge(file.status).label}
+												</span>
+												<span
+													style={{
+														display: "flex",
+														color: "var(--color-text-muted)",
+													}}
+												>
+													{getFileTypeIcon(file.file_type)}
+												</span>
+											</div>
 											<div
 												style={{
-													textAlign: "center",
-													padding: "var(--space-12)",
-													color: "var(--color-text-muted)",
+													fontSize: "var(--text-sm)",
+													fontWeight: 500,
+													color: "var(--color-text-primary)",
+													overflow: "hidden",
+													textOverflow: "ellipsis",
+													whiteSpace: "nowrap",
 												}}
 											>
+												{file.filename}
+											</div>
+											<div
+												style={{
+													display: "flex",
+													alignItems: "center",
+													gap: "var(--space-3)",
+													marginTop: "var(--space-1)",
+													flexWrap: "wrap",
+												}}
+											>
+												<span
+													style={{
+														fontSize: "var(--text-xs)",
+														color: "var(--color-text-muted)",
+													}}
+												>
+													{formatFileSize(file.file_size)}
+												</span>
+												<span
+													style={{
+														fontSize: "var(--text-xs)",
+														color: "var(--color-text-muted)",
+														textTransform: "uppercase",
+													}}
+												>
+													{file.file_type}
+												</span>
+												<span
+													style={{
+														fontSize: "var(--text-xs)",
+														color: "var(--color-text-muted)",
+													}}
+												>
+													{new Date(file.created_at).toLocaleDateString()}
+												</span>
+											</div>
+											{file.status === "failed" && (
+												<div
+													style={{
+														marginTop: "var(--space-2)",
+														padding: "var(--space-2) var(--space-3)",
+														background: "rgba(239, 68, 68, 0.1)",
+														borderRadius: "var(--radius-sm)",
+														borderLeft: "2px solid var(--color-error)",
+													}}
+												>
+													<p
+														style={{
+															fontSize: "var(--text-xs)",
+															color: "var(--color-error)",
+															margin: 0,
+															lineHeight: 1.4,
+														}}
+													>
+														{file.error_message?.trim() ||
+															t("files.processingFailedFallback")}
+													</p>
+												</div>
+											)}
+										</div>
+										<button
+											onClick={() => handleDelete(file.id)}
+											disabled={deletingFileId === file.id}
+											className="btn-ghost"
+											aria-label={t("buttons.delete")}
+											style={{
+												color: "var(--color-error)",
+												padding: "var(--space-2)",
+												opacity: deletingFileId === file.id ? 0.5 : 1,
+												cursor:
+													deletingFileId === file.id
+														? "not-allowed"
+														: "pointer",
+												minHeight: "44px",
+												minWidth: "44px",
+											}}
+										>
+											{deletingFileId === file.id ? (
+												<div
+													className="spinner"
+													style={{ width: "14px", height: "14px" }}
+												/>
+											) : (
 												<svg
-													width="48"
-													height="48"
+													width="16"
+													height="16"
 													viewBox="0 0 24 24"
 													fill="none"
 													stroke="currentColor"
-													strokeWidth="1.5"
-													style={{ margin: "0 auto var(--space-4)" }}
+													strokeWidth="2"
 												>
-													<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-													<polyline points="14 2 14 8 20 8" />
+													<polyline points="3 6 5 6 21 6" />
+													<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
 												</svg>
-												<p style={{ fontSize: "var(--text-base)" }}>
-													{t("files.noFiles")}
-												</p>
-												<p
-													style={{
-														fontSize: "var(--text-sm)",
-														marginTop: "var(--space-2)",
-													}}
-												>
-													{t("files.uploadHint")}
-												</p>
-											</div>
-										) : (
-											files.map((file) => (
-												<div
-													key={file.id}
-													style={{
-														padding: "var(--space-4)",
-														background:
-															file.status === "ready"
-																? "var(--color-bg-tertiary)"
-																: file.status === "processing" ||
-																		file.status === "uploading" ||
-																		file.status === "pending"
-																	? "rgba(245, 158, 11, 0.1)"
-																	: "rgba(239, 68, 68, 0.1)",
-														borderRadius: "var(--radius-md)",
-														border:
-															file.status === "ready"
-																? "1px solid var(--color-border)"
-																: file.status === "processing" ||
-																		file.status === "uploading" ||
-																		file.status === "pending"
-																	? "2px solid var(--color-warning)"
-																	: "2px solid var(--color-error)",
-													}}
-												>
-													<div
-														style={{
-															display: "flex",
-															alignItems: "center",
-															justifyContent: "space-between",
-															gap: "var(--space-4)",
-														}}
-													>
-														<div style={{ flex: 1, minWidth: 0 }}>
-															<div
-																style={{
-																	display: "flex",
-																	alignItems: "center",
-																	gap: "var(--space-2)",
-																	marginBottom: "var(--space-2)",
-																}}
-															>
-																<span
-																	className={
-																		getStatusBadge(file.status).className
-																	}
-																>
-																	{getStatusBadge(file.status).label}
-																</span>
-																<span
-																	style={{
-																		display: "flex",
-																		color: "var(--color-text-muted)",
-																	}}
-																>
-																	{getFileTypeIcon(file.file_type)}
-																</span>
-															</div>
-															<div
-																style={{
-																	fontSize: "var(--text-sm)",
-																	fontWeight: 500,
-																	color: "var(--color-text-primary)",
-																	overflow: "hidden",
-																	textOverflow: "ellipsis",
-																	whiteSpace: "nowrap",
-																}}
-															>
-																{file.filename}
-															</div>
-															<div
-																style={{
-																	display: "flex",
-																	alignItems: "center",
-																	gap: "var(--space-3)",
-																	marginTop: "var(--space-1)",
-																}}
-															>
-																<span
-																	style={{
-																		fontSize: "var(--text-xs)",
-																		color: "var(--color-text-muted)",
-																	}}
-																>
-																	{formatFileSize(file.file_size)}
-																</span>
-																<span
-																	style={{
-																		fontSize: "var(--text-xs)",
-																		color: "var(--color-text-muted)",
-																		textTransform: "uppercase",
-																	}}
-																>
-																	{file.file_type}
-																</span>
-																<span
-																	style={{
-																		fontSize: "var(--text-xs)",
-																		color: "var(--color-text-muted)",
-																	}}
-																>
-																	{new Date(
-																		file.created_at,
-																	).toLocaleDateString()}
-																</span>
-															</div>
-															{/* Error message display for failed files */}
-															{file.status === "failed" && (
-																<div
-																	style={{
-																		marginTop: "var(--space-2)",
-																		padding: "var(--space-2) var(--space-3)",
-																		background: "rgba(239, 68, 68, 0.1)",
-																		borderRadius: "var(--radius-sm)",
-																		borderLeft: "2px solid var(--color-error)",
-																	}}
-																>
-																	<p
-																		style={{
-																			fontSize: "var(--text-xs)",
-																			color: "var(--color-error)",
-																			margin: 0,
-																			lineHeight: 1.4,
-																		}}
-																	>
-																		{file.error_message?.trim() ||
-																			t("files.processingFailedFallback")}
-																	</p>
-																</div>
-															)}
-														</div>
-														<button
-															onClick={() => handleDelete(file.id)}
-															disabled={deletingFileId === file.id}
-															className="btn-ghost"
-															style={{
-																color: "var(--color-error)",
-																padding: "var(--space-2)",
-																opacity: deletingFileId === file.id ? 0.5 : 1,
-																cursor:
-																	deletingFileId === file.id
-																		? "not-allowed"
-																		: "pointer",
-															}}
-														>
-															{deletingFileId === file.id ? (
-																<div
-																	className="spinner"
-																	style={{ width: "14px", height: "14px" }}
-																/>
-															) : (
-																<svg
-																	width="16"
-																	height="16"
-																	viewBox="0 0 24 24"
-																	fill="none"
-																	stroke="currentColor"
-																	strokeWidth="2"
-																>
-																	<polyline points="3 6 5 6 21 6" />
-																	<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-																</svg>
-															)}
-														</button>
-													</div>
-												</div>
-											))
-										)}
+											)}
+										</button>
 									</div>
 								</div>
-							</div>
-
-							{/* Sources Summary - Desktop: right column */}
-							{!isMobile && agentId && (
-								<div style={{ position: "sticky", top: "var(--space-8)" }}>
-									<SourcesSummary
-										agentId={agentId}
-										refreshTrigger={refreshTrigger}
-									/>
-								</div>
-							)}
-						</div>
-
-						{/* Mobile: Sources Summary at bottom */}
-						{isMobile && agentId && (
-							<div style={{ marginTop: "var(--space-6)" }}>
-								<SourcesSummary
-									agentId={agentId}
-									refreshTrigger={refreshTrigger}
-								/>
-							</div>
+							))
 						)}
 					</div>
-				</KBSetupGuard>
-			) : (
-				<div
-					style={{
-						padding: isMobile ? "var(--space-4)" : "var(--space-8)",
-						textAlign: "center",
-					}}
-				>
-					<div className="spinner" />
 				</div>
-			)}
-		</AdminLayout>
+			</div>
+		</section>
 	);
 }

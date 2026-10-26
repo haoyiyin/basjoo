@@ -12,6 +12,11 @@ interface QuickAction {
 	titleKey: string;
 	descriptionKey: string;
 	path: string;
+	/**
+	 * `agent` actions stay inside `/agents/:agentId`; `sources` actions belong to
+	 * the bound knowledge base and are resolved in `resolveActionPath`.
+	 */
+	scope: "agent" | "sources";
 	icon: JSX.Element;
 	gradient: string;
 	glowColor: string;
@@ -22,6 +27,7 @@ const quickActionsConfig: QuickAction[] = [
 		titleKey: "navigation.playground",
 		descriptionKey: "labels.testAiEffect",
 		path: "/playground",
+		scope: "agent",
 		icon: (
 			<svg
 				width="24"
@@ -42,6 +48,7 @@ const quickActionsConfig: QuickAction[] = [
 		titleKey: "navigation.fileManagement",
 		descriptionKey: "labels.manageFiles",
 		path: "/files",
+		scope: "sources",
 		icon: (
 			<svg
 				width="24"
@@ -63,6 +70,7 @@ const quickActionsConfig: QuickAction[] = [
 		titleKey: "navigation.urlKnowledge",
 		descriptionKey: "labels.addWebKnowledge",
 		path: "/urls",
+		scope: "sources",
 		icon: (
 			<svg
 				width="24"
@@ -208,6 +216,7 @@ export default function Dashboard() {
 	} | null>(null);
 	const [agentId, setAgentId] = useState<string | null>(null);
 	const [agentName, setAgentName] = useState<string>("");
+	const [kbId, setKbId] = useState<string | null>(null);
 	const [agentIdCopied, setAgentIdCopied] = useState(false);
 
 	useEffect(() => {
@@ -223,6 +232,7 @@ export default function Dashboard() {
 			const agent = await api.getAgent(routeAgentId);
 			setAgentId(agent.id);
 			setAgentName(agent.name);
+			setKbId(agent.kb_id ?? null);
 			const [quotaData, sourcesData] = await Promise.all([
 				api.getQuota(agent.id),
 				api.getSourcesSummary(agent.id),
@@ -233,6 +243,19 @@ export default function Dashboard() {
 			console.error("Failed to load data:", error);
 			navigate("/agents");
 		}
+	};
+
+	/**
+	 * Source quick actions land on the KB's source page. An unbound agent opens
+	 * the KB list with the bind modal pre-selected for it.
+	 */
+	const resolveActionPath = (action: QuickAction): string => {
+		if (action.scope === "sources") {
+			if (kbId) return `/knowledge-bases/${kbId}`;
+			if (agentId) return `/knowledge-bases?bindAgent=${encodeURIComponent(agentId)}`;
+			return "/knowledge-bases";
+		}
+		return routeAgentId ? `/agents/${routeAgentId}${action.path}` : action.path;
 	};
 
 	const getGreeting = () => {
@@ -291,10 +314,13 @@ export default function Dashboard() {
 	return (
 		<AdminLayout>
 			<div
+				className="admin-page"
+				data-testid="dashboard-page"
 				style={{
 					padding: isMobile ? "var(--space-4)" : "var(--space-8)",
 					maxWidth: "1400px",
 					margin: "0 auto",
+					minWidth: 0,
 				}}
 			>
 				{/* Greeting header */}
@@ -371,13 +397,7 @@ export default function Dashboard() {
 						{quickActionsConfig.map((action, idx) => (
 							<button
 								key={action.path}
-								onClick={() =>
-									navigate(
-										routeAgentId
-											? `/agents/${routeAgentId}${action.path}`
-											: action.path,
-									)
-								}
+								onClick={() => navigate(resolveActionPath(action))}
 								className="liquid-glass-card"
 								style={{
 									display: "flex",

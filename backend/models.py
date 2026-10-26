@@ -75,8 +75,6 @@ class Agent(Base):
     # 基本信息
     name = Column(String(100), nullable=False, default="AI Agent")
     description = Column(Text, nullable=True)
-    agent_type = Column(String(50), nullable=False, default="website_support")
-    channel_mode = Column(String(50), nullable=False, default="web_widget")
     avatar = Column(String(500), nullable=True)
 
     # LLM配置
@@ -208,9 +206,6 @@ class Agent(Base):
 
     # 关系
     workspace = relationship("Workspace", back_populates="agents")
-    url_sources = relationship(
-        "URLSource", back_populates="agent", cascade="all, delete-orphan"
-    )
     knowledge_files = relationship(
         "KnowledgeFile", back_populates="agent", cascade="all, delete-orphan"
     )
@@ -229,7 +224,9 @@ class URLSource(Base):
     __tablename__ = "url_sources"
 
     id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    kb_id = Column(
+        String(36), ForeignKey("knowledge_bases.id"), nullable=False, index=True
+    )
 
     # URL信息
     url = Column(String(1000), nullable=False, index=True)
@@ -258,12 +255,12 @@ class URLSource(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # 关系
-    agent = relationship("Agent", back_populates="url_sources")
+    knowledge_base = relationship("KnowledgeBase", back_populates="url_sources")
 
     # 索引和约束
     __table_args__ = (
-        Index("ix_url_sources_agent_status", "agent_id", "status"),
-        UniqueConstraint("agent_id", "normalized_url", name="uq_agent_normalized_url"),
+        Index("ix_url_sources_kb_status", "kb_id", "status"),
+        UniqueConstraint("kb_id", "normalized_url", name="uq_kb_normalized_url"),
     )
 
 
@@ -580,6 +577,9 @@ class KnowledgeBase(Base):
     tenant = relationship("Tenant", back_populates="knowledge_bases")
     documents = relationship(
         "KbDocument", back_populates="knowledge_base", cascade="all, delete-orphan"
+    )
+    url_sources = relationship(
+        "URLSource", back_populates="knowledge_base", cascade="all, delete-orphan"
     )
     agent = relationship("Agent", back_populates="knowledge_base", uselist=False)
 

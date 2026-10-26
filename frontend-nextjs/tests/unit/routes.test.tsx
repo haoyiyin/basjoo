@@ -2,8 +2,9 @@
 import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/App";
+import { api } from "../../src/services/api";
 
 // --- View mocks -------------------------------------------------------------
 // Every view is replaced with a marker element so the route table can be
@@ -29,6 +30,9 @@ vi.mock("../../src/views/Dashboard", () => ({
 }));
 vi.mock("../../src/views/FileUploadManagement", () => ({
 	default: () => <div>view:FileUploadManagement</div>,
+}));
+vi.mock("../../src/views/KnowledgeBaseDetail", () => ({
+	default: () => <div>view:KnowledgeBaseDetail</div>,
 }));
 vi.mock("../../src/views/KnowledgeBaseSetup", () => ({
 	default: () => <div>view:KnowledgeBaseSetup</div>,
@@ -86,6 +90,10 @@ function currentPath(): string {
 }
 
 // --- Real routes: exactly the 18 rendering entries of the route table --------
+//
+// The agent-scoped source routes (`/agents/:id/files|urls|knowledge`) now render
+// the redirect-only KnowledgeBaseSetup view; source management itself lives on
+// `/knowledge-bases/:kbId`.
 
 const routes: Array<[path: string, view: string]> = [
 	["/login", "view:Login"],
@@ -94,16 +102,16 @@ const routes: Array<[path: string, view: string]> = [
 	["/", "view:AgentPanel"],
 	["/agents", "view:Agents"],
 	["/agents/some-id/dashboard", "view:Dashboard"],
-	["/agents/some-id/files", "view:FileUploadManagement"],
+	["/agents/some-id/files", "view:KnowledgeBaseSetup"],
 	["/agents/some-id/knowledge", "view:KnowledgeBaseSetup"],
+	["/agents/some-id/urls", "view:KnowledgeBaseSetup"],
 	["/knowledge-bases", "view:KnowledgeBases"],
+	["/knowledge-bases/kb_42", "view:KnowledgeBaseDetail"],
 	["/agents/some-id/playground", "view:Playground"],
 	["/agents/some-id/sessions", "view:Sessions"],
 	["/agents/some-id/settings/agent", "view:AgentSettings"],
-	["/agents/some-id/urls", "view:URLManagement"],
 	["/agents/some-id/users", "view:AdminUsers"],
 	["/chat/some-session", "view:Chat"],
-	["/files", "view:FileUploadManagement"],
 	["/settings/agent", "view:AgentSettings"],
 	["/settings/account", "view:AccountSettings"],
 ];
@@ -115,15 +123,16 @@ describe("route table", () => {
 		expect(currentPath()).toBe(path);
 	});
 
-	// --- The 6 redirect entries ----------------------------------------------
+	// --- The 7 redirect entries ----------------------------------------------
 
 	const redirects: Array<[from: string, to: string, view: string]> = [
 		["/sessions", "/", "view:AgentPanel"],
 		["/knowledge", "/knowledge-bases", "view:KnowledgeBases"],
 		["/playground", "/", "view:AgentPanel"],
-		["/urls", "/", "view:AgentPanel"],
+		["/urls", "/knowledge-bases", "view:KnowledgeBases"],
 		["/users", "/", "view:AgentPanel"],
-		["/qa", "/files", "view:FileUploadManagement"],
+		["/files", "/knowledge-bases", "view:KnowledgeBases"],
+		["/qa", "/knowledge-bases", "view:KnowledgeBases"],
 	];
 
 	it.each(redirects)("%s redirects to %s", (from, to, view) => {
@@ -140,5 +149,186 @@ describe("route table", () => {
 	it("does not render the auth layout switcher on dashboard routes", () => {
 		renderAt("/");
 		expect(screen.queryByText("layout:AuthLanguageSwitcher")).not.toBeInTheDocument();
+	});
+
+	it("gives the KB detail page its own route parameter", () => {
+		renderAt("/knowledge-bases/kb_42");
+		expect(screen.getByText("view:KnowledgeBaseDetail")).toBeInTheDocument();
+		expect(currentPath()).toBe("/knowledge-bases/kb_42");
+	});
+
+	it.each(["/agents/some-id/files", "/agents/some-id/urls", "/agents/some-id/knowledge"])(
+		"routes %s to the redirect-only KnowledgeBaseSetup view",
+		(path) => {
+			renderAt(path);
+			// The redirect view is the only thing mounted; the old source panels
+			// (URLManagement / FileUploadManagement) are no longer top-level routes.
+			expect(screen.getByText("view:KnowledgeBaseSetup")).toBeInTheDocument();
+			expect(screen.queryByText("view:URLManagement")).not.toBeInTheDocument();
+			expect(
+				screen.queryByText("view:FileUploadManagement"),
+			).not.toBeInTheDocument();
+		},
+	);
+});
+
+// --- api.ts kb-scoped source helpers -----------------------------------------
+// §5 requires the client to call the *canonical* KB routes. `services/api` is not
+// mocked in this file, so the real helpers are exercised against a stubbed
+// `fetch`; the assertions pin the exact path, method and body shapes.
+
+function jsonResponse(payload: unknown): Response {
+	return new Response(JSON.stringify(payload), {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
+function stubFetch(payload: unknown = {}) {
+	return vi
+		.spyOn(globalThis, "fetch")
+		.mockResolvedValueOnce(jsonResponse(payload));
+}
+
+function stubStorage() {
+	vi.stubGlobal("localStorage", {
+		getItem: vi.fn(() => null),
+		setItem: vi.fn(),
+		removeItem: vi.fn(),
+		clear: vi.fn(),
+	});
+}
+
+/** Called + captured in one step so the assertion stays one line per helper. */
+async function callAndCapture(
+	call: () => Promise<unknown>,
+	payload: unknown = {},
+): Promise<{ url: string; init: RequestInit }> {
+	stubStorage();
+	const spy = stubFetch(payload);
+	await call();
+	const [rawUrl, init] = spy.mock.calls[0];
+	return { url: String(rawUrl), init: (init ?? {}) as RequestInit };
+}
+
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
+});
+
+describe("api.ts kb-scoped source helpers", () => {
+	it("listKbUrls GETs /knowledge-bases/{kb}/urls:list with no agent_id", async () => {
+		const { url, init } = await callAndCapture(
+			() => api.listKbUrls("kb_1"),
+			{ urls: [], total: 0, quota: { used: 0, max: 100 } },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/urls:list");
+		expect(url).toContain("skip=0");
+		expect(url).toContain("limit=100");
+		expect(url).not.toContain("agent_id");
+		expect(init.method).toBeUndefined();
+	});
+
+	it("createKbUrls POSTs {urls:[...]} to /knowledge-bases/{kb}/urls:create", async () => {
+		const { url, init } = await callAndCapture(
+			() => api.createKbUrls("kb_1", ["https://example.com"]),
+			{ urls: [], total: 0, quota: { used: 0, max: 100 } },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/urls:create");
+		expect(url).not.toContain("agent_id");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(String(init.body))).toEqual({
+			urls: ["https://example.com"],
+		});
+	});
+
+	it("refetchKbUrls POSTs {url_ids, force} to /knowledge-bases/{kb}/urls:refetch", async () => {
+		const { url, init } = await callAndCapture(
+			() => api.refetchKbUrls("kb_1", [3, 4], true),
+			{ job_id: "j1", status: "queued", message: "ok" },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/urls:refetch");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(String(init.body))).toEqual({
+			url_ids: [3, 4],
+			force: true,
+		});
+	});
+
+	it("deleteKbUrl DELETEs ?url_id= on /knowledge-bases/{kb}/urls:delete", async () => {
+		const { url, init } = await callAndCapture(() =>
+			api.deleteKbUrl("kb_1", 42),
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/urls:delete");
+		expect(url).toContain("url_id=42");
+		expect(init.method).toBe("DELETE");
+	});
+
+	it("listKbFiles GETs /knowledge-bases/{kb}/files:list with no agent_id", async () => {
+		const { url } = await callAndCapture(
+			() => api.listKbFiles("kb_1"),
+			{ files: [], total: 0, quota: { used: 0, max: 100 } },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/files:list");
+		expect(url).not.toContain("agent_id");
+	});
+
+	it("deleteKbFile DELETEs ?file_id= on /knowledge-bases/{kb}/files:delete", async () => {
+		const { url, init } = await callAndCapture(() =>
+			api.deleteKbFile("kb_1", "doc_9"),
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/files:delete");
+		expect(url).toContain("file_id=doc_9");
+		expect(init.method).toBe("DELETE");
+	});
+
+	it("rebuildKbIndex POSTs {force} to /knowledge-bases/{kb}/index:rebuild", async () => {
+		const { url, init } = await callAndCapture(
+			() => api.rebuildKbIndex("kb_1", true),
+			{ job_id: "j1", status: "queued", message: "ok" },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/index:rebuild");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(String(init.body))).toEqual({ force: true });
+	});
+
+	it("getKbIndexStatus GETs /knowledge-bases/{kb}/index:status", async () => {
+		const { url } = await callAndCapture(
+			() => api.getKbIndexStatus("kb_1"),
+			{ kb_id: "kb_1", status: "idle" },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/index:status");
+		expect(url).not.toContain("agent_id");
+	});
+
+	it("getKbSourcesSummary GETs /knowledge-bases/{kb}/sources:summary", async () => {
+		const { url } = await callAndCapture(
+			() => api.getKbSourcesSummary("kb_1"),
+			{
+				urls: { total: 0, indexed: 0, pending: 0, total_size_kb: 0 },
+				files: { total: 0, ready: 0, processing: 0, total_size_kb: 0 },
+				has_pending: false,
+			},
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/sources:summary");
+	});
+
+	it("cancelKbUrlTasks POSTs /knowledge-bases/{kb}/urls:cancel", async () => {
+		const { url, init } = await callAndCapture(
+			() => api.cancelKbUrlTasks("kb_1"),
+			{ cancelled: 0, task_ids: [], message: "no active tasks" },
+		);
+
+		expect(url).toContain("/api/v1/knowledge-bases/kb_1/urls:cancel");
+		expect(init.method).toBe("POST");
 	});
 });

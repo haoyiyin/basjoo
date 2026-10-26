@@ -10,28 +10,26 @@ import AdminLayout from '../components/AdminLayout';
 import AISettingsForm from '../components/AISettingsForm';
 import ChatPanel from '../components/ChatPanel';
 import type { Message as ChatPanelMessage, Agent as ChatPanelAgent } from '../components/ChatPanel';
-import { useIsMobile } from '../hooks/useMediaQuery';
 
 interface ChatParamOverrides {
   temperature: number;
   max_tokens: number;
 }
 
-type TabType = 'settings' | 'preview';
-
 export default function Playground() {
   const { t, i18n } = useTranslation('common');
   const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
-  const isMobile = useIsMobile();
   const [agentId, setAgentId] = useState<string | null>(null);
   const [agent, setAgent] = useState<ChatPanelAgent | null>(null);
   const [messages, setMessages] = useState<ChatPanelMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
-  const [activeTab, setActiveTab] = useState<TabType>('preview');
   const [showSaved, setShowSaved] = useState(false);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  // null = agent not loaded yet. `false` means the backend reports no LLM key,
+  // which blocks the SSE stream and the send control (issue #19).
+  const [apiKeySet, setApiKeySet] = useState<boolean | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [chatParams, setChatParams] = useState<ChatParamOverrides>({
     temperature: 0.7,
@@ -57,6 +55,8 @@ export default function Playground() {
       const data = await api.getAgent(currentAgentId);
       setAgent(data);
       setAgentId(data.id);
+      const hasApiKey = Boolean(data.api_key_set);
+      setApiKeySet(hasApiKey);
       setChatParams({
         temperature: data.temperature,
         max_tokens: data.max_tokens,
@@ -133,6 +133,8 @@ export default function Playground() {
 
   const handleSendMessage = useCallback(async () => {
     const effectiveAgentId = agentId || agent?.id || null;
+    // Hard gate: never open the SSE stream when no LLM API key is configured.
+    if (apiKeySet !== true) return;
     if (!input.trim() || isLoading || isSettingsSaving || !effectiveAgentId) return;
 
     streamAbortControllerRef.current?.abort();
@@ -314,7 +316,7 @@ export default function Playground() {
         setIsLoading(false);
       }
     }
-  }, [input, isLoading, isSettingsSaving, agentId, agent?.id, chatParams, sessionId, i18n.language, getErrorMessage]);
+  }, [apiKeySet, input, isLoading, isSettingsSaving, agentId, agent?.id, chatParams, sessionId, i18n.language, getErrorMessage]);
 
   const handleClearChat = useCallback(() => {
     if (confirm(t('playground.confirmClear'))) {
@@ -336,6 +338,7 @@ export default function Playground() {
     if (updatedAgent) {
       setAgent(updatedAgent);
       setAgentId(updatedAgent.id);
+      setApiKeySet(Boolean(updatedAgent.api_key_set));
       setChatParams({
         temperature: updatedAgent.temperature,
         max_tokens: updatedAgent.max_tokens,
@@ -382,85 +385,40 @@ export default function Playground() {
     };
   }, []);
 
-  if (isMobile) {
-    return (
-      <AdminLayout>
-        <div style={{
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            display: 'flex',
-            gap: 'var(--space-2)',
-            padding: 'var(--space-2) var(--space-3)',
-            background: 'var(--color-bg-primary)',
-            flexShrink: 0,
-          }}>
-            {(['settings', 'preview'] as TabType[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  padding: 'var(--space-1) var(--space-3)',
-                  border: 'none',
-                  background: activeTab === tab ? 'var(--color-accent-primary)' : 'var(--color-bg-tertiary)',
-                  color: activeTab === tab ? 'var(--color-text-inverse)' : 'var(--color-text-secondary)',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  borderRadius: 'var(--radius-full)',
-                  fontSize: 'var(--text-xs)',
-                  transition: 'all var(--transition-fast)',
-                }}
-              >
-                {tab === 'settings' ? t('navigation.aiSettings') : t('playground.preview')}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            {activeTab === 'settings' ? (
-              <div style={{ height: '100%', overflow: 'auto' }}>
-                <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
-              </div>
-            ) : (
-              <ChatPanel
-                messages={messages}
-                input={input}
-                isLoading={isLoading}
-                isSettingsSaving={isSettingsSaving}
-                agent={agent}
-                onInputChange={handleInputChange}
-                onSendMessage={handleSendMessage}
-                onClearChat={handleClearChat}
-              />
-            )}
-          </div>
-        </div>
-      </AdminLayout>
-    );
-  }
-
+  /*
+   * One markup for every viewport. The desktop shape (settings column at 40% /
+   * min-width 360px next to the chat column) is inline; at <=768px the
+   * `.playground-shell` rule in index.css turns this same tree into a single
+   * scrolling column with the settings pane stacked above the chat pane, so
+   * the DOM order below is the mobile visual order.
+   */
   return (
     <AdminLayout>
-      <div style={{
-        height: '100vh',
-        display: 'flex',
-        overflow: 'hidden',
-      }}>
-        <div style={{
-          width: '40%',
-          minWidth: '360px',
-          maxWidth: '480px',
-          borderRight: '1px solid var(--color-border)',
-          background: 'var(--color-bg-secondary)',
-          backdropFilter: 'blur(var(--glass-blur-surface))',
-          WebkitBackdropFilter: 'blur(var(--glass-blur-surface))',
+      <div
+        data-testid="playground-shell"
+        className="admin-page playground-shell"
+        style={{
+          height: '100vh',
           display: 'flex',
-          flexDirection: 'column',
           overflow: 'hidden',
-        }}>
+        }}
+      >
+        <div
+          data-testid="playground-pane-settings"
+          className="playground-pane-settings"
+          style={{
+            width: '40%',
+            minWidth: '360px',
+            maxWidth: '480px',
+            borderRight: '1px solid var(--color-border)',
+            background: 'var(--color-bg-secondary)',
+            backdropFilter: 'blur(var(--glass-blur-surface))',
+            WebkitBackdropFilter: 'blur(var(--glass-blur-surface))',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
           <div style={{
             padding: 'var(--space-4)',
             borderBottom: '1px solid var(--color-border)',
@@ -515,12 +473,16 @@ export default function Playground() {
           </div>
         </div>
 
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}>
+        <div
+          data-testid="playground-pane-chat"
+          className="playground-pane-chat"
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
           <div style={{
             padding: 'var(--space-4)',
             borderBottom: '1px solid var(--color-border)',
@@ -542,12 +504,29 @@ export default function Playground() {
               {t('playground.testAiEffect')}
             </p>
           </div>
+          {apiKeySet === false && (
+            <div
+              role="alert"
+              style={{
+                padding: 'var(--space-3)',
+                margin: 'var(--space-4) var(--space-4) 0',
+                background: 'rgba(245, 158, 11, 0.1)',
+                border: '1px solid rgba(245, 158, 11, 0.3)',
+                borderRadius: 'var(--radius-md)',
+                color: '#f59e0b',
+                fontSize: 'var(--text-sm)',
+              }}
+            >
+              {t('labels.pleaseConfigureApiKey')}
+            </div>
+          )}
           <ChatPanel
             messages={messages}
             input={input}
             isLoading={isLoading}
             isSettingsSaving={isSettingsSaving}
             agent={agent}
+            sendDisabled={apiKeySet !== true}
             onInputChange={handleInputChange}
             onSendMessage={handleSendMessage}
             onClearChat={handleClearChat}

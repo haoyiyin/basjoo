@@ -55,31 +55,32 @@ Docker-oriented AI customer support platform:
 - `backend/main.py` owns the app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`, legacy `/api/tenants`), static asset routes (`/sdk.js`, `/basjoo-logo.png`, `/widget-demo`), and scheduler/Redis lifespan.
 - KB stack (`kb_service.py`, `kb_document_processor.py`, `kb_retrieval_service.py`, `qdrant_service.py`):
   - A `KnowledgeBase` exists on its own (`KnowledgeBase` → `KbDocument` → `KbChunk`), scoped by `workspace_id`. It is **not** derived from an agent: `agents.kb_id` is a nullable UNIQUE pointer, so at most one agent uses a KB and a KB can outlive every agent. Create/reset/delete live on `/api/v1/knowledge-bases` (`backend/api/v1/kb_endpoints.py`).
-  - Binding is the only link: `PUT /api/v1/agents/{agent_id}/knowledge-base {"kb_id": ...|null}`. Deleting an agent (soft delete) clears `agents.kb_id` in the same transaction — the KB, its documents and its chunks survive and can be bound to another agent. Never add a "the agent's KB" accessor; go through the binding.
+  - Binding is the only link: `PUT /api/v1/agents/{agent_id}/knowledge-base {"kb_id": ...|null}`. Deleting an agent (soft delete) clears `agents.kb_id` in the same transaction — the KB, its documents, its chunks, **and its `URLSource` rows** survive and can be bound to another agent. Never add a "the agent's KB" accessor; go through the binding. Soft-deleted agent purge must not delete `URLSource` (the table is keyed by `kb_id`, not `agent_id`).
+  - `URLSource` belongs to the KB (`kb_id` FK, unique `(kb_id, normalized_url)`). There is no `url_sources.agent_id`. `KbDocument.source_agent_id` is optional provenance only.
   - One Qdrant collection per KB (`kb_<12 hex chars>`, Cosine distance), filtered by `workspace_id` only. `Tenant` still exists as a table but **no KB request path reads it** — do not reintroduce tenant-derived isolation.
   - `knowledge_bases.embedding_dimension` is measured by probe (one real embedding call) when the KB is created, so the collection and the provider always agree; on mismatch `qdrant_service` raises instead of silently writing wrong-size vectors.
   - Each KB owns its embedding config (`embedding_provider`, `embedding_model`, `embedding_base_url`, encrypted key). Retrieval and ingestion read the key from the **KB**, never from the agent — that is the #11 fix.
   - Chunking defaults: `chunk_size=512`, `chunk_overlap=64`; embeddings upserted in batches of ≤100.
   - Retrieval: query embed → Qdrant top `top_k * 2` → post-filter by score → cap at `top_k`. Effective threshold = explicit arg > `agent.similarity_threshold` > service default `0.6`. Agent default is `0.01` (`DEFAULT_AGENT_SIMILARITY_THRESHOLD`); the settings slider maps `0–100` → `0.00–0.100` (×1000).
-- Task concurrency is guarded by a shared `TaskLock` (`services/task_lock.py`, `TaskType` enum) in URL/index/KB-reset endpoints.
+- Task concurrency is guarded by a shared `TaskLock` (`services/task_lock.py`, `TaskType` enum). URL/index/crawl locks are keyed by **`kb_id`** (the parameter inside `task_lock.py` may still be named `agent_id` — pass the KB id as the owner key).
 - Widget auto-detects `apiBase` from `<script src>`; persists visitor/session in localStorage; polls `/api/v1/chat/messages` every 3s for human-takeover messages.
 
 ## Chat request flow (`POST /api/v1/chat/stream`)
 Two phases on purpose — never hold a DB connection while the LLM streams:
-1. Short-lived DB session: resolve agent → widget origin whitelist → daily quota → get/create `ChatSession` → if `taken_over`, persist the message and finish → per-session per-minute rate limit (returns `restricted_reply`) → load history → KB retrieval → build messages. Session closes here.
-2. No DB connection: emit `sources`, stream `content` deltas (plus `thinking_done` when the provider supports it), then `done` with `message_id`/`session_id`/`usage`/`taken_over`. LLM failure falls back to `agent.restricted_reply`. Hard cap 300s.
+1. Short-lived DB session: resolve agent → widget origin whitelist → daily quota → get/create `ChatSession` → if `taken_over`, persist the message and finish → per-session per-minute rate limit (returns `restricted_reply`) → **reject empty LLM key with HTTP 400 `detail="Agent has no LLM API key configured"` (SSE code `API_KEY_MISSING`; never set `use_mock_llm=True`)** → load history → KB retrieval → build messages. Session closes here.
+2. No DB connection: emit `sources`, stream `content` deltas (plus `thinking_done` when the provider supports it), then `done` with `message_id`/`session_id`/`usage`/`taken_over`. LLM failure falls back to `agent.restricted_reply`. Hard cap 300s. `get_llm_service` returns `MockLLMService` **only** when `use_mock=True` (tests). Missing key + `use_mock=False` raises `ValueError("api_key required")`.
 
 SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anything else is a bug — the widget parser ignores unknown events.
 
 ## When changing areas
 - **New LLM provider**: extend `backend/services/llm_service.py` (`provider_type` branch), update the `Agent` model/config, expose it in `src/components/AISettingsForm.tsx`.
-- **New knowledge source type**: extend the shared ingestion path (`services/kb_document_processor.py` + `services/document_parser.py`) and surface it through the **agent-scoped** endpoints in `backend/api/v1/endpoints.py` (which resolve the KB via `agents.kb_id`) or through `backend/api/v1/kb_endpoints.py` if it belongs to the KB rather than the agent.
-- **UI change**: update `src/views/` or `src/components/`; add i18n strings in `src/locales/{zh-CN,en-US}/`; verify responsiveness.
-- **KB create/bind UX**: KBs are created and bound **outside** the agent. The agent list offers three choices per unbound agent (bind an existing KB / create one in `KbFormModal` / skip). `src/components/KBSetupGuard.tsx` blocks knowledge-dependent views and links to `/knowledge-bases`; it never sets up a KB inline. `KBSetupWizard` no longer exists — do not reintroduce an inline wizard.
+- **New knowledge source type**: extend the shared ingestion path (`services/kb_document_processor.py` + `services/document_parser.py`) and surface it on the **KB-scoped** routes in `backend/api/v1/kb_endpoints.py` (`/knowledge-bases/{kb_id}/urls:*`, `/files:*`, `/index:*`, `/sources:summary`). Unbound KBs are first-class. The `/api/v1/urls:*` / `/files:*` / `/index:*?agent_id=` handlers in `endpoints.py` are one-release aliases that `require_bound_kb` and delegate; do not add new logic there.
+- **UI change**: update `src/views/` or `src/components/`; add i18n strings in `src/locales/{zh-CN,en-US}/`; verify responsiveness (admin SPA 375px: no horizontal overflow, tap targets ≥44px). Widget is a separate app — do not restyle it as a side effect of admin work.
+- **KB create/bind UX**: KBs are created and bound **outside** the agent. Home card (`AgentPanel`): bound `kb_id` → `/knowledge-bases/${kb_id}` (source management); unbound → `/knowledge-bases?bindAgent=`. The agent list still offers bind / create / skip. Agent sidebar group `navigation.knowledge` (网站管理 / 文件上传) is gone — sources live on the KB page (`KnowledgeBaseDetail` composes `URLManagement` + `FileUploadManagement` with `kbId` from `useParams`). `KBSetupWizard` no longer exists. `Agent.agent_type` and `Agent.channel_mode` are gone; create-agent is name + optional description only.
 - **KB status is derived**: `GET /api/v1/agent:kb-status?agent_id=` computes `kb_setup_completed` from the binding plus `KnowledgeBase.status`. `Agent.kb_setup_completed` is a dead column; never read it, and don't put the flag back on the `/api/v1/agent` payload.
 - **Chat streaming issues**: inspect SSE in `backend/api/v1/endpoints.py`, `sse_utils.py`, the widget parser, and the error middleware.
 - **Indexing/retrieval problems**: check `kb_retrieval_service.py`, `qdrant_service.py`, threshold, `is_indexed` on `URLSource`, and `sources:summary` / `index:status`.
-- **Large exploration/analysis**: use `rg`/`search_files` and read targeted ranges rather than dumping whole files (`endpoints.py` is ~3.9k lines).
+- **Large exploration/analysis**: use `rg`/`search_files` and read targeted ranges rather than dumping whole files (`endpoints.py` is ~2.8k lines after the source-route move).
 
 ## Testing and verification (mandatory before claiming done)
 - Frontend changes: always `cd frontend-nextjs && npm run build && npm run typecheck && npm run test` (Vitest, `maxWorkers: 1` — several tests mock globals, keep it serial).
@@ -91,19 +92,22 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 
 ## Subsystem-specific
 ### Backend RAG / ingestion
-- URL pipeline: `create_urls` → `URLSource` row (pending) → background fetch through Scrapling → content stored → chunk/embed into the agent's KB → `is_indexed`.
-- Force rebuild vs incremental is controlled by the `force` param on `/index:rebuild`.
-- File pipeline: `/files:upload` writes bytes + a `KbDocument` (status `pending`) → `BackgroundTasks` → `DocumentParser` (pdfplumber / python-docx / openpyxl) → chunk → embedding → Qdrant upsert → status `ready`/`error`.
+- URL pipeline: `POST /knowledge-bases/{kb_id}/urls:create` → `URLSource(kb_id=..., status=pending)` → `process_url_refetch(kb_id=..., ...)` through Scrapling → content stored → chunk/embed into **that KB** → `is_indexed`. Fetch failure writes `status=failed` + `last_error`; never leave a fetched-and-failed row as `pending` with `last_error IS NULL`.
+- Scheduler: recurring refetch of stale `success` rows still requires an agent with `enable_auto_fetch` and a bound `kb_id`. Independent catch-all: every `URLSource` with `status=pending` and `last_fetch_at IS NULL` is fetched (this is what moves the example URL off pending). Do not auto-retry `failed`.
+- Example seed (`ensure_example_agent`): login/register only (not `database.py` startup). Two guards — workspace already has any agent, or a KB named `EXAMPLE_KB_NAME`. After commit, queue `process_url_refetch` via `asyncio.create_task`; do not block login.
+- Force rebuild vs incremental is controlled by the `force` param on `/knowledge-bases/{kb_id}/index:rebuild` (legacy `/index:rebuild?agent_id=` still aliases).
+- File pipeline: `POST /knowledge-bases/{kb_id}/files:upload` writes bytes + a `KbDocument` (status `pending`) → `BackgroundTasks` → `DocumentParser` (pdfplumber / python-docx / openpyxl) → chunk → embedding → Qdrant upsert → status `ready`/`error`.
 - Limits: ≤5 files per request, 20 MB per file, extensions `txt md html pdf docx xlsx`.
-- `/files:list` reads `KbDocument` (excluding `url_*` rows); `/urls:list` reads `URLSource`.
+- `/knowledge-bases/{kb_id}/files:list` reads `KbDocument` (excluding `url_*` rows); `/urls:list` reads `URLSource`.
 
-**KB endpoints are the live path, in two layers:** the KB's own lifecycle on `/api/v1/knowledge-bases` (list/create/detail/reset/delete, `kb_endpoints.py`) and the agent-scoped data surface on `/api/v1` (`files:*`, `urls:*`, `sources:summary`, `index:*`) which resolves the KB *through* `agents.kb_id`. `backend/api/v1/kb_document_endpoints.py` and the `/api/tenants/...` KB surface are gone — do not resurrect them.
+**KB endpoints are the live path:** lifecycle + sources both live on `/api/v1/knowledge-bases` (`kb_endpoints.py`). Agent-scoped `/api/v1` `files:*` / `urls:*` / `sources:summary` / `index:*` stay as one-release aliases that resolve the KB through `agents.kb_id` and 409 if unbound. `backend/api/v1/kb_document_endpoints.py` and the `/api/tenants/...` KB surface are gone — do not resurrect them.
 
 ### Frontend
 - Centralized API/SSE client plus the `kbStatus` helper in `src/services/api.ts`.
 - Auth state in `src/context/AuthContext.tsx` (localStorage).
 - `useAgentKbStatus` hook drives the first-time KB flow.
-- Nav and route scoping are role-driven in `src/components/AdminLayout.tsx`: `super_admin` sees only dashboard + agents at the root level and the full set inside an agent; `support` sees only the agent's sessions page.
+- Nav and route scoping are role-driven in `src/components/AdminLayout.tsx`: workspace nav includes 知识库列表 (`/knowledge-bases`); there is **no** agent-scoped "知识库" sidebar group. `super_admin` sees dashboard + agents at the root and sessions/settings/playground inside an agent; `support` sees only the agent's sessions page.
+- Playground: if `!agent.api_key_set`, do not open the SSE stream; disable send; keep the configure-key banner.
 - `ThemeProvider` (in `AppProviders`) applies `data-theme` on `<html>`, which `src/index.css` keys off. Keep it even though `useTheme` itself has no live consumer.
 
 ### Widget
@@ -155,4 +159,4 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 
 **This is living documentation. Update when patterns change.**
 
-Last updated: 2026-10-25 (verified against HEAD `f56286f`: Vite SPA replaces Next.js, SQLite-only persistence, real scheduler intervals, chat SSE flow, and a known-dead-code inventory)
+Last updated: 2026-10-26 (issues #15–#20: `URLSource.kb_id`, KB-scoped source routes, production MockLLM ban, `agent_type`/`channel_mode` dropped, admin SPA 375px)

@@ -793,6 +793,39 @@ button:disabled {
   }
 }
 
+/* ==================== Admin page width contract ==================== */
+/*
+ * `.admin-page` is the root node of every load-bearing admin SPA view and is
+ * the node the mobile no-overflow contract is asserted against. The base rule
+ * only makes the page a shrinkable block box (min-width: 0 breaks the
+ * flex/grid min-content floor), so desktop layout is unchanged.
+ * `mobileLayout.test.tsx` asserts the class carries `overflow-x: hidden`
+ * inside the mobile media block below.
+ */
+.admin-page {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/*
+ * Wide data tables (the 7-column KB list) scroll inside their own box instead
+ * of pushing the page wider than the viewport. `min-width: 0` on the wrapper
+ * lets it shrink inside flex/grid parents.
+ */
+.kb-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.kb-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
 /* ==================== Responsive Design ==================== */
 
 /* Mobile (max-width: 768px) */
@@ -849,18 +882,28 @@ button:disabled {
     z-index: 30;
   }
 
+  /* 44x44px minimum touch target (#15): the menu button is the primary
+   * navigation affordance at 375px, so it must be at least 44px in both axes
+   * and must sit above the scrolling content (`z-index: 45` is above
+   * `.mobile-header`'s 30 and the overlay's 40, below the sidebar's 50 so an
+   * open drawer still covers it). The inline style on the button matches. */
   .hamburger-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
     background: transparent;
     border: none;
     color: var(--color-text-primary);
     cursor: pointer;
     border-radius: var(--radius-md);
     transition: background var(--transition-fast);
+    position: relative;
+    z-index: 45;
   }
 
   .hamburger-btn:hover {
@@ -871,6 +914,150 @@ button:disabled {
     margin-top: 60px;
     margin-left: 0 !important;
     padding: var(--space-4) !important;
+    overflow-x: hidden;
+  }
+
+  /* ------------------------------------------------------------------
+   * Mobile width contract: nothing inside a page may widen the viewport.
+   * `mobileLayout.test.tsx` reads this file and asserts these rules exist
+   * inside this media block, so deleting one is a test failure.
+   * ------------------------------------------------------------------ */
+  .admin-page {
+    overflow-x: hidden;
+  }
+
+  /* Page roots own their gutter at 375px instead of inheriting the desktop
+   * `--space-8` padding, which would eat 64px of a 375px viewport. */
+  .admin-page {
+    padding: var(--space-4) !important;
+  }
+
+  /* KB list: the 7-column table keeps its columns readable and scrolls
+   * horizontally inside `.kb-table-scroll` rather than being clipped. */
+  .kb-table-scroll {
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  .kb-table {
+    min-width: 640px;
+  }
+
+  /* ------------------------------------------------------------------
+   * Tap targets (#15): every interactive control in a page (or in the mobile
+   * shell) is at least 44px tall. The resolution rule used by the test is
+   * "declared inline height/min-height >= 44px OR the element matches a
+   * selector in this media block whose declaration sets min-height: 44px".
+   * ------------------------------------------------------------------ */
+  .admin-page button,
+  .admin-page [role="button"],
+  .admin-page a.btn-primary,
+  .admin-page a.btn-secondary,
+  .admin-page a.btn-ghost,
+  .admin-page a.btn-danger,
+  .mobile-main button,
+  .mobile-main [role="button"],
+  .mobile-main a.btn-primary,
+  .mobile-main a.btn-secondary,
+  .mobile-main a.btn-ghost,
+  .mobile-main a.btn-danger,
+  .hamburger-btn {
+    min-height: 44px;
+  }
+
+  /* `min-height` is ignored on inline boxes; links-as-buttons are inline-flex
+   * at mobile width so the 44px floor actually applies. Plain prose links keep
+   * their inline flow (they are not button-shaped tap targets). */
+  .admin-page a.btn-primary,
+  .admin-page a.btn-secondary,
+  .admin-page a.btn-ghost,
+  .admin-page a.btn-danger,
+  .mobile-main a.btn-primary,
+  .mobile-main a.btn-secondary,
+  .mobile-main a.btn-ghost,
+  .mobile-main a.btn-danger {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* The drawer is itself a tap-target surface: its nav links and the logout
+   * button are the primary navigation controls behind the hamburger. */
+  .mobile-sidebar button,
+  .mobile-sidebar [role="button"],
+  .mobile-sidebar a,
+  .mobile-header a,
+  .mobile-header button {
+    min-height: 44px;
+  }
+
+  .mobile-sidebar a,
+  .mobile-header a {
+    display: flex;
+    align-items: center;
+  }
+
+  /* ------------------------------------------------------------------
+   * Playground (#15): one DOM, two panes, settings first. Desktop keeps the
+   * 40% / min-width 360px side-by-side shape (inline styles); at mobile width
+   * the shell turns into a single scrolling column with the settings pane
+   * stacked ABOVE the chat pane.
+   * ------------------------------------------------------------------ */
+  .playground-shell {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    height: auto !important;
+    min-height: calc(100vh - 60px);
+  }
+
+  .playground-pane-settings {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .playground-pane-chat {
+    flex: 1 1 auto !important;
+    min-height: 60vh;
+    min-width: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* ------------------------------------------------------------------
+   * Source panels (`URLManagement` / `FileUploadManagement`) are composed on
+   * the KB detail page. They are grid children, so `min-width: 0` is what
+   * stops a long URL or file name from widening the page.
+   * ------------------------------------------------------------------ */
+  .url-panel,
+  .file-panel {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .url-panel *,
+  .file-panel * {
+    max-width: 100%;
+  }
+
+  /* ------------------------------------------------------------------
+   * Auth pages (`Login` / `Register`) use `maxWidth: 420px` cards inside a
+   * centered flex page. 420px already fits 375px, so this only tightens the
+   * outer gutter so the card keeps a usable gutter on narrow phones and
+   * guarantees the card can never force overflow.
+   * ------------------------------------------------------------------ */
+  .auth-page {
+    padding: var(--space-4) !important;
+    overflow-x: hidden;
+  }
+
+  .auth-page > div {
+    min-width: 0;
+    max-width: 100% !important;
   }
 
   .responsive-grid-3 {

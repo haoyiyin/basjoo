@@ -1,8 +1,29 @@
 import json
 
 import pytest
+import pytest_asyncio
 
+import database
 from api.v1.endpoints import replace_source_placeholders
+from core.encryption import encrypt_api_key
+from models import Agent
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
+async def chat_ready_agent(default_agent_id):
+    """Give the default agent a stored LLM key before chat tests run.
+
+    Issue #19 removed the silent Mock fallback: a keyless agent now answers 400
+    (`API_KEY_MISSING`) instead of streaming Mock tokens. Chat-behaviour tests
+    therefore need a *configured* agent; `conftest.mock_llm_service` still swaps
+    `get_llm_service` for `MockLLMService`, so no provider is ever contacted.
+    """
+    async with database.AsyncSessionLocal() as session:
+        agent = await session.get(Agent, default_agent_id)
+        assert agent is not None
+        agent.api_key = encrypt_api_key("sk-test-chat-key")
+        await session.commit()
+    return default_agent_id
 
 
 def test_replace_source_placeholders_uses_only_url_sources():

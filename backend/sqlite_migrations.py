@@ -76,8 +76,14 @@ def run_sqlite_migrations(database_url: str) -> None:
             # Dedicated per-column backfills (after all columns definitely exist)
             _backfill_agents(cursor)
 
+        # ── agents: drop the retired agent_type / channel_mode columns ─────
+        _drop_retired_agent_columns(cursor)
+
         # ── knowledge bases (workspace scope + KB-owned embedding config) ──
         _migrate_knowledge_bases(cursor)
+
+        # ── url_sources (agent scope → KB scope, issue #15/#16) ────────────
+        _migrate_url_sources(cursor)
 
         # ── agent_members ─────────────────────────────────────────────────
         if _table_exists(cursor, "agents") and _table_exists(cursor, "admin_users"):
@@ -326,8 +332,6 @@ def _migrate_agents(cursor: sqlite3.Cursor):
     """
     columns: list[tuple[str, str]] = [
         # LLM / provider
-        ("agent_type", "VARCHAR(50) DEFAULT 'website_support'"),
-        ("channel_mode", "VARCHAR(50) DEFAULT 'web_widget'"),
         ("avatar", "VARCHAR(500)"),
         ("deleted_at", "DATETIME"),
         ("purge_after", "DATETIME"),
@@ -453,16 +457,6 @@ def _backfill_agents(cursor: sqlite3.Cursor):
             "UPDATE agents SET persona_type = 'general' "
             "WHERE persona_type IS NULL OR persona_type = ''"
         )
-    if "agent_type" in col_names:
-        cursor.execute(
-            "UPDATE agents SET agent_type = 'website_support' "
-            "WHERE agent_type IS NULL OR agent_type = ''"
-        )
-    if "channel_mode" in col_names:
-        cursor.execute(
-            "UPDATE agents SET channel_mode = 'web_widget' "
-            "WHERE channel_mode IS NULL OR channel_mode = ''"
-        )
 
     # ── top_k ────────────────────────────────────────────────────────────────
     if "top_k" in col_names:
@@ -532,6 +526,189 @@ def _backfill_agents(cursor: sqlite3.Cursor):
             "WHERE restricted_reply IS NULL OR restricted_reply = ''",
             (restricted_reply_default,),
         )
+
+# ---- url_sources migration (agent scope -> KB scope) ------------------------
+
+_URL_SOURCES_NEW_DDL = """
+CREATE TABLE url_sources_new (
+    id INTEGER PRIMARY KEY,
+    kb_id VARCHAR(36) NOT NULL REFERENCES knowledge_bases(id),
+    url VARCHAR(1000) NOT NULL,
+    normalized_url VARCHAR(1000) NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    last_fetch_at DATETIME,
+    last_error TEXT,
+    title VARCHAR(500),
+    content TEXT,
+    content_hash VARCHAR(64),
+    fetch_metadata JSON,
+    is_indexed BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
+)
+"""
+
+def _ensure_url_source_indexes(cursor: sqlite3.Cursor) -> None:
+    """Recreate every index/unique constraint the model declares (idempotent)."""
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_url_sources_kb_id ON url_sources(kb_id)"
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS ix_url_sources_url ON url_sources(url)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_url_sources_normalized_url "
+        "ON url_sources(normalized_url)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_url_sources_status ON url_sources(status)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_url_sources_kb_status "
+        "ON url_sources(kb_id, status)"
+    )
+
+    # A fresh ``create_all`` install already has the UNIQUE table constraint
+    # (SQLite reports it as ``sqlite_autoindex_*``), so only add the named index
+    # when no unique index on (kb_id, normalized_url) exists yet.
+    cursor.execute("PRAGMA index_list(url_sources)")
+    for index_row in cursor.fetchall():
+        index_name = index_row[1]
+        is_unique = bool(index_row[2])
+        if not is_unique:
+            continue
+        cursor.execute(f"PRAGMA index_info('{index_name}')")
+        columns = [row[2] for row in cursor.fetchall()]
+        if columns == ["kb_id", "normalized_url"]:
+            return
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_kb_normalized_url "
+        "ON url_sources(kb_id, normalized_url)"
+    )
+
+def _migrate_url_sources(cursor: sqlite3.Cursor) -> None:
+    """Rebuild ``url_sources`` from agent scope to KB scope.
+
+    Legacy rows are re-pointed at the KB bound to their agent. Rows whose agent
+    has no KB cannot be indexed anywhere and are dropped. The whole block is
+    idempotent: a table that already has ``kb_id`` and no ``agent_id`` is left
+    untouched apart from re-asserting its indexes.
+    """
+    if not _table_exists(cursor, "url_sources"):
+        return
+
+    cursor.execute("PRAGMA table_info(url_sources)")
+    existing = {row[1] for row in cursor.fetchall()}
+
+    if "kb_id" in existing and "agent_id" not in existing:
+        _ensure_url_source_indexes(cursor)
+        return
+
+    if "agent_id" not in existing:
+        # Neither shape known — nothing safe to rebuild from.
+        return
+
+    if not _table_exists(cursor, "agents"):
+        # Without the agents table the legacy rows cannot be re-pointed at a KB;
+        # leaving the table untouched beats dropping every row.
+        return
+
+    target_columns = [
+        "id",
+        "kb_id",
+        "url",
+        "normalized_url",
+        "status",
+        "last_fetch_at",
+        "last_error",
+        "title",
+        "content",
+        "content_hash",
+        "fetch_metadata",
+        "is_indexed",
+        "created_at",
+        "updated_at",
+    ]
+    source_expressions = {
+        "is_indexed": "COALESCE(url_sources.is_indexed, 0)",
+    }
+    if "kb_id" in existing:
+        # Half-migrated install: keep an already-set kb_id instead of dropping
+        # the row when its agent happens to be unbound.
+        source_expressions["kb_id"] = "COALESCE(agents.kb_id, url_sources.kb_id)"
+        bound_filter = "WHERE COALESCE(agents.kb_id, url_sources.kb_id) IS NOT NULL"
+    else:
+        source_expressions["kb_id"] = "agents.kb_id"
+        bound_filter = "WHERE agents.kb_id IS NOT NULL"
+    select_list = []
+    for column in target_columns:
+        if column in source_expressions:
+            select_list.append(source_expressions[column])
+        elif column in existing:
+            select_list.append(f"url_sources.{column}")
+        elif column == "status":
+            select_list.append("'pending'")
+        else:
+            select_list.append("NULL")
+
+    cursor.execute("DROP TABLE IF EXISTS url_sources_new")
+    cursor.execute(_URL_SOURCES_NEW_DDL)
+
+    cursor.execute(
+        f"INSERT INTO url_sources_new ({', '.join(target_columns)}) "
+        f"SELECT {', '.join(select_list)} "
+        "FROM url_sources "
+        "JOIN agents ON url_sources.agent_id = agents.id "
+        f"{bound_filter}"
+    )
+    copied = cursor.rowcount
+    print(f"✓ Migrated {copied} url_source row(s) from agent scope to KB scope")
+
+    cursor.execute("DROP TABLE url_sources")
+    cursor.execute("ALTER TABLE url_sources_new RENAME TO url_sources")
+
+    # Dedupe before the unique index: a legacy install can bind two agents to
+    # one KB, which collapses onto the same (kb_id, normalized_url).
+    cursor.execute(
+        "DELETE FROM url_sources WHERE id NOT IN ("
+        "SELECT MIN(id) FROM url_sources GROUP BY kb_id, normalized_url)"
+    )
+    if cursor.rowcount > 0:
+        print(f"✓ Dropped {cursor.rowcount} duplicate url_source row(s)")
+
+    _ensure_url_source_indexes(cursor)
+
+# ---- agents: drop retired columns -------------------------------------------
+
+def _drop_retired_agent_columns(cursor: sqlite3.Cursor) -> None:
+    """Drop ``agents.agent_type`` / ``agents.channel_mode`` (issue #20).
+
+    Idempotent: a column that is already gone is skipped. Any plain index that
+    mentions the column is dropped first, because SQLite refuses to drop a
+    column that an index depends on. ``sqlite_autoindex_*`` entries belong to
+    table constraints and cannot be dropped individually.
+    """
+    if not _table_exists(cursor, "agents"):
+        return
+
+    cursor.execute("PRAGMA table_info(agents)")
+    existing = {row[1] for row in cursor.fetchall()}
+
+    for column in ("agent_type", "channel_mode"):
+        if column not in existing:
+            continue
+
+        cursor.execute("PRAGMA index_list(agents)")
+        for index_row in cursor.fetchall():
+            index_name = index_row[1]
+            if index_name.startswith("sqlite_autoindex_"):
+                continue
+            cursor.execute(f"PRAGMA index_info('{index_name}')")
+            indexed_columns = {row[2] for row in cursor.fetchall()}
+            if column in indexed_columns:
+                cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+        cursor.execute(f"ALTER TABLE agents DROP COLUMN {column}")
+        print(f"✓ Dropped retired agents.{column}")
+        existing.discard(column)
 
 # ---- knowledge base migration ----------------------------------------------
 
