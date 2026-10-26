@@ -33,14 +33,15 @@ vi.mock("../../src/services/api", () => ({
 	},
 }));
 
+// `t` must be stable: Dashboard renders it inside memoised callbacks.
+const stableT = (key: string, options?: Record<string, unknown>) => {
+	if (key === "labels.welcome")
+		return `欢迎回到 ${options?.agentName} 控制台`;
+	return key;
+};
+
 vi.mock("react-i18next", () => ({
-	useTranslation: () => ({
-		t: (key: string, options?: Record<string, unknown>) => {
-			if (key === "labels.welcome")
-				return `欢迎回到 ${options?.agentName} 控制台`;
-			return key;
-		},
-	}),
+	useTranslation: () => ({ t: stableT }),
 }));
 
 const mockedApi = vi.mocked(api);
@@ -50,6 +51,7 @@ beforeEach(() => {
 	mockedApi.getAgent.mockResolvedValue({
 		id: "agt_1",
 		name: "官网客服",
+		kb_id: "kb_bound",
 	} as any);
 	mockedApi.getQuota.mockResolvedValue({
 		used_urls: 0,
@@ -98,6 +100,52 @@ describe("Dashboard agent scoped navigation", () => {
 
 		await waitFor(() => {
 			expect(router.state.location.pathname).toBe("/agents/agt_1/playground");
+		});
+	});
+
+	it("sends source quick actions to the bound knowledge base, not /files and /urls", async () => {
+		const router = createMemoryRouter(
+			[
+				{ path: "/agents/:agentId/dashboard", element: <Dashboard /> },
+				{
+					path: "/knowledge-bases/:kbId",
+					element: <div>KB Detail Page</div>,
+				},
+			],
+			{ initialEntries: ["/agents/agt_1/dashboard"] },
+		);
+
+		render(<RouterProvider router={router} />);
+
+		fireEvent.click(await screen.findByText("navigation.fileManagement"));
+
+		await waitFor(() => {
+			expect(router.state.location.pathname).toBe("/knowledge-bases/kb_bound");
+		});
+	});
+
+	it("sends file-source quick actions to the bind prompt when the agent has no KB", async () => {
+		mockedApi.getAgent.mockResolvedValue({
+			id: "agt_1",
+			name: "官网客服",
+			kb_id: null,
+		} as any);
+
+		const router = createMemoryRouter(
+			[
+				{ path: "/agents/:agentId/dashboard", element: <Dashboard /> },
+				{ path: "/knowledge-bases", element: <div>KB List Page</div> },
+			],
+			{ initialEntries: ["/agents/agt_1/dashboard"] },
+		);
+
+		render(<RouterProvider router={router} />);
+
+		fireEvent.click(await screen.findByText("navigation.urlKnowledge"));
+
+		await waitFor(() => {
+			expect(router.state.location.pathname).toBe("/knowledge-bases");
+			expect(router.state.location.search).toBe("?bindAgent=agt_1");
 		});
 	});
 });

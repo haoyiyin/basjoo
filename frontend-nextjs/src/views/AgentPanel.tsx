@@ -7,20 +7,6 @@ import AdminLayout from "../components/AdminLayout";
 import { Agent, api } from "../services/api";
 import { useIsMobile } from "../hooks/useMediaQuery";
 
-const agentTypeLabelKeys: Record<string, string> = {
-	website_support: "agents.types.websiteSupport",
-	ai_clone: "agents.types.aiClone",
-	sales_outreach: "agents.types.salesOutreach",
-	custom: "agents.types.custom",
-};
-
-const channelModeLabelKeys: Record<string, string> = {
-	web_widget: "agents.channels.webWidget",
-	whatsapp: "agents.channels.whatsapp",
-	email: "agents.channels.email",
-	custom: "agents.channels.custom",
-};
-
 export default function AgentPanel() {
 	const { t } = useTranslation("common");
 	const navigate = useNavigate();
@@ -28,6 +14,19 @@ export default function AgentPanel() {
 	const [agents, setAgents] = useState<Agent[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
+
+	/**
+	 * The home card is a knowledge-base entry point: a bound KB opens its source
+	 * page, an unbound agent opens the KB list with the bind modal pre-selected
+	 * for that agent. The agent dashboard is reachable from elsewhere.
+	 */
+	const openAgentWorkspace = (agent: Agent) => {
+		if (agent.kb_id) {
+			navigate(`/knowledge-bases/${agent.kb_id}`);
+			return;
+		}
+		navigate(`/knowledge-bases?bindAgent=${encodeURIComponent(agent.id)}`);
+	};
 
 	useEffect(() => {
 		api
@@ -48,10 +47,13 @@ export default function AgentPanel() {
 	return (
 		<AdminLayout>
 			<div
+				className="admin-page"
+				data-testid="agent-panel-page"
 				style={{
 					padding: isMobile ? "var(--space-4)" : "var(--space-8)",
 					maxWidth: 1400,
 					margin: "0 auto",
+					minWidth: 0,
 				}}
 			>
 				<header style={{ marginBottom: "var(--space-6)" }}>
@@ -131,7 +133,7 @@ export default function AgentPanel() {
 						{agents.map((agent) => (
 							<button
 								key={agent.id}
-								onClick={() => navigate(`/agents/${agent.id}/dashboard`)}
+								onClick={() => openAgentWorkspace(agent)}
 								className="liquid-glass-card"
 								style={{
 									textAlign: "left",
@@ -169,6 +171,7 @@ export default function AgentPanel() {
 											{agent.name}
 										</div>
 										<div
+											data-testid={`agent-kb-${agent.id}`}
 											style={{
 												color: "var(--color-text-muted)",
 												fontSize: "var(--text-xs)",
@@ -177,15 +180,9 @@ export default function AgentPanel() {
 												whiteSpace: "nowrap",
 											}}
 										>
-											{t(
-												agentTypeLabelKeys[agent.agent_type || "custom"] ||
-													"agents.types.custom",
-											)}{" "}
-											/{" "}
-											{t(
-												channelModeLabelKeys[agent.channel_mode || "custom"] ||
-													"agents.channels.custom",
-											)}
+											{agent.kb_name
+												? agent.kb_name
+												: t("agents.panelNoKnowledgeBase")}
 										</div>
 									</div>
 									<span

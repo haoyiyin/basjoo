@@ -77,8 +77,6 @@ export default async function globalSetup(): Promise<void> {
       data: {
         name: 'E2E Agent',
         description: 'Default agent seeded by E2E global setup',
-        agent_type: 'website_support',
-        channel_mode: 'web_widget',
       },
     });
     if (![200, 201].includes(createAgentRes.status)) {

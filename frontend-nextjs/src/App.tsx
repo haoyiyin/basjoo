@@ -8,14 +8,13 @@ import AgentSelector from './views/AgentSelector';
 import AgentPanel from './views/AgentPanel';
 import Agents from './views/Agents';
 import Dashboard from './views/Dashboard';
-import FileUploadManagement from './views/FileUploadManagement';
+import KnowledgeBaseDetail from './views/KnowledgeBaseDetail';
 import KnowledgeBaseSetup from './views/KnowledgeBaseSetup';
 import KnowledgeBases from './views/KnowledgeBases';
 import Playground from './views/Playground';
 import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
 import AccountSettings from './views/AccountSettings';
-import URLManagement from './views/URLManagement';
 import { AdminUsers } from './views/AdminUsers';
 import Chat from './views/Chat';
 
@@ -51,25 +50,31 @@ export function App() {
         <Route path="/" element={<AgentPanel />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/:agentId/dashboard" element={<Dashboard />} />
-        <Route path="/agents/:agentId/files" element={<FileUploadManagement />} />
+        {/*
+         * Agent-scoped source routes are gone: they redirect to the bound
+         * knowledge base. `KnowledgeBaseSetup` is the redirect-only view that
+         * resolves `agent.kb_id` from `/api/v1/agent:kb-status`.
+         */}
+        <Route path="/agents/:agentId/files" element={<KnowledgeBaseSetup />} />
+        <Route path="/agents/:agentId/urls" element={<KnowledgeBaseSetup />} />
         <Route path="/agents/:agentId/knowledge" element={<KnowledgeBaseSetup />} />
         <Route path="/agents/:agentId/playground" element={<Playground />} />
         <Route path="/agents/:agentId/sessions" element={<Sessions />} />
         <Route path="/agents/:agentId/settings/agent" element={<AgentSettings />} />
-        <Route path="/agents/:agentId/urls" element={<URLManagement />} />
         <Route path="/agents/:agentId/users" element={<AdminUsers />} />
         <Route path="/chat/:sessionId" element={<Chat />} />
-        <Route path="/files" element={<FileUploadManagement />} />
         <Route path="/settings/agent" element={<AgentSettings />} />
         <Route path="/settings/account" element={<AccountSettings />} />
 
         <Route path="/knowledge-bases" element={<KnowledgeBases />} />
+        <Route path="/knowledge-bases/:kbId" element={<KnowledgeBaseDetail />} />
         <Route path="/sessions" element={<Redirect to="/" />} />
         <Route path="/knowledge" element={<Redirect to="/knowledge-bases" />} />
+        <Route path="/files" element={<Redirect to="/knowledge-bases" />} />
+        <Route path="/qa" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/playground" element={<Redirect to="/" />} />
-        <Route path="/urls" element={<Redirect to="/" />} />
+        <Route path="/urls" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/users" element={<Redirect to="/" />} />
-        <Route path="/qa" element={<Redirect to="/files" />} />
       </Route>
     </Routes>
   );

@@ -202,15 +202,6 @@ export default function KBSetupGuard({
 								defaultValue: "Open knowledge bases",
 							})}
 						</Link>
-						<Link
-							to={`/agents/${agentId}/knowledge`}
-							className="btn-secondary"
-							style={{ textDecoration: "none" }}
-						>
-							{t("kb.guardAgentPage", {
-								defaultValue: "Agent knowledge page",
-							})}
-						</Link>
 					</div>
 				</div>
 			</div>

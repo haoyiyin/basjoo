@@ -157,34 +157,16 @@
     "noDescription": "No description",
     "namePlaceholder": "Example: Website support, WhatsApp clone, email prospecting",
     "descriptionPlaceholder": "Describe the business, channel, or knowledge scope for this agent.",
-    "type": "Agent type",
     "selectAgent": "Select Agent",
     "selectForSessions": "Choose an agent to manage conversations.",
     "selectForDashboard": "Choose an agent to access its dashboard.",
     "noAssigned": "No Agent Assigned",
     "contactSuperAdmin": "Contact your workspace super administrator to get assigned to an agent.",
-    "types": {
-      "websiteSupport": "Website AI support",
-      "aiClone": "AI clone",
-      "salesOutreach": "AI sales outreach",
-      "custom": "Custom"
-    },
-    "typeDescriptions": {
-      "websiteSupport": "Connect to the website widget and answer visitor questions.",
-      "aiClone": "Reserve clone-style setup for channels like WhatsApp.",
-      "salesOutreach": "Reserve setup for email or sales outreach workflows.",
-      "custom": "Start from a blank purpose."
-    },
-    "channels": {
-      "webWidget": "Web widget",
-      "whatsapp": "WhatsApp",
-      "email": "Email",
-      "custom": "Custom"
-    },
     "kbOnboardingTitle": "Set up your Knowledge Base",
     "kbOnboardingDescription": "Configure embeddings to let your agent answer from your data. You can finish this later from Knowledge settings.",
     "kbOnboardingSkip": "Skip for now",
-    "kbOnboardingContinue": "Initialize Knowledge Base"
+    "kbOnboardingContinue": "Initialize Knowledge Base",
+    "panelNoKnowledgeBase": "No knowledge base bound"
   },
   "placeholders": {
     "enterMessage": "Enter message...",
@@ -790,7 +772,8 @@
       "unbind": "Unbind",
       "reset": "Reset",
       "delete": "Delete",
-      "close": "Close"
+      "close": "Close",
+      "sources": "Manage sources"
     },
     "status": {
       "active": "Active",
@@ -818,7 +801,11 @@
       "deleteFailed": "Failed to delete",
       "bindFailed": "Binding failed",
       "testFailed": "Connection test failed"
-    }
+    },
+    "bindAgentTitle": "Bind a knowledge base",
+    "bindAgentDescription": "Pick a knowledge base to bind to this agent. If none are available, create one first.",
+    "bindKbLabel": "Select knowledge base",
+    "bindKbPlaceholder": "Select a knowledge base"
   },
   "kbForm": {
     "createTitle": "New knowledge base",

@@ -52,6 +52,8 @@ export const Login = () => {
 
 	return (
 		<div
+			className="auth-page"
+			data-testid="login-page"
 			style={{
 				minHeight: "100vh",
 				display: "flex",
@@ -59,6 +61,7 @@ export const Login = () => {
 				justifyContent: "center",
 				padding: "var(--space-6)",
 				position: "relative",
+				minWidth: 0,
 			}}
 		>
 			{/* Liquid blob background */}

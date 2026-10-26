@@ -96,59 +96,6 @@ const navItemsConfig: NavItem[] = [
 		),
 	},
 	{
-		path: "/knowledge",
-		i18nKey: "navigation.knowledge",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-				<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-			</svg>
-		),
-		children: [
-			{
-				path: "/urls",
-				i18nKey: "navigation.urlKnowledge",
-				icon: (
-					<svg
-						width="18"
-						height="18"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2"
-					>
-						<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-						<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-					</svg>
-				),
-			},
-			{
-				path: "/files",
-				i18nKey: "navigation.fileManagement",
-				icon: (
-					<svg
-						width="18"
-						height="18"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2"
-					>
-						<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-						<polyline points="14 2 14 8 20 8" />
-					</svg>
-				),
-			},
-		],
-	},
-	{
 		path: "/sessions",
 		i18nKey: "navigation.sessions",
 		icon: (
@@ -279,34 +226,14 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 		label: t(item.i18nKey),
 	}));
 
-	// Auto-expand knowledge group when child route is active
-	const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
-		const knowledgePath = agentId ? `${agentBasePath}/knowledge` : "/knowledge";
-		if (
-			location.pathname === knowledgePath ||
-			location.pathname === `${agentBasePath}/urls` ||
-			location.pathname === `${agentBasePath}/files`
-		) {
-			return new Set([knowledgePath]);
-		}
-		return new Set();
-	});
-
-	useEffect(() => {
-		const knowledgePath = agentId ? `${agentBasePath}/knowledge` : "/knowledge";
-		if (
-			location.pathname === knowledgePath ||
-			location.pathname === `${agentBasePath}/urls` ||
-			location.pathname === `${agentBasePath}/files`
-		) {
-			setExpandedGroups((prev) => new Set([...prev, knowledgePath]));
-		}
-	}, [agentBasePath, agentId, location.pathname]);
-
 	const isActive = (item: NavItem) => {
 		if (item.path === location.pathname) return true;
 		if (item.children) {
 			return item.children.some((child) => child.path === location.pathname);
+		}
+		// Detail routes (`/knowledge-bases/:kbId`) keep their list entry active.
+		if (item.path !== "/" && location.pathname.startsWith(`${item.path}/`)) {
+			return true;
 		}
 		return false;
 	};
@@ -353,12 +280,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 	useEffect(() => {
 		updateIndicator();
 	}, [location.pathname, updateIndicator]);
-
-	// Re-measure after expand/collapse animations
-	useEffect(() => {
-		const timer = setTimeout(updateIndicator, 350);
-		return () => clearTimeout(timer);
-	}, [expandedGroups, updateIndicator]);
 
 	useEffect(() => {
 		if (!agentId) {
@@ -540,8 +461,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 					)}
 
 					{navItems.map((item) => {
-						const hasChildren = item.children && item.children.length > 0;
-						const isExpanded = expandedGroups.has(item.path);
 						const active = isActive(item);
 
 						return (
@@ -551,11 +470,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 										to={item.path}
 										data-nav-active={active ? "true" : undefined}
 										onClick={() => {
-											if (hasChildren) {
-												setExpandedGroups(
-													(prev) => new Set([...prev, item.path]),
-												);
-											}
 											handleNavClick();
 										}}
 										style={{
@@ -591,121 +505,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 										</span>
 										{item.label}
 									</Link>
-									{hasChildren && (
-										<button
-											onClick={(e) => {
-												e.preventDefault();
-												setExpandedGroups((prev) => {
-													const next = new Set(prev);
-													if (next.has(item.path)) {
-														next.delete(item.path);
-													} else {
-														next.add(item.path);
-													}
-													return next;
-												});
-											}}
-											style={{
-												padding: "var(--space-2)",
-												background: "transparent",
-												border: "none",
-												cursor: "pointer",
-												color: "var(--color-text-muted)",
-												display: "flex",
-												alignItems: "center",
-												borderRadius: "var(--radius-sm)",
-												transition: "color var(--transition-fast)",
-											}}
-										>
-											<svg
-												width="16"
-												height="16"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="2"
-												style={{
-													transform: isExpanded
-														? "rotate(90deg)"
-														: "rotate(0deg)",
-													transition:
-														"transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1)",
-												}}
-											>
-												<polyline points="9 18 15 12 9 6" />
-											</svg>
-										</button>
-									)}
 								</div>
-
-								{hasChildren && isExpanded && (
-									<div
-										style={{
-											marginLeft: "var(--space-4)",
-											overflow: "hidden",
-										}}
-									>
-										{item.children!.map((child) => {
-											const childActive = location.pathname === child.path;
-											return (
-												<Link
-													key={child.path}
-													to={child.path}
-													onClick={handleNavClick}
-													style={{
-														display: "flex",
-														alignItems: "center",
-														gap: "var(--space-3)",
-														padding: "var(--space-2) var(--space-4)",
-														paddingLeft: "var(--space-10)",
-														borderRadius: "var(--radius-md)",
-														color: childActive
-															? "var(--color-accent-primary)"
-															: "var(--color-text-secondary)",
-														background: childActive
-															? "hsla(188deg, 90%, 50%, 0.06)"
-															: "transparent",
-														textDecoration: "none",
-														fontSize: "var(--text-sm)",
-														fontWeight: childActive ? 500 : 400,
-														transition: "all var(--transition-fast)",
-														position: "relative",
-													}}
-												>
-													{childActive && (
-														<div
-															style={{
-																position: "absolute",
-																left: "12px",
-																top: "50%",
-																transform: "translateY(-50%)",
-																width: "4px",
-																height: "4px",
-																borderRadius: "50%",
-																background: "var(--color-accent-primary)",
-																boxShadow:
-																	"0 0 8px hsla(188deg, 90%, 50%, 0.5)",
-															}}
-														/>
-													)}
-													<span
-														style={{
-															display: "flex",
-															opacity: childActive ? 1 : 0.6,
-															transition: "opacity var(--transition-fast)",
-															filter: childActive
-																? "drop-shadow(0 0 4px hsla(188deg, 90%, 50%, 0.3))"
-																: "none",
-														}}
-													>
-														{child.icon}
-													</span>
-													{t(child.i18nKey)}
-												</Link>
-											);
-										})}
-									</div>
-								)}
 							</div>
 						);
 					})}
@@ -824,21 +624,35 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 			{/* Mobile Header */}
 			{isMobile && (
 				<header className="mobile-header">
+					{/*
+					 * 44x44px touch target (#15) and `z-index: 45` from
+					 * `.hamburger-btn` so the scrolling `<main>` can never paint
+					 * over it. `aria-controls`/`aria-expanded` expose the drawer
+					 * state; the class carries the sizing contract in index.css.
+					 */}
 					<button
+						type="button"
 						onClick={() => setSidebarOpen(true)}
 						aria-label="Open menu"
+						aria-controls="mobile-sidebar"
+						aria-expanded={sidebarOpen}
+						className="hamburger-btn"
 						style={{
 							display: "flex",
 							alignItems: "center",
 							justifyContent: "center",
-							width: "40px",
-							height: "40px",
+							width: "44px",
+							height: "44px",
+							minWidth: "44px",
+							minHeight: "44px",
 							padding: 0,
 							background: "transparent",
 							border: "none",
 							color: "var(--color-text-primary)",
 							cursor: "pointer",
 							borderRadius: "var(--radius-md)",
+							position: "relative",
+							zIndex: 45,
 						}}
 					>
 						<svg
@@ -870,7 +684,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 							Basjoo AI
 						</span>
 					</Link>
-					<div style={{ width: "40px" }} />
+					<div style={{ width: "44px" }} aria-hidden="true" />
 				</header>
 			)}
 
@@ -885,6 +699,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 			{/* Sidebar */}
 			{isMobile ? (
 				<aside
+					id="mobile-sidebar"
+					data-testid="mobile-sidebar"
+					data-open={sidebarOpen ? "true" : "false"}
 					className={`mobile-sidebar glass-sidebar ${sidebarOpen ? "open" : ""}`}
 					style={{
 						display: "flex",
@@ -911,13 +728,23 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 				</aside>
 			)}
 
+			{/*
+			 * `minWidth: 0` lets the flex child shrink below its content width and
+			 * at mobile width `overflowX: 'hidden'` is the last line of defence
+			 * against a 375px horizontal scrollbar. Desktop keeps `overflow: auto`
+			 * untouched (only the harmless `minWidth: 0` applies there), so no
+			 * desktop restyle happens.
+			 */}
 			<main
 				className={isMobile ? "mobile-main" : ""}
+				data-testid="admin-main"
 				style={{
 					flex: 1,
 					marginLeft: isMobile ? 0 : "var(--sidebar-width)",
 					minHeight: "100vh",
+					minWidth: 0,
 					overflow: "auto",
+					overflowX: isMobile ? "hidden" : "auto",
 				}}
 			>
 				{children}

@@ -66,4 +66,64 @@ describe("AdminLayout agent brand", () => {
 		});
 		expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_1");
 	});
+
+	it("drops the agent sidebar 知识库 group so no 网站管理/文件上传 entry remains", async () => {
+		const router = createMemoryRouter(
+			[
+				{
+					path: "/agents/:agentId/dashboard",
+					element: (
+						<AdminLayout>
+							<div>Body</div>
+						</AdminLayout>
+					),
+				},
+			],
+			{ initialEntries: ["/agents/agt_1/dashboard"] },
+		);
+
+		render(<RouterProvider router={router} />);
+
+		await screen.findByRole("heading", { name: "官网客服" });
+
+		// The group parent and both children used to render these i18n keys.
+		expect(
+			screen.queryByText("navigation.knowledge"),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByText("navigation.urlKnowledge"),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByText("navigation.fileManagement"),
+		).not.toBeInTheDocument();
+		// No anchor may point at the removed agent-scoped source routes.
+		const hrefs = screen
+			.queryAllByRole("link")
+			.map((link) => link.getAttribute("href") ?? "");
+		expect(hrefs.filter((href) => /\/urls|\/files$/.test(href))).toEqual([]);
+	});
+
+	it("keeps the workspace 知识库列表 entry", async () => {
+		const router = createMemoryRouter(
+			[
+				{
+					path: "/",
+					element: (
+						<AdminLayout>
+							<div>Body</div>
+						</AdminLayout>
+					),
+				},
+			],
+			{ initialEntries: ["/"] },
+		);
+
+		render(<RouterProvider router={router} />);
+
+		await waitFor(() => {
+			expect(
+				screen.getByText("navigation.knowledgeBases"),
+			).toBeInTheDocument();
+		});
+	});
 });

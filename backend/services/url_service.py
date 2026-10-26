@@ -1,4 +1,10 @@
-"""URL knowledge source service (extracted from endpoints.py per AGENTS.md)."""
+"""URL knowledge source service (extracted from endpoints.py per AGENTS.md).
+
+Everything in this module is keyed by ``kb_id``: a URL source belongs to a
+knowledge base, and a KB exists with or without an agent bound to it. Agents are
+only *provenance* here (``source_agent_id`` on the derived ``KbDocument``), never
+the scoping key.
+"""
 
 import asyncio
 import logging
@@ -6,19 +12,18 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
-from models import URLSource, normalize_url, Agent
+from models import URLSource, normalize_url
 from api.v1.schemas import URLCreateRequest, URLItem, URLListResponse
 import database
 
 logger = logging.getLogger(__name__)
 
-
 async def list_urls(
-    db: AsyncSession, agent_id: str, skip: int = 0, limit: int = 100
+    db: AsyncSession, kb_id: str, skip: int = 0, limit: int = 100
 ) -> URLListResponse:
     stmt = (
         select(URLSource)
-        .where(URLSource.agent_id == agent_id)
+        .where(URLSource.kb_id == kb_id)
         .order_by(URLSource.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -28,7 +33,7 @@ async def list_urls(
 
     total = (
         await db.execute(
-            select(func.count(URLSource.id)).where(URLSource.agent_id == agent_id)
+            select(func.count(URLSource.id)).where(URLSource.kb_id == kb_id)
         )
     ).scalar() or 0
 
@@ -39,16 +44,15 @@ async def list_urls(
     items = [URLItem.model_validate(u) for u in url_sources]
     return URLListResponse(urls=items, total=total, quota=quota)
 
-
 async def create_urls(
-    db: AsyncSession, agent_id: str, payload: URLCreateRequest
+    db: AsyncSession, kb_id: str, payload: URLCreateRequest
 ) -> URLListResponse:
     for url_str in payload.urls:
         normalized = normalize_url(url_str)
         exists = (
             await db.execute(
                 select(URLSource).where(
-                    URLSource.agent_id == agent_id,
+                    URLSource.kb_id == kb_id,
                     URLSource.normalized_url == normalized,
                 )
             )
@@ -56,16 +60,15 @@ async def create_urls(
         if exists:
             continue
         us = URLSource(
-            agent_id=agent_id, url=url_str, normalized_url=normalized, status="pending"
+            kb_id=kb_id, url=url_str, normalized_url=normalized, status="pending"
         )
         db.add(us)
     await db.commit()
-    return await list_urls(db, agent_id, 0, 100)
+    return await list_urls(db, kb_id, 0, 100)
 
-
-async def delete_url(db: AsyncSession, agent_id: str, url_id: int) -> dict[str, bool]:
+async def delete_url(db: AsyncSession, kb_id: str, url_id: int) -> dict[str, bool]:
     us = await db.get(URLSource, url_id)
-    if us is None or us.agent_id != agent_id:
+    if us is None or us.kb_id != kb_id:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="URL not found")
@@ -73,49 +76,50 @@ async def delete_url(db: AsyncSession, agent_id: str, url_id: int) -> dict[str, 
     await db.commit()
     return {"success": True}
 
-
-async def clear_all_urls(db: AsyncSession, agent_id: str) -> dict[str, bool]:
-    await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
+async def clear_all_urls(db: AsyncSession, kb_id: str) -> dict[str, bool]:
+    await db.execute(delete(URLSource).where(URLSource.kb_id == kb_id))
     await db.commit()
     return {"success": True}
 
-
 # ========== Background Processing Functions ==========
 
-
 async def process_url_refetch(
-    agent_id: str,
+    *,
+    kb_id: str,
     url_ids: Optional[List[int]],
     force: bool,
     job_id: str,
+    source_agent_id: Optional[str] = None,
     release_lock: bool = True,
     parent_job_id: Optional[str] = None,
-):
-    """Background task: refetch URLs and index to KB.
+) -> None:
+    """Background task: refetch URLs and index them into the KB.
 
     Args:
-        agent_id: Agent ID
-        url_ids: List of URL IDs to refetch, None for all
-        force: Force refetch even if content hasn't changed
-        job_id: Task ID for tracking
-        release_lock: Whether to release the task lock on completion.
-            Set to False when called inline from another background task.
+        kb_id: Knowledge base that owns the URL rows (and the task lock).
+        url_ids: List of URL IDs to refetch, None/empty for all.
+        force: Force refetch even if the content hash hasn't changed.
+        job_id: Task ID for tracking/releasing the lock.
+        source_agent_id: Optional provenance of the ingest, threaded to
+            ``KbDocument.source_agent_id``. ``None`` for KB-page ingests that
+            have no agent behind them.
+        release_lock: Whether to release the task lock on completion. Set to
+            False when called inline from another background task.
         parent_job_id: Parent job ID to check for cancellation when called
-            from another background task (e.g., from process_site_crawl).
+            from another background task (e.g., from ``process_site_crawl``).
     """
-    from services.task_lock import TaskType, task_lock
+    from services.task_lock import task_lock
     from services.crawler import SiteCrawler
-    from services.kb_service import KbService
     from services.kb_document_processor import KbDocumentProcessor
     from services.url_safety import validate_url_safe
 
-    logger.info(f"[URL Refetch] Starting job {job_id} for agent {agent_id}")
+    logger.info(f"[URL Refetch] Starting job {job_id} for KB {kb_id}")
 
     def _is_cancelled() -> bool:
         """Check if either this job or parent job is cancelled."""
-        if task_lock.is_cancelled(agent_id, job_id):
+        if task_lock.is_cancelled(kb_id, job_id):
             return True
-        if parent_job_id and task_lock.is_cancelled(agent_id, parent_job_id):
+        if parent_job_id and task_lock.is_cancelled(kb_id, parent_job_id):
             return True
         return False
 
@@ -126,20 +130,6 @@ async def process_url_refetch(
             return
 
         async with database.AsyncSessionLocal() as session:
-            # Get agent and KB
-            result = await session.execute(select(Agent).where(Agent.id == agent_id))
-            agent = result.scalar_one_or_none()
-            if not agent:
-                logger.error(f"[URL Refetch] Agent {agent_id} not found")
-                return
-
-            if not agent.kb_id:
-                logger.error(f"[URL Refetch] Agent {agent_id} has no KB bound")
-                return
-
-            kb_id = agent.kb_id
-
-            # The KB owns the embedding config and the workspace scope.
             from models import KnowledgeBase
 
             kb_result = await session.execute(
@@ -147,14 +137,14 @@ async def process_url_refetch(
             )
             kb = kb_result.scalar_one_or_none()
             if not kb:
-                logger.error(f"[URL Refetch] KB {kb_id} not found for agent {agent_id}")
+                logger.error(f"[URL Refetch] KB {kb_id} not found")
                 return
 
             workspace_id = int(kb.workspace_id)
 
             # Build query for URLs to process
             query = select(URLSource).where(
-                URLSource.agent_id == agent_id,
+                URLSource.kb_id == kb_id,
                 URLSource.status.in_(["pending", "success", "failed"]),
             )
             if url_ids:
@@ -189,13 +179,17 @@ async def process_url_refetch(
                     continue
 
                 # Update status to fetching
-                url_source.status = "fetching"
                 from datetime import datetime, timezone
 
-                url_source.last_fetch_at = datetime.now(timezone.utc)
-                await session.commit()
-
                 try:
+                    # Written INSIDE the try on purpose: a failure here used to
+                    # escape to the outer handler and leave the row stuck in
+                    # "fetching" with last_error NULL, which neither the catch-all
+                    # nor the recurring pass retries.
+                    url_source.status = "fetching"
+                    url_source.last_fetch_at = datetime.now(timezone.utc)
+                    await session.commit()
+
                     # Fetch URL content
                     page_result = await crawler.crawl_single_page(url)
 
@@ -245,7 +239,7 @@ async def process_url_refetch(
                         kb_id,
                         filename=f"url_{url_id}.txt",
                         file_size=len(page_result.content or ""),
-                        source_agent_id=agent_id,
+                        source_agent_id=source_agent_id,
                         db=session,
                     )
                     # Store content as a file for processing
@@ -316,19 +310,18 @@ async def process_url_refetch(
         logger.exception(f"[URL Refetch] Job {job_id} failed: {e}")
     finally:
         if release_lock:
-            await task_lock.release_task(agent_id, job_id)
-
+            await task_lock.release_task(kb_id, job_id)
 
 async def _store_crawl_error(
     session,
-    agent_id: str,
+    kb_id: str,
     start_url: str,
     error_msg: str,
 ) -> None:
     """Store a crawl error as a URLSource record so the frontend can display it.
 
     Uses upsert semantics: if a URLSource with the same normalized URL already
-    exists for this agent (e.g. from a previous failed crawl), update its error
+    exists for this KB (e.g. from a previous failed crawl), update its error
     message. Otherwise create a new record.
     """
     import sqlalchemy as sa
@@ -337,7 +330,7 @@ async def _store_crawl_error(
     existing = (
         await session.execute(
             sa.select(URLSource).where(
-                URLSource.agent_id == agent_id,
+                URLSource.kb_id == kb_id,
                 URLSource.normalized_url == normalized,
             )
         )
@@ -348,7 +341,7 @@ async def _store_crawl_error(
         existing.last_error = error_msg
     else:
         url_source = URLSource(
-            agent_id=agent_id,
+            kb_id=kb_id,
             url=start_url,
             normalized_url=normalized,
             status="failed",
@@ -356,34 +349,35 @@ async def _store_crawl_error(
         )
         session.add(url_source)
 
-
 async def process_site_crawl(
-    agent_id: str,
+    kb_id: str,
     start_url: str,
     max_depth: int,
     max_pages: int,
     job_id: str,
+    source_agent_id: Optional[str] = None,
 ):
-    """Background task: crawl site and index pages.
+    """Background task: crawl site and index pages into one KB.
 
     Args:
-        agent_id: Agent ID
-        start_url: Starting URL for crawl
-        max_depth: Maximum crawl depth
-        max_pages: Maximum pages to crawl
-        job_id: Task ID for tracking
+        kb_id: Knowledge base that owns the crawl (and the task lock).
+        start_url: Starting URL for crawl.
+        max_depth: Maximum crawl depth.
+        max_pages: Maximum pages to crawl.
+        job_id: Task ID for tracking.
+        source_agent_id: Optional provenance threaded to the derived documents.
     """
-    from services.task_lock import TaskType, task_lock
+    from services.task_lock import task_lock
     from services.crawler import SiteCrawler
     from services.url_safety import validate_url_safe
 
     logger.info(
-        f"[Site Crawl] Starting job {job_id} for agent {agent_id}, url={start_url}"
+        f"[Site Crawl] Starting job {job_id} for KB {kb_id}, url={start_url}"
     )
 
     try:
         # Check cancellation before starting
-        if task_lock.is_cancelled(agent_id, job_id):
+        if task_lock.is_cancelled(kb_id, job_id):
             logger.info(f"[Site Crawl] Job {job_id} cancelled before starting")
             return
 
@@ -393,14 +387,14 @@ async def process_site_crawl(
             logger.error(f"[Site Crawl] Unsafe start URL: {start_url} - {reason}")
             async with database.AsyncSessionLocal() as session:
                 await _store_crawl_error(
-                    session, agent_id, start_url,
+                    session, kb_id, start_url,
                     f"URL safety check failed: {reason}",
                 )
                 await session.commit()
             return
 
         # Check cancellation before crawling
-        if task_lock.is_cancelled(agent_id, job_id):
+        if task_lock.is_cancelled(kb_id, job_id):
             logger.info(f"[Site Crawl] Job {job_id} cancelled before crawling")
             return
 
@@ -409,11 +403,11 @@ async def process_site_crawl(
             start_url,
             max_depth=max_depth,
             max_pages=max_pages,
-            should_cancel=lambda: task_lock.is_cancelled(agent_id, job_id),
+            should_cancel=lambda: task_lock.is_cancelled(kb_id, job_id),
         )
 
         # Check cancellation after crawling
-        if task_lock.is_cancelled(agent_id, job_id):
+        if task_lock.is_cancelled(kb_id, job_id):
             logger.info(f"[Site Crawl] Job {job_id} cancelled after crawling")
             return
 
@@ -439,7 +433,7 @@ async def process_site_crawl(
             created_count = 0
             for page in valid_pages:
                 # Check cancellation during URL record creation
-                if task_lock.is_cancelled(agent_id, job_id):
+                if task_lock.is_cancelled(kb_id, job_id):
                     logger.info(f"[Site Crawl] Job {job_id} cancelled during URL creation")
                     # Commit any records created so far
                     try:
@@ -451,7 +445,7 @@ async def process_site_crawl(
                 normalized = normalize_url(page.url)
                 exists = await session.scalar(
                     select(URLSource).where(
-                        URLSource.agent_id == agent_id,
+                        URLSource.kb_id == kb_id,
                         URLSource.normalized_url == normalized,
                     )
                 )
@@ -459,7 +453,7 @@ async def process_site_crawl(
                     continue
 
                 url_source = URLSource(
-                    agent_id=agent_id,
+                    kb_id=kb_id,
                     url=page.url,
                     normalized_url=normalized,
                     status="pending",
@@ -476,7 +470,7 @@ async def process_site_crawl(
                     f"({len(valid_pages)} valid). "
                     f"The site may have no sub-links or the start page may be unreachable."
                 )
-                await _store_crawl_error(session, agent_id, start_url, error_msg)
+                await _store_crawl_error(session, kb_id, start_url, error_msg)
 
             # Commit with IntegrityError safety net (defensive against race conditions)
             try:
@@ -491,14 +485,18 @@ async def process_site_crawl(
             logger.info(f"[Site Crawl] Created {created_count} URL records")
 
         # Check cancellation before indexing
-        if task_lock.is_cancelled(agent_id, job_id):
+        if task_lock.is_cancelled(kb_id, job_id):
             logger.info(f"[Site Crawl] Job {job_id} cancelled before indexing")
             return
 
         # Trigger refetch to index all discovered URLs (only if we found pages)
         if valid_pages:
             await process_url_refetch(
-                agent_id, None, False, f"{job_id}_refetch",
+                kb_id=kb_id,
+                url_ids=None,
+                force=False,
+                job_id=f"{job_id}_refetch",
+                source_agent_id=source_agent_id,
                 release_lock=False,
                 parent_job_id=job_id,
             )
@@ -513,57 +511,53 @@ async def process_site_crawl(
         try:
             async with database.AsyncSessionLocal() as session:
                 await _store_crawl_error(
-                    session, agent_id, start_url,
+                    session, kb_id, start_url,
                     f"Site crawl failed: {str(e)[:500]}",
                 )
                 await session.commit()
         except Exception:
             logger.exception(f"[Site Crawl] Failed to store error for job {job_id}")
     finally:
-        await task_lock.release_task(agent_id, job_id)
-
+        await task_lock.release_task(kb_id, job_id)
 
 async def process_index_rebuild(
-    agent_id: str,
+    kb_id: str,
     force: bool,
     job_id: str,
+    source_agent_id: Optional[str] = None,
 ):
-    """Background task: rebuild index for all URLs.
+    """Background task: rebuild the index of one KB.
 
     Args:
-        agent_id: Agent ID
-        force: Force rebuild (clear existing index)
-        job_id: Task ID for tracking
+        kb_id: Knowledge base to rebuild.
+        force: Force rebuild (clear existing index).
+        job_id: Task ID for tracking.
+        source_agent_id: Optional provenance threaded to the derived documents.
     """
-    from services.task_lock import TaskType, task_lock
+    from services.task_lock import task_lock
     from services.qdrant_service import QdrantKbService, get_embedding_dimension
 
-    logger.info(f"[Index Rebuild] Starting job {job_id} for agent {agent_id}")
+    logger.info(f"[Index Rebuild] Starting job {job_id} for KB {kb_id}")
 
     try:
         async with database.AsyncSessionLocal() as session:
-            # Get agent and KB
-            result = await session.execute(select(Agent).where(Agent.id == agent_id))
-            agent = result.scalar_one_or_none()
-            if not agent or not agent.kb_id:
-                logger.error(f"[Index Rebuild] Agent {agent_id} has no KB")
-                return
-
-            kb_id = agent.kb_id
             from models import KnowledgeBase
+
+            kb_row = (
+                await session.execute(
+                    select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+                )
+            ).scalar_one_or_none()
+            if kb_row is None:
+                logger.error(f"[Index Rebuild] KB {kb_id} not found")
+                return
 
             # If force=True, clear existing Qdrant data
             if force:
                 logger.info(f"[Index Rebuild] Clearing existing index for KB {kb_id}")
-                kb_row = (
-                    await session.execute(
-                        select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
-                    )
-                ).scalar_one_or_none()
                 dimension = (
                     int(kb_row.embedding_dimension)
-                    if kb_row is not None
-                    and getattr(kb_row, "embedding_dimension", None)
+                    if getattr(kb_row, "embedding_dimension", None)
                     else get_embedding_dimension(
                         str(getattr(kb_row, "embedding_model", "") or "")
                     )
@@ -574,35 +568,41 @@ async def process_index_rebuild(
 
                 # Reset is_indexed flag for all URLs
                 result = await session.execute(
-                    select(URLSource).where(URLSource.agent_id == agent_id)
+                    select(URLSource).where(URLSource.kb_id == kb_id)
                 )
                 for url_source in result.scalars():
                     url_source.is_indexed = False
                 await session.commit()
 
         # Trigger refetch to reindex all URLs
-        await process_url_refetch(agent_id, None, True, f"{job_id}_refetch", release_lock=False)
+        await process_url_refetch(
+            kb_id=kb_id,
+            url_ids=None,
+            force=True,
+            job_id=f"{job_id}_refetch",
+            source_agent_id=source_agent_id,
+            release_lock=False,
+        )
 
         logger.info(f"[Index Rebuild] Job {job_id} completed")
 
     except Exception as e:
         logger.exception(f"[Index Rebuild] Job {job_id} failed: {e}")
     finally:
-        await task_lock.release_task(agent_id, job_id)
+        await task_lock.release_task(kb_id, job_id)
 
-
-async def repair_url_indexed_status(agent_id: str) -> dict:
-    """Repair is_indexed status for URLs by checking corresponding KbDocument status.
+async def repair_url_indexed_status(kb_id: str) -> dict:
+    """Repair is_indexed status for URLs by checking the matching KbDocument.
 
     This fixes the issue where URLs have status="success" but is_indexed=False
     due to a session isolation bug in process_url_refetch.
 
     For each URL with status="success" and is_indexed=False, it finds the
-    corresponding KbDocument (filename=url_{url_id}.txt) and sets is_indexed=True
-    if the document status is "ready".
+    corresponding KbDocument (filename=url_{url_id}.txt in the same KB) and sets
+    is_indexed=True if the document status is "ready".
 
     Args:
-        agent_id: The agent ID to repair
+        kb_id: The knowledge base whose URL rows are repaired
 
     Returns:
         Dict with repair stats: {"fixed": int, "already_correct": int, "errors": int}
@@ -610,9 +610,9 @@ async def repair_url_indexed_status(agent_id: str) -> dict:
     from models import KbDocument
 
     async with database.AsyncSessionLocal() as session:
-        # Get all URLs for this agent with status="success" but is_indexed=False
+        # Get all URLs for this KB with status="success" but is_indexed=False
         stmt = select(URLSource).where(
-            URLSource.agent_id == agent_id,
+            URLSource.kb_id == kb_id,
             URLSource.status == "success",
             URLSource.is_indexed == False,
         )
@@ -627,7 +627,10 @@ async def repair_url_indexed_status(agent_id: str) -> dict:
             try:
                 # Find the corresponding KbDocument (filename=url_{url_id}.txt)
                 doc_filename = f"url_{url_source.id}.txt"
-                doc_stmt = select(KbDocument).where(KbDocument.filename == doc_filename)
+                doc_stmt = select(KbDocument).where(
+                    KbDocument.filename == doc_filename,
+                    KbDocument.kb_id == kb_id,
+                )
                 doc_result = await session.execute(doc_stmt)
                 doc = doc_result.scalar_one_or_none()
 
@@ -664,7 +667,7 @@ async def repair_url_indexed_status(agent_id: str) -> dict:
 
         # Also check URLs that are already correctly marked as indexed
         correct_stmt = select(URLSource).where(
-            URLSource.agent_id == agent_id,
+            URLSource.kb_id == kb_id,
             URLSource.status == "success",
             URLSource.is_indexed == True,
         )
@@ -672,7 +675,7 @@ async def repair_url_indexed_status(agent_id: str) -> dict:
         already_correct = len(list(correct_result.scalars().all()))
 
         logger.info(
-            f"[Repair] Agent {agent_id}: fixed={fixed}, already_correct={already_correct}, "
+            f"[Repair] KB {kb_id}: fixed={fixed}, already_correct={already_correct}, "
             f"errors={errors}"
         )
 

@@ -1,12 +1,13 @@
 """定时任务调度服务"""
 
 import logging
+import uuid
 from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_, delete, or_
 
 from database import AsyncSessionLocal
 from models import (
@@ -19,7 +20,8 @@ from models import (
     Workspace,
     WorkspaceQuota,
 )
-from services.crawler import SiteCrawler
+from services.task_lock import task_lock, TaskType
+from services.url_service import process_url_refetch
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +71,17 @@ class URLFetchScheduler:
         检查并抓取需要更新的URL
 
         逻辑：
-        1. 获取所有启用了自动抓取的Agent
-        2. 对于每个Agent，检查其URL源
-        3. 如果URL的last_fetch_at超过设定的间隔天数，则重新抓取
+        1. 回收所有「从未抓取过、仍是 pending」的URL（与 enable_auto_fetch 无关）
+        2. 获取所有启用了自动抓取的Agent（且已绑定KB）
+        3. 对于每个Agent，检查其KB的URL源
+        4. 如果URL的last_fetch_at超过设定的间隔天数，则重新抓取
         """
         try:
             logger.info("Checking URLs that need to be refetched...")
 
             async with AsyncSessionLocal() as db:
+                await self.fetch_never_fetched_urls(db)
+
                 # 获取所有启用了自动抓取的Agent
                 result = await db.execute(
                     select(Agent).where(Agent.enable_auto_fetch == True)
@@ -89,16 +94,92 @@ class URLFetchScheduler:
         except Exception as e:
             logger.exception(f"Error in check_and_fetch_urls: {e}")
 
-    async def fetch_agent_urls(self, db: AsyncSession, agent: Agent):
-        """抓取特定Agent的URL，读取列表后不再持有会话执行 HTTP 请求"""
+    async def fetch_never_fetched_urls(self, db: AsyncSession):
+        """Catch-all: fetch every URL row that was never fetched.
+
+        A row is ``pending`` with ``last_fetch_at IS NULL`` when it was created but
+        no fetch ever ran — e.g. the example seed could not take the task lock, or
+        the process died between the commit and the background task. Independent of
+        ``enable_auto_fetch`` on purpose: leaving content unindexed forever is not a
+        preference.
+
+        ``failed`` rows are deliberately NOT retried here; the operator hits
+        "重建索引" for those.
+        """
         try:
+            result = await db.execute(
+                select(URLSource).where(
+                    URLSource.status == "pending",
+                    URLSource.last_fetch_at.is_(None),
+                )
+            )
+            url_sources = result.scalars().all()
+
+            if not url_sources:
+                logger.debug("No never-fetched pending URLs")
+                return
+
+            logger.info(
+                f"Catch-all: fetching {len(url_sources)} never-fetched pending URLs"
+            )
+
+            await self._refetch_grouped_by_kb(
+                self._group_ids_by_kb(url_sources), context="catch-all"
+            )
+
+        except Exception as e:
+            logger.exception(f"Error in fetch_never_fetched_urls: {e}")
+
+    @staticmethod
+    def _group_ids_by_kb(url_sources) -> dict[str, list[int]]:
+        """Group URL row IDs by owning KB (one refetch job per KB, not per row)."""
+        groups: dict[str, list[int]] = {}
+        for url_source in url_sources:
+            groups.setdefault(str(url_source.kb_id), []).append(url_source.id)
+        return groups
+
+    async def _refetch_grouped_by_kb(
+        self, groups: dict[str, list[int]], context: str
+    ) -> None:
+        """Run the real ingest path once per KB, under that KB's task lock.
+
+        ``process_url_refetch`` creates the KbDocument, chunks, embeds and upserts
+        the Qdrant points — writing the fetched text alone (what this scheduler
+        used to do) left the KB with zero retrievable content.
+        """
+        for kb_id, ids in groups.items():
+            job_id = f"sched_refetch_{kb_id}_{uuid.uuid4().hex[:8]}"
+            acquired, err = await task_lock.acquire_task(
+                kb_id, TaskType.URL_REFETCH, job_id
+            )
+            if not acquired:
+                logger.info(
+                    f"{context}: lock held for KB {kb_id} ({err}), "
+                    f"skipping this cycle"
+                )
+                continue
+            await process_url_refetch(
+                kb_id=kb_id,
+                url_ids=ids,
+                force=False,
+                job_id=job_id,
+                source_agent_id=None,
+            )
+
+    async def fetch_agent_urls(self, db: AsyncSession, agent: Agent):
+        """抓取特定Agent绑定KB的URL，读取列表后不再持有会话执行 HTTP 请求"""
+        try:
+            if not agent.kb_id:
+                logger.debug(f"Agent {agent.id} has no bound KB; skipping")
+                return
+
             interval_days = agent.url_fetch_interval_days or 7
             threshold_date = datetime.now(timezone.utc) - timedelta(days=interval_days)
 
             result = await db.execute(
                 select(URLSource).where(
                     and_(
-                        URLSource.agent_id == agent.id,
+                        URLSource.kb_id == agent.kb_id,
                         URLSource.status == "success",
                         (
                             (URLSource.last_fetch_at < threshold_date)
@@ -110,104 +191,21 @@ class URLFetchScheduler:
             url_sources = result.scalars().all()
 
             if not url_sources:
-                logger.debug(f"No URLs need refetching for agent {agent.id}")
+                logger.debug(f"No URLs need refetching for KB {agent.kb_id}")
                 return
 
             logger.info(
-                f"Found {len(url_sources)} URLs to refetch for agent {agent.id} "
+                f"Found {len(url_sources)} URLs to refetch for KB {agent.kb_id} "
                 f"(interval: {interval_days} days)"
             )
 
-            crawler = SiteCrawler()
-
-            for url_source in url_sources:
-                await self.fetch_single_url(crawler, url_source.id, str(agent.id))
+            await self._refetch_grouped_by_kb(
+                self._group_ids_by_kb(url_sources),
+                context=f"agent {agent.id}",
+            )
 
         except Exception as e:
             logger.exception(f"Error in fetch_agent_urls for agent {agent.id}: {e}")
-
-    async def fetch_single_url(
-        self,
-        crawler: SiteCrawler,
-        url_source_id: int,
-        agent_id: str,
-    ):
-        """抓取单个URL，使用短生命周期数据库会话"""
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(URLSource).where(URLSource.id == url_source_id)
-                )
-                url_source = result.scalar_one_or_none()
-                if not url_source:
-                    return
-                logger.info(f"Refetching URL {url_source.url} (ID: {url_source.id})")
-                url = url_source.url
-                old_hash = url_source.content_hash
-                url_source.status = "fetching"
-                await db.commit()
-
-            page_result = await crawler.crawl_single_page(url)
-
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(URLSource).where(URLSource.id == url_source_id)
-                )
-                url_source = result.scalar_one_or_none()
-                if not url_source:
-                    return
-
-                if page_result.success:
-                    new_hash = page_result.content_hash
-                    if old_hash != new_hash:
-                        url_source.status = "success"
-                        url_source.title = page_result.title
-                        url_source.content = page_result.content
-                        url_source.content_hash = new_hash
-                        url_source.last_fetch_at = datetime.now(timezone.utc)
-                        url_source.fetch_metadata = page_result.metadata
-                        logger.info(
-                            f"URL {url_source.url} content changed, updated. "
-                            f"Old hash: {old_hash[:8] if old_hash else 'None'}..., New hash: {new_hash[:8]}..."
-                        )
-                    else:
-                        url_source.status = "success"
-                        url_source.last_fetch_at = datetime.now(timezone.utc)
-                        logger.info(
-                            f"URL {url_source.url} content unchanged, only updated timestamp"
-                        )
-
-                    await db.commit()
-
-                    if old_hash != new_hash:
-                        logger.info(
-                            f"URL content changed for {url_source.url} (self-KB handles indexing)"
-                        )
-                else:
-                    url_source.status = "failed"
-                    url_source.last_error = page_result.error or "Unknown error"
-                    await db.commit()
-                    logger.error(
-                        f"Failed to refetch URL {url_source.url}: {page_result.error}"
-                    )
-
-        except Exception as e:
-            logger.exception(
-                f"Error in fetch_single_url for URL ID {url_source_id}: {e}"
-            )
-            try:
-                async with AsyncSessionLocal() as db:
-                    result = await db.execute(
-                        select(URLSource).where(URLSource.id == url_source_id)
-                    )
-                    url_source = result.scalar_one_or_none()
-                    if url_source:
-                        url_source.status = "failed"
-                        url_source.last_error = str(e)
-                        await db.commit()
-            except Exception:
-                logger.exception("Failed to persist fetch_single_url error state")
-
 
 # 全局实例
 url_fetch_scheduler = URLFetchScheduler()
@@ -437,7 +435,9 @@ class AgentPurgeScheduler:
         if ids:
             await db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(ids)))
         await db.execute(delete(ChatSession).where(ChatSession.agent_id == agent.id))
-        await db.execute(delete(URLSource).where(URLSource.agent_id == agent.id))
+        # URL sources belong to the KB. Soft-delete already cleared `agent.kb_id`,
+        # so this row has no pointer left; even if it did, the KB (and its URLs)
+        # must outlive the agent. KnowledgeFile is still agent-keyed (dead table).
         await db.execute(
             delete(KnowledgeFile).where(KnowledgeFile.agent_id == agent.id)
         )

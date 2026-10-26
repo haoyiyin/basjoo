@@ -175,13 +175,7 @@ async def init_db():
             else:
                 print(f"✓ 默认工作空间已存在(ID={existing_workspace.id})")
                 print("✓ 未自动创建Agent，等待管理员在后台创建")
-                # The default workspace exists but holds nothing: seed the built-in
-                # example. The TEI container may still be starting up, so this is
-                # best-effort here and self-heals on the first login.
-                await session.close()
-                try:
-                    from services.example_seed import ensure_example_agent
-
-                    await ensure_example_agent(existing_workspace.id)
-                except Exception as exc:  # never block startup
-                    print(f"⚠ 示例Agent种子数据跳过: {type(exc).__name__}: {exc}")
+                # The built-in example is seeded from the login/register paths only
+                # (`api/endpoints/auth.py` -> `ensure_example_agent`). Seeding it here
+                # gave the unused bootstrap workspace (id=1, no admin) its own example
+                # KB, and startup is not a user action.

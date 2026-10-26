@@ -627,6 +627,9 @@ def get_llm_service(
 
     Returns:
         BaseLLMService: LLM 服务实例
+
+    Raises:
+        ValueError: use_mock=False 且未提供 API Key 时（生产环境禁止静默降级到 Mock）
     """
     resolved_api_key = api_key if api_key is not None else getattr(agent, "api_key", None)
     resolved_api_base = api_base if api_base is not None else getattr(agent, "api_base", None)
@@ -634,10 +637,15 @@ def get_llm_service(
     resolved_provider_type = provider_type if provider_type is not None else getattr(agent, "provider_type", "openai")
     resolved_provider_type = resolved_provider_type or "openai"
 
-    # 如果没有API key或显式要求使用Mock
-    if use_mock or not resolved_api_key:
-        logger.warning("Agent没有配置API Key，使用Mock LLM服务")
+    # Mock 只在显式要求时使用（测试/演示），生产环境绝不静默降级
+    if use_mock:
+        logger.warning("显式要求使用 Mock LLM 服务（仅用于测试/演示）")
         return MockLLMService(model=resolved_model or "mock-model")
+
+    # 生产路径缺少 API Key 时必须报错，不能回落到 Mock
+    if not resolved_api_key:
+        logger.error("未配置 API Key，拒绝创建 LLM 服务")
+        raise ValueError("api_key required")
 
     # 根据服务商类型创建相应的服务
     if resolved_provider_type == "openai_native":

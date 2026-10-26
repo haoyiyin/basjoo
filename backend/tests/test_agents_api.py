@@ -14,15 +14,14 @@ async def test_agents_can_be_created_listed_selected_and_deactivated(client):
         json={
             "name": "WA Clone",
             "description": "Answers as a personal assistant",
-            "agent_type": "ai_clone",
-            "channel_mode": "whatsapp",
         },
     )
     assert create_response.status_code == 201
     created = create_response.json()
     assert created["name"] == "WA Clone"
-    assert created["agent_type"] == "ai_clone"
-    assert created["channel_mode"] == "whatsapp"
+    # #20: agent type / channel mode are gone end to end.
+    assert "agent_type" not in created
+    assert "channel_mode" not in created
     assert created["workspace_id"] is not None
 
     list_response = await client.get("/api/v1/agents")
@@ -83,7 +82,6 @@ async def test_support_sees_only_assigned_agents(client, support_client, setup_t
         json={
             "name": "Agent A",
             "description": "First agent",
-            "agent_type": "ai_clone",
         },
     )
     assert create_response_1.status_code == 201
@@ -94,7 +92,6 @@ async def test_support_sees_only_assigned_agents(client, support_client, setup_t
         json={
             "name": "Agent B",
             "description": "Second agent",
-            "agent_type": "ai_clone",
         },
     )
     assert create_response_2.status_code == 201
@@ -139,7 +136,7 @@ async def test_readonly_denied_on_agent_listing(readonly_client):
 async def test_agent_name_accepts_ten_ascii_display_units(client):
     response = await client.post(
         "/api/v1/agents",
-        json={"name": "AgentName1", "agent_type": "ai_clone"},
+        json={"name": "AgentName1"},
     )
 
     assert response.status_code == 201
@@ -150,7 +147,7 @@ async def test_agent_name_accepts_ten_ascii_display_units(client):
 async def test_agent_name_accepts_six_chinese_characters(client):
     response = await client.post(
         "/api/v1/agents",
-        json={"name": "客服助手一二", "agent_type": "ai_clone"},
+        json={"name": "客服助手一二"},
     )
 
     assert response.status_code == 201
@@ -163,7 +160,7 @@ async def test_agent_name_accepts_the_builtin_example_name(client):
     # legal name so an admin can re-save the example untouched.
     response = await client.post(
         "/api/v1/agents",
-        json={"name": "Basjoo 助手", "agent_type": "ai_clone"},
+        json={"name": "Basjoo 助手"},
     )
 
     assert response.status_code == 201
@@ -175,7 +172,7 @@ async def test_agent_name_accepts_the_builtin_example_name(client):
 async def test_agent_name_rejects_more_than_twelve_display_units(client, name):
     response = await client.post(
         "/api/v1/agents",
-        json={"name": name, "agent_type": "ai_clone"},
+        json={"name": name},
     )
 
     assert response.status_code == 422
@@ -186,7 +183,7 @@ async def test_agent_name_rejects_more_than_twelve_display_units(client, name):
 async def test_agent_update_rejects_over_limit_display_width_name(client):
     create_response = await client.post(
         "/api/v1/agents",
-        json={"name": "AgentName1", "agent_type": "ai_clone"},
+        json={"name": "AgentName1"},
     )
     assert create_response.status_code == 201
     agent_id = create_response.json()["id"]
@@ -198,3 +195,55 @@ async def test_agent_update_rejects_over_limit_display_width_name(client):
 
     assert update_response.status_code == 422
     assert "12" in update_response.text
+
+
+# ── #20: agent_type / channel_mode are gone end to end ───────────────────────
+
+@pytest.mark.asyncio
+async def test_create_agent_ignores_removed_type_and_channel_fields(client):
+    """Extra body keys are ignored by Pydantic and never persisted (#20)."""
+    response = await client.post(
+        "/api/v1/agents",
+        json={
+            "name": "NoType",
+            "description": "legacy payload",
+            "agent_type": "ai_clone",
+            "channel_mode": "whatsapp",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert "agent_type" not in created
+    assert "channel_mode" not in created
+
+    listed = await client.get("/api/v1/agents")
+    assert listed.status_code == 200
+    item = next(a for a in listed.json()["agents"] if a["id"] == created["id"])
+    assert "agent_type" not in item
+    assert "channel_mode" not in item
+
+    async with database.AsyncSessionLocal() as session:
+        from models import Agent
+
+        agent = await session.get(Agent, created["id"])
+        assert not hasattr(agent, "agent_type")
+        assert not hasattr(agent, "channel_mode")
+
+    await client.delete(f"/api/v1/agents/{created['id']}")
+
+
+@pytest.mark.asyncio
+async def test_agent_payload_keeps_persona_type_and_auto_fetch(client):
+    """`persona_type` and `enable_auto_fetch` stay on the wire (only type/channel went)."""
+    response = await client.post(
+        "/api/v1/agents",
+        json={"name": "PersonaK", "persona_type": "sales"},
+    )
+    assert response.status_code == 201, response.text
+    created = response.json()
+
+    assert created["persona_type"] == "sales"
+    assert "enable_auto_fetch" in created
+
+    await client.delete(f"/api/v1/agents/{created['id']}")

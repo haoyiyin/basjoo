@@ -65,20 +65,12 @@ export type EmbeddingProvider =
 	| "siliconflow"
 	| "custom"
 	| "local";
-export type AgentType =
-	| "website_support"
-	| "ai_clone"
-	| "sales_outreach"
-	| "custom";
-export type AgentChannelMode = "web_widget" | "whatsapp" | "email" | "custom";
 
 export interface Agent {
 	id: string;
 	workspace_id?: number;
 	name: string;
 	description?: string;
-	agent_type?: AgentType;
-	channel_mode?: AgentChannelMode;
 	avatar?: string | null;
 	system_prompt: string;
 	model: string;
@@ -262,6 +254,76 @@ export interface URLListResponse {
 	updated_at?: string;
 }
 
+/** Result of `POST /knowledge-bases/{kb_id}/urls:clear_all` and files:clear_all. */
+export interface KbClearResponse {
+	success?: boolean;
+	message?: string;
+	deleted_count?: number;
+}
+
+/** Result of `POST /knowledge-bases/{kb_id}/urls:refetch`. */
+export interface KbUrlRefetchResponse {
+	job_id: string;
+	status: string;
+	message: string;
+}
+
+/** Result of `POST /knowledge-bases/{kb_id}/urls:cancel`. */
+export interface KbUrlCancelResponse {
+	cancelled: number;
+	task_ids: string[];
+	message: string;
+}
+
+/** Result of `POST /knowledge-bases/{kb_id}/urls:crawl_site`. */
+export interface KbSiteCrawlResponse {
+	job_id: string;
+	status: string;
+	discovered: number;
+	created: number;
+	message: string;
+}
+
+/** Result of `POST /knowledge-bases/{kb_id}/files:upload`. */
+export interface KbFileUploadResponse {
+	uploaded: number;
+	failed: number;
+	files: FileItem[];
+	errors: string[];
+}
+
+/** Result of `POST /knowledge-bases/{kb_id}/index:rebuild`. */
+export interface KbIndexRebuildResponse {
+	job_id: string;
+	status: string;
+	message: string;
+}
+
+/** Result of `GET /knowledge-bases/{kb_id}/index:status`. */
+export interface KbIndexStatusResponse {
+	kb_id: string;
+	job_id?: string | null;
+	status: string;
+	result?: Record<string, unknown> | null;
+}
+
+/** Result of `GET /knowledge-bases/{kb_id}/sources:summary`. */
+export interface KbSourcesSummaryResponse {
+	urls: {
+		total: number;
+		indexed: number;
+		pending: number;
+		total_size_kb: number;
+	};
+	files: {
+		total: number;
+		ready: number;
+		processing: number;
+		total_size_kb: number;
+	};
+	has_pending: boolean;
+}
+
 export interface FileItem {
 	id: string;
 	filename: string;
@@ -293,8 +355,6 @@ export interface Quota {
 export interface AgentCreateInput {
 	name: string;
 	description?: string;
-	agent_type?: AgentType;
-	channel_mode?: AgentChannelMode;
 	system_prompt?: string;
 	persona_type?: string;
 	widget_title?: string;
@@ -1054,6 +1114,174 @@ class APIService {
 		status: string;
 	}> {
 		return this.request(`/api/v1/index:info?agent_id=${agentId}`);
+	}
+
+	// KB-scoped source APIs (canonical routes; no agent in the request path).
+	// The KB page composes URL + file management, so these helpers take `kbId`.
+
+	private kbBase(kbId: string): string {
+		return `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}`;
+	}
+
+	async listKbUrls(
+		kbId: string,
+		skip = 0,
+		limit = 100,
+	): Promise<URLListResponse> {
+		return this.request<URLListResponse>(
+			`${this.kbBase(kbId)}/urls:list?skip=${skip}&limit=${limit}`,
+		);
+	}
+
+	async createKbUrls(
+		kbId: string,
+		urls: string[],
+	): Promise<URLListResponse> {
+		return this.request<URLListResponse>(`${this.kbBase(kbId)}/urls:create`, {
+			method: "POST",
+			body: JSON.stringify({ urls }),
+		});
+	}
+
+	async deleteKbUrl(kbId: string, urlId: number): Promise<void> {
+		await this.request(`${this.kbBase(kbId)}/urls:delete?url_id=${urlId}`, {
+			method: "DELETE",
+		});
+	}
+
+	async clearKbUrls(kbId: string): Promise<KbClearResponse> {
+		return this.request<KbClearResponse>(
+			`${this.kbBase(kbId)}/urls:clear_all`,
+			{ method: "POST" },
+		);
+	}
+
+	async refetchKbUrls(
+		kbId: string,
+		urlIds?: number[],
+		force = false,
+	): Promise<KbUrlRefetchResponse> {
+		return this.request<KbUrlRefetchResponse>(
+			`${this.kbBase(kbId)}/urls:refetch`,
+			{
+				method: "POST",
+				body: JSON.stringify({ url_ids: urlIds ?? null, force }),
+			},
+		);
+	}
+
+	async cancelKbUrlTasks(kbId: string): Promise<KbUrlCancelResponse> {
+		return this.request<KbUrlCancelResponse>(
+			`${this.kbBase(kbId)}/urls:cancel`,
+			{ method: "POST" },
+		);
+	}
+
+	async crawlKbSite(
+		kbId: string,
+		url: string,
+		maxDepth = 2,
+		maxPages = 20,
+	): Promise<KbSiteCrawlResponse> {
+		return this.request<KbSiteCrawlResponse>(
+			`${this.kbBase(kbId)}/urls:crawl_site`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					url,
+					max_depth: maxDepth,
+					max_pages: maxPages,
+				}),
+			},
+		);
+	}
+
+	async discoverKbUrls(
+		kbId: string,
+		url: string,
+		maxDepth = 1,
+		maxPages = 10,
+	): Promise<{ discovered: number; created: number; message: string }> {
+		const query = `url=${encodeURIComponent(url)}&max_depth=${maxDepth}&max_pages=${maxPages}`;
+		return this.request(`${this.kbBase(kbId)}/urls:discover?${query}`, {
+			method: "POST",
+		});
+	}
+
+	async listKbFiles(
+		kbId: string,
+		skip = 0,
+		limit = 100,
+	): Promise<{ files: FileItem[]; total: number; quota: { used: number; max: number } }> {
+		return this.request(
+			`${this.kbBase(kbId)}/files:list?skip=${skip}&limit=${limit}`,
+		);
+	}
+
+	async uploadKbFiles(
+		kbId: string,
+		files: File[],
+	): Promise<KbFileUploadResponse> {
+		const formData = new FormData();
+		for (const file of files) {
+			formData.append("files", file);
+		}
+		const token = localStorage.getItem("token");
+		const url = new URL(
+			`${this.baseUrl}${this.kbBase(kbId)}/files:upload`,
+			window.location.origin,
+		);
+		url.searchParams.set("locale", this.getLocale());
+
+		const response = await fetch(url.toString(), {
+			method: "POST",
+			headers: {
+				...(token ? { Authorization: `Bearer ${token}` } : {}),
+			},
+			body: formData,
+		});
+
+		if (!response.ok) {
+			throw new Error(await parseErrorResponse(response));
+		}
+
+		return response.json();
+	}
+
+	async deleteKbFile(kbId: string, fileId: string): Promise<void> {
+		await this.request(
+			`${this.kbBase(kbId)}/files:delete?file_id=${encodeURIComponent(fileId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	async clearKbFiles(kbId: string): Promise<KbClearResponse> {
+		return this.request<KbClearResponse>(
+			`${this.kbBase(kbId)}/files:clear_all`,
+			{ method: "POST" },
+		);
+	}
+
+	async rebuildKbIndex(
+		kbId: string,
+		force = false,
+	): Promise<KbIndexRebuildResponse> {
+		return this.request<KbIndexRebuildResponse>(
+			`${this.kbBase(kbId)}/index:rebuild`,
+			{ method: "POST", body: JSON.stringify({ force }) },
+		);
+	}
+
+	async getKbIndexStatus(kbId: string): Promise<KbIndexStatusResponse> {
+		return this.request<KbIndexStatusResponse>(
+			`${this.kbBase(kbId)}/index:status`,
+		);
+	}
+
+	async getKbSourcesSummary(kbId: string): Promise<KbSourcesSummaryResponse> {
+		return this.request<KbSourcesSummaryResponse>(
+			`${this.kbBase(kbId)}/sources:summary`,
+		);
 	}
 
 	// Models API

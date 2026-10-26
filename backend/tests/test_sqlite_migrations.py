@@ -860,3 +860,293 @@ def test_kb_migration_block_is_idempotent():
         assert sorted(first_indexes) == sorted(second_indexes)
     finally:
         os.unlink(db_path)
+
+# ---- URL sources: agent scope -> KB scope (issues #15/#16) ------------------
+
+LEGACY_URL_SOURCES_DDL = """
+CREATE TABLE workspaces (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_email TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE knowledge_bases (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    embedding_provider TEXT NOT NULL DEFAULT 'jina',
+    embedding_model TEXT NOT NULL DEFAULT 'BAAI/bge-m3',
+    embedding_base_url TEXT,
+    vector_backend TEXT NOT NULL DEFAULT 'qdrant',
+    qdrant_collection TEXT NOT NULL,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    chunk_size INTEGER NOT NULL DEFAULT 512,
+    chunk_overlap INTEGER NOT NULL DEFAULT 64,
+    status TEXT NOT NULL DEFAULT 'active',
+    error_message TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE agents (
+    id TEXT PRIMARY KEY,
+    workspace_id INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT 'AI Agent',
+    agent_type VARCHAR(50) NOT NULL DEFAULT 'website_support',
+    channel_mode VARCHAR(50) NOT NULL DEFAULT 'web_widget',
+    model TEXT NOT NULL DEFAULT 'gpt-4o-mini',
+    api_base TEXT DEFAULT 'https://api.openai.com/v1',
+    kb_id TEXT,
+    embedding_provider TEXT,
+    embedding_api_base TEXT,
+    embedding_model TEXT,
+    embedding_batch_size INTEGER,
+    jina_api_key TEXT,
+    siliconflow_api_key TEXT,
+    kb_setup_completed INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX ix_agents_agent_type ON agents(agent_type);
+CREATE TABLE url_sources (
+    id INTEGER PRIMARY KEY,
+    agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+    url VARCHAR(1000) NOT NULL,
+    normalized_url VARCHAR(1000) NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    last_fetch_at DATETIME,
+    last_error TEXT,
+    title VARCHAR(500),
+    content TEXT,
+    content_hash VARCHAR(64),
+    fetch_metadata JSON,
+    is_indexed BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME,
+    CONSTRAINT uq_agent_normalized_url UNIQUE (agent_id, normalized_url)
+);
+CREATE INDEX ix_url_sources_agent_id ON url_sources(agent_id);
+CREATE INDEX ix_url_sources_agent_status ON url_sources(agent_id, status);
+"""
+
+def _create_legacy_url_source_db(db_path: str) -> str:
+    """Legacy install: url_sources hang off agents, one agent is bound to a KB."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(LEGACY_URL_SOURCES_DDL)
+    conn.execute(
+        "INSERT INTO workspaces (id, name, owner_email) VALUES (3, 'WS3', 'ws3@test.com')"
+    )
+    conn.execute(
+        "INSERT INTO knowledge_bases (id, name, qdrant_collection) "
+        "VALUES ('kb_bound', 'Bound KB', 'kb_bound_collection')"
+    )
+    # Agent bound to a KB: its URL sources are recoverable.
+    conn.execute(
+        "INSERT INTO agents (id, workspace_id, name, kb_id, created_at) VALUES "
+        "('agt_bound', 3, 'Bound Agent', 'kb_bound', '2023-01-01 00:00:00')"
+    )
+    # Agent without a KB: its URL sources cannot be indexed anywhere.
+    conn.execute(
+        "INSERT INTO agents (id, workspace_id, name, created_at) VALUES "
+        "('agt_unbound', 3, 'Unbound Agent', '2023-01-02 00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO url_sources "
+        "(id, agent_id, url, normalized_url, status, content_hash, is_indexed) "
+        "VALUES (1, 'agt_bound', 'https://example.com/a', 'https://example.com/a', "
+        "'success', 'hash-a', 1)"
+    )
+    conn.execute(
+        "INSERT INTO url_sources "
+        "(id, agent_id, url, normalized_url, status, is_indexed) "
+        "VALUES (2, 'agt_unbound', 'https://example.com/orphan', "
+        "'https://example.com/orphan', 'pending', 0)"
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+def _url_source_rows(db_path: str) -> dict[int, sqlite3.Row]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = {
+        row["id"]: row
+        for row in conn.execute("SELECT * FROM url_sources ORDER BY id").fetchall()
+    }
+    conn.close()
+    return rows
+
+def _table_columns(db_path: str, table: str) -> set[str]:
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    conn.close()
+    return columns
+
+def test_migration_rebuilds_url_sources_to_kb_scope():
+    """Legacy agent-scoped rows are re-pointed at the agent's KB; orphans dropped."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_url_source_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        columns = _table_columns(db_path, "url_sources")
+        assert "kb_id" in columns
+        assert "agent_id" not in columns
+
+        rows = _url_source_rows(db_path)
+        # Only the row whose agent is bound to a KB survives.
+        assert sorted(rows) == [1]
+        surviving = rows[1]
+        assert surviving["kb_id"] == "kb_bound"
+        assert surviving["url"] == "https://example.com/a"
+        assert surviving["normalized_url"] == "https://example.com/a"
+        assert surviving["status"] == "success"
+        assert surviving["content_hash"] == "hash-a"
+        assert surviving["is_indexed"] == 1
+        # The orphan (agent without a KB) is gone, not re-pointed at anything.
+        assert "https://example.com/orphan" not in {
+            row["url"] for row in rows.values()
+        }
+    finally:
+        os.unlink(db_path)
+
+def test_migration_url_sources_unique_is_per_kb():
+    """uq_kb_normalized_url is enforced on (kb_id, normalized_url), per KB."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_url_source_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        index_names = _index_names(db_path, "url_sources")
+        assert "uq_kb_normalized_url" in index_names
+        assert "ix_url_sources_kb_status" in index_names
+        assert "ix_url_sources_agent_status" not in index_names
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO knowledge_bases (id, name, qdrant_collection) "
+            "VALUES ('kb_other', 'Other KB', 'kb_other_collection')"
+        )
+        conn.commit()
+        # Same URL under a different KB is fine.
+        conn.execute(
+            "INSERT INTO url_sources (kb_id, url, normalized_url, status) "
+            "VALUES ('kb_other', 'https://example.com/a', 'https://example.com/a', 'pending')"
+        )
+        conn.commit()
+        # Same URL under the same KB is a duplicate.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO url_sources (kb_id, url, normalized_url, status) "
+                "VALUES ('kb_bound', 'https://example.com/a', "
+                "'https://example.com/a', 'pending')"
+            )
+        conn.close()
+    finally:
+        os.unlink(db_path)
+
+def test_migration_drops_retired_agent_columns():
+    """agents.agent_type / channel_mode are gone after the migration (issue #20)."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_url_source_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        columns = _table_columns(db_path, "agents")
+        assert "agent_type" not in columns
+        assert "channel_mode" not in columns
+        # Nothing else was lost: the row and the KB binding survive.
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, kb_id, name FROM agents WHERE id = 'agt_bound'"
+        ).fetchone()
+        conn.close()
+        assert row["kb_id"] == "kb_bound"
+        assert row["name"] == "Bound Agent"
+        assert "ix_agents_agent_type" not in _index_names(db_path, "agents")
+    finally:
+        os.unlink(db_path)
+
+def test_url_sources_migration_is_idempotent():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_url_source_db(db_path)
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+        first_rows = {k: dict(v) for k, v in _url_source_rows(db_path).items()}
+        first_indexes = sorted(_index_names(db_path, "url_sources"))
+
+        # A second startup must not rebuild, drop or duplicate anything.
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+        second_rows = {k: dict(v) for k, v in _url_source_rows(db_path).items()}
+        second_indexes = sorted(_index_names(db_path, "url_sources"))
+
+        assert first_rows == second_rows
+        assert first_indexes == second_indexes
+        assert sorted(second_rows) == [1]
+    finally:
+        os.unlink(db_path)
+
+def test_url_source_and_agent_model_contract_matches_migration():
+    """models.py declares the shape the migration produces (guards drift)."""
+    from sqlalchemy import UniqueConstraint, inspect
+
+    from models import Agent, KnowledgeBase, URLSource
+
+    url_table = URLSource.__table__
+    assert "kb_id" in url_table.columns
+    assert "agent_id" not in url_table.columns
+    assert url_table.columns["kb_id"].nullable is False
+    assert {fk.target_fullname for fk in url_table.columns["kb_id"].foreign_keys} == {
+        "knowledge_bases.id"
+    }
+
+    unique_names = {
+        constraint.name: [column.name for column in constraint.columns]
+        for constraint in url_table.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert unique_names.get("uq_kb_normalized_url") == ["kb_id", "normalized_url"]
+    assert "uq_agent_normalized_url" not in unique_names
+
+    index_names = {
+        index.name: [column.name for column in index.columns]
+        for index in url_table.indexes
+    }
+    assert index_names.get("ix_url_sources_kb_status") == ["kb_id", "status"]
+    assert "ix_url_sources_agent_status" not in index_names
+
+    assert "agent_type" not in Agent.__table__.columns
+    assert "channel_mode" not in Agent.__table__.columns
+    agent_relationships = inspect(Agent).relationships
+    kb_relationships = inspect(KnowledgeBase).relationships
+    assert "url_sources" not in agent_relationships
+    assert "url_sources" in kb_relationships
+
+def test_migration_completes_a_half_migrated_url_sources_table():
+    """A table that already has kb_id but still has agent_id is still rebuilt."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_url_source_db(db_path)
+        conn = sqlite3.connect(db_path)
+        conn.execute("ALTER TABLE url_sources ADD COLUMN kb_id TEXT")
+        conn.execute("UPDATE url_sources SET kb_id = 'kb_bound'")
+        conn.commit()
+        conn.close()
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        columns = _table_columns(db_path, "url_sources")
+        assert "kb_id" in columns
+        assert "agent_id" not in columns
+        rows = _url_source_rows(db_path)
+        # Rows that were already re-pointed keep their kb_id instead of being
+        # dropped because their agent happens to be unbound.
+        assert {row_id: row["kb_id"] for row_id, row in rows.items()} == {
+            1: "kb_bound",
+            2: "kb_bound",
+        }
+    finally:
+        os.unlink(db_path)

@@ -57,7 +57,7 @@ async def test_url_list_exposes_indexing_error_when_fetch_succeeds_but_processin
 
         # Create URL source: fetch succeeded but not indexed
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=kb_id,
             url="https://example.com/fetch-ok-process-fail",
             normalized_url="https://example.com/fetch-ok-process-fail",
             status="success",  # Fetch succeeded
@@ -151,7 +151,7 @@ async def test_url_list_shows_indexing_status_distinct_from_fetch_status(
 
         # Create URL: fetch success, is_indexed=False (processing in progress)
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=agent.kb_id,
             url="https://example.com/processing-test",
             normalized_url="https://example.com/processing-test",
             status="success",
@@ -341,9 +341,13 @@ async def test_url_response_includes_last_error_for_fetch_failures(client, defau
     import uuid
 
     async with database.AsyncSessionLocal() as session:
+        agent = (
+            await session.execute(select(Agent).where(Agent.id == default_agent_id))
+        ).scalar_one()
+        assert agent.kb_id, "Fixture must bind a KB to the test agent"
         # Create URL with fetch failure
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=agent.kb_id,
             url="https://example.com/fetch-fail",
             normalized_url="https://example.com/fetch-fail",
             status="failed",

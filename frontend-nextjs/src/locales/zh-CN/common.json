@@ -157,34 +157,16 @@
     "noDescription": "暂无描述",
     "namePlaceholder": "例如：官网客服、WhatsApp 分身、邮件开发顾客",
     "descriptionPlaceholder": "说明这个智能体负责的业务、渠道或知识范围。",
-    "type": "智能体类型",
     "selectAgent": "选择智能体",
     "selectForSessions": "选择一个智能体来管理对话。",
     "selectForDashboard": "选择一个智能体来访问其后台。",
     "noAssigned": "未分配智能体",
     "contactSuperAdmin": "请联系工作区超级管理员以获得智能体分配。",
-    "types": {
-      "websiteSupport": "网页 AI 客服",
-      "aiClone": "AI 分身",
-      "salesOutreach": "AI 开发顾客",
-      "custom": "自定义"
-    },
-    "typeDescriptions": {
-      "websiteSupport": "对接网页 widget，回答访客问题。",
-      "aiClone": "为 WhatsApp 等渠道预留分身配置。",
-      "salesOutreach": "为邮件或销售触达场景预留配置。",
-      "custom": "从空白用途开始配置。"
-    },
-    "channels": {
-      "webWidget": "网页组件",
-      "whatsapp": "WhatsApp",
-      "email": "邮件",
-      "custom": "自定义"
-    },
     "kbOnboardingTitle": "设置知识库",
     "kbOnboardingDescription": "配置嵌入服务，让智能体基于你的数据回答问题。稍后也可以在知识库设置中完成。",
     "kbOnboardingSkip": "跳过",
-    "kbOnboardingContinue": "初始化知识库"
+    "kbOnboardingContinue": "初始化知识库",
+    "panelNoKnowledgeBase": "未绑定知识库"
   },
   "placeholders": {
     "enterMessage": "输入消息...",
@@ -790,7 +772,8 @@
       "unbind": "解绑",
       "reset": "重置",
       "delete": "删除",
-      "close": "关闭"
+      "close": "关闭",
+      "sources": "管理来源"
     },
     "status": {
       "active": "正常",
@@ -818,7 +801,11 @@
       "deleteFailed": "删除失败",
       "bindFailed": "绑定操作失败",
       "testFailed": "连接测试失败"
-    }
+    },
+    "bindAgentTitle": "为智能体绑定知识库",
+    "bindAgentDescription": "选择一个知识库绑定到该智能体。没有可绑定的知识库时，请先新建一个。",
+    "bindKbLabel": "选择知识库",
+    "bindKbPlaceholder": "请选择知识库"
   },
   "kbForm": {
     "createTitle": "新建知识库",

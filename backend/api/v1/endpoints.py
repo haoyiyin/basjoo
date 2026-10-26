@@ -28,7 +28,6 @@ from datetime import datetime, timedelta, timezone
 import database
 from database import get_db
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
-from constants import ALLOWED_EXTENSIONS, MAX_FILES_PER_UPLOAD, MAX_FILE_SIZE
 from api.endpoints.auth import (
     get_current_admin,
     require_admin_or_super_admin,
@@ -38,17 +37,14 @@ from api.endpoints.auth import (
 from models import (
     Agent,
     URLSource,
-    KnowledgeFile,
     ChatSession,
     ChatMessage,
     Workspace,
     WorkspaceQuota,
     AdminUser,
     AgentMember,
-    normalize_url,
     KnowledgeBase,
     KbDocument,
-    KbChunk,
 )
 from api.v1.schemas import (
     ChatRequest,
@@ -59,10 +55,8 @@ from api.v1.schemas import (
     URLListResponse,
     URLRefetchRequest,
     URLRefetchResponse,
-    URLItem,
     FileUploadResponse,
     FileListResponse,
-    FileItem,
     AgentConfig,
     AgentCreateRequest,
     AgentListResponse,
@@ -80,25 +74,11 @@ from api.v1.schemas import (
     ModelsListRequest,
     QuotaInfo,
     SourcesSummaryResponse,
-    SourcesURLSummary,
-    SourcesFileSummary,
     SessionListItem,
     SessionListResponse,
     normalize_widget_origin,
 )
 from services import URLNormalizer, TaskType, task_lock
-from services.url_service import (
-    list_urls as svc_list_urls,
-    create_urls as svc_create_urls,
-    delete_url as svc_delete_url,
-    clear_all_urls as svc_clear_all_urls,
-)
-from services.file_service import (
-    list_files as svc_list_files,
-    upload_files as svc_upload_files,
-    delete_file as svc_delete_file,
-    clear_all_files as svc_clear_all_files,
-)
 from core.encryption import encrypt_api_key, decrypt_api_key
 from services.llm_service import get_llm_service
 from services.auth_service import AuthService
@@ -107,9 +87,7 @@ from services.kb_service import KbService
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
-from i18n.core import get_localized_document_processing_error
 import os
-import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +167,6 @@ def build_agent_config(
         "workspace_id": agent.workspace_id,
         "name": agent.name,
         "description": agent.description,
-        "agent_type": getattr(agent, "agent_type", None) or "website_support",
-        "channel_mode": getattr(agent, "channel_mode", None) or "web_widget",
         "avatar": getattr(agent, "avatar", None),
         "system_prompt": agent.system_prompt,
         "model": agent.model,
@@ -268,9 +244,16 @@ async def build_agent_config_with_stats(agent: Agent, db: AsyncSession) -> dict:
             kb_name, kb_status = kb_row[0], str(kb_row[1])
 
     config = build_agent_config(agent, kb_name=kb_name, kb_status=kb_status)
-    url_count = await db.scalar(
-        select(func.count(URLSource.id)).where(URLSource.agent_id == agent.id)
-    )
+    # `URLSource` is KB-scoped: the URL count is the bound KB's URL count.
+    url_count = 0
+    if getattr(agent, "kb_id", None):
+        url_count = (
+            await db.scalar(
+                select(func.count(URLSource.id)).where(
+                    URLSource.kb_id == agent.kb_id
+                )
+            )
+        ) or 0
     file_count = 0
     if getattr(agent, "kb_id", None):
         file_count = (
@@ -289,7 +272,7 @@ async def build_agent_config_with_stats(agent: Agent, db: AsyncSession) -> dict:
     )
     config.update(
         {
-            "url_count": url_count or 0,
+            "url_count": url_count,
             "file_count": file_count,
             "active_session_count": active_session_count or 0,
         }
@@ -662,6 +645,8 @@ def get_stream_error_code(error: HTTPException) -> str:
             return WIDGET_ORIGIN_NOT_ALLOWED_CODE
         return "FORBIDDEN"
     if error.status_code == status.HTTP_400_BAD_REQUEST:
+        if detail == "Agent has no LLM API key configured":
+            return "API_KEY_MISSING"
         return "BAD_REQUEST"
     return "CHAT_ERROR"
 
@@ -675,6 +660,7 @@ def get_safe_stream_error_message(code: str) -> str:
         WIDGET_ORIGIN_NOT_ALLOWED_CODE: WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
         "FORBIDDEN": "Request was denied",
         "BAD_REQUEST": "Invalid chat request",
+        "API_KEY_MISSING": "Configure an LLM API key before chatting",
         "PERSISTENCE_ERROR": "Failed to save streamed chat response",
         "CHAT_ERROR": "Chat stream failed",
         "STREAM_TIMEOUT": "Chat stream timed out",
@@ -808,9 +794,13 @@ async def prepare_chat_request(
     agent_api_key = get_agent_plaintext_keys(agent)
     agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
-    use_mock_llm = not agent_api_key
-    if use_mock_llm:
-        logger.info("Agent未配置API Key，使用Mock LLM服务（仅用于测试/演示）")
+    # #19: a missing key is a hard 400. Production must never serve Mock tokens.
+    if not agent_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent has no LLM API key configured",
+        )
+    use_mock_llm = False
 
     session = await get_or_create_chat_session(agent, request, http_request, db)
 
@@ -1709,8 +1699,6 @@ async def create_agent(
         workspace_id=current_user.workspace_id,
         name=request.name,
         description=request.description,
-        agent_type=request.agent_type,
-        channel_mode=request.channel_mode,
         system_prompt=system_prompt,
         model="deepseek-v4-flash",
         temperature=0.7,
@@ -2237,94 +2225,12 @@ async def get_sources_summary(
 
     返回URL和QA的总数、已训练数、待训练数等统计
     """
-    # Check agent access permission before reading stats
-    await require_agent_admin(db, agent_id, current_user)
+    from api.v1.kb_endpoints import build_kb_sources_summary
 
-    # 统计URL
-    url_total_result = await db.execute(
-        select(func.count())
-        .select_from(URLSource)
-        .where(URLSource.agent_id == agent_id, URLSource.status == "success")
-    )
-    url_total = url_total_result.scalar() or 0
-
-    url_indexed_result = await db.execute(
-        select(func.count())
-        .select_from(URLSource)
-        .where(URLSource.agent_id == agent_id, URLSource.is_indexed == True)
-    )
-    url_indexed = url_indexed_result.scalar() or 0
-
-    # 计算URL内容大小（按已成功抓取的内容，转换为KB）
-    url_size_result = await db.execute(
-        select(func.sum(func.length(URLSource.content))).where(
-            URLSource.agent_id == agent_id, URLSource.status == "success"
-        )
-    )
-    url_size_bytes = url_size_result.scalar() or 0
-    url_size_kb = round(url_size_bytes / 1024, 2)
-
-    url_pending = url_total - url_indexed
-
-    # 统计文件 (KbDocument, scoped by kb_id only — no Tenant in the request path)
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
-    kb_id = getattr(agent, "kb_id", None) if agent else None
-
-    if kb_id:
-        file_total = (
-            await db.scalar(
-                select(func.count(KbDocument.id)).where(KbDocument.kb_id == kb_id)
-            )
-        ) or 0
-        file_ready = (
-            await db.scalar(
-                select(func.count(KbDocument.id)).where(
-                    KbDocument.kb_id == kb_id, KbDocument.status == "ready"
-                )
-            )
-        ) or 0
-        # KbDocument statuses: pending, processing, ready, error
-        file_processing = (
-            await db.scalar(
-                select(func.count(KbDocument.id)).where(
-                    KbDocument.kb_id == kb_id,
-                    KbDocument.status.in_(["pending", "processing"]),
-                )
-            )
-        ) or 0
-        file_size_bytes = (
-            await db.scalar(
-                select(func.sum(KbDocument.file_size)).where(
-                    KbDocument.kb_id == kb_id
-                )
-            )
-        ) or 0
-        file_size_kb = round(file_size_bytes / 1024, 2)
-    else:
-        # No KB bound, all file stats are zero
-        file_total = 0
-        file_ready = 0
-        file_processing = 0
-        file_size_kb = 0.0
-
-    has_pending = url_pending > 0 or file_processing > 0
-
-    return SourcesSummaryResponse(
-        urls=SourcesURLSummary(
-            total=url_total,
-            indexed=url_indexed,
-            pending=url_pending,
-            total_size_kb=url_size_kb,
-        ),
-        files=SourcesFileSummary(
-            total=file_total,
-            ready=file_ready,
-            processing=file_processing,
-            total_size_kb=file_size_kb,
-        ),
-        has_pending=has_pending,
-    )
+    # `require_agent_admin` + `require_bound_kb`: an unbound agent is 409, never a
+    # silent zero payload (issue #17).
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await build_kb_sources_summary(db, kb_id)
 
 
 # ========== 公开配置端点 ==========
@@ -2576,8 +2482,20 @@ async def send_session_message(
     return {"success": True}
 
 
-# ========== URL & File KB Management Endpoints (restore missing routes) ==========
+# ========== Legacy agent-scoped source aliases ==========
+#
+# `/api/v1/urls:*`, `/api/v1/files:*` and `/api/v1/index:*` with `?agent_id=`
+# are kept for one release so existing clients keep working. They are thin
+# aliases: resolve the agent, resolve its *bound* KB (409 when it has none), then
+# delegate to the KB-scoped implementation in `api/v1/kb_endpoints.py`. Crawl /
+# index internals stay in `services/`.
 
+async def _legacy_kb_context(
+    db: AsyncSession, agent_id: str, current_user: AdminUser
+) -> tuple[Agent, str]:
+    """`require_agent_admin` + `require_bound_kb`; 409 when the agent has no KB."""
+    agent = await require_agent_admin(db, agent_id, current_user)
+    return agent, require_bound_kb(agent)
 
 @router.get("/urls:list", response_model=URLListResponse)
 async def list_urls(
@@ -2587,94 +2505,11 @@ async def list_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias of `GET /knowledge-bases/{kb_id}/urls:list`."""
+    from api.v1.kb_endpoints import build_kb_url_list
 
-    # Get agent to find KB
-    agent = await db.get(Agent, agent_id)
-    kb_id = agent.kb_id if agent else None
-
-    stmt = (
-        select(URLSource)
-        .where(URLSource.agent_id == agent_id)
-        .order_by(URLSource.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    url_sources = result.scalars().all()
-
-    # Fetch related KbDocuments for indexing diagnostics
-    url_docs = {}
-    if kb_id and url_sources:
-        url_ids = [u.id for u in url_sources]
-        # URL-derived documents have filenames like "url_{url_id}.txt"
-        doc_filenames = [f"url_{url_id}.txt" for url_id in url_ids]
-        doc_result = await db.execute(
-            select(KbDocument).where(
-                KbDocument.kb_id == kb_id,
-                KbDocument.filename.in_(doc_filenames),
-            )
-        )
-        for doc in doc_result.scalars().all():
-            # Extract url_id from filename like "url_123.txt"
-            if doc.filename.startswith("url_") and doc.filename.endswith(".txt"):
-                try:
-                    url_id = int(doc.filename[4:-4])
-                    url_docs[url_id] = doc
-                except ValueError:
-                    pass
-
-        # Also look for any URL-related documents (e.g., test fixtures with different naming)
-        # This handles test cases where KbDocument has non-standard filename
-        all_doc_result = await db.execute(
-            select(KbDocument).where(
-                KbDocument.kb_id == kb_id,
-                KbDocument.filename.like("url%"),
-            )
-        )
-        for doc in all_doc_result.scalars().all():
-            # Try to match by URL ID in filename, or assign to URLs without docs
-            if doc.filename.startswith("url_") and doc.filename.endswith(".txt"):
-                try:
-                    url_id = int(doc.filename[4:-4])
-                    if url_id not in url_docs:
-                        url_docs[url_id] = doc
-                except ValueError:
-                    # Non-standard URL filename (e.g., "url_content.txt" in tests)
-                    # Match to first URL without a doc for test compatibility
-                    for u in url_sources:
-                        if u.id not in url_docs:
-                            url_docs[u.id] = doc
-                            break
-
-    total = (
-        await db.execute(
-            select(func.count(URLSource.id)).where(URLSource.agent_id == agent_id)
-        )
-    ).scalar() or 0
-    quota = {"used": total, "max": 500}
-
-    # Build URLItem with indexing diagnostics
-    items = []
-    for u in url_sources:
-        item_data = URLItem.model_validate(u)
-        # Add indexing diagnostics from related KbDocument
-        doc = url_docs.get(u.id)
-        if doc:
-            item_data.indexing_status = doc.status
-            if doc.status == "error":
-                item_data.indexing_error = doc.error_message
-        elif u.is_indexed:
-            item_data.indexing_status = "ready"
-        else:
-            item_data.indexing_status = "pending"
-        # Include fetch error
-        if u.last_error:
-            item_data.last_error = u.last_error
-        items.append(item_data)
-
-    return {"urls": items, "total": total, "quota": quota}
-
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await build_kb_url_list(db, kb_id, skip, limit)
 
 @router.post("/urls:create", response_model=URLListResponse)
 async def create_urls(
@@ -2684,72 +2519,13 @@ async def create_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = await require_agent_admin(db, agent_id, current_user)
-    require_bound_kb(agent)
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/urls:create`."""
+    from api.v1.kb_endpoints import create_kb_urls
 
-    # Track newly created URL IDs for background fetch
-    new_url_ids = []
-
-    for url_str in payload.urls:
-        normalized = normalize_url(url_str)
-        exists = (
-            await db.execute(
-                select(URLSource).where(
-                    URLSource.agent_id == agent_id,
-                    URLSource.normalized_url == normalized,
-                )
-            )
-        ).scalar_one_or_none()
-        if exists:
-            continue
-        us = URLSource(
-            agent_id=agent_id, url=url_str, normalized_url=normalized, status="pending"
-        )
-        db.add(us)
-        await db.flush()  # Get the ID before commit
-        new_url_ids.append(us.id)
-
-    await db.commit()
-
-    # Get the list response data
-    result = await list_urls(agent_id, 0, 100, current_user, db)
-
-    # Auto-dispatch background fetch if new URLs were created
-    job_id = None
-    auto_fetch_queued = False
-
-    if new_url_ids:
-        # Attempt to acquire task lock for auto-fetch
-        from services.task_lock import TaskType
-
-        job_id = f"refetch_{agent_id}_{uuid.uuid4().hex[:8]}"
-        acquired, _ = await task_lock.acquire_task(
-            agent_id, TaskType.URL_REFETCH, job_id
-        )
-
-        if acquired:
-            # Dispatch background refetch for newly created URLs
-            from services.url_service import process_url_refetch
-
-            background_tasks.add_task(
-                process_url_refetch,
-                agent_id=agent_id,
-                url_ids=new_url_ids,
-                force=False,
-                job_id=job_id,
-            )
-            auto_fetch_queued = True
-        # If lock not acquired, URLs remain pending for later manual refetch
-
-    # Return response with job_id if auto-fetch was dispatched
-    return URLListResponse(
-        urls=result["urls"],
-        total=result["total"],
-        quota=result["quota"],
-        job_id=job_id,
-        auto_fetch_queued=auto_fetch_queued,
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await create_kb_urls(
+        db, kb_id, payload, background_tasks, source_agent_id=agent_id
     )
-
 
 @router.delete("/urls:delete")
 async def delete_url(
@@ -2758,14 +2534,11 @@ async def delete_url(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await require_agent_admin(db, agent_id, current_user)
-    us = await db.get(URLSource, url_id)
-    if not us or us.agent_id != agent_id:
-        raise HTTPException(status_code=404, detail="URL not found")
-    await db.delete(us)
-    await db.commit()
-    return {"success": True}
+    """Legacy alias of `DELETE /knowledge-bases/{kb_id}/urls:delete`."""
+    from api.v1.kb_endpoints import delete_kb_url
 
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await delete_kb_url(db, kb_id, url_id)
 
 @router.post("/urls:clear_all")
 async def clear_all_urls(
@@ -2773,93 +2546,11 @@ async def clear_all_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Clear this agent's URLs and the KB data derived from them.
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/urls:clear_all`."""
+    from api.v1.kb_endpoints import clear_kb_urls
 
-    Only documents this agent ingested are removed (`source_agent_id == agent_id`).
-    Legacy rows with no provenance (NULL) are left alone so a shared KB never loses
-    another agent's content.
-    """
-    await require_agent_admin(db, agent_id, current_user)
-
-    from services.qdrant_service import QdrantKbService
-
-    agent_obj = (
-        await db.execute(select(Agent).where(Agent.id == agent_id))
-    ).scalar_one_or_none()
-    kb_id = agent_obj.kb_id if agent_obj else None
-
-    deleted_url_count = (
-        await db.scalar(
-            select(func.count(URLSource.id)).where(URLSource.agent_id == agent_id)
-        )
-    ) or 0
-
-    deleted_doc_count = 0
-    deleted_chunk_count = 0
-    deleted_qdrant_count = 0
-    deleted_files_count = 0
-
-    if kb_id:
-        url_docs = list(
-            (
-                await db.execute(
-                    select(KbDocument).where(
-                        KbDocument.kb_id == kb_id,
-                        KbDocument.filename.like("url\\_%", escape="\\"),
-                        KbDocument.source_agent_id == agent_id,
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        if url_docs:
-            qdrant = QdrantKbService()
-            for doc in url_docs:
-                try:
-                    await qdrant.delete_points_by_doc_id(kb_id, str(doc.id))
-                    deleted_qdrant_count += 1
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to delete Qdrant points for doc %s: %s", doc.id, exc
-                    )
-
-            doc_ids = [doc.id for doc in url_docs]
-            chunk_result = await db.execute(
-                delete(KbChunk).where(KbChunk.doc_id.in_(doc_ids))
-            )
-            deleted_chunk_count = chunk_result.rowcount or 0
-
-            for doc in url_docs:
-                storage_path = getattr(doc, "storage_path", None)
-                if storage_path and os.path.exists(storage_path):
-                    try:
-                        doc_dir = os.path.dirname(storage_path)
-                        if doc_dir and os.path.exists(doc_dir):
-                            shutil.rmtree(doc_dir)
-                            deleted_files_count += 1
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to delete file for doc %s: %s", doc.id, exc
-                        )
-
-            await db.execute(delete(KbDocument).where(KbDocument.id.in_(doc_ids)))
-            deleted_doc_count = len(url_docs)
-
-    await db.execute(delete(URLSource).where(URLSource.agent_id == agent_id))
-    await db.commit()
-
-    return {
-        "success": True,
-        "message": "All URLs and their knowledge base data cleared successfully",
-        "deleted_count": deleted_doc_count,
-        "deleted_url_count": deleted_url_count,
-        "deleted_doc_count": deleted_doc_count,
-        "deleted_chunk_count": deleted_chunk_count,
-        "deleted_qdrant_count": deleted_qdrant_count,
-        "deleted_files_count": deleted_files_count,
-    }
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await clear_kb_urls(db, kb_id, source_agent_id=agent_id)
 
 @router.get("/files:list", response_model=FileListResponse)
 async def list_files(
@@ -2871,82 +2562,19 @@ async def list_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List uploaded files for an agent (excludes URL-generated files).
+    """Legacy alias of `GET /knowledge-bases/{kb_id}/files:list`."""
+    from api.v1.kb_endpoints import list_kb_files
 
-    `source="own"` narrows the list to documents this agent uploaded. Legacy rows
-    with no provenance (NULL `source_agent_id`) stay visible to everyone because a
-    shared KB may hold pre-binding content.
-    """
-    agent = await require_agent_admin(db, agent_id, current_user)
-
-    # If agent has no KB bound, return empty list
-    if not agent.kb_id:
-        return {"files": [], "total": 0, "quota": {"used": 0, "max": 500}}
-
-    filters = [
-        KbDocument.kb_id == agent.kb_id,
-        ~KbDocument.filename.like("url\\_%", escape="\\"),  # exclude URL docs
-    ]
-    if source == "own":
-        filters.append(
-            or_(
-                KbDocument.source_agent_id == agent_id,
-                KbDocument.source_agent_id.is_(None),
-            )
-        )
-
-    # Query KbDocuments from agent's KB, excluding URL-generated files
-    stmt = (
-        select(KbDocument)
-        .where(*filters)
-        .order_by(KbDocument.created_at.desc())
-        .offset(skip)
-        .limit(limit)
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await list_kb_files(
+        db,
+        kb_id,
+        http_request,
+        skip,
+        limit,
+        source=source,
+        source_agent_id=agent_id,
     )
-    result = await db.execute(stmt)
-    docs = result.scalars().all()
-
-    total = (
-        await db.scalar(select(func.count(KbDocument.id)).where(*filters))
-    ) or 0
-
-    quota = {"used": total, "max": 500}
-
-    # Map KbDocument to FileItem format
-    # KbDocument status: pending/processing/ready/error -> FileItem status: pending/processing/ready/failed
-    items = []
-    for doc in docs:
-        status = doc.status
-        error_message = None
-        if status == "error":
-            status = "failed"
-            error_message = get_localized_document_processing_error(
-                http_request, getattr(doc, "error_message", None)
-            )
-        items.append(
-            FileItem(
-                id=str(doc.id),
-                filename=doc.filename,
-                file_type=getattr(doc, "file_type", "") or "",
-                file_size=getattr(doc, "file_size", 0) or 0,
-                status=status,
-                error_message=error_message,
-                created_at=str(doc.created_at) if doc.created_at else "",
-            )
-        )
-
-    return {"files": items, "total": total, "quota": quota}
-
-
-EXT_TO_MIME = {
-    "txt": "text/plain",
-    "md": "text/markdown",
-    "html": "text/html",
-    "pdf": "application/pdf",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-}
-
 
 @router.post("/files:upload", response_model=FileUploadResponse)
 async def upload_files(
@@ -2956,113 +2584,18 @@ async def upload_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload files to the agent's bound knowledge base.
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/files:upload`."""
+    from api.v1.kb_endpoints import upload_kb_files
 
-    - Validates file limits (max 5 files, 20MB each)
-    - 409 when the agent has no KB bound (binding is an explicit super_admin action)
-    - Stores file bytes and creates KbDocument records tagged with `source_agent_id`
-    - Triggers background processing (parse→chunk→embed→Qdrant)
-    """
-    agent = await require_agent_admin(db, agent_id, current_user)
-    kb_id = require_bound_kb(agent)
-
-    # Enforce max files limit
-    if len(files) > MAX_FILES_PER_UPLOAD:
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Max {MAX_FILES_PER_UPLOAD} files per upload",
+            status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found"
         )
-
-    kb = (
-        await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
-    ).scalar_one_or_none()
-    if not kb:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Knowledge base not found",
-        )
-    workspace_id = int(kb.workspace_id)
-
-    # Initialize processor
-    from services.kb_document_processor import KbDocumentProcessor
-
-    processor = KbDocumentProcessor()
-
-    uploaded = 0
-    failed = 0
-    errors: List[str] = []
-    items: List[FileItem] = []
-
-    for upload_file in files[:MAX_FILES_PER_UPLOAD]:
-        filename = upload_file.filename or "unnamed"
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-
-        # Validate extension
-        if ext not in ALLOWED_EXTENSIONS:
-            failed += 1
-            errors.append(f"{filename}: unsupported .{ext}")
-            continue
-
-        try:
-            # Read file content
-            content = await upload_file.read()
-
-            # Validate size
-            if len(content) > MAX_FILE_SIZE:
-                failed += 1
-                errors.append(f"{filename}: exceeds 20MB limit")
-                continue
-
-            if len(content) == 0:
-                errors.append(f"Empty file: {filename} (0 bytes)")
-                failed += 1
-                continue
-
-            # Create KbDocument record tagged with its provenance
-            doc = await processor.create_document_record(
-                workspace_id,
-                kb_id,
-                filename,
-                len(content),
-                source_agent_id=agent_id,
-                db=db,
-            )
-
-            # Save file to disk
-            storage_path = processor.save_uploaded_file(doc, content, ext)
-            object.__setattr__(doc, "storage_path", storage_path)
-            object.__setattr__(doc, "file_type", ext)
-
-            # Trigger background processing
-            doc_id = str(getattr(doc, "id", ""))
-            background_tasks.add_task(processor.process_document, doc_id, kb_id)
-
-            # Create FileItem for response (mapping from KbDocument)
-            file_item = FileItem(
-                id=doc_id,
-                filename=filename,
-                file_type=EXT_TO_MIME.get(ext, ext),
-                file_size=len(content),
-                status="pending",
-                created_at=str(getattr(doc, "created_at", "")),
-            )
-            items.append(file_item)
-            uploaded += 1
-
-        except Exception as e:
-            logger.exception(f"File upload failed for {filename}: {e}")
-            failed += 1
-            errors.append(f"{filename}: {str(e)}")
-
-    await db.commit()
-
-    return {
-        "uploaded": uploaded,
-        "failed": failed,
-        "files": items,
-        "errors": errors,
-    }
-
+    return await upload_kb_files(
+        db, kb, background_tasks, files, source_agent_id=agent_id
+    )
 
 @router.delete("/files:delete")
 async def delete_file(
@@ -3071,29 +2604,11 @@ async def delete_file(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a file (KbDocument) from the agent's KB."""
-    agent = await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias of `DELETE /knowledge-bases/{kb_id}/files:delete`."""
+    from api.v1.kb_endpoints import delete_kb_file
 
-    if not agent.kb_id:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    from services.kb_document_processor import KbDocumentProcessor
-
-    processor = KbDocumentProcessor()
-
-    doc = (
-        await db.execute(
-            select(KbDocument).where(
-                KbDocument.id == file_id, KbDocument.kb_id == agent.kb_id
-            )
-        )
-    ).scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    await processor.delete_document(agent.kb_id, file_id, db)
-    return {"success": True}
-
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await delete_kb_file(db, kb_id, file_id)
 
 @router.post("/files:clear_all")
 async def clear_all_files(
@@ -3101,45 +2616,13 @@ async def clear_all_files(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Clear all files (KbDocuments) from agent's KB."""
-    agent = await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/files:clear_all`."""
+    from api.v1.kb_endpoints import clear_kb_files
 
-    if not agent.kb_id:
-        return {
-            "success": True,
-            "message": "All files cleared successfully",
-            "deleted_count": 0,
-        }
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await clear_kb_files(db, kb_id)
 
-    from services.kb_document_processor import KbDocumentProcessor
-
-    processor = KbDocumentProcessor()
-
-    # Only uploaded documents (URL-derived rows are handled by urls:clear_all)
-    result = await db.execute(
-        select(KbDocument.id).where(
-            KbDocument.kb_id == agent.kb_id,
-            ~KbDocument.filename.like("url\\_%", escape="\\"),
-        )
-    )
-    doc_ids = [row[0] for row in result.all()]
-
-    # Delete each document using processor (clears Qdrant + DB + files)
-    for doc_id in doc_ids:
-        try:
-            await processor.delete_document(agent.kb_id, doc_id, db)
-        except Exception as e:
-            logger.warning(f"Failed to delete document {doc_id}: {e}")
-
-    return {
-        "success": True,
-        "message": "All files cleared successfully",
-        "deleted_count": len(doc_ids),
-    }
-
-
-# ========== URL Indexing & Crawl Endpoints ==========
-
+# ========== URL Indexing & Crawl Endpoints (legacy aliases) ==========
 
 @router.post("/urls:refetch", response_model=URLRefetchResponse)
 async def refetch_urls(
@@ -3149,44 +2632,13 @@ async def refetch_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """重新抓取URL内容并索引到知识库。
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/urls:refetch`."""
+    from api.v1.kb_endpoints import refetch_kb_urls
 
-    - url_ids: 要重抓的URL ID列表，为空则重抓所有pending/success状态的URL
-    - force: 是否强制重抓（忽略内容哈希去重）
-    """
-    agent = await require_agent_admin(db, agent_id, current_user)
-    require_bound_kb(agent)
-
-    # Acquire task lock
-    from services.task_lock import TaskType
-
-    job_id = f"refetch_{agent_id}_{uuid.uuid4().hex[:8]}"
-    acquired, error = await task_lock.acquire_task(
-        agent_id, TaskType.URL_REFETCH, job_id
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await refetch_kb_urls(
+        db, kb_id, payload, background_tasks, source_agent_id=agent_id
     )
-    if not acquired:
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail=f"Refetch already in progress: {error}",
-        )
-
-    # Trigger background refetch
-    from services.url_service import process_url_refetch
-
-    background_tasks.add_task(
-        process_url_refetch,
-        agent_id=agent_id,
-        url_ids=payload.url_ids,
-        force=payload.force,
-        job_id=job_id,
-    )
-
-    return URLRefetchResponse(
-        job_id=job_id,
-        status="queued",
-        message="URL refetch queued",
-    )
-
 
 @router.post("/urls:cancel", response_model=URLCancelResponse)
 async def cancel_url_tasks(
@@ -3194,23 +2646,11 @@ async def cancel_url_tasks(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """取消正在进行的URL抓取任务。"""
-    await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/urls:cancel`."""
+    from api.v1.kb_endpoints import cancel_kb_url_tasks
 
-    from services.task_lock import TaskType
-
-    cancelled_task_ids = await task_lock.cancel_tasks(
-        agent_id, {TaskType.URL_CRAWL, TaskType.URL_REFETCH}
-    )
-
-    return URLCancelResponse(
-        cancelled=len(cancelled_task_ids),
-        task_ids=cancelled_task_ids,
-        message=f"Cancelled {len(cancelled_task_ids)} task(s)"
-        if cancelled_task_ids
-        else "No active tasks",
-    )
-
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await cancel_kb_url_tasks(kb_id)
 
 @router.post("/urls:repair-indexed-status")
 async def repair_url_indexed_status(
@@ -3218,20 +2658,11 @@ async def repair_url_indexed_status(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """修复 URL 的 is_indexed 状态。
-
-    由于历史 bug（session 隔离问题），部分 URL 虽然 KbDocument 已处理成功，
-    但 is_indexed 字段仍为 False。此接口根据 KbDocument 状态批量修复。
-
-    返回修复统计：fixed（已修复数量）、already_correct（已正确数量）、errors（问题数量）
-    """
-    await require_agent_admin(db, agent_id, current_user)
-
+    """Legacy alias: repair `is_indexed` from the KB's KbDocument rows."""
     from services.url_service import repair_url_indexed_status as do_repair
 
-    result = await do_repair(agent_id)
-    return result
-
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await do_repair(kb_id)
 
 @router.post("/urls:crawl_site", response_model=SiteCrawlResponse)
 async def crawl_site(
@@ -3240,50 +2671,11 @@ async def crawl_site(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """全站爬取发现并索引页面。
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/urls:crawl_site`."""
+    from api.v1.kb_endpoints import crawl_kb_site
 
-    - url: 起始URL
-    - max_depth: 最大爬取深度 (1-5)
-    - max_pages: 最大页面数量 (1-500)
-    """
-    import asyncio
-
-    agent = await require_agent_admin(db, agent_id, current_user)
-    require_bound_kb(agent)
-
-    # Acquire task lock
-    from services.task_lock import TaskType
-
-    job_id = f"crawl_{agent_id}_{uuid.uuid4().hex[:8]}"
-    acquired, error = await task_lock.acquire_task(agent_id, TaskType.URL_CRAWL, job_id)
-    if not acquired:
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail=f"Crawl already in progress: {error}",
-        )
-
-    # Trigger background crawl using asyncio.create_task for proper cancellation support
-    from services.url_service import process_site_crawl
-
-    task = asyncio.create_task(
-        process_site_crawl(
-            agent_id=agent_id,
-            start_url=payload.url,
-            max_depth=payload.max_depth,
-            max_pages=payload.max_pages,
-            job_id=job_id,
-        )
-    )
-    await task_lock.register_task_handle(agent_id, job_id, task)
-
-    return SiteCrawlResponse(
-        job_id=job_id,
-        status="queued",
-        discovered=0,
-        created=0,
-        message="Site crawl queued",
-    )
-
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await crawl_kb_site(kb_id, payload, source_agent_id=agent_id)
 
 @router.post("/urls:discover")
 async def discover_urls(
@@ -3294,31 +2686,13 @@ async def discover_urls(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """发现URL子页面但不立即索引（返回发现的URL列表）。"""
-    await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/urls:discover`."""
+    from api.v1.kb_endpoints import discover_urls_for_site
 
-    from services.url_safety import validate_url_safe
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await discover_urls_for_site(url, max_depth=max_depth, max_pages=max_pages)
 
-    safe, reason = validate_url_safe(url)
-    if not safe:
-        raise HTTPException(status_code=400, detail=f"Unsafe URL: {reason}")
-
-    from services.crawler import SiteCrawler
-
-    crawler = SiteCrawler()
-    results = await crawler.crawl_site(url, max_depth=max_depth, max_pages=max_pages)
-
-    discovered_urls = [r.url for r in results if r.url and not r.error]
-
-    return {
-        "discovered": len(results),
-        "urls": discovered_urls,
-        "message": f"Discovered {len(discovered_urls)} URLs",
-    }
-
-
-# ========== Index Management Endpoints ==========
-
+# ========== Index Management Endpoints (legacy aliases) ==========
 
 @router.post("/index:rebuild", response_model=IndexRebuildResponse)
 async def rebuild_index(
@@ -3328,42 +2702,13 @@ async def rebuild_index(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """重建知识库索引。
+    """Legacy alias of `POST /knowledge-bases/{kb_id}/index:rebuild`."""
+    from api.v1.kb_endpoints import rebuild_kb_index
 
-    - force: 是否强制重建（删除现有索引重新处理）
-    """
-    agent = await require_agent_admin(db, agent_id, current_user)
-    require_bound_kb(agent)
-
-    # Acquire task lock
-    from services.task_lock import TaskType
-
-    job_id = f"rebuild_{agent_id}_{uuid.uuid4().hex[:8]}"
-    acquired, error = await task_lock.acquire_task(
-        agent_id, TaskType.INDEX_REBUILD, job_id
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    return await rebuild_kb_index(
+        kb_id, payload, background_tasks, source_agent_id=agent_id
     )
-    if not acquired:
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail=f"Index rebuild already in progress: {error}",
-        )
-
-    # Trigger background rebuild
-    from services.url_service import process_index_rebuild
-
-    background_tasks.add_task(
-        process_index_rebuild,
-        agent_id=agent_id,
-        force=payload.force,
-        job_id=job_id,
-    )
-
-    return IndexRebuildResponse(
-        job_id=job_id,
-        status="queued",
-        message="Index rebuild queued",
-    )
-
 
 @router.get("/index:status", response_model=IndexStatusResponse)
 async def get_index_status(
@@ -3371,41 +2716,14 @@ async def get_index_status(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取索引任务状态。"""
-    await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias of `GET /knowledge-bases/{kb_id}/index:status`."""
+    from api.v1.kb_endpoints import kb_task_status
 
-    from services.task_lock import TaskType
-
-    # Check for active tasks
-    is_rebuilding = task_lock.is_task_running(agent_id, TaskType.INDEX_REBUILD)
-    is_crawling = task_lock.is_task_running(agent_id, TaskType.URL_CRAWL)
-    is_refetching = task_lock.is_task_running(agent_id, TaskType.URL_REFETCH)
-
-    status = "idle"
-    if is_rebuilding:
-        status = "rebuilding"
-    elif is_crawling or is_refetching:
-        status = "indexing"
-
-    # Get active task IDs
-    active_tasks = task_lock.get_active_tasks(agent_id)
-    job_id = None
-    for task_id, task_info in active_tasks.items():
-        if task_info.get("type") in [
-            TaskType.INDEX_REBUILD.value,
-            TaskType.URL_CRAWL.value,
-            TaskType.URL_REFETCH.value,
-        ]:
-            job_id = task_id
-            break
-
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
+    state, job_id = kb_task_status(kb_id)
     return IndexStatusResponse(
-        agent_id=agent_id,
-        job_id=job_id,
-        status=status,
-        result=None,
+        agent_id=agent_id, job_id=job_id, status=state, result=None
     )
-
 
 @router.get("/index:info", response_model=IndexInfoResponse)
 async def get_index_info(
@@ -3413,42 +2731,32 @@ async def get_index_info(
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取索引统计信息。"""
-    await require_agent_admin(db, agent_id, current_user)
+    """Legacy alias: index counters for the agent's bound KB."""
+    _, kb_id = await _legacy_kb_context(db, agent_id, current_user)
 
-    # Count indexed URLs
     urls_indexed = (
         await db.scalar(
             select(func.count(URLSource.id)).where(
-                URLSource.agent_id == agent_id,
-                URLSource.is_indexed == True,
+                URLSource.kb_id == kb_id,
+                URLSource.is_indexed == True,  # noqa: E712
             )
         )
-        or 0
-    )
-
-    # Check if agent has KB and count ready files (scoped by kb_id only)
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = result.scalar_one()
-    index_exists = agent.kb_id is not None
-
-    files_indexed = 0
-    if agent.kb_id:
-        files_indexed = (
-            await db.scalar(
-                select(func.count(KbDocument.id)).where(
-                    KbDocument.kb_id == agent.kb_id,
-                    KbDocument.status == "ready",
-                )
+    ) or 0
+    files_indexed = (
+        await db.scalar(
+            select(func.count(KbDocument.id)).where(
+                KbDocument.kb_id == kb_id,
+                KbDocument.status == "ready",
             )
-        ) or 0
+        )
+    ) or 0
 
     return IndexInfoResponse(
         agent_id=agent_id,
         urls_indexed=urls_indexed,
         files_indexed=files_indexed,
-        index_exists=index_exists,
-        status="ready" if index_exists else "not_setup",
+        index_exists=True,
+        status="ready",
     )
 
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
@@ -76,6 +77,14 @@ export default function KnowledgeBases() {
 	const [bindTarget, setBindTarget] = useState<KnowledgeBaseDetail | null>(null);
 	const [bindAgentId, setBindAgentId] = useState("");
 
+	// Agent-initiated bind: the home card sends `?bindAgent=<id>` for an agent
+	// with no KB. In that direction the agent is fixed and the operator picks
+	// which KB to bind, so the modal swaps its select around.
+	const [searchParams, setSearchParams] = useSearchParams();
+	const bindAgentFromQuery = searchParams.get("bindAgent");
+	const [bindAgentForKb, setBindAgentForKb] = useState<string | null>(null);
+	const [bindKbId, setBindKbId] = useState("");
+
 	const load = async () => {
 		setLoading(true);
 		setError(null);
@@ -106,6 +115,32 @@ export default function KnowledgeBases() {
 		() => knowledgeBases.find((kb) => kb.id === selectedId) ?? null,
 		[knowledgeBases, selectedId],
 	);
+
+	// `?bindAgent=` opens the bind modal for that agent once agents are loaded.
+	useEffect(() => {
+		if (!bindAgentFromQuery) return;
+		let cancelled = false;
+		const openForAgent = async () => {
+			await loadAgents();
+			if (cancelled) return;
+			setBindAgentForKb(bindAgentFromQuery);
+			setBindKbId("");
+		};
+		void openForAgent();
+		return () => {
+			cancelled = true;
+		};
+	}, [bindAgentFromQuery]);
+
+	const closeBindAgentModal = useCallback(() => {
+		setBindAgentForKb(null);
+		setBindKbId("");
+		if (bindAgentFromQuery) {
+			const next = new URLSearchParams(searchParams);
+			next.delete("bindAgent");
+			setSearchParams(next, { replace: true });
+		}
+	}, [bindAgentFromQuery, searchParams, setSearchParams]);
 
 	const loadAgents = async () => {
 		try {
@@ -177,6 +212,19 @@ export default function KnowledgeBases() {
 		);
 	};
 
+	const handleBindAgentToKb = async () => {
+		if (!bindAgentForKb || !bindKbId) return;
+		const agentId = bindAgentForKb;
+		const kbId = bindKbId;
+		setBindAgentForKb(null);
+		setBindKbId("");
+		await runAction(
+			kbId,
+			() => api.bindAgentKnowledgeBase(agentId, kbId).then(() => undefined),
+			"knowledgeBases.errors.bindFailed",
+		);
+	};
+
 	const handleUnbind = async (kb: KnowledgeBaseDetail) => {
 		if (!kb.bound_agent) return;
 		const confirmed = window.confirm(
@@ -210,6 +258,11 @@ export default function KnowledgeBases() {
 		setBindTarget(kb);
 	};
 
+	const bindableKbs = useMemo(
+		() => knowledgeBases.filter((kb) => !kb.bound_agent && kb.status === "active"),
+		[knowledgeBases],
+	);
+
 	const renderActions = (kb: KnowledgeBaseDetail) => {
 		const busy = busyId === kb.id;
 		return (
@@ -221,6 +274,13 @@ export default function KnowledgeBases() {
 				>
 					{t("knowledgeBases.actions.details")}
 				</button>
+				<Link
+					to={`/knowledge-bases/${kb.id}`}
+					className="btn-secondary"
+					style={{ textDecoration: "none" }}
+				>
+					{t("knowledgeBases.actions.sources")}
+				</Link>
 				{isSuperAdmin && !kb.bound_agent && (
 					<button
 						type="button"
@@ -304,10 +364,13 @@ export default function KnowledgeBases() {
 	return (
 		<AdminLayout>
 			<div
+				className="admin-page"
+				data-testid="kb-list-page"
 				style={{
 					padding: "var(--space-8)",
 					maxWidth: "1400px",
 					margin: "0 auto",
+					minWidth: 0,
 				}}
 			>
 				<div
@@ -426,66 +489,78 @@ export default function KnowledgeBases() {
 							</p>
 						</div>
 					) : (
-						<table style={{ width: "100%", borderCollapse: "collapse" }}>
-							<thead>
-								<tr>
-									<th style={thStyle}>{t("knowledgeBases.columns.name")}</th>
-									<th style={thStyle}>
-										{t("knowledgeBases.columns.embedding")}
-									</th>
-									<th style={thStyle}>
-										{t("knowledgeBases.columns.documents")}
-									</th>
-									<th style={thStyle}>{t("knowledgeBases.columns.chunks")}</th>
-									<th style={thStyle}>{t("knowledgeBases.columns.status")}</th>
-									<th style={thStyle}>
-										{t("knowledgeBases.columns.boundAgent")}
-									</th>
-									<th style={thStyle}>
-										{t("knowledgeBases.columns.actions")}
-									</th>
-								</tr>
-							</thead>
-							<tbody>
-								{knowledgeBases.map((kb) => (
-									<tr key={kb.id} data-testid={`kb-row-${kb.id}`}>
-										<td style={tdStyle}>{kb.name}</td>
-										<td style={tdStyle}>
-											<div style={{ fontWeight: 500 }}>
-												{t(providerLabelKey[kb.embedding_provider])}
-											</div>
-											<div
-												style={{
-													fontSize: "var(--text-xs)",
-													color: "var(--color-text-muted)",
-												}}
-											>
-												{kb.embedding_model}
-											</div>
-										</td>
-										<td style={tdStyle}>
-											{kb.ready_document_count}/{kb.document_count}
-										</td>
-										<td style={tdStyle}>{kb.total_chunks}</td>
-										<td style={tdStyle}>
-											<span className={statusBadgeClass[kb.status]}>
-												{t(`knowledgeBases.status.${kb.status}`)}
-											</span>
-										</td>
-										<td style={tdStyle}>
-											{kb.bound_agent ? (
-												kb.bound_agent.name
-											) : (
-												<span style={{ color: "var(--color-text-muted)" }}>
-													{t("knowledgeBases.unboundValue")}
-												</span>
-											)}
-										</td>
-										<td style={tdStyle}>{renderActions(kb)}</td>
+						<div className="kb-table-scroll">
+							<table style={{ width: "100%", borderCollapse: "collapse" }}>
+								<thead>
+									<tr>
+										<th style={thStyle}>{t("knowledgeBases.columns.name")}</th>
+										<th style={thStyle}>
+											{t("knowledgeBases.columns.embedding")}
+										</th>
+										<th style={thStyle}>
+											{t("knowledgeBases.columns.documents")}
+										</th>
+										<th style={thStyle}>{t("knowledgeBases.columns.chunks")}</th>
+										<th style={thStyle}>{t("knowledgeBases.columns.status")}</th>
+										<th style={thStyle}>
+											{t("knowledgeBases.columns.boundAgent")}
+										</th>
+										<th style={thStyle}>
+											{t("knowledgeBases.columns.actions")}
+										</th>
 									</tr>
-								))}
-							</tbody>
-						</table>
+								</thead>
+								<tbody>
+									{knowledgeBases.map((kb) => (
+										<tr key={kb.id} data-testid={`kb-row-${kb.id}`}>
+											<td style={tdStyle}>
+												<Link
+													to={`/knowledge-bases/${kb.id}`}
+													style={{
+														color: "var(--color-accent-primary)",
+														fontWeight: 500,
+													}}
+												>
+													{kb.name}
+												</Link>
+											</td>
+											<td style={tdStyle}>
+												<div style={{ fontWeight: 500 }}>
+													{t(providerLabelKey[kb.embedding_provider])}
+												</div>
+												<div
+													style={{
+														fontSize: "var(--text-xs)",
+														color: "var(--color-text-muted)",
+													}}
+												>
+													{kb.embedding_model}
+												</div>
+											</td>
+											<td style={tdStyle}>
+												{kb.ready_document_count}/{kb.document_count}
+											</td>
+											<td style={tdStyle}>{kb.total_chunks}</td>
+											<td style={tdStyle}>
+												<span className={statusBadgeClass[kb.status]}>
+													{t(`knowledgeBases.status.${kb.status}`)}
+												</span>
+											</td>
+											<td style={tdStyle}>
+												{kb.bound_agent ? (
+													kb.bound_agent.name
+												) : (
+													<span style={{ color: "var(--color-text-muted)" }}>
+														{t("knowledgeBases.unboundValue")}
+													</span>
+												)}
+											</td>
+											<td style={tdStyle}>{renderActions(kb)}</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
 					)}
 				</div>
 
@@ -685,6 +760,92 @@ export default function KnowledgeBases() {
 								className="btn-primary"
 								disabled={!bindAgentId}
 								onClick={handleBind}
+							>
+								{t("knowledgeBases.bindSubmit")}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{bindAgentForKb && (
+				<div
+					data-testid="kb-bind-agent-modal"
+					style={{
+						position: "fixed",
+						inset: 0,
+						zIndex: 9999,
+						background: "rgba(0, 0, 0, 0.5)",
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+					}}
+					onClick={closeBindAgentModal}
+				>
+					<div
+						className="liquid-glass-card"
+						role="dialog"
+						aria-modal="true"
+						style={{
+							padding: "var(--space-6)",
+							maxWidth: "440px",
+							width: "100%",
+							margin: "var(--space-4)",
+						}}
+						onClick={(event) => event.stopPropagation()}
+					>
+						<h3
+							style={{
+								fontSize: "var(--text-lg)",
+								fontWeight: 600,
+								marginBottom: "var(--space-2)",
+								color: "var(--color-text-primary)",
+							}}
+						>
+							{t("knowledgeBases.bindAgentTitle")}
+						</h3>
+						<p
+							style={{
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-secondary)",
+								marginBottom: "var(--space-4)",
+							}}
+						>
+							{t("knowledgeBases.bindAgentDescription")}
+						</p>
+						<select
+							aria-label={t("knowledgeBases.bindKbLabel")}
+							value={bindKbId}
+							onChange={(event) => setBindKbId(event.target.value)}
+							style={{ width: "100%" }}
+						>
+							<option value="">{t("knowledgeBases.bindKbPlaceholder")}</option>
+							{bindableKbs.map((kb) => (
+								<option key={kb.id} value={kb.id}>
+									{kb.name}
+								</option>
+							))}
+						</select>
+						<div
+							style={{
+								display: "flex",
+								gap: "var(--space-3)",
+								justifyContent: "flex-end",
+								marginTop: "var(--space-6)",
+							}}
+						>
+							<button
+								type="button"
+								className="btn-secondary"
+								onClick={closeBindAgentModal}
+							>
+								{t("buttons.cancel")}
+							</button>
+							<button
+								type="button"
+								className="btn-primary"
+								disabled={!bindKbId}
+								onClick={handleBindAgentToKb}
 							>
 								{t("knowledgeBases.bindSubmit")}
 							</button>

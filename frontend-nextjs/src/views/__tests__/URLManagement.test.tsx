@@ -1,7 +1,7 @@
 // @ts-nocheck
 // @vitest-environment jsdom
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom";
@@ -9,23 +9,25 @@ import URLManagement from "../URLManagement";
 import { api } from "../../services/api";
 import type { URLSource } from "../../services/api";
 
-// Mock window.alert to prevent blocking
+// Mock window.alert / confirm to prevent blocking
 vi.stubGlobal("alert", vi.fn());
+vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
 
-// Mock the API module
+// The panel is KB-scoped: it reads `kbId` from the route and calls only the
+// canonical kb-scoped helpers. No agent id appears in the request path.
 vi.mock("../../services/api", () => ({
   api: {
+    getKnowledgeBase: vi.fn(),
     getAgent: vi.fn(),
-    listURLs: vi.fn(),
-    createURLs: vi.fn(),
-    refetchURLs: vi.fn(),
-    crawlSite: vi.fn(),
-    cancelURLTasks: vi.fn(),
-    deleteURL: vi.fn(),
-    clearAllUrls: vi.fn(),
-    rebuildIndex: vi.fn(),
-    getTasksStatus: vi.fn(),
-    getIndexStatus: vi.fn(),
+    listKbUrls: vi.fn(),
+    createKbUrls: vi.fn(),
+    refetchKbUrls: vi.fn(),
+    crawlKbSite: vi.fn(),
+    cancelKbUrlTasks: vi.fn(),
+    deleteKbUrl: vi.fn(),
+    clearKbUrls: vi.fn(),
+    rebuildKbIndex: vi.fn(),
+    getKbIndexStatus: vi.fn(),
     updateAgent: vi.fn(),
   },
 }));
@@ -39,31 +41,17 @@ vi.mock("../../context/AuthContext", () => ({
   }),
 }));
 
-// Mock react-i18next
+// Mock react-i18next (stable `t`: the loader is memoised on it)
+const stableT = (key: string, params?: Record<string, unknown>) =>
+  params ? `${key}|${JSON.stringify(params)}` : key;
+
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
-
-// Mock AdminLayout
-vi.mock("../../components/AdminLayout", () => ({
-  default: ({ children }: { children: React.ReactNode }) => <div data-testid="admin-layout">{children}</div>,
-}));
-
-// Mock KBSetupGuard
-vi.mock("../../components/KBSetupGuard", () => ({
-  default: ({ children, agentId }: { children: React.ReactNode; agentId: string }) => (
-    <div data-testid="kb-setup-guard">{children}</div>
-  ),
+  useTranslation: () => ({ t: stableT }),
 }));
 
 // Mock HelpTooltip
 vi.mock("../../components/HelpTooltip", () => ({
   default: () => null,
-}));
-
-// Mock SourcesSummary
-vi.mock("../../components/SourcesSummary", () => ({
-  default: () => <div data-testid="sources-summary" />,
 }));
 
 // Mock useMediaQuery hook
@@ -83,7 +71,11 @@ const mockAgent = {
   crawl_max_pages: 20,
 };
 
-const createMockURL = (status: URLSource["status"], isIndexed: boolean = false, overrides: Partial<URLSource> = {}): URLSource => ({
+const createMockURL = (
+  status: URLSource["status"],
+  isIndexed = false,
+  overrides: Partial<URLSource> = {},
+): URLSource => ({
   id: 1,
   url: "https://example.com",
   normalized_url: "https://example.com",
@@ -93,92 +85,124 @@ const createMockURL = (status: URLSource["status"], isIndexed: boolean = false, 
   last_fetch_at: new Date().toISOString(),
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
-  agent_id: "agt_test",
   ...overrides,
 });
+
+function stubUrlList(urls: URLSource[]) {
+  mockedApi.listKbUrls.mockResolvedValue({
+    urls,
+    total: urls.length,
+    quota: { used: urls.length, max: 100 },
+  } as any);
+}
+
+function renderComponent(initialURLs: URLSource[] = [], boundAgent: unknown = null) {
+  stubUrlList(initialURLs);
+  mockedApi.getKnowledgeBase.mockResolvedValue({
+    id: "kb_test",
+    name: "Test KB",
+    bound_agent: boundAgent ? { id: mockAgent.id, name: mockAgent.name } : null,
+  } as any);
+  mockedApi.getAgent.mockResolvedValue(mockAgent as any);
+  mockedApi.getKbIndexStatus.mockResolvedValue({ kb_id: "kb_test", status: "idle" } as any);
+
+  const router = createMemoryRouter(
+    [{ path: "/knowledge-bases/:kbId", element: <URLManagement /> }],
+    { initialEntries: ["/knowledge-bases/kb_test"] },
+  );
+
+  const view = render(<RouterProvider router={router} />);
+  return { ...view, router };
+}
 
 describe("URLManagement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    // Default mocks - no active crawling
-    mockedApi.getAgent.mockResolvedValue(mockAgent as any);
-    mockedApi.getTasksStatus.mockResolvedValue({
-      is_crawling: false,
-      is_rebuilding: false,
-      can_modify_index: true,
-      active_tasks: [],
-    } as any);
-    mockedApi.getIndexStatus.mockResolvedValue({
-      status: "ready",
-      total_chunks: 0,
-    } as any);
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  function renderComponent(initialURLs: URLSource[] = []) {
-    mockedApi.listURLs.mockResolvedValue({ urls: initialURLs, total: initialURLs.length } as any);
-
-    const router = createMemoryRouter(
-      [
-        { path: "/agents/:agentId/urls", element: <URLManagement /> },
-      ],
-      { initialEntries: ["/agents/agt_test/urls"] }
-    );
-
-    const view = render(<RouterProvider router={router} />);
-    return { ...view, router };
-  }
-
-  it("should render without errors", async () => {
+  it("loads the KB's URLs through the kb-scoped helper and never the agent alias", async () => {
     const urls = [createMockURL("success", true)];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
     renderComponent(urls);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.getAgent).toHaveBeenCalled();
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // Component should render
-    expect(screen.getByTestId("admin-layout")).toBeInTheDocument();
+    // The legacy agent-scoped helpers must not be reachable from this view.
+    expect(mockedApi.listURLs).toBeUndefined();
+    expect(mockedApi.createURLs).toBeUndefined();
+    expect(mockedApi.uploadFiles).toBeUndefined();
   });
 
   it("should render URL list when there are URLs", async () => {
     const urls = [createMockURL("success", true)];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
     renderComponent(urls);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // URL should be displayed
     await waitFor(() => {
       expect(screen.getByText("https://example.com")).toBeInTheDocument();
     });
   });
 
   it("should show empty state when no URLs", async () => {
-    mockedApi.listURLs.mockResolvedValue({ urls: [], total: 0 } as any);
-
     renderComponent([]);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // Empty state should be shown
     await waitFor(() => {
       expect(screen.getByText("labels.urlManagement.noUrls")).toBeInTheDocument();
+    });
+  });
+
+  it("hides the auto-fetch toggle when the KB has no bound agent", async () => {
+    renderComponent([], null);
+
+    await waitFor(() => {
+      expect(mockedApi.getKnowledgeBase).toHaveBeenCalledWith("kb_test");
+    });
+
+    expect(screen.queryByTestId("kb-url-autofetch")).not.toBeInTheDocument();
+    expect(mockedApi.getAgent).not.toHaveBeenCalled();
+  });
+
+  it("saves auto-fetch settings against the KB's bound agent, not the KB id", async () => {
+    mockedApi.updateAgent.mockResolvedValue(mockAgent as any);
+    renderComponent([], mockAgent);
+
+    expect(await screen.findByTestId("kb-url-autofetch")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_test");
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "labels.urlManagement.saveSettings",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledTimes(1);
+    });
+
+    // The auto-fetch knobs live on the *agent*; the KB page must never PATCH a
+    // KB-scoped endpoint for them.
+    const [agentId, patch] = mockedApi.updateAgent.mock.calls[0];
+    expect(agentId).toBe("agt_test");
+    expect(patch).toMatchObject({
+      enable_auto_fetch: false,
+      url_fetch_interval_days: 7,
+      crawl_max_depth: 2,
+      crawl_max_pages: 20,
     });
   });
 });
@@ -187,149 +211,79 @@ describe("URLManagement indexing status display", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    // Default mocks - idle backend state
-    mockedApi.getAgent.mockResolvedValue(mockAgent as any);
-    mockedApi.getTasksStatus.mockResolvedValue({
-      is_crawling: false,
-      is_rebuilding: false,
-      can_modify_index: true,
-      active_tasks: [],
-    } as any);
-    // Backend index status is idle (not indexing/rebuilding)
-    mockedApi.getIndexStatus.mockResolvedValue({
-      status: "idle",
-      total_chunks: 0,
-    } as any);
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  function renderComponent(initialURLs: URLSource[] = []) {
-    mockedApi.listURLs.mockResolvedValue({ urls: initialURLs, total: initialURLs.length } as any);
-
-    const router = createMemoryRouter(
-      [
-        { path: "/agents/:agentId/urls", element: <URLManagement /> },
-      ],
-      { initialEntries: ["/agents/agt_test/urls"] }
-    );
-
-    const view = render(<RouterProvider router={router} />);
-    return { ...view, router };
-  }
-
   it("should NOT show active fetching banner for success-but-unindexed URL when backend is idle", async () => {
-    // URL is fetched successfully but not indexed, and backend reports idle
-    const urls = [createMockURL("success", false, { 
-      indexing_status: "error",
-      indexing_error: "Embedding API rate limit exceeded"
-    })];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
+    const urls = [
+      createMockURL("success", false, {
+        indexing_status: "error",
+        indexing_error: "Embedding API rate limit exceeded",
+      }),
+    ];
     renderComponent(urls);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // Should show "Not Indexed" or similar status, NOT active fetching/crawling banner
-    // The crawlInProgress banner should NOT be visible
     await waitFor(() => {
-      const crawlBanner = screen.queryByText(/crawlInProgress/i);
-      expect(crawlBanner).not.toBeInTheDocument();
+      expect(screen.queryByText(/crawlInProgress/i)).not.toBeInTheDocument();
     });
 
-    // Should display the URL's index status (Index Error)
     await waitFor(() => {
       expect(screen.getByText(/Index Error/i)).toBeInTheDocument();
     });
   });
 
   it("should display 'Indexing...' badge for URLs with indexing_status 'processing'", async () => {
-    // URL with indexing_status: "processing" should show "Indexing..." badge
     const urls = [createMockURL("success", false, { indexing_status: "processing" })];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
     renderComponent(urls);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // Should display "Indexing..." badge (polling only starts for pending/fetching URLs)
     await waitFor(() => {
       expect(screen.getByText(/Indexing\.\.\./i)).toBeInTheDocument();
     });
   });
 
-  it("should recognize backend index status 'rebuilding' as active index work", async () => {
-    // Backend reports rebuilding is in progress
-    mockedApi.getIndexStatus.mockResolvedValue({
-      status: "rebuilding",
-      total_chunks: 50,
-    } as any);
-    mockedApi.getTasksStatus.mockResolvedValue({
-      is_crawling: false,
-      is_rebuilding: true,
-      can_modify_index: false,
-      active_tasks: ["rebuild_index"],
-    } as any);
-
-    const urls = [createMockURL("success", false, { indexing_status: "processing" })];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
-    renderComponent(urls);
-
-    // Wait for component to load
-    await waitFor(() => {
-      expect(mockedApi.getTasksStatus).toHaveBeenCalledWith("agt_test");
-    });
-
-    // Should detect rebuilding as active work
-    await waitFor(() => {
-      expect(mockedApi.getTasksStatus).toHaveBeenCalled();
-    });
-  });
-
   it("should display indexing error details when provided", async () => {
-    const urls = [createMockURL("success", false, {
-      indexing_status: "error",
-      indexing_error: "Embedding API rate limit exceeded"
-    })];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
+    const urls = [
+      createMockURL("success", false, {
+        indexing_status: "error",
+        indexing_error: "Embedding API rate limit exceeded",
+      }),
+    ];
     renderComponent(urls);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // Should show the indexing error message
     await waitFor(() => {
-      expect(screen.getByText(/Embedding API rate limit exceeded/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Embedding API rate limit exceeded/i),
+      ).toBeInTheDocument();
     });
   });
 
   it("should display URL last_error when fetch failed", async () => {
-    const urls = [createMockURL("failed", false, {
-      last_error: "DNS resolution failed: example.com not found"
-    })];
-    mockedApi.listURLs.mockResolvedValue({ urls, total: 1 } as any);
-
+    const urls = [
+      createMockURL("failed", false, {
+        last_error: "DNS resolution failed: example.com not found",
+      }),
+    ];
     renderComponent(urls);
 
-    // Wait for component to load
     await waitFor(() => {
-      expect(mockedApi.listURLs).toHaveBeenCalledWith("agt_test");
+      expect(mockedApi.listKbUrls).toHaveBeenCalledWith("kb_test");
     });
 
-    // Should show the fetch error message (may appear in both banner and URL card)
     await waitFor(() => {
       const elements = screen.getAllByText(/DNS resolution failed/i);
       expect(elements.length).toBeGreaterThanOrEqual(1);
@@ -340,43 +294,30 @@ describe("URLManagement indexing status display", () => {
 describe("URLManagement crawlPolling synchronization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // Default mocks
-    mockedApi.getAgent.mockResolvedValue(mockAgent as any);
-    mockedApi.getTasksStatus.mockResolvedValue({
-      is_crawling: false,
-      is_rebuilding: false,
-      can_modify_index: true,
-      active_tasks: [],
-    } as any);
-    mockedApi.getIndexStatus.mockResolvedValue({
-      status: "ready",
-      total_chunks: 0,
-    } as any);
   });
 
-  it("should have reactive synchronization code to clear crawlPolling when backend reports no crawling", () => {
-    // Read the source file to verify the fix is in place
+  it("keeps the documented reason for not stopping URL polling on is_crawling=false", () => {
     const fs = require("fs");
     const path = require("path");
     const sourceFile = path.join(__dirname, "../URLManagement.tsx");
     const content = fs.readFileSync(sourceFile, "utf-8");
 
-    // Verify the fix is present: don't immediately stop URL polling when is_crawling becomes false
-    expect(content).toContain("Don't immediately stop URL polling when is_crawling becomes false");
-    expect(content).toContain("The URL polling loop has its own stop conditions");
+    // The KB page has no `tasks:status` agent poll any more; the polling loop
+    // owns its stop conditions and must say so.
+    expect(content).toContain(
+      "The KB index task is the only backend-side work signal",
+    );
+    expect(content).toContain("success-but-unindexed is NOT an");
+    expect(content).toContain("active signal");
   });
 
-  it("should have reduced consecutiveNoChange threshold from 2 to 1", () => {
-    // Read the source file to verify the fix is in place
+  it("uses a one-poll-stable stop threshold instead of a two-poll one", () => {
     const fs = require("fs");
     const path = require("path");
     const sourceFile = path.join(__dirname, "../URLManagement.tsx");
     const content = fs.readFileSync(sourceFile, "utf-8");
 
-    // Verify the consecutiveNoChange threshold is now 1
     expect(content).toContain("consecutiveNoChange >= 1");
-    // Should NOT contain the old threshold of 2
     expect(content).not.toMatch(/consecutiveNoChange >= 2(?!\d)/);
   });
 });

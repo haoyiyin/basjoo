@@ -11,12 +11,18 @@ Ensures that URL sources added from the admin UI:
 4. Index status is accurately reported to the UI
 """
 
+from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock
 import pytest
 from sqlalchemy import select
 
 import database
 from models import Agent, KbDocument, URLSource
+
+# Captured at import time, BEFORE the autouse `hermetic_url_network` fixture swaps
+# the module attribute for a no-network stand-in. Needed by the signature contract
+# test, which must see the function that is really shipped.
+from services.url_service import process_url_refetch as _real_process_url_refetch
 
 # ========== Hermetic harness ==========
 #
@@ -217,7 +223,7 @@ async def test_url_creation_returns_list_response_shape(client, default_agent_id
 
 @pytest.mark.asyncio
 async def test_url_status_transitions_to_success_after_indexing(
-    client, default_agent_id
+    client, default_agent_id, bound_kb_id
 ):
     """URL added for an agent should progress to success and be marked indexed."""
     # Mock the URL fetching to avoid external calls
@@ -257,7 +263,7 @@ async def test_url_status_transitions_to_success_after_indexing(
     async with database.AsyncSessionLocal() as session:
         result = await session.execute(
             select(URLSource).where(
-                URLSource.agent_id == default_agent_id,
+                URLSource.kb_id == bound_kb_id,
                 URLSource.normalized_url == "https://example.com/test-page",
             )
         )
@@ -365,7 +371,7 @@ async def test_url_fetching_uses_url_safety(client, default_agent_id):
 
 
 @pytest.mark.asyncio
-async def test_url_fetching_blocks_unsafe_urls(client, default_agent_id):
+async def test_url_fetching_blocks_unsafe_urls(client, default_agent_id, bound_kb_id):
     """URL fetching should block unsafe URLs (localhost, private IPs)."""
     with patch("services.url_safety.validate_url_safe") as mock_validate:
         mock_validate.return_value = (False, "localhost is not allowed")
@@ -382,7 +388,7 @@ async def test_url_fetching_blocks_unsafe_urls(client, default_agent_id):
             async with database.AsyncSessionLocal() as session:
                 result = await session.execute(
                     select(URLSource).where(
-                        URLSource.agent_id == default_agent_id,
+                        URLSource.kb_id == bound_kb_id,
                         URLSource.url.contains("localhost"),
                     )
                 )
@@ -465,12 +471,12 @@ async def test_url_content_upserts_to_qdrant(client, default_agent_id):
 
 
 @pytest.mark.asyncio
-async def test_url_indexed_flag_reflects_success(client, default_agent_id):
+async def test_url_indexed_flag_reflects_success(client, default_agent_id, bound_kb_id):
     """URLSource.is_indexed should be True when indexing succeeds."""
     # Create a URL source with success status and is_indexed=True
     async with database.AsyncSessionLocal() as session:
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=bound_kb_id,
             url="https://example.com/indexed-page",
             normalized_url="https://example.com/indexed-page",
             status="success",
@@ -491,7 +497,7 @@ async def test_url_indexed_flag_reflects_success(client, default_agent_id):
 
 
 @pytest.mark.asyncio
-async def test_store_crawl_error_stores_error_message(client, default_agent_id):
+async def test_store_crawl_error_stores_error_message(client, default_agent_id, bound_kb_id):
     """Test that _store_crawl_error correctly stores error message and sets status to failed.
 
     This verifies the fix where _store_crawl_error was missing await on session.execute().
@@ -509,7 +515,7 @@ async def test_store_crawl_error_stores_error_message(client, default_agent_id):
         # Call _store_crawl_error with the error
         await _store_crawl_error(
             session=session,
-            agent_id=default_agent_id,
+            kb_id=bound_kb_id,
             start_url=test_url,
             error_msg=error_message,
         )
@@ -519,7 +525,7 @@ async def test_store_crawl_error_stores_error_message(client, default_agent_id):
     async with database.AsyncSessionLocal() as session:
         result = await session.execute(
             select(URLSource).where(
-                URLSource.agent_id == default_agent_id,
+                URLSource.kb_id == bound_kb_id,
                 URLSource.url == test_url,
             )
         )
@@ -540,7 +546,7 @@ async def test_store_crawl_error_stores_error_message(client, default_agent_id):
 
 
 @pytest.mark.asyncio
-async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
+async def test_store_crawl_error_updates_existing_url(client, default_agent_id, bound_kb_id):
     """Test that _store_crawl_error updates an existing URLSource record.
 
     When a URLSource already exists for the agent+normalized_url combination,
@@ -556,7 +562,7 @@ async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
     # Create an existing URLSource
     async with database.AsyncSessionLocal() as session:
         existing = URLSource(
-            agent_id=default_agent_id,
+            kb_id=bound_kb_id,
             url=test_url,
             normalized_url=test_url,
             status="pending",
@@ -570,7 +576,7 @@ async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
     async with database.AsyncSessionLocal() as session:
         await _store_crawl_error(
             session=session,
-            agent_id=default_agent_id,
+            kb_id=bound_kb_id,
             start_url=test_url,
             error_msg=new_error,
         )
@@ -580,7 +586,7 @@ async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
     async with database.AsyncSessionLocal() as session:
         result = await session.execute(
             select(URLSource).where(
-                URLSource.agent_id == default_agent_id,
+                URLSource.kb_id == bound_kb_id,
                 URLSource.url == test_url,
             )
         )
@@ -602,7 +608,7 @@ async def test_store_crawl_error_updates_existing_url(client, default_agent_id):
 
 
 @pytest.mark.asyncio
-async def test_store_crawl_error_retrievable_via_url_list(client, default_agent_id):
+async def test_store_crawl_error_retrievable_via_url_list(client, default_agent_id, bound_kb_id):
     """Test that errors stored by _store_crawl_error are visible in URL list endpoint.
 
     This verifies the error is committed to the database and can be retrieved
@@ -617,7 +623,7 @@ async def test_store_crawl_error_retrievable_via_url_list(client, default_agent_
     async with database.AsyncSessionLocal() as session:
         await _store_crawl_error(
             session=session,
-            agent_id=default_agent_id,
+            kb_id=bound_kb_id,
             start_url=test_url,
             error_msg=error_message,
         )
@@ -718,7 +724,7 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
 
         # Create URL source
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=kb_id,
             url="https://example.com/fail-page",
             normalized_url="https://example.com/fail-page",
             status="success",  # Already fetched
@@ -777,7 +783,7 @@ async def test_is_indexed_false_on_process_failure(client, default_agent_id):
 
 
 @pytest.mark.asyncio
-async def test_process_url_refetch_in_syntax(client, default_agent_id):
+async def test_process_url_refetch_in_syntax(client, default_agent_id, bound_kb_id):
     """Test that process_url_refetch compiles the SQL query correctly.
 
     This test verifies the fix for the SQLAlchemy .in_() syntax error where
@@ -794,7 +800,7 @@ async def test_process_url_refetch_in_syntax(client, default_agent_id):
 
     # Build the query the same way process_url_refetch does (after fix)
     query = select(URLSource).where(
-        URLSource.agent_id == default_agent_id,
+        URLSource.kb_id == bound_kb_id,
         URLSource.status.in_(["pending", "success", "failed"]),
     )
 
@@ -883,7 +889,7 @@ def test_crawl_page_result_accesses_status_code_from_metadata():
 
 @pytest.mark.asyncio
 async def test_fetch_metadata_uses_metadata_dict_for_status_code(
-    client, default_agent_id
+    client, default_agent_id, bound_kb_id
 ):
     """Integration test: URL refetch endpoint accepts requests and queues job.
 
@@ -910,7 +916,7 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(
     async with database.AsyncSessionLocal() as session:
         result = await session.execute(
             select(URLSource).where(
-                URLSource.agent_id == default_agent_id,
+                URLSource.kb_id == bound_kb_id,
                 URLSource.normalized_url == url,
             )
         )
@@ -931,7 +937,7 @@ async def test_fetch_metadata_uses_metadata_dict_for_status_code(
         # Verify process_url_refetch was called (confirms the endpoint dispatches correctly)
         mock_refetch.assert_called_once()
         call_kwargs = mock_refetch.call_args.kwargs
-        assert call_kwargs["agent_id"] == default_agent_id
+        assert call_kwargs["kb_id"] == bound_kb_id
         assert url_id in call_kwargs["url_ids"]
         assert call_kwargs["force"] is True
         assert "job_id" in call_kwargs
@@ -1075,13 +1081,13 @@ async def test_clear_all_urls_is_scoped_to_source_agent(
         session.add_all(
             [
                 URLSource(
-                    agent_id=agent_a.id,
+                    kb_id=bound_kb_id,
                     url="https://example.com/a",
                     normalized_url="https://example.com/a",
                     status="success",
                 ),
                 URLSource(
-                    agent_id=agent_b.id,
+                    kb_id=bound_kb_id,
                     url="https://example.com/b",
                     normalized_url="https://example.com/b",
                     status="success",
@@ -1094,8 +1100,12 @@ async def test_clear_all_urls_is_scoped_to_source_agent(
     response = await client.post(f"/api/v1/urls:clear_all?agent_id={default_agent_id}")
     assert response.status_code == 200
     data = response.json()
+    # Documents keep per-ingester provenance even on a shared KB.
     assert data["deleted_count"] == 1, data
-    assert data["deleted_url_count"] == 1
+    # URL rows, on the other hand, belong to the KB (URLSource has no agent column
+    # any more), so clearing the KB clears all of its URL sources — agent A's and
+    # agent B's alike. What must never leak across agents is the *documents*.
+    assert data["deleted_url_count"] == 2, data
 
     async with database.AsyncSessionLocal() as session:
         assert await session.get(KbDocument, doc_a_id) is None, "agent A's doc is gone"
@@ -1106,9 +1116,11 @@ async def test_clear_all_urls_is_scoped_to_source_agent(
             "legacy rows without provenance must survive"
         )
         remaining_urls = (
-            await session.execute(select(URLSource.agent_id))
+            await session.execute(
+                select(URLSource.id).where(URLSource.kb_id == bound_kb_id)
+            )
         ).scalars().all()
-        assert remaining_urls and remaining_urls[0] != default_agent_id
+        assert remaining_urls == [], f"KB URL sources should be gone; got {remaining_urls}"
 
 
 # ========== KB Indexing Diagnostics Gap Tests ==========
@@ -1140,7 +1152,7 @@ async def test_url_list_exposes_indexing_error_for_fetch_success_process_failure
 
         # Create URL: fetch succeeded, but indexing failed
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=kb_id,
             url="https://example.com/fetch-ok-index-fail",
             normalized_url="https://example.com/fetch-ok-index-fail",
             status="success",  # Fetch worked
@@ -1213,7 +1225,7 @@ async def test_url_list_exposes_indexing_status_field(client, default_agent_id):
 
         # Create URL being processed
         url_source = URLSource(
-            agent_id=default_agent_id,
+            kb_id=agent.kb_id,
             url="https://example.com/processing",
             normalized_url="https://example.com/processing",
             status="success",
@@ -1241,6 +1253,191 @@ async def test_url_list_exposes_indexing_status_field(client, default_agent_id):
     assert url_item["indexing_status"] in ["pending", "processing", "ready", "error"], (
         "indexing_status should have explicit state values"
     )
+
+
+# ========== kb-scoped service contract (url-svc lane) ==========
+# These are the unit-level contracts of this lane: `process_url_refetch` is
+# keyword-only and KB-scoped, and the scheduler has a never-fetched catch-all
+# that is independent of `enable_auto_fetch` and never retries `failed` rows.
+
+@pytest.mark.asyncio
+async def test_process_url_refetch_signature_is_keyword_only_and_kb_scoped():
+    """`process_url_refetch` must only be callable with the frozen keywords.
+
+    Guards the contract §4 (api-surface) and the seed build against: positional
+    calls or an `agent_id` spelling have to fail immediately, not at fetch time.
+    """
+    import inspect
+
+    import services.url_service as url_service_module
+
+    # The autouse fixture replaces the module attribute with a stub; the real
+    # function is the one imported at collection time.
+    assert (
+        url_service_module.process_url_refetch is not _real_process_url_refetch
+    ), "hermetic harness should still be stubbing the background entry point"
+
+    params = inspect.signature(_real_process_url_refetch).parameters
+    for name in ("kb_id", "url_ids", "force", "job_id"):
+        assert name in params, f"missing frozen keyword {name!r}: {list(params)}"
+        assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (
+            f"{name!r} must be keyword-only; got {params[name].kind}"
+        )
+    assert params["source_agent_id"].default is None
+    assert "agent_id" not in params, (
+        "process_url_refetch is kb-scoped; an agent_id parameter would let a "
+        "caller filter the wrong column"
+    )
+    assert inspect.iscoroutinefunction(_real_process_url_refetch)
+
+
+def _stub_task_lock(monkeypatch):
+    """Neutralise the real (module-global) task lock for scheduler dispatch tests.
+
+    Stubbing via monkeypatch is hermetic: it is undone on teardown, so a later test
+    in this process never sees a lock left held by this one.
+    """
+    from services.task_lock import task_lock
+
+    async def _acquired(agent_id, task_type, task_id):
+        return True, None
+
+    async def _released(agent_id, task_id):
+        return False
+
+    monkeypatch.setattr(task_lock, "acquire_task", _acquired)
+    monkeypatch.setattr(task_lock, "release_task", _released)
+
+@pytest.mark.asyncio
+async def test_scheduler_catch_all_fetches_never_fetched_pending_rows(
+    default_agent_id, bound_kb_id, monkeypatch
+):
+    """A `pending` + `last_fetch_at IS NULL` row is fetched even with auto-fetch OFF.
+
+    This is the product fix for "the example URL never leaves pending": the seed
+    may fail to take the lock, the process may die after commit, ... none of that
+    is a user preference, so the catch-all must not look at `enable_auto_fetch`.
+    """
+    from services.scheduler import URLFetchScheduler
+
+    # `services.scheduler` binds the sessionmaker once at import time; this suite
+    # reconfigures `database.AsyncSessionLocal` per test, so point it at the live one.
+    monkeypatch.setattr(
+        "services.scheduler.AsyncSessionLocal", database.AsyncSessionLocal
+    )
+
+    async with database.AsyncSessionLocal() as session:
+        agent = await session.get(Agent, default_agent_id)
+        assert agent.enable_auto_fetch is False, "fixture agent must not auto-fetch"
+
+        pending = URLSource(
+            kb_id=bound_kb_id,
+            url="https://example.com/never-fetched",
+            normalized_url="https://example.com/never-fetched",
+            status="pending",
+            last_fetch_at=None,
+        )
+        session.add(pending)
+        # A failed row and an already-fetched pending row must both be ignored.
+        session.add(
+            URLSource(
+                kb_id=bound_kb_id,
+                url="https://example.com/failed-row",
+                normalized_url="https://example.com/failed-row",
+                status="failed",
+                last_fetch_at=datetime.now(timezone.utc),
+                last_error="boom",
+            )
+        )
+        session.add(
+            URLSource(
+                kb_id=bound_kb_id,
+                url="https://example.com/already-fetched-pending",
+                normalized_url="https://example.com/already-fetched-pending",
+                status="pending",
+                last_fetch_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+        pending_id = pending.id
+
+    scheduler = URLFetchScheduler()
+    calls: list[dict] = []
+
+    async def _record(**kwargs):
+        calls.append(kwargs)
+
+    # Hermetic lock: the real one is module-global and would leak into later
+    # tests in this same pytest process if it were acquired for real.
+    _stub_task_lock(monkeypatch)
+
+    with patch("services.scheduler.process_url_refetch", side_effect=_record):
+        async with database.AsyncSessionLocal() as db:
+            await scheduler.check_and_fetch_urls()
+
+    assert len(calls) == 1, (
+        f"the catch-all must dispatch one job per KB, not one per row; got {calls}"
+    )
+    call = calls[0]
+    assert call["url_ids"] == [pending_id], (
+        f"catch-all should refetch only the never-fetched pending row; got {call}"
+    )
+    assert call["kb_id"] == bound_kb_id, call
+    assert call["force"] is False, call
+    assert call["job_id"].startswith(f"sched_refetch_{bound_kb_id}_"), call
+    assert call["source_agent_id"] is None, call
+
+
+@pytest.mark.asyncio
+async def test_scheduler_recurring_refetch_is_scoped_to_bound_kb(
+    default_agent_id, bound_kb_id, monkeypatch
+):
+    """The stale-success path queries `URLSource.kb_id`, never an agent column."""
+    from services.scheduler import URLFetchScheduler
+
+    monkeypatch.setattr(
+        "services.scheduler.AsyncSessionLocal", database.AsyncSessionLocal
+    )
+
+    async with database.AsyncSessionLocal() as session:
+        agent = await session.get(Agent, default_agent_id)
+        agent.enable_auto_fetch = True
+        session.add(
+            URLSource(
+                kb_id=bound_kb_id,
+                url="https://example.com/stale-success",
+                normalized_url="https://example.com/stale-success",
+                status="success",
+                last_fetch_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+        await session.commit()
+        agent_id = agent.id
+
+    scheduler = URLFetchScheduler()
+    calls: list[dict] = []
+
+    async def _record(**kwargs):
+        calls.append(kwargs)
+
+    _stub_task_lock(monkeypatch)
+
+    with patch("services.scheduler.process_url_refetch", side_effect=_record):
+        async with database.AsyncSessionLocal() as db:
+            agent = await db.get(Agent, agent_id)
+            await scheduler.fetch_agent_urls(db, agent)
+
+    async with database.AsyncSessionLocal() as session:
+        stale_id = await session.scalar(
+            select(URLSource.id).where(
+                URLSource.normalized_url == "https://example.com/stale-success"
+            )
+        )
+    assert len(calls) == 1, f"one job per KB expected; got {calls}"
+    assert calls[0]["url_ids"] == [stale_id], calls
+    assert calls[0]["kb_id"] == bound_kb_id, calls
+    assert calls[0]["force"] is False, calls
+    assert calls[0]["source_agent_id"] is None, calls
 
 
 # ========== Scrapling Service /discover Endpoint Tests ==========

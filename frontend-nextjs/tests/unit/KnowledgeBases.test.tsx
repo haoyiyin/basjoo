@@ -2,9 +2,11 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom";
 import KnowledgeBases from "../../src/views/KnowledgeBases";
+import KnowledgeBaseDetailView from "../../src/views/KnowledgeBaseDetail";
 import { api } from "../../src/services/api";
 import type { Agent, KnowledgeBaseDetail } from "../../src/services/api";
 
@@ -31,6 +33,8 @@ vi.mock("../../src/services/api", () => ({
 		deleteKnowledgeBase: vi.fn(),
 		bindAgentKnowledgeBase: vi.fn(),
 		testEmbeddingConfig: vi.fn(),
+		getKnowledgeBase: vi.fn(),
+		getKbSourcesSummary: vi.fn(),
 	},
 }));
 
@@ -40,10 +44,17 @@ vi.mock("../../src/hooks/useMediaQuery", () => ({
 
 // Keys are returned verbatim so assertions can target i18n keys directly.
 vi.mock("react-i18next", () => ({
-	useTranslation: () => ({
-		t: (key: string, params?: Record<string, unknown>) =>
-			params ? `${key}|${JSON.stringify(params)}` : key,
-	}),
+	useTranslation: () => ({ t: stableT }),
+}));
+
+// Both panels own their own test file; here they are stubs so that the detail
+// page's *composition* can be asserted without duplicating their internals.
+vi.mock("../../src/views/URLManagement", () => ({
+	default: () => <div data-testid="stub-url-panel">urls</div>,
+}));
+
+vi.mock("../../src/views/FileUploadManagement", () => ({
+	default: () => <div data-testid="stub-file-panel">files</div>,
 }));
 
 // The layout is exercised by its own test; here it only needs to render children.
@@ -116,6 +127,34 @@ function mockList(kbs: KnowledgeBaseDetail[]) {
 	});
 }
 
+/** `t` must be stable: some views use it in effect dependencies. */
+function stableT(key: string, params?: Record<string, unknown>) {
+	return params ? `${key}|${JSON.stringify(params)}` : key;
+}
+
+/** The view now renders `Link`s and reads `?bindAgent=`, so it needs a router. */
+function LocationProbe() {
+	const location = useLocation();
+	return (
+		<div data-testid="location">{`${location.pathname}${location.search}`}</div>
+	);
+}
+
+function renderView(initialEntry = "/knowledge-bases") {
+	return render(
+		<MemoryRouter initialEntries={[initialEntry]}>
+			<Routes>
+				<Route path="/knowledge-bases" element={<KnowledgeBases />} />
+				<Route
+					path="/knowledge-bases/:kbId"
+					element={<div>route:KnowledgeBaseDetail</div>}
+				/>
+			</Routes>
+			<LocationProbe />
+		</MemoryRouter>,
+	);
+}
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	authState.role = "super_admin";
@@ -126,7 +165,7 @@ beforeEach(() => {
 
 describe("KnowledgeBases view", () => {
 	it("renders one row per knowledge base with counts and status", async () => {
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
@@ -148,7 +187,7 @@ describe("KnowledgeBases view", () => {
 	});
 
 	it("shows the bound agent name and an Unbind action for a bound KB", async () => {
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
@@ -172,7 +211,7 @@ describe("KnowledgeBases view", () => {
 			agent: agents[0],
 			knowledge_base: unboundKb,
 		});
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_free")).toBeInTheDocument(),
@@ -209,7 +248,7 @@ describe("KnowledgeBases view", () => {
 			agent: agents[0],
 			knowledge_base: null,
 		});
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
@@ -231,7 +270,7 @@ describe("KnowledgeBases view", () => {
 
 	it("hides every mutating action for a non super_admin", async () => {
 		authState.role = "admin";
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
@@ -261,7 +300,7 @@ describe("KnowledgeBases view", () => {
 		mockedApi.deleteKnowledgeBase.mockRejectedValue(
 			new Error("KB is bound to an agent. Unbind it first."),
 		);
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
@@ -279,7 +318,7 @@ describe("KnowledgeBases view", () => {
 
 	it("renders the empty state when the workspace has no knowledge bases", async () => {
 		mockList([]);
-		render(<KnowledgeBases />);
+		renderView();
 
 		expect(
 			await screen.findByText("knowledgeBases.empty"),
@@ -289,7 +328,7 @@ describe("KnowledgeBases view", () => {
 
 	it("renders an error state with a retry that refetches", async () => {
 		mockedApi.listKnowledgeBases.mockRejectedValueOnce(new Error("boom"));
-		render(<KnowledgeBases />);
+		renderView();
 
 		expect(await screen.findByText("boom")).toBeInTheDocument();
 		await userEvent.click(
@@ -302,7 +341,7 @@ describe("KnowledgeBases view", () => {
 
 	it("opens the create modal and posts the form values", async () => {
 		mockedApi.createKnowledgeBase.mockResolvedValue(unboundKb);
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
@@ -339,7 +378,7 @@ describe("KnowledgeBases view", () => {
 	});
 
 	it("opens the detail panel for the selected row", async () => {
-		render(<KnowledgeBases />);
+		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_free")).toBeInTheDocument(),
@@ -355,5 +394,159 @@ describe("KnowledgeBases view", () => {
 		expect(
 			within(panel).getByText("BAAI/bge-m3"),
 		).toBeInTheDocument();
+	});
+
+	it("navigates to /knowledge-bases/:kbId from the row's sources action", async () => {
+		renderView();
+
+		await waitFor(() =>
+			expect(screen.getByTestId("kb-row-kb_free")).toBeInTheDocument(),
+		);
+		await userEvent.click(
+			within(screen.getByTestId("kb-row-kb_free")).getByRole("link", {
+				name: "knowledgeBases.actions.sources",
+			}),
+		);
+
+		await waitFor(() =>
+			expect(screen.getByTestId("location")).toHaveTextContent(
+				"/knowledge-bases/kb_free",
+			),
+		);
+		expect(screen.getByText("route:KnowledgeBaseDetail")).toBeInTheDocument();
+	});
+
+	it("opens the bind modal for the agent named in ?bindAgent=", async () => {
+		mockedApi.bindAgentKnowledgeBase.mockResolvedValue({
+			agent: agents[0],
+			knowledge_base: unboundKb,
+		});
+		renderView("/knowledge-bases?bindAgent=agt_1");
+
+		const modal = await screen.findByTestId("kb-bind-agent-modal");
+		await waitFor(() =>
+			expect(
+				within(modal).getByLabelText("knowledgeBases.bindKbLabel"),
+			).toBeInTheDocument(),
+		);
+
+		// Only KBs that can actually be bound are offered (kb_bound is taken).
+		const options = within(modal).getAllByRole("option");
+		expect(options.map((option) => option.textContent)).toEqual([
+			"knowledgeBases.bindKbPlaceholder",
+			"Unbound KB",
+		]);
+
+		await userEvent.selectOptions(
+			within(modal).getByLabelText("knowledgeBases.bindKbLabel"),
+			"kb_free",
+		);
+		await userEvent.click(
+			within(modal).getByRole("button", {
+				name: "knowledgeBases.bindSubmit",
+			}),
+		);
+
+		await waitFor(() =>
+			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
+				"agt_1",
+				"kb_free",
+			),
+		);
+	});
+
+	it("does not open the agent bind modal without ?bindAgent=", async () => {
+		renderView();
+
+		await waitFor(() =>
+			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
+		);
+		expect(
+			screen.queryByTestId("kb-bind-agent-modal"),
+		).not.toBeInTheDocument();
+	});
+});
+
+// --- /knowledge-bases/:kbId composition --------------------------------------
+// The KB detail page is the single place an operator manages a KB's sources:
+// it must mount BOTH the URL panel and the file panel, driven by the route
+// parameter, and it must work for an unbound KB (no agent anywhere).
+
+const detailKb: KnowledgeBaseDetail = {
+	id: "kb_solo",
+	name: "Solo KB",
+	embedding_provider: "jina",
+	embedding_model: "jina-embeddings-v3",
+	embedding_base_url: null,
+	embedding_batch_size: 4,
+	embedding_dimension: 1024,
+	chunk_size: 512,
+	chunk_overlap: 64,
+	status: "active",
+	is_locked: false,
+	error_message: null,
+	document_count: 1,
+	ready_document_count: 1,
+	total_chunks: 9,
+	bound_agent: null,
+	created_at: "2026-01-01T00:00:00Z",
+};
+
+function renderDetail(kbId = "kb_solo") {
+	return render(
+		<MemoryRouter initialEntries={[`/knowledge-bases/${kbId}`]}>
+			<Routes>
+				<Route
+					path="/knowledge-bases/:kbId"
+					element={<KnowledgeBaseDetailView />}
+				/>
+			</Routes>
+		</MemoryRouter>,
+	);
+}
+
+describe("KnowledgeBaseDetail route composition", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockedApi.getKnowledgeBase.mockResolvedValue(detailKb);
+		mockedApi.getKbSourcesSummary.mockResolvedValue({
+			urls: { total: 2, indexed: 2, pending: 0, total_size_kb: 10 },
+			files: { total: 1, ready: 1, processing: 0, total_size_kb: 5 },
+			has_pending: false,
+		});
+	});
+
+	it("loads the KB named by the route parameter, not an agent", async () => {
+		renderDetail("kb_solo");
+
+		await waitFor(() => {
+			expect(mockedApi.getKnowledgeBase).toHaveBeenCalledWith("kb_solo");
+		});
+		expect(mockedApi.getKbSourcesSummary).toHaveBeenCalledWith("kb_solo");
+	});
+
+	it("mounts both the URL panel and the file panel", async () => {
+		renderDetail();
+
+		expect(await screen.findByTestId("stub-url-panel")).toBeInTheDocument();
+		expect(await screen.findByTestId("stub-file-panel")).toBeInTheDocument();
+	});
+
+	it("renders the KB name and its summary counters", async () => {
+		renderDetail();
+
+		expect(await screen.findByTestId("kb-detail-title")).toHaveTextContent(
+			"Solo KB",
+		);
+		expect(await screen.findByTestId("kb-detail-summary")).toBeInTheDocument();
+	});
+
+	it("supports an unbound KB: the page never requires a bound agent", async () => {
+		renderDetail();
+
+		await screen.findByTestId("kb-detail-title");
+		expect(mockedApi.getKnowledgeBase).toHaveBeenCalledWith("kb_solo");
+		// No agent-scoped source helper may be used from the KB page.
+		expect(mockedApi.listAgents).not.toHaveBeenCalled();
 	});
 });

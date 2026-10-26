@@ -164,6 +164,7 @@ async def setup_test_db(prepare_test_db_dir):
     await init_db()
 
     async with database.AsyncSessionLocal() as session:
+        from core.encryption import encrypt_api_key
         from models import Agent, KnowledgeBase, Workspace, WorkspaceQuota
 
         workspace_result = await session.execute(
@@ -194,6 +195,13 @@ async def setup_test_db(prepare_test_db_dir):
             )
             session.add(agent)
             await session.flush()
+
+        # Issue #19: production chat refuses a keyless agent. Chat-behaviour
+        # tests still mock `get_llm_service` (see `mock_llm_service` above), so
+        # a stored dummy key is enough to pass the gate without hitting a
+        # provider. Tests that want the 400 path create their own keyless agent.
+        if not agent.api_key:
+            agent.api_key = encrypt_api_key("test-llm-key")
 
         # Every test agent starts with an active KB bound; embedding config lives
         # on the KB now, so no agent-side key is needed.

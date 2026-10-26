@@ -11,7 +11,7 @@ import pytest_asyncio
 from sqlalchemy import select
 
 import database
-from models import Agent, KbDocument, Workspace, WorkspaceQuota
+from models import Agent, KbDocument, URLSource, Workspace, WorkspaceQuota
 from tests.conftest import make_test_kb
 
 @pytest_asyncio.fixture(loop_scope="function")
@@ -156,20 +156,73 @@ async def test_sources_summary_returns_kb_document_counts(client, agent_with_kb_
     )
 
 @pytest.mark.asyncio
-async def test_sources_summary_with_no_kb(client, default_agent_id):
-    """Test that sources:summary returns zero file stats when agent has no KB."""
-    # Use default agent which may not have KB
-    response = await client.get(f"/api/v1/sources:summary?agent_id={default_agent_id}")
+async def test_sources_summary_409_when_the_agent_has_no_kb(client):
+    """An unbound agent is 409, not a 200 with every counter zeroed.
+
+    `conftest` always binds a KB to the default agent, so the previous
+    `test_sources_summary_with_no_kb` (200-with-zeros, comment "default agent may
+    not have KB") could never exercise the no-KB path. This builds a real unbound
+    agent instead and pins the 409 contract of every legacy alias.
+    """
+    async with database.AsyncSessionLocal() as session:
+        workspace = (
+            await session.execute(select(Workspace).limit(1))
+        ).scalar_one()
+        agent = Agent(
+            workspace_id=workspace.id,
+            name="Unbound Summary Agent",
+            model="deepseek-v4-flash",
+            api_base="https://api.deepseek.com/v1",
+            provider_type="deepseek",
+        )
+        session.add(agent)
+        await session.commit()
+        agent_id = agent.id
+
+    response = await client.get(f"/api/v1/sources:summary?agent_id={agent_id}")
+
+    assert response.status_code == 409, (
+        f"Expected 409 for an unbound agent, got {response.status_code}: "
+        f"{response.text}"
+    )
+    assert "knowledge base" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_sources_summary_counts_a_failed_url(client, agent_with_kb_docs):
+    """A KB whose only URL failed still reports it as total + pending.
+
+    The old implementation filtered `url_total` on `status == "success"`, so this
+    KB reported urls.total == 0 and has_pending == False — hiding exactly the
+    failure #17 exists to surface.
+    """
+    agent_id = agent_with_kb_docs["agent_id"]
+    kb_id = agent_with_kb_docs["kb_id"]
+
+    async with database.AsyncSessionLocal() as session:
+        session.add(
+            URLSource(
+                kb_id=kb_id,
+                url="https://example.com/boom",
+                normalized_url="https://example.com/boom",
+                status="failed",
+                last_error="boom",
+            )
+        )
+        await session.commit()
+
+    response = await client.get(f"/api/v1/sources:summary?agent_id={agent_id}")
 
     assert response.status_code == 200, (
         f"Expected 200, got {response.status_code}: {response.text}"
     )
-
     data = response.json()
-    assert data["files"]["total"] == 0
-    assert data["files"]["ready"] == 0
-    assert data["files"]["processing"] == 0
-    assert data["files"]["total_size_kb"] == 0
+    assert data["urls"]["total"] == 1, (
+        f"A failed URL must still be counted, got {data['urls']['total']}"
+    )
+    assert data["urls"]["pending"] == 1
+    assert data["urls"]["indexed"] == 0
+    assert data["has_pending"] is True
 
 @pytest.mark.asyncio
 async def test_sources_summary_counts_every_document_of_the_kb(
