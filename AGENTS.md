@@ -152,7 +152,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 Left over from the Next.js → Vite migration. Removing these is a separate cleanup task; touching them inside an unrelated change is noise.
 
 **Frontend**
-- `api.clearAgentError` / `useTheme` are now referenced by nothing at all (the accidental `AgentSettings 2.tsx` duplicate that used them was deleted during the UI redesign). `~100` i18n keys it consumed are unreferenced, as are the `theme.*` keys.
+- `api.clearAgentError` / `useTheme` are now referenced by nothing at all (the accidental `AgentSettings 2.tsx` duplicate that used them was deleted during the UI redesign, along with the accident-twin `package-lock 2.json`). `~100` i18n keys it consumed are unreferenced, as are the `theme.*` keys.
 - `src/utils/textSanitizer.ts` — zero imports.
 - `src/views/Chat.tsx` + route `/chat/:sessionId` — no link or `navigate()` targets it; `Sessions.tsx` handles messages inline. Orphan route.
 - `src/views/Setup.tsx` + route `/setup` — legacy AI-config wizard with no inbound link (`Login.tsx` points at `/register`). Orphan route.
@@ -173,7 +173,7 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 - `Tenant` (table + `/api/tenants` router) — the KB stack no longer reads it; workspaces are the isolation unit. `Tenant.slug` / `Tenant.plan`, `ChatSession.visitor_region` — written, never read.
 
 **Repository hygiene**
-- Tracked artifacts: `E2E_TEST_REPORT.md`, `E2E_BUG_REPORT.md`, `E2E_RAW_OUTPUT.txt`, `tests/playwright-report/index.html` (559 KB), `package-lock 2.json`, `widget/example/basjoo-widget.js` (stale build output).
+- Tracked artifacts: `E2E_TEST_REPORT.md`, `E2E_BUG_REPORT.md`, `E2E_RAW_OUTPUT.txt`, `tests/playwright-report/index.html` (559 KB), `widget/example/basjoo-widget.js` (stale build output).
 - `frontend-nextjs/.next/` (67 MB) exists on disk from the Next.js era; gitignored, safe to delete.
 
 ## Safety and operational notes
