@@ -109,11 +109,11 @@ describe("Icon registry (R3)", () => {
 		]) {
 			expect(ICON_NAMES).toContain(name);
 		}
-		// Round 6 additions — and only these: an unused name is dead weight.
-		for (const name of ["save", "swap"]) {
+		// Every registered glyph must have a consumer — an unused name is dead weight.
+		for (const name of ["save"]) {
 			expect(ICON_NAMES).toContain(name);
 		}
-		expect(ICON_NAMES).toHaveLength(19);
+		expect(ICON_NAMES).toHaveLength(18);
 	});
 });
 

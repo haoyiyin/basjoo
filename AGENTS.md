@@ -134,7 +134,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
 - The agent-dashboard KB row links to the KB source page and carries **no** rebind control (the `swap`
   icon was removed). Every icon-only control takes its accessible name from the locale files plus a
-  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 19).
+  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 18).
   Destructive **confirm** primaries keep their words.
 - **Rebinding is unbind-then-bind**: detach from either list (the unbind icon beside the bound KB name
   on `/agents`, or beside the bound agent name on `/knowledge-bases`), then use the dashboard's
