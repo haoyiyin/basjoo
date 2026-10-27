@@ -47,7 +47,7 @@ Docker-oriented AI customer support platform:
 
 ## Must-follow conventions
 - **Structure**: Backend logic strictly in `backend/services/`; thin routers in `backend/api/`. Models in `backend/models.py`. Frontend views in `src/views/`, shared components in `src/components/`, hooks in `src/hooks/`. Widget self-contained in `widget/src/`.
-- **Style**: Python — 4 spaces, snake_case for modules/functions/tests. TypeScript/React — 2 spaces, PascalCase for components/views, `use*` hooks. Explicit TS types; no `any`.
+- **Style**: Python — 4 spaces, snake_case for modules/functions/tests. TypeScript/React — **tabs** (every file in `src/` uses tabs; there is no prettier/editorconfig, so the existing code is the style), PascalCase for components/views, `use*` hooks. Explicit TS types; no `any`.
 - **Commits**: Conventional (`feat:`, `fix:`, `docs:`), scoped, imperative. PRs require summary, test commands+output, UI screenshots, migration notes.
 - **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
 
@@ -106,8 +106,49 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - Centralized API/SSE client plus the `kbStatus` helper in `src/services/api.ts`.
 - Auth state in `src/context/AuthContext.tsx` (localStorage).
 - `useAgentKbStatus` hook drives the first-time KB flow.
-- Nav and route scoping are role-driven in `src/components/AdminLayout.tsx`: workspace nav includes 知识库列表 (`/knowledge-bases`); there is **no** agent-scoped "知识库" sidebar group. `super_admin` sees dashboard + agents at the root and sessions/settings/playground inside an agent; `support` sees only the agent's sessions page.
-- Playground: if `!agent.api_key_set`, do not open the SSE stream; disable send; keep the configure-key banner.
+- **Design system lives in `src/index.css`** — the single source of truth. Tokens (`--text-*`,
+  `--space-*`, `--radius-*`, `--weight-*`, `--color-*`, `--shadow-*`) plus the primitive classes
+  every view composes: `admin-page`, `page`, `page-header`, `page-title`, `page-actions`,
+  `list` / `list-row` / `list-header`, `card`, `stat` / `stat-grid`, `btn*`, `field` / `input` /
+  `select` / `switch`, `badge` / `badge-<state>`, `empty`, `sheet`, `mono`. Two contract suites pin
+  it: `tests/unit/designTokens.test.ts` (every primitive exists; WCAG contrast computed for BOTH
+  themes) and `tests/unit/mobileLayout.test.tsx` (375px: no overflow, ≥44px targets, the mobile
+  media-block rules and the ≥1025px ordering). A new class or a token change must keep both green —
+  that is the cheapest way to avoid a silent visual regression.
+- Layout rules when adding a view: root `admin-page`, one `page-header` with a single `page-title`,
+  actions in `page-actions`, machine strings (ids, model names, counts, quotas) in `mono`. No glass
+  surface, no gradient backdrop, no `fontWeight` outside 400/500/600, no literal colour in a `.tsx`.
+- **Light is the appearance the product actually ships in** (`ThemeProvider` sets `data-theme`;
+  light is the default resolve). Check a colour change in light first, dark second.
+- **Nav is four entries, not six**: 首页 `/`, 智能体 `/agents`, 知识库 `/knowledge-bases`,
+  账号设置 `/settings/account`. `/sessions` and `/users` are not routes and not nav — do not
+  re-add them. `super_admin` sees those four at the root; inside an agent scope it sees
+  仪表盘 / 调试区 / 会话中心 / 智能体设置 (four — round 6 removed the 知识库 sidebar door), and
+  `support` sees only 会话中心.
+- **Agent-scoped 知识库 is a route, not a nav entry**: `/agents/:id/knowledge` still resolves (a bound
+  agent redirects to that KB's source page, an unbound one renders an inline bind prompt
+  `kb-bind-prompt`), and it is what the legacy `/urls` + `/files` paths redirect to. The door is the
+  agent dashboard's knowledge row. The bind prompt's primary action opens the bind sheet on
+  `/knowledge-bases?bindAgent=<id>`. That query param is a live contract between
+  `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
+- The agent-dashboard 更换 button is the `swap` icon (`.btn-icon`, `aria-label` = 更换知识库); every
+  icon-only control takes its accessible name from the locale files plus a `title`, never the glyph.
+  Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 19). Destructive **confirm** primaries
+  keep their words.
+- **Lists are one system**: `/agents` and `/knowledge-bases` both render `list-header` + `list-row`
+  as a shared column grid. The row's NAME is the navigation affordance (link + chevron); the row
+  itself is not a link, so it can still host a menu button. Every list has an `empty` state with its
+  create action. The header row hides below 768px and rows stack.
+- Knowledge-base rows carry **no unbind and no refresh control**; unbinding happens from the agent
+  side, and every panel auto-polls. Clicking a KB's name opens its source page — there is no
+  separate "manage sources" action and no inline expand panel.
+- Agent creation is a `+` icon button in `page-actions` opening a `sheet`, never an inline form.
+  Escape and backdrop click close it; focus returns to the `+`.
+- The agent dashboard (`/agents/:id/dashboard`) shows API status, agent name, user count, session
+  count and one status region. It must not render knowledge-base parameters (index size, URL/file
+  counts, chunk counts) — those belong to the KB page.
+- Playground: if `!agent.api_key_set`, do not open the SSE stream; disable send; keep the
+  configure-key banner.
 - `ThemeProvider` (in `AppProviders`) applies `data-theme` on `<html>`, which `src/index.css` keys off. Keep it even though `useTheme` itself has no live consumer.
 
 ### Widget
@@ -118,7 +159,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 Left over from the Next.js → Vite migration. Removing these is a separate cleanup task; touching them inside an unrelated change is noise.
 
 **Frontend**
-- `src/views/AgentSettings 2.tsx` (1,630 lines) — accidental Finder duplicate, not routed and not imported anywhere. It is the only consumer of `api.clearAgentError`, `useTheme`, and ~100 i18n keys, so deleting it strands those keys too.
+- `api.clearAgentError` / `useTheme` are now referenced by nothing at all (the accidental `AgentSettings 2.tsx` duplicate that used them was deleted during the UI redesign, along with the accident-twin `package-lock 2.json`). `~100` i18n keys it consumed are unreferenced, as are the `theme.*` keys.
 - `src/utils/textSanitizer.ts` — zero imports.
 - `src/views/Chat.tsx` + route `/chat/:sessionId` — no link or `navigate()` targets it; `Sessions.tsx` handles messages inline. Orphan route.
 - `src/views/Setup.tsx` + route `/setup` — legacy AI-config wizard with no inbound link (`Login.tsx` points at `/register`). Orphan route.
@@ -139,7 +180,7 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 - `Tenant` (table + `/api/tenants` router) — the KB stack no longer reads it; workspaces are the isolation unit. `Tenant.slug` / `Tenant.plan`, `ChatSession.visitor_region` — written, never read.
 
 **Repository hygiene**
-- Tracked artifacts: `E2E_TEST_REPORT.md`, `E2E_BUG_REPORT.md`, `E2E_RAW_OUTPUT.txt`, `tests/playwright-report/index.html` (559 KB), `package-lock 2.json`, `widget/example/basjoo-widget.js` (stale build output).
+- Tracked artifacts: `E2E_TEST_REPORT.md`, `E2E_BUG_REPORT.md`, `E2E_RAW_OUTPUT.txt`, `tests/playwright-report/index.html` (559 KB), `widget/example/basjoo-widget.js` (stale build output).
 - `frontend-nextjs/.next/` (67 MB) exists on disk from the Next.js era; gitignored, safe to delete.
 
 ## Safety and operational notes
@@ -159,4 +200,4 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 
 **This is living documentation. Update when patterns change.**
 
-Last updated: 2026-10-26 (issues #15–#20: `URLSource.kb_id`, KB-scoped source routes, production MockLLM ban, `agent_type`/`channel_mode` dropped, admin SPA 375px)
+Last updated: 2026-10-27 (admin SPA redesign: design system in `index.css`, 首页/智能体/知识库/账号设置 nav, `/sessions`+`/users` removed, agent-scoped 知识库 entry, `+`-opened create sheet, unified list grid, agent dashboard without KB parameters, all manual refresh buttons removed)

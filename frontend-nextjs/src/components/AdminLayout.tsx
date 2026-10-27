@@ -5,6 +5,8 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useTranslation } from "react-i18next";
 import { api } from "../services/api";
+import { Icon } from "./Icon";
+import type { IconName } from "./Icon";
 
 import { useIsMobile } from "../hooks/useMediaQuery";
 
@@ -15,159 +17,60 @@ interface AdminLayoutProps {
 interface NavItem {
 	path: string;
 	i18nKey: string;
-	icon: JSX.Element;
-	children?: NavItem[];
+	icon: IconName;
 }
 
-const navItemsConfig: NavItem[] = [
-	{
-		path: "/",
-		i18nKey: "navigation.dashboard",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<rect x="3" y="3" width="7" height="7" rx="1" />
-				<rect x="14" y="3" width="7" height="7" rx="1" />
-				<rect x="14" y="14" width="7" height="7" rx="1" />
-				<rect x="3" y="14" width="7" height="7" rx="1" />
-			</svg>
-		),
-	},
-	{
-		path: "/playground",
-		i18nKey: "navigation.playground",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-			</svg>
-		),
-	},
-	{
-		path: "/agents",
-		i18nKey: "navigation.agents",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M12 2v4" />
-				<path d="M12 18v4" />
-				<rect x="4" y="6" width="16" height="12" rx="3" />
-				<path d="M8 12h.01" />
-				<path d="M16 12h.01" />
-				<path d="M9 16h6" />
-			</svg>
-		),
-	},
+/**
+ * Workspace (root) navigation — spec §13: exactly these four entries, in this
+ * order. 会话 `/sessions` and 用户 `/users` are gone: both routes were deleted
+ * from `App.tsx` (`AdminUsers` is gone with them).
+ */
+const workspaceNavItems: NavItem[] = [
+	{ path: "/", i18nKey: "navigation.home", icon: "home" },
+	{ path: "/agents", i18nKey: "navigation.agents", icon: "agents" },
 	{
 		path: "/knowledge-bases",
 		i18nKey: "navigation.knowledgeBases",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-				<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-				<path d="M9 7h7" />
-				<path d="M9 11h7" />
-			</svg>
-		),
-	},
-	{
-		path: "/sessions",
-		i18nKey: "navigation.sessions",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-				<circle cx="9" cy="7" r="4" />
-				<path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-				<path d="M16 3.13a4 4 0 0 1 0 7.75" />
-			</svg>
-		),
-	},
-	{
-		path: "/users",
-		i18nKey: "navigation.users",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-				<circle cx="9" cy="7" r="4" />
-				<path d="M19 8v6" />
-				<path d="M22 11h-6" />
-			</svg>
-		),
-	},
-	{
-		path: "/settings/agent",
-		i18nKey: "navigation.agentSettings",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<circle cx="12" cy="12" r="3" />
-				<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-			</svg>
-		),
+		icon: "knowledge",
 	},
 	{
 		path: "/settings/account",
 		i18nKey: "navigation.accountSettings",
-		icon: (
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-			>
-				<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-				<circle cx="12" cy="7" r="4" />
-			</svg>
-		),
+		icon: "settings",
 	},
 ];
+
+/**
+ * Agent-scoped navigation — exactly four entries. `/agents/:id/dashboard`
+ * replaces the workspace home. The old 知识库 sidebar door (which pointed at
+ * `/agents/:id/knowledge`) is gone: the dashboard's knowledge row links to the
+ * KB, so the sidebar entry was a second door to the same place. The route
+ * itself still resolves (deep link / legacy `/urls`+`/files` redirects).
+ */
+function agentNavItems(agentBasePath: string): NavItem[] {
+	return [
+		{
+			path: `${agentBasePath}/dashboard`,
+			i18nKey: "navigation.dashboard",
+			icon: "dashboard",
+		},
+		{
+			path: `${agentBasePath}/playground`,
+			i18nKey: "navigation.playground",
+			icon: "playground",
+		},
+		{
+			path: `${agentBasePath}/sessions`,
+			i18nKey: "navigation.sessions",
+			icon: "sessions",
+		},
+		{
+			path: `${agentBasePath}/settings/agent`,
+			i18nKey: "navigation.agentSettings",
+			icon: "settings",
+		},
+	];
+}
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
 	const { t } = useTranslation("common");
@@ -182,55 +85,29 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 	const isSupport = admin?.role === "support";
 	const agentBasePath = agentId ? `/agents/${agentId}` : "";
 
-	// Build nav items based on role and context. `/knowledge-bases` and
-	// `/settings/account` are workspace-level (root) entries only, so they are
-	// dropped from agent scoping.
-	const scopedNavItems = agentId
-		? navItemsConfig
-				.filter(
-					(item) =>
-						item.path !== "/agents" &&
-						item.path !== "/knowledge-bases" &&
-						item.path !== "/settings/account",
-				)
-				.map((item) => ({
-					...item,
-					path:
-						item.path === "/"
-							? `${agentBasePath}/dashboard`
-							: `${agentBasePath}${item.path}`,
-					children: item.children?.map((child) => ({
-						...child,
-						path: `${agentBasePath}${child.path}`,
-					})),
-				}))
+	// Build nav items based on role and context. A `super_admin` at workspace
+	// level sees the four §13 entries; every other root role sees none. Support
+	// users only ever get the agent-scoped sessions entry.
+	const navItems: NavItem[] = agentId
+		? agentNavItems(agentBasePath)
 		: isSuperAdmin
-			? navItemsConfig.filter(
-					(item) =>
-						item.path === "/" ||
-						item.path === "/agents" ||
-						item.path === "/knowledge-bases" ||
-						item.path === "/settings/account",
-				)
+			? workspaceNavItems
 			: []; // Non-super users at root level should redirect, show no nav
 
 	const allowedNav =
 		isSupport && agentId
-			? scopedNavItems.filter(
+			? navItems.filter(
 					(item) => item.path === `${agentBasePath}/sessions`,
 				)
-			: scopedNavItems;
+			: navItems;
 
-	const navItems = allowedNav.map((item) => ({
+	const scopedNavItems = allowedNav.map((item) => ({
 		...item,
 		label: t(item.i18nKey),
 	}));
 
 	const isActive = (item: NavItem) => {
 		if (item.path === location.pathname) return true;
-		if (item.children) {
-			return item.children.some((child) => child.path === location.pathname);
-		}
 		// Detail routes (`/knowledge-bases/:kbId`) keep their list entry active.
 		if (item.path !== "/" && location.pathname.startsWith(`${item.path}/`)) {
 			return true;
@@ -255,7 +132,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 		}
 	};
 
-	// Water-drop indicator tracking
+	// Active-item indicator tracking (the floating marker behind the current
+	// row). Kept from the previous shell: it follows `data-nav-active`.
 	const navRef = useRef<HTMLDivElement>(null);
 	const [indicatorStyle, setIndicatorStyle] = useState<{
 		top: number;
@@ -308,244 +186,232 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 		};
 	}, [agentId]);
 
+	const brandPath = isSuperAdmin
+		? "/"
+		: agentId
+			? isSupport
+				? `${agentBasePath}/sessions`
+				: `${agentBasePath}/dashboard`
+			: "/agent-selector";
+
 	const SidebarContent = () => (
 		<>
-			{/* Logo */}
+			{/* Brand: workspace name, or the current agent's name in agent scope */}
 			<div
 				style={{
-					padding: "var(--space-6)",
-					borderBottom: "1px solid var(--color-border)",
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "space-between",
+					gap: "var(--space-3)",
+					minWidth: 0,
 				}}
 			>
-				<div
+				<Link
+					to={brandPath}
+					onClick={handleLogoClick}
 					style={{
+						textDecoration: "none",
 						display: "flex",
 						alignItems: "center",
-						justifyContent: "space-between",
+						gap: "var(--space-3)",
+						minWidth: 0,
 					}}
 				>
-					<Link
-						to={
-							isSuperAdmin
-								? "/"
-								: agentId
-									? isSupport
-										? `${agentBasePath}/sessions`
-										: `${agentBasePath}/dashboard`
-									: "/agent-selector"
-						}
+					<span
 						style={{
-							textDecoration: "none",
+							width: 36,
+							height: 36,
+							flexShrink: 0,
+							borderRadius: "var(--radius-md)",
 							display: "flex",
 							alignItems: "center",
-							gap: "var(--space-3)",
+							justifyContent: "center",
+							overflow: "hidden",
+							background: "var(--color-bg-tertiary)",
+							border: "1px solid var(--color-border)",
 						}}
-						onClick={handleLogoClick}
 					>
-						<div
+						<img
+							src="/logo.png"
+							alt="Basjoo Logo"
 							style={{
-								width: "40px",
-								height: "40px",
-								borderRadius: "var(--radius-md)",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
+								width: "100%",
+								height: "100%",
+								objectFit: "contain",
+							}}
+						/>
+					</span>
+					<span style={{ display: "grid", minWidth: 0 }}>
+						<h1
+							data-testid="sidebar-brand-title"
+							style={{
+								fontFamily: "var(--font-display)",
+								fontSize: "var(--text-lg)",
+								fontWeight: 600,
+								lineHeight: "var(--leading-tight)",
+								letterSpacing: "-0.01em",
+								color: "var(--fg-strong)",
 								overflow: "hidden",
-								boxShadow: "0 0 20px hsla(188deg, 90%, 50%, 0.2)",
+								textOverflow: "ellipsis",
+								whiteSpace: "nowrap",
+								margin: 0,
 							}}
 						>
-							<img
-								src="/logo.png"
-								alt="Basjoo Logo"
-								style={{
-									width: "100%",
-									height: "100%",
-									objectFit: "contain",
-								}}
-							/>
-						</div>
-						<div>
-							<h1
-								style={{
-									fontSize: "var(--text-lg)",
-									fontWeight: 700,
-									color: "var(--color-text-primary)",
-									letterSpacing: "-0.02em",
-									background:
-										"linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(265deg, 90%, 65%) 100%)",
-									WebkitBackgroundClip: "text",
-									WebkitTextFillColor: "transparent",
-									backgroundClip: "text",
-								}}
-							>
-								{agentId ? agentName || t("status.loading") : t("appName")}
-							</h1>
-							<span
-								style={{
-									fontSize: "var(--text-xs)",
-									color: "var(--color-text-muted)",
-								}}
-							>
-								{t("tagline")}
-							</span>
-						</div>
-					</Link>
-				</div>
+							{agentId ? agentName || t("status.loading") : t("appName")}
+						</h1>
+						<span
+							style={{
+								fontSize: "var(--text-xs)",
+								lineHeight: "var(--leading-snug)",
+								color: "var(--fg-dim)",
+								overflow: "hidden",
+								textOverflow: "ellipsis",
+								whiteSpace: "nowrap",
+							}}
+						>
+							{t("tagline")}
+						</span>
+					</span>
+				</Link>
 			</div>
 
 			{agentId && (
-				<div
+				<Link
+					to="/"
+					onClick={handleLogoClick}
+					className="btn btn-ghost"
 					style={{
-						padding: "var(--space-4) var(--space-6)",
-						borderBottom: "1px solid var(--color-border)",
-						display: "grid",
-						gap: "var(--space-2)",
+						justifyContent: "flex-start",
+						width: "100%",
+						textDecoration: "none",
+						overflow: "hidden",
+						textOverflow: "ellipsis",
+						whiteSpace: "nowrap",
 					}}
 				>
-					<Link
-						to="/"
-						onClick={handleLogoClick}
-						style={{
-							color: "var(--color-text-secondary)",
-							textDecoration: "none",
-							fontSize: "var(--text-sm)",
-							padding: "var(--space-2) var(--space-3)",
-							borderRadius: "var(--radius-md)",
-							border: "1px solid var(--color-border)",
-							background: "var(--color-bg-secondary)",
-							overflow: "hidden",
-							textOverflow: "ellipsis",
-							whiteSpace: "nowrap",
-						}}
-					>
-						← {t("agents.panelTitle")}
-					</Link>
-				</div>
+					← {t("agents.panelTitle")}
+				</Link>
 			)}
 
 			{/* Navigation */}
 			<nav
+				aria-label={t("navigation.mainNav")}
 				style={{
 					flex: 1,
-					padding: "var(--space-4)",
+					minHeight: 0,
 					overflowY: "auto",
 				}}
 			>
 				<div
 					ref={navRef}
 					style={{
+						position: "relative",
 						display: "flex",
 						flexDirection: "column",
-						gap: "var(--space-1)",
-						position: "relative",
 					}}
 				>
-					{/* Water-drop floating indicator */}
+					{/* Active-item marker (accent tint behind the current row) */}
 					{indicatorStyle.height > 0 && (
 						<div
+							aria-hidden="true"
 							style={{
 								position: "absolute",
-								left: "4px",
+								left: 0,
+								right: 0,
 								top: `${indicatorStyle.top}px`,
 								height: `${indicatorStyle.height}px`,
-								width: "calc(100% - 8px)",
-								background: "hsla(188deg, 90%, 50%, 0.08)",
+								background: "var(--color-surface-selected)",
 								borderRadius: "var(--radius-md)",
-								border: "1px solid hsla(188deg, 90%, 50%, 0.12)",
 								transition:
-									"top 400ms cubic-bezier(0.34, 1.56, 0.64, 1), height 300ms cubic-bezier(0.25, 1.1, 0.5, 1.15)",
+									"top var(--transition-base), height var(--transition-base)",
 								pointerEvents: "none",
 								zIndex: 0,
 							}}
 						/>
 					)}
 
-					{navItems.map((item) => {
-						const active = isActive(item);
+					<ul
+						className="list"
+						style={{
+							background: "transparent",
+							border: "none",
+							borderRadius: 0,
+							gap: "var(--space-1)",
+						}}
+					>
+						{scopedNavItems.map((item) => {
+							const active = isActive(item);
 
-						return (
-							<div key={item.path} style={{ position: "relative", zIndex: 1 }}>
-								<div style={{ display: "flex", alignItems: "center" }}>
+							return (
+								<li
+									key={item.path}
+									style={{ position: "relative", zIndex: 1 }}
+								>
 									<Link
 										to={item.path}
+										className="list-row"
 										data-nav-active={active ? "true" : undefined}
-										onClick={() => {
-											handleNavClick();
-										}}
+										aria-current={active ? "page" : undefined}
+										onClick={handleNavClick}
 										style={{
-											flex: 1,
-											display: "flex",
-											alignItems: "center",
 											gap: "var(--space-3)",
-											padding: "var(--space-3) var(--space-4)",
+											padding: "var(--space-3)",
+											borderBottom: "none",
 											borderRadius: "var(--radius-md)",
 											color: active
 												? "var(--color-accent-primary)"
-												: "var(--color-text-secondary)",
-											background: "transparent",
+												: "var(--fg-default)",
+											// Leave the background to CSS for the inactive rows so the
+											// `.list-row:hover` tint still applies.
+											background: active
+												? "var(--color-surface-selected)"
+												: undefined,
 											textDecoration: "none",
-											fontSize: "var(--text-sm)",
-											fontWeight: active ? 600 : 400,
+											fontSize: "var(--text-base)",
+											fontWeight: active ? 500 : 400,
 											transition:
-												"color var(--transition-fast), font-weight var(--transition-fast)",
-											position: "relative",
+												"color var(--transition-fast), background var(--transition-fast)",
 										}}
 									>
 										<span
 											style={{
 												display: "flex",
-												opacity: active ? 1 : 0.6,
-												transition: "opacity var(--transition-fast)",
-												filter: active
-													? "drop-shadow(0 0 6px hsla(188deg, 90%, 50%, 0.4))"
-													: "none",
+												flexShrink: 0,
+												color: active
+													? "var(--color-accent-primary)"
+													: "var(--fg-dim)",
 											}}
 										>
-											{item.icon}
+											<Icon name={item.icon} />
 										</span>
 										{item.label}
 									</Link>
-								</div>
-							</div>
-						);
-					})}
+								</li>
+							);
+						})}
+					</ul>
 				</div>
 			</nav>
 
-			{/* User profile & logout */}
-			<div
-				style={{
-					padding: "var(--space-4)",
-					borderTop: "1px solid var(--color-border)",
-				}}
-			>
-				<div
-					style={{
-						display: "flex",
-						alignItems: "center",
-						gap: "var(--space-3)",
-						padding: "var(--space-3)",
-						background: "var(--sidebar-user-bg)",
-						backdropFilter: "blur(12px)",
-						WebkitBackdropFilter: "blur(12px)",
-						border: "1px solid var(--color-border-glass)",
-						borderRadius: "var(--radius-lg)",
-						marginBottom: "var(--space-3)",
-					}}
-				>
+			{/* User profile & logout — ONE card (R3). The account block and the logout
+			 * action are no longer two siblings that touch: the logout control is a
+			 * ghost button inside the same card, below a hairline separator, so the
+			 * two read as one grouped unit and the action stays reachable. */}
+			<div className="sidebar-user-card">
+				<div className="sidebar-user-account">
 					<div
 						style={{
-							width: "36px",
-							height: "36px",
-							background: "var(--color-accent-gradient)",
+							width: 36,
+							height: 36,
+							flexShrink: 0,
+							background: "var(--color-accent-primary)",
 							borderRadius: "var(--radius-full)",
 							display: "flex",
 							alignItems: "center",
 							justifyContent: "center",
 							fontSize: "var(--text-sm)",
-							fontWeight: 600,
+							fontWeight: "var(--weight-semibold)",
 							color: "var(--color-text-inverse)",
-							boxShadow: "0 0 16px hsla(188deg, 90%, 50%, 0.25)",
 						}}
 					>
 						{admin?.name?.charAt(0).toUpperCase() || "A"}
@@ -553,9 +419,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 					<div style={{ flex: 1, minWidth: 0 }}>
 						<div
 							style={{
-								fontSize: "var(--text-sm)",
-								fontWeight: 500,
-								color: "var(--color-text-primary)",
+								fontSize: "var(--text-base)",
+								fontWeight: "var(--weight-medium)",
+								color: "var(--fg-strong)",
 								whiteSpace: "nowrap",
 								overflow: "hidden",
 								textOverflow: "ellipsis",
@@ -566,7 +432,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 						<div
 							style={{
 								fontSize: "var(--text-xs)",
-								color: "var(--color-text-muted)",
+								color: "var(--fg-dim)",
 								whiteSpace: "nowrap",
 								overflow: "hidden",
 								textOverflow: "ellipsis",
@@ -578,22 +444,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 				</div>
 
 				<button
+					type="button"
+					className="btn btn-ghost sidebar-user-logout"
 					onClick={handleLogout}
-					style={{
-						width: "100%",
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "center",
-						gap: "var(--space-2)",
-						padding: "var(--space-3)",
-						background: "transparent",
-						border: "1px solid var(--color-border)",
-						borderRadius: "var(--radius-md)",
-						color: "var(--color-text-secondary)",
-						fontSize: "var(--text-sm)",
-						cursor: "pointer",
-						transition: "all var(--transition-fast)",
-					}}
 				>
 					<svg
 						width="16"
@@ -602,6 +455,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 						fill="none"
 						stroke="currentColor"
 						strokeWidth="2"
+						aria-hidden="true"
+						style={{ display: "block" }}
 					>
 						<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
 						<polyline points="16 17 21 12 16 7" />
@@ -614,13 +469,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 	);
 
 	return (
-		<div
-			style={{
-				display: "flex",
-				minHeight: "100vh",
-				background: "var(--color-bg-primary)",
-			}}
-		>
+		<div className="app-shell">
 			{/* Mobile Header */}
 			{isMobile && (
 				<header className="mobile-header">
@@ -662,6 +511,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 							fill="none"
 							stroke="currentColor"
 							strokeWidth="2"
+							aria-hidden="true"
 							style={{ display: "block" }}
 						>
 							<line x1="3" y1="6" x2="21" y2="6" />
@@ -672,16 +522,14 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 					<Link to="/" style={{ textDecoration: "none" }}>
 						<span
 							style={{
+								fontFamily: "var(--font-display)",
 								fontSize: "var(--text-lg)",
-								fontWeight: 700,
-								background:
-									"linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(265deg, 90%, 65%) 100%)",
-								WebkitBackgroundClip: "text",
-								WebkitTextFillColor: "transparent",
-								backgroundClip: "text",
+								fontWeight: 600,
+								letterSpacing: "-0.01em",
+								color: "var(--fg-strong)",
 							}}
 						>
-							Basjoo AI
+							{t("appName")}
 						</span>
 					</Link>
 					<div style={{ width: "44px" }} aria-hidden="true" />

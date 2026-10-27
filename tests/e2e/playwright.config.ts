@@ -51,6 +51,7 @@ export default defineConfig({
 				"recent-commits.spec.ts",
 				"api-keys-validation.spec.ts",
 				"url-clear-all.spec.ts",
+				"mobile-scroll.spec.ts",
 			],
 			use: {
 				...devices["Desktop Chrome"],

@@ -140,6 +140,15 @@ function LocationProbe() {
 	);
 }
 
+/** Row mutations live in the per-row overflow menu (§16 mirrors /agents). */
+async function openRowMenu(row: HTMLElement) {
+	await userEvent.click(
+		within(row).getByRole("button", {
+			name: /^knowledgeBases\.rowActions\|/,
+		}),
+	);
+}
+
 function renderView(initialEntry = "/knowledge-bases") {
 	return render(
 		<MemoryRouter initialEntries={[initialEntry]}>
@@ -171,12 +180,19 @@ describe("KnowledgeBases view", () => {
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
 		);
 
-		const boundRow = screen.getByTestId("kb-row-kb_bound");
+	const boundRow = screen.getByTestId("kb-row-kb_bound");
 		expect(within(boundRow).getByText("Bound KB")).toBeInTheDocument();
 		expect(within(boundRow).getByText("2/3")).toBeInTheDocument();
 		expect(within(boundRow).getByText("11")).toBeInTheDocument();
 		expect(
 			within(boundRow).getByText("knowledgeBases.status.active"),
+		).toBeInTheDocument();
+		// §16: the embedding provider and model are now row content, not a cell.
+		expect(
+			within(boundRow).getByText(/kbForm\.providerJina/),
+		).toBeInTheDocument();
+		expect(
+			within(boundRow).getByText(/jina-embeddings-v3/),
 		).toBeInTheDocument();
 
 		const freeRow = screen.getByTestId("kb-row-kb_free");
@@ -186,7 +202,7 @@ describe("KnowledgeBases view", () => {
 		).toBeInTheDocument();
 	});
 
-	it("shows the bound agent name and an Unbind action for a bound KB", async () => {
+	it("shows the bound agent name and no Unbind action for a bound KB", async () => {
 		renderView();
 
 		await waitFor(() =>
@@ -194,11 +210,13 @@ describe("KnowledgeBases view", () => {
 		);
 		const boundRow = screen.getByTestId("kb-row-kb_bound");
 		expect(within(boundRow).getByText("Support Bot")).toBeInTheDocument();
+		// §16: unbinding happens from the agent side only, so the KB list never
+		// offers an Unbind control (in either direction).
 		expect(
-			within(boundRow).getByRole("button", {
+			within(boundRow).queryByRole("button", {
 				name: "knowledgeBases.actions.unbind",
 			}),
-		).toBeInTheDocument();
+		).not.toBeInTheDocument();
 		expect(
 			within(boundRow).queryByRole("button", {
 				name: "knowledgeBases.actions.bind",
@@ -217,8 +235,9 @@ describe("KnowledgeBases view", () => {
 			expect(screen.getByTestId("kb-row-kb_free")).toBeInTheDocument(),
 		);
 		const freeRow = screen.getByTestId("kb-row-kb_free");
+		await openRowMenu(freeRow);
 		await userEvent.click(
-			within(freeRow).getByRole("button", {
+			within(screen.getByTestId("kb-menu-kb_free")).getByRole("menuitem", {
 				name: "knowledgeBases.actions.bind",
 			}),
 		);
@@ -243,29 +262,27 @@ describe("KnowledgeBases view", () => {
 		);
 	});
 
-	it("unbinds a bound KB after confirmation", async () => {
-		mockedApi.bindAgentKnowledgeBase.mockResolvedValue({
-			agent: agents[0],
-			knowledge_base: null,
-		});
+	it("offers no unbind control anywhere in the KB list", async () => {
 		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
 		);
-		await userEvent.click(
-			within(screen.getByTestId("kb-row-kb_bound")).getByRole("button", {
+		// §16: the per-row Unbind action is gone; unbinding lives on the agent
+		// side. Nothing may call the bind API to unbind from this page.
+		expect(
+			screen.queryByRole("button", {
 				name: "knowledgeBases.actions.unbind",
 			}),
-		);
-
-		await waitFor(() =>
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_1",
-				null,
-			),
-		);
-		expect(window.confirm).toHaveBeenCalled();
+		).not.toBeInTheDocument();
+		const boundRow = screen.getByTestId("kb-row-kb_bound");
+		await openRowMenu(boundRow);
+		expect(
+			within(screen.getByTestId("kb-menu-kb_bound")).queryByRole("menuitem", {
+				name: "knowledgeBases.actions.unbind",
+			}),
+		).not.toBeInTheDocument();
+		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
 	});
 
 	it("hides every mutating action for a non super_admin", async () => {
@@ -288,12 +305,14 @@ describe("KnowledgeBases view", () => {
 				}),
 			).not.toBeInTheDocument();
 		}
-		// Read-only affordances stay available.
+		// Read-only affordances stay available: the KB name is now the link that
+		// opens /knowledge-bases/:kbId (§16 replaced the `details` button).
 		expect(
-			screen.getAllByRole("button", {
-				name: "knowledgeBases.actions.details",
-			}).length,
-		).toBeGreaterThan(0);
+			screen.getByRole("link", { name: "Bound KB" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("link", { name: "Unbound KB" }),
+		).toBeInTheDocument();
 	});
 
 	it("surfaces the backend 409 message when deleting a bound KB", async () => {
@@ -305,8 +324,10 @@ describe("KnowledgeBases view", () => {
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
 		);
+		const boundRow = screen.getByTestId("kb-row-kb_bound");
+		await openRowMenu(boundRow);
 		await userEvent.click(
-			within(screen.getByTestId("kb-row-kb_bound")).getByRole("button", {
+			within(screen.getByTestId("kb-menu-kb_bound")).getByRole("menuitem", {
 				name: "knowledgeBases.actions.delete",
 			}),
 		);
@@ -377,34 +398,37 @@ describe("KnowledgeBases view", () => {
 		);
 	});
 
-	it("opens the detail panel for the selected row", async () => {
+	it("renders no inline detail panel for any row", async () => {
 		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_free")).toBeInTheDocument(),
 		);
-		await userEvent.click(
-			within(screen.getByTestId("kb-row-kb_free")).getByRole("button", {
+		// §16: the expandable detail panel and its `details` trigger are gone.
+		expect(screen.queryByTestId("kb-detail-panel")).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", {
 				name: "knowledgeBases.actions.details",
 			}),
-		);
-
-		const panel = await screen.findByTestId("kb-detail-panel");
-		expect(within(panel).getByText("Unbound KB")).toBeInTheDocument();
-		expect(
-			within(panel).getByText("BAAI/bge-m3"),
-		).toBeInTheDocument();
+		).not.toBeInTheDocument();
 	});
 
-	it("navigates to /knowledge-bases/:kbId from the row's sources action", async () => {
+	it("navigates to /knowledge-bases/:kbId from the row's name link", async () => {
 		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_free")).toBeInTheDocument(),
 		);
+		// §16: the name is the only navigation affordance; the separate
+		// 管理来源 (manage sources) action no longer exists.
+		expect(
+			screen.queryByRole("link", {
+				name: "knowledgeBases.actions.sources",
+			}),
+		).not.toBeInTheDocument();
 		await userEvent.click(
 			within(screen.getByTestId("kb-row-kb_free")).getByRole("link", {
-				name: "knowledgeBases.actions.sources",
+				name: "Unbound KB",
 			}),
 		);
 

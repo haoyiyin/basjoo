@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../services/api";
 import type { EmbeddingProvider, KnowledgeBaseDetail } from "../services/api";
+import { Icon } from "./Icon";
 
 /** Default embedding model for each provider, used to prefill the form. */
 export const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
@@ -45,6 +46,15 @@ function isHttpUrl(value: string): boolean {
 	return /^https?:\/\/.+/i.test(value.trim());
 }
 
+/**
+ * Knowledge-base create / reset form.
+ *
+ * Restyle (spec §20): the dialog is the shared `.sheet` (header / body /
+ * footer) over a `.sheet-backdrop`, and every control is a `.field` +
+ * `.input` / `.select` / `.btn`. Behaviour — the local-provider rules, the
+ * connection test, the validation order and the submitted payload — is
+ * unchanged.
+ */
 export default function KbFormModal({
 	mode,
 	initial,
@@ -174,14 +184,6 @@ export default function KbFormModal({
 		}
 	};
 
-	const labelStyle = {
-		display: "block",
-		marginBottom: "var(--space-2)",
-		fontSize: "var(--text-sm)",
-		fontWeight: 500,
-		color: "var(--color-text-secondary)",
-	} as const;
-
 	return (
 		<div
 			data-testid="kb-form-modal"
@@ -189,80 +191,81 @@ export default function KbFormModal({
 				position: "fixed",
 				inset: 0,
 				zIndex: 9999,
-				background: "rgba(0, 0, 0, 0.5)",
 				display: "flex",
 				alignItems: "center",
 				justifyContent: "center",
+				padding: "var(--space-4)",
 				overflowY: "auto",
 			}}
 			onClick={onClose}
 		>
+			<div className="sheet-backdrop" aria-hidden="true" />
 			<div
-				className="liquid-glass-card"
+				className="sheet"
 				role="dialog"
 				aria-modal="true"
+				aria-labelledby="kb-form-title"
 				style={{
-					padding: "var(--space-6)",
+					position: "relative",
 					maxWidth: "520px",
 					width: "100%",
-					margin: "var(--space-4)",
+					minWidth: 0,
+					maxHeight: "calc(100vh - var(--space-8))",
+					borderRadius: "var(--radius-lg)",
 				}}
 				onClick={(event) => event.stopPropagation()}
 			>
-				<h3
-					style={{
-						fontSize: "var(--text-lg)",
-						fontWeight: 600,
-						marginBottom: "var(--space-1)",
-						color: "var(--color-text-primary)",
-					}}
-				>
-					{isCreate
-						? t("kbForm.createTitle")
-						: t("kbForm.resetTitle")}
-				</h3>
-				<p
-					style={{
-						fontSize: "var(--text-sm)",
-						marginBottom: "var(--space-6)",
-						color: "var(--color-text-muted)",
-					}}
-				>
-					{isCreate
-						? t("kbForm.createDescription")
-						: t("kbForm.resetDescription")}
-				</p>
-
-				{errorMessage && (
-					<div
-						style={{
-							padding: "var(--space-3) var(--space-4)",
-							borderRadius: "var(--radius-md)",
-							fontSize: "var(--text-sm)",
-							background: "var(--color-error-bg)",
-							border: "1px solid var(--color-error)",
-							color: "var(--color-error)",
-							marginBottom: "var(--space-4)",
-						}}
-					>
-						{errorMessage}
+				<div className="sheet-header">
+					<div style={{ minWidth: 0 }}>
+						<h2 id="kb-form-title" className="card-title">
+							{isCreate ? t("kbForm.createTitle") : t("kbForm.resetTitle")}
+						</h2>
+						<p
+							className="field-hint"
+							style={{ marginTop: "var(--space-1)" }}
+						>
+							{isCreate
+								? t("kbForm.createDescription")
+								: t("kbForm.resetDescription")}
+						</p>
 					</div>
-				)}
+					<button
+						type="button"
+						className="btn btn-icon"
+						aria-label={t("knowledgeBases.actions.close")}
+						title={t("knowledgeBases.actions.close")}
+						onClick={onClose}
+					>
+						<Icon name="close" size={16} />
+					</button>
+				</div>
 
-				<div
-					style={{
-						display: "flex",
-						flexDirection: "column",
-						gap: "var(--space-5)",
-					}}
-				>
+				<div className="sheet-body">
+					{errorMessage && (
+						<div
+							role="alert"
+							style={{
+								padding: "var(--space-3) var(--space-4)",
+								borderRadius: "var(--radius-md)",
+								fontSize: "var(--text-sm)",
+								background: "var(--color-error-bg)",
+								border: "1px solid var(--color-error)",
+								color: "var(--color-error)",
+								marginBottom: "var(--space-4)",
+							}}
+						>
+							{errorMessage}
+						</div>
+					)}
+
 					{isCreate && (
-						<div>
-							<label style={labelStyle} htmlFor="kb-form-name">
+						<div className="field">
+							<label className="field-label" htmlFor="kb-form-name">
 								{t("kbForm.name")}
 							</label>
 							<input
 								id="kb-form-name"
+								className="input"
 								type="text"
 								value={name}
 								maxLength={100}
@@ -272,12 +275,13 @@ export default function KbFormModal({
 						</div>
 					)}
 
-					<div>
-						<label style={labelStyle} htmlFor="kb-form-provider">
+					<div className="field">
+						<label className="field-label" htmlFor="kb-form-provider">
 							{t("kbForm.provider")}
 						</label>
 						<select
 							id="kb-form-provider"
+							className="select"
 							value={provider}
 							onChange={(event) =>
 								handleProviderChange(event.target.value as EmbeddingProvider)
@@ -292,12 +296,13 @@ export default function KbFormModal({
 						</select>
 					</div>
 
-					<div>
-						<label style={labelStyle} htmlFor="kb-form-model">
+					<div className="field">
+						<label className="field-label" htmlFor="kb-form-model">
 							{t("kbForm.model")}
 						</label>
 						<input
 							id="kb-form-model"
+							className="input"
 							type="text"
 							value={model}
 							onChange={(event) => setModel(event.target.value)}
@@ -306,12 +311,13 @@ export default function KbFormModal({
 					</div>
 
 					{baseUrlRequired && (
-						<div>
-							<label style={labelStyle} htmlFor="kb-form-base-url">
+						<div className="field">
+							<label className="field-label" htmlFor="kb-form-base-url">
 								{t("kbForm.baseUrl")}
 							</label>
 							<input
 								id="kb-form-base-url"
+								className="input"
 								type="text"
 								value={baseUrl}
 								onChange={(event) => setBaseUrl(event.target.value)}
@@ -320,39 +326,41 @@ export default function KbFormModal({
 						</div>
 					)}
 
-					<div>
-						{!isLocalProvider && (
-							<>
-								<label style={labelStyle} htmlFor="kb-form-api-key">
-									{t("kbForm.apiKey")}
-								</label>
-								<input
-									id="kb-form-api-key"
-									type="password"
-									value={apiKey}
-									onChange={(event) => {
-										setApiKey(event.target.value);
-										setTestResult(null);
-									}}
-									placeholder={
-										isCreate
-											? t("kbForm.apiKeyPlaceholder")
-											: t("kbForm.apiKeyKeepPlaceholder")
-									}
-								/>
-							</>
-						)}
+					{!isLocalProvider && (
+						<div className="field">
+							<label className="field-label" htmlFor="kb-form-api-key">
+								{t("kbForm.apiKey")}
+							</label>
+							<input
+								id="kb-form-api-key"
+								className="input"
+								type="password"
+								value={apiKey}
+								onChange={(event) => {
+									setApiKey(event.target.value);
+									setTestResult(null);
+								}}
+								placeholder={
+									isCreate
+										? t("kbForm.apiKeyPlaceholder")
+										: t("kbForm.apiKeyKeepPlaceholder")
+								}
+							/>
+						</div>
+					)}
+
+					<div className="field">
 						<div
 							style={{
 								display: "flex",
 								alignItems: "center",
 								gap: "var(--space-3)",
-								marginTop: "var(--space-2)",
+								flexWrap: "wrap",
 							}}
 						>
 							<button
 								type="button"
-								className="btn-secondary"
+								className="btn btn-secondary"
 								onClick={handleTest}
 								disabled={testing || (!isLocalProvider && !apiKey.trim())}
 							>
@@ -360,8 +368,10 @@ export default function KbFormModal({
 							</button>
 							{testResult && (
 								<span
+									role="status"
 									style={{
 										fontSize: "var(--text-xs)",
+										lineHeight: "var(--leading-normal)",
 										color: testResult.success
 											? "var(--color-success)"
 											: "var(--color-error)",
@@ -377,12 +387,13 @@ export default function KbFormModal({
 						</div>
 					</div>
 
-					<div>
-						<label style={labelStyle} htmlFor="kb-form-batch-size">
+					<div className="field">
+						<label className="field-label" htmlFor="kb-form-batch-size">
 							{t("kbForm.batchSize")}
 						</label>
 						<input
 							id="kb-form-batch-size"
+							className="input"
 							type="number"
 							min={1}
 							max={64}
@@ -399,12 +410,13 @@ export default function KbFormModal({
 								gap: "var(--space-4)",
 							}}
 						>
-							<div>
-								<label style={labelStyle} htmlFor="kb-form-chunk-size">
+							<div className="field">
+								<label className="field-label" htmlFor="kb-form-chunk-size">
 									{t("kbForm.chunkSize")}
 								</label>
 								<input
 									id="kb-form-chunk-size"
+									className="input"
 									type="number"
 									min={128}
 									max={2048}
@@ -412,12 +424,13 @@ export default function KbFormModal({
 									onChange={(event) => setChunkSize(Number(event.target.value))}
 								/>
 							</div>
-							<div>
-								<label style={labelStyle} htmlFor="kb-form-chunk-overlap">
+							<div className="field">
+								<label className="field-label" htmlFor="kb-form-chunk-overlap">
 									{t("kbForm.chunkOverlap")}
 								</label>
 								<input
 									id="kb-form-chunk-overlap"
+									className="input"
 									type="number"
 									min={0}
 									max={512}
@@ -431,34 +444,48 @@ export default function KbFormModal({
 					)}
 				</div>
 
-				<div
-					style={{
-						display: "flex",
-						gap: "var(--space-3)",
-						justifyContent: "flex-end",
-						marginTop: "var(--space-6)",
-					}}
-				>
+				<div className="sheet-footer">
 					<button
 						type="button"
-						className="btn-secondary"
+						className="btn btn-secondary btn-icon"
 						onClick={onClose}
 						disabled={submitting}
+						aria-label={t("buttons.cancel")}
+						title={t("buttons.cancel")}
 					>
-						{t("buttons.cancel")}
+						<Icon name="close" size={16} />
 					</button>
-					<button
-						type="button"
-						className="btn-primary"
-						onClick={handleSubmit}
-						disabled={submitting}
-					>
-						{submitting
-							? t("status.saving")
-							: isCreate
-								? t("kbForm.createSubmit")
-								: t("kbForm.resetSubmit")}
-					</button>
+					{/* The reset submit keeps its words: it destroys and rebuilds the whole
+					 * vector collection, and a bare glyph would understate that. */}
+					{isCreate ? (
+						<button
+							type="button"
+							className="btn btn-primary btn-icon"
+							onClick={handleSubmit}
+							disabled={submitting}
+							aria-label={t("kbForm.createSubmit")}
+							title={submitting ? t("status.saving") : t("kbForm.createSubmit")}
+							aria-busy={submitting}
+						>
+							{submitting ? (
+								<div
+									className="spinner"
+									style={{ width: "14px", height: "14px" }}
+								/>
+							) : (
+								<Icon name="check" size={16} />
+							)}
+						</button>
+					) : (
+						<button
+							type="button"
+							className="btn btn-primary"
+							onClick={handleSubmit}
+							disabled={submitting}
+						>
+							{submitting ? t("status.saving") : t("kbForm.resetSubmit")}
+						</button>
+					)}
 				</div>
 			</div>
 		</div>

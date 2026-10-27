@@ -6,7 +6,8 @@ import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
 import type { Agent, URLSource } from '../services/api';
 import HelpTooltip from '../components/HelpTooltip';
-import { useIsMobile, useIsTablet } from '../hooks/useMediaQuery';
+import { Icon } from '../components/Icon';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 interface KbIndexState {
   status: string;
@@ -24,7 +25,6 @@ export default function URLManagement() {
   const { t } = useTranslation('common');
   const { kbId } = useParams<{ kbId: string }>();
   const isMobile = useIsMobile();
-  const isTablet = useIsTablet();
 
   const [urls, setUrls] = useState<URLSource[]>([]);
   const [total, setTotal] = useState(0);
@@ -46,6 +46,8 @@ export default function URLManagement() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [pollingStopped, setPollingStopped] = useState(false);
   const [deletingUrlId, setDeletingUrlId] = useState<number | null>(null);
+  // Row actions live in one overflow menu per row (§19).
+  const [openMenuUrlId, setOpenMenuUrlId] = useState<number | null>(null);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopPollingRequestedRef = useRef(false);
   const crawlPollingRef = useRef(false);
@@ -470,511 +472,365 @@ export default function URLManagement() {
     indexState !== null &&
     (indexState.status === 'indexing' || indexState.status === 'rebuilding');
 
-  return (
-    <section data-testid="kb-url-panel" className="url-panel" style={{ minWidth: 0 }}>
-      {showClearConfirm && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.6)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 'var(--space-4)',
-            zIndex: 1000,
-          }}
+  // Row actions live in one overflow menu per URL row (§19: destructive
+  // actions in a row menu). Nothing here fetches: the menu only re-uses the
+  // handlers above.
+  const renderRowMenu = (url: URLSource) => {
+    const menuOpen = openMenuUrlId === url.id;
+    const busy = deletingUrlId === url.id;
+    return (
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          justifyContent: isMobile ? 'flex-start' : 'flex-end',
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          className="btn btn-icon"
+          aria-label={`${t('knowledgeBases.columns.actions')} ${url.url}`}
+          title={`${t('knowledgeBases.columns.actions')} ${url.url}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          disabled={busy}
+          onClick={() =>
+            setOpenMenuUrlId((current) => (current === url.id ? null : url.id))
+          }
         >
+          {busy ? (
+            <div className="spinner" style={{ width: '14px', height: '14px' }} />
+          ) : (
+            <Icon name="more" size={16} />
+          )}
+        </button>
+        {menuOpen && (
           <div
-            className="glass-modal"
+            role="menu"
+            aria-label={`${t('knowledgeBases.columns.actions')} ${url.url}`}
             style={{
-              width: '100%',
-              maxWidth: '420px',
-              padding: 'var(--space-6)',
+              position: 'absolute',
+              top: 'calc(100% + var(--space-1))',
+              right: isMobile ? 'auto' : 0,
+              left: isMobile ? 0 : 'auto',
+              zIndex: 20,
+              minWidth: 200,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-1)',
+              padding: 'var(--space-1)',
+              background: 'var(--color-bg-elevated)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              boxShadow: 'var(--shadow-lg)',
             }}
           >
-            <h3
-              style={{
-                margin: 0,
-                marginBottom: 'var(--space-3)',
-                fontSize: 'var(--text-lg)',
-                color: 'var(--color-text-primary)',
-              }}
-            >
-              {t('labels.urlManagement.clearAll')}
-            </h3>
-            <p
-              style={{
-                margin: 0,
-                marginBottom: 'var(--space-5)',
-                color: 'var(--color-text-secondary)',
-                lineHeight: 1.6,
-              }}
-            >
-              {t('labels.urlManagement.confirmClearAll')}
-            </p>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 'var(--space-3)',
-              }}
-            >
+            {url.status === 'success' && !url.is_indexed && (
               <button
                 type="button"
-                className="btn-ghost"
-                onClick={() => setShowClearConfirm(false)}
-                disabled={clearing}
-              >
-                {t('buttons.cancel')}
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={confirmClearAll}
-                disabled={clearing}
-                style={{
-                  background: 'var(--color-error)',
-                  borderColor: 'var(--color-error)',
+                role="menuitem"
+                className="btn btn-ghost"
+                style={{ justifyContent: 'flex-start' }}
+                onClick={() => {
+                  setOpenMenuUrlId(null);
+                  void handleRebuildIndex();
                 }}
               >
-                {clearing
-                  ? t('labels.urlManagement.clearing')
-                  : t('buttons.confirm')}
+                {t('buttons.rebuild')}
               </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className="btn btn-danger"
+              style={{ justifyContent: 'flex-start' }}
+              disabled={busy}
+              onClick={() => {
+                setOpenMenuUrlId(null);
+                void handleDelete(url.id);
+              }}
+            >
+              {t('buttons.delete')}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <section
+      data-testid="kb-url-panel"
+      className="url-panel"
+      aria-busy={loading}
+      style={{ minWidth: 0, borderRight: 'none', height: 'auto' }}
+    >
+      {showClearConfirm && (
+        <div className="modal-backdrop">
+          <div
+            className="card card-raised"
+            style={{ width: '100%', maxWidth: 420 }}
+          >
+            <div className="card-header">
+              <h2 className="card-title">
+                {t('labels.urlManagement.clearAll')}
+              </h2>
+            </div>
+            <div className="card-body">
+              <p
+                style={{
+                  color: 'var(--fg-dim)',
+                  lineHeight: 'var(--leading-relaxed)',
+                }}
+              >
+                {t('labels.urlManagement.confirmClearAll')}
+              </p>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 'var(--space-2)',
+                  marginTop: 'var(--space-5)',
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-icon"
+                  onClick={() => setShowClearConfirm(false)}
+                  disabled={clearing}
+                  aria-label={t('buttons.cancel')}
+                  title={t('buttons.cancel')}
+                >
+                  <Icon name="close" size={16} />
+                </button>
+                {/* Destructive confirm keeps its words: the user must read what
+                  * they are confirming (round-6 rule). */}
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={confirmClearAll}
+                  disabled={clearing}
+                >
+                  {clearing
+                    ? t('labels.urlManagement.clearing')
+                    : t('buttons.confirm')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      <header
-        style={{
-          marginBottom: 'var(--space-6)',
-          display: 'flex',
-          flexDirection: isMobile ? 'column' : 'row',
-          alignItems: isMobile ? 'flex-start' : 'center',
-          justifyContent: 'space-between',
-          gap: isMobile ? 'var(--space-3)' : 'var(--space-4)',
-        }}
-      >
+      <header className="page-header">
         <div style={{ minWidth: 0 }}>
-          <h2
-            style={{
-              fontSize: isMobile ? 'var(--text-xl)' : 'var(--text-2xl)',
-              fontWeight: 700,
-              color: 'var(--color-text-primary)',
-              marginBottom: 'var(--space-1)',
-            }}
-          >
-            {t('labels.urlManagement.title')}
-          </h2>
-          <p style={{ color: 'var(--color-text-secondary)' }}>
+          <h2 className="page-title">{t('labels.urlManagement.title')}</h2>
+          <p className="page-subtitle">
             {t('labels.urlManagement.description')}
           </p>
         </div>
-        {total > 0 && (
-          <span
-            className="badge badge-info"
-            style={{ fontSize: 'var(--text-sm)', padding: 'var(--space-2) var(--space-4)' }}
-          >
-            {t('labels.urlManagement.total', { total: String(total) })}
-          </span>
-        )}
+        <div className="page-actions">
+          {total > 0 && (
+            <span className="badge badge-neutral">
+              {t('labels.urlManagement.total', { total: String(total) })}
+            </span>
+          )}
+        </div>
       </header>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile
-            ? 'minmax(0, 1fr)'
-            : isTablet
-              ? 'minmax(0, 1fr)'
-              : 'minmax(0, 1fr) minmax(0, 1fr) 300px',
-          gap: 'var(--space-6)',
-          alignItems: 'start',
-        }}
-      >
-        <div className="liquid-glass-card" style={{ padding: 'var(--space-6)', minWidth: 0 }}>
-          <h3
-            style={{
-              fontSize: 'var(--text-lg)',
-              fontWeight: 600,
-              marginBottom: 'var(--space-5)',
-              color: 'var(--color-text-primary)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-3)',
-            }}
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="16" />
-              <line x1="8" y1="12" x2="16" y2="12" />
-            </svg>
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title">
             {t('labels.urlManagement.addUrl')}
-            <HelpTooltip
-              title={t('labels.urlManagement.addUrlHelpTitle')}
-              content={[
-                t('labels.urlManagement.addUrlHelpContent1'),
-                t('labels.urlManagement.addUrlHelpContent2'),
-                t('labels.urlManagement.addUrlHelpContent3'),
-                t('labels.urlManagement.addUrlHelpContent4'),
-                '',
-                t('labels.urlManagement.addUrlHelpDetail'),
-                t('labels.urlManagement.addUrlHelpBullet1'),
-                t('labels.urlManagement.addUrlHelpBullet2'),
-                t('labels.urlManagement.addUrlHelpBullet3'),
-                t('labels.urlManagement.addUrlHelpBullet4'),
-              ]}
-              position="top"
-              size="sm"
-            />
           </h3>
+          <HelpTooltip
+            title={t('labels.urlManagement.addUrlHelpTitle')}
+            content={[
+              t('labels.urlManagement.addUrlHelpContent1'),
+              t('labels.urlManagement.addUrlHelpContent2'),
+              t('labels.urlManagement.addUrlHelpContent3'),
+              t('labels.urlManagement.addUrlHelpContent4'),
+              '',
+              t('labels.urlManagement.addUrlHelpDetail'),
+              t('labels.urlManagement.addUrlHelpBullet1'),
+              t('labels.urlManagement.addUrlHelpBullet2'),
+              t('labels.urlManagement.addUrlHelpBullet3'),
+              t('labels.urlManagement.addUrlHelpBullet4'),
+            ]}
+            position="top"
+            size="sm"
+          />
+        </div>
+        <div className="card-body">
+          <div className="field">
+            <label className="field-label">
+              {t('labels.urlManagement.webpageUrl')}
+              <HelpTooltip
+                title={t('labels.urlManagement.webpageUrlHelpTitle')}
+                content={[
+                  t('labels.urlManagement.webpageUrlHelpContent1'),
+                  t('labels.urlManagement.webpageUrlHelpContent2'),
+                  t('labels.urlManagement.webpageUrlHelpContent3'),
+                ]}
+                position="top"
+                size="sm"
+              />
+            </label>
+            <input
+              className="input"
+              type="text"
+              aria-label={t('labels.urlManagement.webpageUrl')}
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
+              onBlur={handleUrlBlur}
+              placeholder={t('labels.urlManagement.urlPlaceholder')}
+            />
+          </div>
 
           <div
             style={{
-              display: 'flex',
-              flexDirection: 'column',
+              display: 'grid',
+              gridTemplateColumns: isMobile
+                ? 'minmax(0, 1fr)'
+                : 'repeat(2, minmax(0, 1fr))',
               gap: 'var(--space-4)',
             }}
           >
-            <div>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: 'var(--space-2)',
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 500,
-                  color: 'var(--color-text-secondary)',
-                }}
-              >
-                {t('labels.urlManagement.webpageUrl')}
+            <div className="field">
+              <label className="field-label">
+                {t('labels.urlManagement.crawlDepth')}
                 <HelpTooltip
-                  title={t('labels.urlManagement.webpageUrlHelpTitle')}
-                  content={[
-                    t('labels.urlManagement.webpageUrlHelpContent1'),
-                    t('labels.urlManagement.webpageUrlHelpContent2'),
-                    t('labels.urlManagement.webpageUrlHelpContent3'),
-                  ]}
+                  title={t('labels.urlManagement.crawlDepth')}
+                  content={[t('labels.urlManagement.crawlDepthDesc')]}
                   position="top"
                   size="sm"
                 />
               </label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type="text"
-                  value={newUrl}
-                  onChange={(e) => setNewUrl(e.target.value)}
-                  onBlur={handleUrlBlur}
-                  placeholder={t('labels.urlManagement.urlPlaceholder')}
-                  style={{ paddingLeft: 'var(--space-12)', width: '100%' }}
-                />
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  style={{
-                    position: 'absolute',
-                    left: 'var(--space-4)',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    color: 'var(--color-text-muted)',
-                  }}
-                >
-                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                </svg>
-              </div>
+              <input
+                className="input"
+                type="number"
+                aria-label={t('labels.urlManagement.crawlDepth')}
+                value={crawlMaxDepth}
+                onChange={(e) =>
+                  setCrawlMaxDepth(
+                    Math.max(1, Math.min(5, parseInt(e.target.value) || 2)),
+                  )
+                }
+                min={1}
+                max={5}
+              />
             </div>
+            <div className="field">
+              <label className="field-label">
+                {t('labels.urlManagement.crawlMaxPages')}
+                <HelpTooltip
+                  title={t('labels.urlManagement.crawlMaxPages')}
+                  content={[t('labels.urlManagement.crawlMaxPagesDesc')]}
+                  position="top"
+                  size="sm"
+                />
+              </label>
+              <input
+                className="input"
+                type="number"
+                aria-label={t('labels.urlManagement.crawlMaxPages')}
+                value={crawlMaxPages}
+                onChange={(e) =>
+                  setCrawlMaxPages(
+                    Math.max(1, Math.min(500, parseInt(e.target.value) || 20)),
+                  )
+                }
+                min={1}
+                max={500}
+              />
+            </div>
+          </div>
 
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 'var(--space-2)',
+            }}
+          >
             <button
+              type="button"
+              className="btn btn-primary"
               onClick={handleAddURL}
               disabled={adding || !newUrl.trim()}
-              style={{
-                width: '100%',
-                padding: 'var(--space-3)',
-                background: 'var(--color-accent-gradient)',
-                color: 'var(--color-text-inverse)',
-                border: 'none',
-                borderRadius: 'var(--radius-md)',
-                cursor: adding || !newUrl.trim() ? 'not-allowed' : 'pointer',
-                opacity: adding || !newUrl.trim() ? 0.5 : 1,
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 'var(--space-2)',
-              }}
             >
               {adding ? (
                 <>
-                  <div className="spinner" />
+                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
                   {t('labels.urlManagement.adding')}
                 </>
               ) : (
-                <>
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="16" />
-                    <line x1="8" y1="12" x2="16" y2="12" />
-                  </svg>
-                  {t('labels.urlManagement.singlePageCrawl')}
-                </>
+                t('labels.urlManagement.singlePageCrawl')
               )}
             </button>
-
             <button
+              type="button"
+              className="btn btn-secondary"
               onClick={handleCrawlSite}
               disabled={crawling || backendBusy || !newUrl.trim()}
-              className="btn-secondary"
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 'var(--space-2)',
-                background: 'linear-gradient(135deg, #8B5CF6, #6366F1)',
-                color: 'white',
-                border: 'none',
-              }}
             >
               {crawling ? (
                 <>
-                  <div className="spinner" />
+                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
                   {t('labels.urlManagement.crawling')}
                 </>
               ) : (
-                <>
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                  </svg>
-                  {t('labels.urlManagement.crawlSite')}
-                </>
+                t('labels.urlManagement.crawlSite')
               )}
             </button>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : '1fr 1fr',
-                gap: 'var(--space-4)',
-              }}
+            <button
+              type="button"
+              className="btn btn-icon"
+              aria-label={t('labels.urlManagement.refetchAll')}
+              title={t('labels.urlManagement.refetchAll')}
+              onClick={handleRefetch}
+              disabled={refetching}
+              style={{ marginLeft: 'auto' }}
             >
-              <div>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: 'var(--space-2)',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    color: 'var(--color-text-secondary)',
-                  }}
-                >
-                  {t('labels.urlManagement.crawlDepth')}
-                  <HelpTooltip
-                    title={t('labels.urlManagement.crawlDepth')}
-                    content={[t('labels.urlManagement.crawlDepthDesc')]}
-                    position="top"
-                    size="sm"
-                  />
-                </label>
-                <input
-                  type="number"
-                  value={crawlMaxDepth}
-                  onChange={(e) =>
-                    setCrawlMaxDepth(
-                      Math.max(1, Math.min(5, parseInt(e.target.value) || 2)),
-                    )
-                  }
-                  min={1}
-                  max={5}
-                  style={{ width: '100%' }}
-                />
-              </div>
-              <div>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: 'var(--space-2)',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    color: 'var(--color-text-secondary)',
-                  }}
-                >
-                  {t('labels.urlManagement.crawlMaxPages')}
-                  <HelpTooltip
-                    title={t('labels.urlManagement.crawlMaxPages')}
-                    content={[t('labels.urlManagement.crawlMaxPagesDesc')]}
-                    position="top"
-                    size="sm"
-                  />
-                </label>
-                <input
-                  type="number"
-                  value={crawlMaxPages}
-                  onChange={(e) =>
-                    setCrawlMaxPages(
-                      Math.max(1, Math.min(500, parseInt(e.target.value) || 20)),
-                    )
-                  }
-                  min={1}
-                  max={500}
-                  style={{ width: '100%' }}
-                />
-              </div>
-            </div>
-
-            <div
-              style={{
-                borderTop: '1px solid var(--color-border)',
-                paddingTop: 'var(--space-4)',
-              }}
-            >
-              <button
-                onClick={handleRefetch}
-                disabled={refetching}
-                className="btn-secondary"
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 'var(--space-2)',
-                }}
-              >
-                {refetching ? (
-                  <>
-                    <div className="spinner" />
-                    {t('labels.urlManagement.refetching')}
-                  </>
-                ) : (
-                  <>
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path d="M23 4v6h-6M1 20v-6h6" />
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                    </svg>
-                    {t('labels.urlManagement.refetchAll')}
-                  </>
-                )}
-              </button>
-            </div>
+              {refetching ? (
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
+              ) : (
+                <Icon name="refresh" size={16} />
+              )}
+            </button>
           </div>
         </div>
+      </div>
 
-        {/* Auto fetch: only meaningful when the KB is bound to an agent. */}
-        {boundAgent && (
-          <div
-            data-testid="kb-url-autofetch"
-            className="liquid-glass-card"
-            style={{ padding: 'var(--space-6)', minWidth: 0 }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-3)',
-                marginBottom: 'var(--space-4)',
-              }}
+      {/* Auto fetch: only meaningful when the KB is bound to an agent. */}
+      {boundAgent && (
+        <div data-testid="kb-url-autofetch" className="card">
+          <div className="card-header">
+            <h3 className="card-title">{t('labels.urlManagement.autoFetch')}</h3>
+            <span
+              className="badge badge-neutral"
+              style={{ whiteSpace: 'normal', textAlign: 'left' }}
             >
-              <div
-                style={{
-                  width: '40px',
-                  height: '40px',
-                  background: 'linear-gradient(135deg, #F59E0B, #F97316)',
-                  borderRadius: 'var(--radius-md)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="white"
-                  strokeWidth="2"
-                >
-                  <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 0 1 9-9" />
-                </svg>
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <h3
+              {t('labels.urlManagement.autoFetchDescription')}
+            </span>
+          </div>
+          <div className="card-body">
+            <label className="switch" style={{ alignItems: 'flex-start' }}>
+              <input
+                type="checkbox"
+                checked={autoFetchEnabled}
+                onChange={(e) => setAutoFetchEnabled(e.target.checked)}
+                aria-label={t('labels.urlManagement.enableAutoFetch')}
+              />
+              <span style={{ minWidth: 0 }}>
+                <span
                   style={{
-                    fontSize: 'var(--text-lg)',
-                    fontWeight: 600,
-                    color: 'var(--color-text-primary)',
-                  }}
-                >
-                  {t('labels.urlManagement.autoFetch')}
-                </h3>
-                <p
-                  style={{
-                    fontSize: 'var(--text-sm)',
-                    color: 'var(--color-text-muted)',
-                  }}
-                >
-                  {t('labels.urlManagement.autoFetchDescription')}
-                </p>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: isMobile ? 'column' : 'row',
-                alignItems: isMobile ? 'stretch' : 'center',
-                justifyContent: 'space-between',
-                gap: 'var(--space-3)',
-                padding: 'var(--space-4)',
-                background: 'var(--color-bg-tertiary)',
-                borderRadius: 'var(--radius-md)',
-                marginBottom: 'var(--space-4)',
-              }}
-            >
-              <div style={{ minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    color: 'var(--color-text-primary)',
                     display: 'flex',
                     alignItems: 'center',
+                    gap: 'var(--space-1)',
+                    fontWeight: 500,
+                    color: 'var(--fg-strong)',
                   }}
                 >
                   {t('labels.urlManagement.enableAutoFetch')}
@@ -988,65 +844,22 @@ export default function URLManagement() {
                     position="top"
                     size="sm"
                   />
-                </div>
-                <div
+                </span>
+                <span
                   style={{
+                    display: 'block',
                     fontSize: 'var(--text-xs)',
-                    color: 'var(--color-text-muted)',
-                    marginTop: 'var(--space-1)',
+                    color: 'var(--fg-dim)',
                   }}
                 >
                   {t('labels.urlManagement.enableAutoFetchDesc')}
-                </div>
-              </div>
-              <button
-                onClick={() => setAutoFetchEnabled(!autoFetchEnabled)}
-                aria-pressed={autoFetchEnabled}
-                aria-label={t('labels.urlManagement.enableAutoFetch')}
-                style={{
-                  width: isMobile ? '56px' : '48px',
-                  height: isMobile ? '32px' : '28px',
-                  minHeight: '44px',
-                  alignSelf: isMobile ? 'flex-start' : 'auto',
-                  borderRadius: '999px',
-                  border: 'none',
-                  background: autoFetchEnabled
-                    ? 'var(--color-accent-primary)'
-                    : 'var(--color-bg-secondary)',
-                  cursor: 'pointer',
-                  position: 'relative',
-                  transition: 'background 0.2s',
-                  touchAction: 'manipulation',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    left: autoFetchEnabled ? (isMobile ? '26px' : '22px') : '2px',
-                    width: isMobile ? '28px' : '24px',
-                    height: isMobile ? '28px' : '24px',
-                    borderRadius: '999px',
-                    background: 'white',
-                    transition: 'left 0.2s',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  }}
-                />
-              </button>
-            </div>
+                </span>
+              </span>
+            </label>
 
             {autoFetchEnabled && (
-              <div style={{ marginBottom: 'var(--space-4)' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: 'var(--space-2)',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    color: 'var(--color-text-secondary)',
-                  }}
-                >
+              <div className="field" style={{ marginTop: 'var(--space-4)' }}>
+                <label className="field-label">
                   {t('labels.urlManagement.fetchInterval')}
                 </label>
                 <div
@@ -1058,6 +871,7 @@ export default function URLManagement() {
                   }}
                 >
                   <input
+                    className="input"
                     type="number"
                     aria-label={t('labels.urlManagement.fetchInterval')}
                     value={fetchIntervalDays}
@@ -1068,11 +882,11 @@ export default function URLManagement() {
                     }
                     min={1}
                     max={30}
-                    style={{ width: '120px', maxWidth: '100%' }}
+                    style={{ width: '120px' }}
                   />
                   <span
                     style={{
-                      color: 'var(--color-text-secondary)',
+                      color: 'var(--fg-dim)',
                       fontSize: 'var(--text-sm)',
                     }}
                   >
@@ -1083,229 +897,82 @@ export default function URLManagement() {
             )}
 
             <button
+              type="button"
+              className="btn btn-primary btn-icon"
               onClick={handleSaveAutoFetchSettings}
               disabled={saving}
-              style={{
-                width: '100%',
-                padding: 'var(--space-3)',
-                background: 'var(--color-accent-gradient)',
-                color: 'var(--color-text-inverse)',
-                border: 'none',
-                borderRadius: 'var(--radius-md)',
-                cursor: saving ? 'not-allowed' : 'pointer',
-                opacity: saving ? 0.7 : 1,
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 'var(--space-2)',
-              }}
+              aria-label={t('labels.urlManagement.saveSettings')}
+              title={t('labels.urlManagement.saveSettings')}
+              aria-busy={saving}
+              style={{ marginTop: 'var(--space-4)' }}
             >
               {saving ? (
-                <>
-                  <div className="spinner" />
-                  {t('status.saving')}
-                </>
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
               ) : (
-                <>
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                    <polyline points="17 21 17 13 7 13 7 21" />
-                    <polyline points="7 3 7 8 15 8" />
-                  </svg>
-                  {t('labels.urlManagement.saveSettings')}
-                </>
+                <Icon name="save" size={16} />
               )}
             </button>
           </div>
-        )}
+        </div>
+      )}
 
-        <div
-          className="liquid-glass-card"
-          style={{
-            padding: 'var(--space-6)',
-            minWidth: 0,
-            gridColumn: isMobile ? 'auto' : isTablet ? 'auto' : '1 / -1',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
-              alignItems: isMobile ? 'stretch' : 'center',
-              justifyContent: 'space-between',
-              marginBottom: 'var(--space-5)',
-              flexWrap: 'wrap',
-              gap: 'var(--space-2)',
-            }}
-          >
-            <h3
-              style={{
-                fontSize: 'var(--text-lg)',
-                fontWeight: 600,
-                color: 'var(--color-text-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-3)',
-              }}
-            >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title">{t('labels.urlManagement.urlList')}</h3>
+          <div className="page-actions">
+            {crawlPolling && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={stopPolling}
               >
-                <line x1="8" y1="6" x2="21" y2="6" />
-                <line x1="8" y1="12" x2="21" y2="12" />
-                <line x1="8" y1="18" x2="21" y2="18" />
-                <line x1="3" y1="6" x2="3.01" y2="6" />
-                <line x1="3" y1="12" x2="3.01" y2="12" />
-                <line x1="3" y1="18" x2="3.01" y2="18" />
-              </svg>
-              {t('labels.urlManagement.urlList')}
-            </h3>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-2)',
-                flexWrap: 'wrap',
-                width: isMobile ? '100%' : 'auto',
-              }}
-            >
-              {crawlPolling && (
-                <button
-                  onClick={stopPolling}
-                  className="btn-ghost"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 'var(--space-2)',
-                    color: 'var(--color-warning)',
-                    minHeight: '44px',
-                  }}
-                >
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                {t('labels.urlManagement.stopPolling')}
+              </button>
+            )}
+            {pollingStopped && !crawlPolling && (
+              <span className="badge badge-success">
+                {t('labels.urlManagement.pollingStopped')}
+              </span>
+            )}
+            {urls.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-danger btn-icon"
+                onClick={handleClearAll}
+                disabled={clearing}
+                aria-label={t('labels.urlManagement.clearAll')}
+                title={t('labels.urlManagement.clearAll')}
+              >
+                {clearing ? (
                   <div
                     className="spinner"
                     style={{ width: '14px', height: '14px' }}
                   />
-                  {t('labels.urlManagement.stopPolling')}
-                </button>
-              )}
-              {pollingStopped && !crawlPolling && (
-                <span
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-2)',
-                    color: 'var(--color-success)',
-                    fontSize: 'var(--text-sm)',
-                  }}
-                >
-                  {t('labels.urlManagement.pollingStopped')}
-                </span>
-              )}
-              {urls.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleClearAll}
-                  disabled={clearing}
-                  className="btn-ghost"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 'var(--space-2)',
-                    color: 'var(--color-error)',
-                    opacity: clearing ? 0.5 : 1,
-                    cursor: clearing ? 'not-allowed' : 'pointer',
-                    minHeight: '44px',
-                  }}
-                >
-                  {clearing ? (
-                    <>
-                      <div
-                        className="spinner"
-                        style={{ width: '14px', height: '14px' }}
-                      />
-                      {t('labels.urlManagement.clearing')}
-                    </>
-                  ) : (
-                    <>
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      </svg>
-                      {t('labels.urlManagement.clearAll')}
-                    </>
-                  )}
-                </button>
-              )}
-              <button
-                onClick={() => void loadUrls()}
-                disabled={loading}
-                className="btn-ghost"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 'var(--space-2)',
-                  minHeight: '44px',
-                }}
-              >
-                {loading ? (
-                  <div className="spinner" />
                 ) : (
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M23 4v6h-6M1 20v-6h6" />
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                  </svg>
+                  <Icon name="trash" size={16} />
                 )}
-                {t('buttons.refresh')}
               </button>
-            </div>
+            )}
           </div>
+        </div>
 
+        <div className="card-body">
           {crawlPolling && (
             <div
               style={{
-                padding: 'var(--space-3) var(--space-4)',
-                background:
-                  'linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.1))',
-                borderRadius: 'var(--radius-md)',
-                marginBottom: 'var(--space-4)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'var(--space-3)',
-                border: '1px solid rgba(139, 92, 246, 0.3)',
+                padding: 'var(--space-3) var(--space-4)',
+                marginBottom: 'var(--space-4)',
+                background: 'var(--color-info-bg)',
+                border: '1px solid var(--color-info)',
+                borderRadius: 'var(--radius-md)',
               }}
             >
               <div className="spinner" style={{ width: '16px', height: '16px' }} />
-              <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
+              <span style={{ color: 'var(--fg-strong)', fontWeight: 500 }}>
                 {t('labels.urlManagement.crawlInProgress')}
               </span>
             </div>
@@ -1317,10 +984,10 @@ export default function URLManagement() {
               <div
                 style={{
                   padding: 'var(--space-3) var(--space-4)',
-                  background: 'rgba(239, 68, 68, 0.08)',
-                  borderRadius: 'var(--radius-md)',
                   marginBottom: 'var(--space-4)',
-                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  background: 'var(--color-error-bg)',
+                  border: '1px solid var(--color-error)',
+                  borderRadius: 'var(--radius-md)',
                 }}
               >
                 <span
@@ -1341,7 +1008,7 @@ export default function URLManagement() {
                         key={u.id}
                         style={{
                           fontSize: 'var(--text-xs)',
-                          color: 'var(--color-text-secondary)',
+                          color: 'var(--fg-dim)',
                           margin: '2px 0',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
@@ -1355,204 +1022,123 @@ export default function URLManagement() {
               </div>
             )}
 
-          <div
-            style={{
-              maxHeight: '600px',
-              overflow: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 'var(--space-3)',
-            }}
-          >
-            {urls.length === 0 ? (
-              <div
-                style={{
-                  textAlign: 'center',
-                  padding: 'var(--space-12)',
-                  color: 'var(--color-text-muted)',
-                }}
-              >
-                <p style={{ fontSize: 'var(--text-base)' }}>
-                  {t('labels.urlManagement.noUrls')}
-                </p>
-                <p
-                  style={{
-                    fontSize: 'var(--text-sm)',
-                    marginTop: 'var(--space-2)',
-                  }}
-                >
-                  {t('labels.urlManagement.pleaseAddUrl')}
-                </p>
-              </div>
-            ) : (
-              urls.map((url) => (
-                <div
-                  key={url.id}
-                  style={{
-                    padding: 'var(--space-4)',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--color-border)',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: isMobile ? 'column' : 'row',
-                      alignItems: isMobile ? 'stretch' : 'flex-start',
-                      justifyContent: 'space-between',
-                      gap: 'var(--space-4)',
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 'var(--space-2)',
-                          marginBottom: 'var(--space-2)',
-                          flexWrap: 'wrap',
-                        }}
-                      >
-                        <span className={getStatusBadge(url.status).className}>
-                          {getStatusBadge(url.status).label}
-                        </span>
-                        {getIndexStatusBadge(url) && (
-                          <span className={getIndexStatusBadge(url)!.className}>
-                            {getIndexStatusBadge(url)!.label}
-                          </span>
-                        )}
-                        {url.status === 'success' && !url.is_indexed && (
-                          <button
-                            onClick={handleRebuildIndex}
-                            className="btn-ghost"
+          {urls.length === 0 ? (
+            <div className="empty">
+              <p className="empty-title">{t('labels.urlManagement.noUrls')}</p>
+              <p className="empty-description">
+                {t('labels.urlManagement.pleaseAddUrl')}
+              </p>
+            </div>
+          ) : (
+            <div className="kb-table-scroll">
+              <table className="kb-table">
+                <thead>
+                  <tr>
+                    <th>{t('labels.urlManagement.webpageUrl')}</th>
+                    <th>{t('knowledgeBases.columns.status')}</th>
+                    <th>{t('labels.indexStatus')}</th>
+                    <th>{t('labels.urlManagement.lastFetch')}</th>
+                    <th>{t('knowledgeBases.columns.actions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {urls.map((url) => {
+                    const status = getStatusBadge(url.status);
+                    const index = getIndexStatusBadge(url);
+                    return (
+                      <tr key={url.id}>
+                        <td style={{ maxWidth: 0 }}>
+                          <a
+                            href={url.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             style={{
-                              fontSize: 'var(--text-xs)',
-                              padding: '2px 8px',
+                              display: 'block',
                               color: 'var(--color-accent-primary)',
-                              minHeight: '44px',
+                              textDecoration: 'none',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
                             }}
                           >
-                            {t('buttons.rebuild')}
-                          </button>
-                        )}
-                      </div>
-                      <a
-                        href={url.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          fontSize: 'var(--text-sm)',
-                          color: 'var(--color-accent-primary)',
-                          textDecoration: 'none',
-                          display: 'block',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {url.url}
-                      </a>
-                      {url.title && (
-                        <p
+                            {url.url}
+                          </a>
+                          {url.title && (
+                            <p
+                              style={{
+                                marginTop: 'var(--space-1)',
+                                fontSize: 'var(--text-sm)',
+                                color: 'var(--fg-dim)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {url.title}
+                            </p>
+                          )}
+                          {/* Indexing error display */}
+                          {url.status === 'success' &&
+                            !url.is_indexed &&
+                            url.indexing_error && (
+                              <p
+                                style={{
+                                  marginTop: 'var(--space-2)',
+                                  padding: 'var(--space-1) var(--space-2)',
+                                  fontSize: 'var(--text-xs)',
+                                  color: 'var(--color-error)',
+                                  background: 'var(--color-error-bg)',
+                                  borderLeft: '2px solid var(--color-error)',
+                                  borderRadius: 'var(--radius-sm)',
+                                }}
+                              >
+                                {url.indexing_error}
+                              </p>
+                            )}
+                          {/* Fetch error display */}
+                          {url.status === 'failed' && url.last_error && (
+                            <p
+                              style={{
+                                marginTop: 'var(--space-2)',
+                                padding: 'var(--space-1) var(--space-2)',
+                                fontSize: 'var(--text-xs)',
+                                color: 'var(--color-error)',
+                                background: 'var(--color-error-bg)',
+                                borderLeft: '2px solid var(--color-error)',
+                                borderRadius: 'var(--radius-sm)',
+                              }}
+                            >
+                              {url.last_error}
+                            </p>
+                          )}
+                        </td>
+                        <td>
+                          <span className={status.className}>{status.label}</span>
+                        </td>
+                        <td>
+                          {index ? (
+                            <span className={index.className}>{index.label}</span>
+                          ) : null}
+                        </td>
+                        <td
                           style={{
                             fontSize: 'var(--text-sm)',
-                            color: 'var(--color-text-secondary)',
-                            marginTop: 'var(--space-1)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
+                            color: 'var(--fg-dim)',
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {url.title}
-                        </p>
-                      )}
-                      {url.last_fetch_at && (
-                        <p
-                          style={{
-                            fontSize: 'var(--text-xs)',
-                            color: 'var(--color-text-muted)',
-                            marginTop: 'var(--space-2)',
-                          }}
-                        >
-                          {t('labels.urlManagement.lastFetch')}:{' '}
-                          {new Date(url.last_fetch_at).toLocaleString()}
-                        </p>
-                      )}
-                      {/* Indexing error display */}
-                      {url.status === 'success' &&
-                        !url.is_indexed &&
-                        url.indexing_error && (
-                          <p
-                            style={{
-                              fontSize: 'var(--text-xs)',
-                              color: 'var(--color-error)',
-                              marginTop: 'var(--space-2)',
-                              padding: 'var(--space-1) var(--space-2)',
-                              background: 'rgba(239, 68, 68, 0.1)',
-                              borderRadius: 'var(--radius-sm)',
-                              borderLeft: '2px solid var(--color-error)',
-                            }}
-                          >
-                            {url.indexing_error}
-                          </p>
-                        )}
-                      {/* Fetch error display */}
-                      {url.status === 'failed' && url.last_error && (
-                        <p
-                          style={{
-                            fontSize: 'var(--text-xs)',
-                            color: 'var(--color-error)',
-                            marginTop: 'var(--space-2)',
-                            padding: 'var(--space-1) var(--space-2)',
-                            background: 'rgba(239, 68, 68, 0.1)',
-                            borderRadius: 'var(--radius-sm)',
-                            borderLeft: '2px solid var(--color-error)',
-                          }}
-                        >
-                          {url.last_error}
-                        </p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => handleDelete(url.id)}
-                      disabled={deletingUrlId === url.id}
-                      className="btn-ghost"
-                      aria-label={t('buttons.delete')}
-                      style={{
-                        color: 'var(--color-error)',
-                        padding: 'var(--space-2)',
-                        opacity: deletingUrlId === url.id ? 0.5 : 1,
-                        cursor:
-                          deletingUrlId === url.id ? 'not-allowed' : 'pointer',
-                        minHeight: '44px',
-                        minWidth: '44px',
-                        alignSelf: isMobile ? 'flex-end' : 'auto',
-                      }}
-                    >
-                      {deletingUrlId === url.id ? (
-                        <div
-                          className="spinner"
-                          style={{ width: '14px', height: '14px' }}
-                        />
-                      ) : (
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <polyline points="3 6 5 6 21 6" />
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+                          {url.last_fetch_at
+                            ? new Date(url.last_fetch_at).toLocaleString()
+                            : ''}
+                        </td>
+                        <td>{renderRowMenu(url)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </section>

@@ -1,67 +1,45 @@
-'use client';
+"use client";
 
-import { useLocation } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
+/**
+ * Two abbreviations, no label (R4). The visible text is the short code; the
+ * accessible name stays the full language name, so `ZH` is not announced as
+ * "Z H" and a screen-reader user still gets 简体中文 / English.
+ */
 const languages = [
-  { code: 'zh-CN', name: '中文' },
-  { code: 'en-US', name: 'English' },
+	{ code: "zh-CN", short: "ZH", label: "简体中文" },
+	{ code: "en-US", short: "EN", label: "English" },
 ];
 
 export function AuthLanguageSwitcher() {
-  const { i18n, t } = useTranslation('auth');
-  const pathname = useLocation().pathname;
+	const { i18n } = useTranslation("auth");
+	const pathname = useLocation().pathname;
 
-  if (pathname !== '/login' && pathname !== '/register') {
-    return null;
-  }
+	if (pathname !== "/login" && pathname !== "/register") {
+		return null;
+	}
 
-  return (
-    <div style={{
-      position: 'absolute',
-      top: 'var(--space-6)',
-      right: 'var(--space-6)',
-      zIndex: 10,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 'var(--space-2)',
-    }}>
-      <span style={{
-        fontSize: 'var(--text-sm)',
-        color: 'var(--color-text-muted)',
-      }}>
-        {t('language')}
-      </span>
-      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-        {languages.map((lang) => (
-          <button
-            key={lang.code}
-            type="button"
-            onClick={() => i18n.changeLanguage(lang.code)}
-            aria-pressed={i18n.language === lang.code}
-            style={{
-              padding: '4px 12px',
-              fontSize: 'var(--text-sm)',
-              fontWeight: i18n.language === lang.code ? 600 : 400,
-              background: i18n.language === lang.code
-                ? 'var(--color-accent-primary)'
-                : 'transparent',
-              color: i18n.language === lang.code
-                ? 'var(--color-text-inverse)'
-                : 'var(--color-text-muted)',
-              border: '1px solid',
-              borderColor: i18n.language === lang.code
-                ? 'var(--color-accent-primary)'
-                : 'var(--color-border)',
-              borderRadius: 'var(--radius-md)',
-              cursor: 'pointer',
-              transition: 'all var(--transition-fast)',
-            }}
-          >
-            {lang.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+	return (
+		<div className="auth-lang-switcher">
+			{languages.map((lang) => {
+				const active = i18n.language === lang.code;
+				return (
+					<button
+						key={lang.code}
+						type="button"
+						className="auth-lang-btn"
+						data-active={active ? "true" : undefined}
+						onClick={() => i18n.changeLanguage(lang.code)}
+						aria-pressed={active}
+						aria-label={lang.label}
+						title={lang.label}
+					>
+						{lang.short}
+					</button>
+				);
+			})}
+		</div>
+	);
 }

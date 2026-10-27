@@ -15,6 +15,11 @@ interface KBSetupGuardProps {
  * Blocks (or banners) knowledge-dependent views while the agent has no bound,
  * active knowledge base. The CTA routes to the workspace knowledge-base list;
  * no setup happens inline, because KBs are created and bound outside the agent.
+ *
+ * Restyle (spec §20): the bootstrap-yellow banner and the blue hand-styled CTA
+ * are gone. The banner is a warning-tinted `.card` whose call to action is the
+ * shared `btn btn-primary`, and the blocking layer is a `.card` on tokens —
+ * no literal hex, no gradient text, no decorative blobs.
  */
 export default function KBSetupGuard({
 	agentId,
@@ -45,41 +50,37 @@ export default function KBSetupGuard({
 			return (
 				<>
 					<div
+						role="status"
+						className="card"
 						style={{
-							padding: "12px 16px",
-							background: "#fff3cd",
-							border: "1px solid #ffc107",
-							borderRadius: "8px",
-							marginBottom: "16px",
 							display: "flex",
 							alignItems: "center",
 							justifyContent: "space-between",
 							flexWrap: "wrap",
-							gap: "8px",
+							gap: "var(--space-3)",
+							padding: "var(--space-3) var(--space-4)",
+							marginBottom: "var(--space-4)",
+							background: "var(--color-warning-bg)",
+							border: "1px solid var(--color-warning)",
+							boxShadow: "none",
 						}}
 					>
-						<span style={{ color: "#856404", fontSize: "var(--text-sm)" }}>
-							⚠️{" "}
-							{t("kb.bannerMessage", {
-								defaultValue:
-									"Knowledge base is not configured. File uploads will not be processed until KB setup is complete.",
-							})}
+						<span
+							style={{
+								color: "var(--color-warning)",
+								fontSize: "var(--text-sm)",
+								lineHeight: "var(--leading-normal)",
+								minWidth: 0,
+							}}
+						>
+							{t("kb.bannerMessage")}
 						</span>
 						<Link
 							to="/knowledge-bases"
-							style={{
-								padding: "6px 12px",
-								background: "#0d6efd",
-								color: "#fff",
-								border: "none",
-								borderRadius: "4px",
-								cursor: "pointer",
-								fontSize: "var(--text-sm)",
-								fontWeight: 500,
-								textDecoration: "none",
-							}}
+							className="btn btn-primary"
+							style={{ flexShrink: 0 }}
 						>
-							{t("kb.setupButton", { defaultValue: "Set Up KB" })}
+							{t("kb.setupButton")}
 						</Link>
 					</div>
 					{children}
@@ -92,7 +93,7 @@ export default function KBSetupGuard({
 					position: "fixed",
 					inset: 0,
 					zIndex: 1000,
-					background: "rgba(0, 0, 0, 0.6)",
+					background: "var(--color-bg-overlay)",
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
@@ -100,107 +101,56 @@ export default function KBSetupGuard({
 					overflowY: "auto",
 				}}
 			>
-				{/* Decorative blur blobs */}
 				<div
-					style={{
-						position: "absolute",
-						top: "10%",
-						right: "20%",
-						width: "350px",
-						height: "350px",
-						background:
-							"radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%)",
-						borderRadius: "50%",
-						filter: "blur(60px)",
-						pointerEvents: "none",
-					}}
-				/>
-				<div
-					style={{
-						position: "absolute",
-						bottom: "15%",
-						left: "10%",
-						width: "280px",
-						height: "280px",
-						background:
-							"radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%)",
-						borderRadius: "50%",
-						filter: "blur(60px)",
-						pointerEvents: "none",
-					}}
-				/>
-
-				<div
-					className="liquid-glass-card"
+					className="card card-raised"
+					role="dialog"
+					aria-modal="true"
+					aria-labelledby="kb-setup-guard-title"
+					data-testid="kb-setup-guard"
 					style={{
 						width: "100%",
 						maxWidth: "480px",
-						padding: "var(--space-6)",
-						position: "relative",
-						zIndex: 1,
+						padding: "var(--space-8)",
 						textAlign: "center",
-						animation: "fadeIn 0.5s ease-out forwards",
 					}}
 				>
 					<img
 						src="/logo.png"
-						alt="Basjoo Logo"
+						alt="Basjoo"
 						style={{
-							width: "64px",
-							height: "64px",
+							width: "56px",
+							height: "56px",
 							objectFit: "contain",
 							marginBottom: "var(--space-4)",
 						}}
 					/>
 					<h1
-						style={{
-							fontSize: "var(--text-2xl)",
-							fontWeight: 700,
-							marginBottom: "var(--space-2)",
-							background: "linear-gradient(135deg, #0EA5E9 0%, #F97316 100%)",
-							WebkitBackgroundClip: "text",
-							backgroundClip: "text",
-							WebkitTextFillColor: "transparent",
-						}}
+						id="kb-setup-guard-title"
+						className="page-title"
+						style={{ marginBottom: "var(--space-2)" }}
 					>
 						{t("kb.setupTitle")}
 					</h1>
 					<p
-						style={{
-							color: "var(--color-text-secondary)",
-							fontSize: "var(--text-base)",
-							marginBottom: "var(--space-5)",
-						}}
+						className="page-subtitle"
+						style={{ marginBottom: "var(--space-3)" }}
 					>
 						{t("kb.setupDescription")}
 					</p>
 					<p
-						style={{
-							color: "var(--color-text-muted)",
-							fontSize: "var(--text-sm)",
-							marginBottom: "var(--space-5)",
-						}}
+						className="caption"
+						style={{ marginBottom: "var(--space-6)" }}
 					>
-						{t("kb.guardDescription", {
-							defaultValue:
-								"Create a knowledge base, then bind it to this agent. Knowledge bases are managed independently of agents.",
-						})}
+						{t("knowledgeBases.emptyHint")}
 					</p>
 					<div
 						style={{
 							display: "flex",
-							flexDirection: "column",
-							gap: "var(--space-3)",
+							justifyContent: "center",
 						}}
 					>
-						<Link
-							to="/knowledge-bases"
-							className="btn-primary"
-							style={{ textDecoration: "none" }}
-						>
-							{t("kb.guardOpenList", {
-								defaultValue: "Open knowledge bases",
-							})}
+						<Link to="/knowledge-bases" className="btn btn-primary">
+							{t("kb.guardOpenList")}
 						</Link>
 					</div>
 				</div>

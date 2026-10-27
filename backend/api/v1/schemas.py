@@ -462,6 +462,7 @@ class AgentConfig(BaseModel):
     url_count: int = 0
     file_count: int = 0
     active_session_count: int = 0
+    visitor_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
     kb_id: Optional[str] = Field(None, description="Bound knowledge base ID (optional)")

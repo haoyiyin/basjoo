@@ -118,6 +118,8 @@ export interface Agent {
 	url_count?: number;
 	file_count?: number;
 	active_session_count?: number;
+	/** Distinct visitors with at least one session; absent on older payloads. */
+	visitor_count?: number;
 	created_at: string;
 	updated_at?: string;
 }

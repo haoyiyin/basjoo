@@ -6,6 +6,13 @@
     "dark": "深色模式",
     "system": "跟随系统"
   },
+  "home": {
+    "title": "首页",
+    "overview": "工作区概览",
+    "agentsCount": "智能体",
+    "knowledgeCount": "知识库",
+    "apiStatus": "API"
+  },
   "buttons": {
     "login": "登录",
     "logout": "退出登录",
@@ -16,7 +23,6 @@
     "edit": "编辑",
     "confirm": "确认",
     "submit": "提交",
-    "refresh": "刷新",
     "search": "搜索",
     "add": "添加",
     "export": "导出",
@@ -60,10 +66,12 @@
     "loadingTimeout": "加载超时，请刷新重试"
   },
   "navigation": {
+    "home": "首页",
+    "mainNav": "主导航",
     "dashboard": "仪表盘",
     "playground": "调试区",
     "knowledge": "知识库",
-    "knowledgeBases": "知识库列表",
+    "knowledgeBases": "知识库",
     "websites": "网站",
     "files": "文件",
     "fileManagement": "文件上传",
@@ -73,8 +81,7 @@
     "agentSettings": "智能体设置",
     "accountSettings": "账号设置",
     "administrator": "管理员",
-    "agents": "智能体",
-    "users": "用户管理"
+    "agents": "智能体"
   },
   "errors": {
     "required": "此字段为必填项",
@@ -145,8 +152,16 @@
     "createTitle": "创建智能体",
     "create": "创建智能体",
     "empty": "还没有智能体，请先创建一个。",
+    "emptyHint": "一个智能体对应一个渠道，拥有自己的提示词和知识库。创建第一个即可开始回复。",
+    "columns": {
+      "name": "智能体",
+      "meta": "描述 / 知识库",
+      "knowledgeBase": "知识库",
+      "updated": "更新",
+      "status": "状态",
+      "actions": "操作"
+    },
     "open": "打开",
-    "openCurrent": "打开当前智能体",
     "current": "当前",
     "switch": "切换",
     "deactivate": "停用",
@@ -166,7 +181,15 @@
     "kbOnboardingDescription": "配置嵌入服务，让智能体基于你的数据回答问题。稍后也可以在知识库设置中完成。",
     "kbOnboardingSkip": "跳过",
     "kbOnboardingContinue": "初始化知识库",
-    "panelNoKnowledgeBase": "未绑定知识库"
+    "panelNoKnowledgeBase": "未绑定知识库",
+    "kbColumn": "知识库",
+    "kbBindExisting": "绑定已有知识库",
+    "kbCreateNew": "新建知识库",
+    "kbNoneAvailable": "没有可用的未绑定知识库，请先到知识库页面创建。",
+    "rowActions": "{{name}} 的操作",
+    "deactivateConfirm": "确定要停用「{{name}}」吗？超过清理期限后将被自动删除。",
+    "updatedAt": "更新于 {{date}}",
+    "statusInactive": "已停用"
   },
   "placeholders": {
     "enterMessage": "输入消息...",
@@ -181,9 +204,7 @@
     "csvFormat": "问题,答案\n如何重置密码?,点击忘记密码按钮..."
   },
   "labels": {
-    "welcome": "欢迎回到 {{agentName}} 控制台",
     "description": "描述",
-    "quickStart": "快速开始",
     "systemStatus": "系统状态",
     "urlKnowledgeSource": "网页数量",
     "fileItems": "文件",
@@ -208,10 +229,7 @@
     "indexedFiles": "已索引文件",
     "docBlocks": "文档块",
     "indexStatus": "索引状态",
-    "testAiEffect": "测试 AI 对话效果",
-    "manageFiles": "上传和管理文件作为AI知识来源",
     "knowledgeDescription": "管理AI的知识来源，包括网页和上传的文件",
-    "addWebKnowledge": "添加网页知识库",
     "configModelParams": "配置模型参数",
     "configAgentSettings": "配置智能体设置和嵌入代码",
     "tips": "使用提示",
@@ -335,6 +353,7 @@
     "embeddingApiBase": "Embedding API Base",
     "apiKey": "API 密钥",
     "configured": "已配置",
+    "notConfigured": "未配置",
     "apiBase": "API 基础地址",
     "modelName": "模型名称",
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
@@ -597,6 +616,8 @@
   },
   "playground": {
     "testAiEffect": "测试您的 AI Agent 对话效果",
+    "tabSettings": "设置",
+    "tabChat": "测试",
     "preview": "对话预览",
     "confirmRebuild": "确定要重建索引吗？这可能需要一些时间。",
     "rebuildStarted": "索引重建已启动",
@@ -674,42 +695,11 @@
   "citations": {
     "references": "参考来源"
   },
-  "users": {
-    "title": "用户管理",
-    "addAdmin": "添加管理员",
-    "email": "邮箱",
-    "name": "姓名",
-    "password": "密码",
-    "role": "角色",
-    "create": "创建",
-    "adminList": "管理员列表",
-    "id": "ID",
-    "status": "状态",
-    "actions": "操作",
-    "save": "保存",
-    "cancel": "取消",
-    "edit": "编辑",
-    "delete": "删除",
-    "statusEnabled": "启用",
-    "statusDisabled": "禁用",
-    "newPasswordPlaceholder": "新密码，留空不改",
-    "roleLabels": {
-      "super_admin": "超级管理员",
-      "admin": "普通管理员",
-      "support": "客服人员",
-      "readonly": "只读账号"
-    },
-    "confirmDelete": "确定删除这个管理员账号吗？",
-    "userCreated": "已创建管理员：{{email}}",
-    "userUpdated": "用户已更新",
-    "userDeleted": "用户已删除",
-    "loadUsersFailed": "加载用户失败",
-    "createFailed": "创建失败",
-    "saveFailed": "保存失败",
-    "deleteFailed": "删除失败"
-  },
   "kb": {
     "title": "知识库设置",
+    "bindPromptTitle": "尚未绑定知识库",
+    "bindPromptDescription": "为这个智能体绑定一个知识库，它就能基于你的资料回答问题。",
+    "bindPromptAction": "绑定知识库",
     "setupTitle": "初始化知识库",
     "setupDescription": "配置 Embedding 模型以启用知识库检索功能。",
     "provider": "Embedding 供应商",
@@ -740,12 +730,16 @@
     "goToSetup": "前往设置",
     "batchSize": "批处理大小",
     "manageUrlsDesc": "管理网站知识源，添加和抓取网页内容",
-    "manageFilesDesc": "上传和管理文件，支持 PDF、TXT、DOCX、XLSX 等格式"
+    "manageFilesDesc": "上传和管理文件，支持 PDF、TXT、DOCX、XLSX 等格式",
+    "bannerMessage": "知识库尚未配置。在完成知识库设置前，上传的文件将不会被处理。",
+    "setupButton": "设置知识库",
+    "guardOpenList": "打开知识库列表"
   },
   "knowledgeBases": {
     "title": "知识库",
     "subtitle": "知识库独立于智能体存在：创建、重置、删除与绑定都在这里完成。",
     "newKnowledgeBase": "新建知识库",
+    "rowActions": "{{name}} 的操作",
     "retry": "重试",
     "empty": "暂无知识库",
     "emptyHint": "新建一个知识库，然后将它绑定到智能体。",
@@ -836,5 +830,14 @@
     "chunkOverlapInvalid": "分块重叠必须小于分块大小",
     "createSubmit": "创建",
     "resetSubmit": "重置并重建索引"
+  },
+  "dashboard": {
+    "userCount": "用户数",
+    "sessionCount": "会话数",
+    "boundKnowledgeBase": "已绑定知识库",
+    "unboundKnowledgeBase": "当前未绑定知识库",
+    "changeKnowledgeBase": "更换知识库",
+    "bindExisting": "绑定现有",
+    "createKnowledgeBase": "创建新知识库"
   }
 }

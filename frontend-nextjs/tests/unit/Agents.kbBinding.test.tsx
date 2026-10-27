@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom";
@@ -144,6 +144,16 @@ beforeEach(() => {
 	});
 });
 
+/**
+ * R3: the blind bind/unbind toggle is gone from the row menu. Binding now
+ * happens on the agent dashboard, which shows the current KB and opens the
+ * shared chooser; the row keeps its name/status/facts and the non-KB actions.
+ */
+function openRowMenu(agentId: string) {
+	fireEvent.click(screen.getByTestId(`agent-actions-${agentId}`));
+	return screen.getByTestId(`agent-menu-${agentId}`);
+}
+
 describe("Agents knowledge-base column", () => {
 	it("shows the bound knowledge base name and an em dash when unbound", async () => {
 		renderAgents();
@@ -157,94 +167,43 @@ describe("Agents knowledge-base column", () => {
 		);
 	});
 
-	it("renders Unbind for a bound agent and Bind for an unbound one", async () => {
+	it("no longer offers bind or unbind in the row menu", async () => {
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
-		expect(screen.getByTestId("agent-kb-bind-agt_bound")).toHaveTextContent(
-			"knowledgeBases.actions.unbind",
-		);
-		expect(screen.getByTestId("agent-kb-bind-agt_free")).toHaveTextContent(
-			"knowledgeBases.actions.bind",
-		);
+		const boundMenu = openRowMenu("agt_bound");
+		expect(
+			within(boundMenu).queryByTestId("agent-kb-bind-agt_bound"),
+		).not.toBeInTheDocument();
+		expect(
+			within(boundMenu).queryByRole("menuitem", {
+				name: /knowledgeBases\.actions\.(bind|unbind)/,
+			}),
+		).not.toBeInTheDocument();
+
+		const freeMenu = openRowMenu("agt_free");
+		expect(
+			within(freeMenu).queryByRole("menuitem", {
+				name: /knowledgeBases\.actions\.(bind|unbind)/,
+			}),
+		).not.toBeInTheDocument();
+		// The non-KB actions stay.
+		expect(
+			within(freeMenu).getByRole("menuitem", { name: "agents.open" }),
+		).toBeInTheDocument();
+		expect(
+			within(freeMenu).getByRole("menuitem", { name: "agents.deactivate" }),
+		).toBeInTheDocument();
 	});
 
-	it("hides the bind/unbind controls from a non super_admin", async () => {
+	it("keeps the knowledge-base column readable for a non super_admin", async () => {
 		authState.role = "admin";
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
-		expect(
-			screen.queryByTestId("agent-kb-bind-agt_bound"),
-		).not.toBeInTheDocument();
-		expect(
-			screen.queryByTestId("agent-kb-bind-agt_free"),
-		).not.toBeInTheDocument();
-		// The column itself stays readable for everyone.
 		expect(screen.getByTestId("agent-kb-name-agt_bound")).toHaveTextContent(
 			"Product Docs",
 		);
-	});
-
-	it("binds an existing knowledge base to an unbound agent through the chooser", async () => {
-		renderAgents();
-
-		await screen.findByText("Free Agent");
-		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_free"));
-
-		const modal = await screen.findByTestId("kb-onboarding-modal");
-		fireEvent.click(
-			screen.getByRole("button", { name: "agents.kbBindExisting" }),
-		);
-		fireEvent.change(screen.getByTestId("kb-chooser-select"), {
-			target: { value: "kb_free" },
-		});
-		fireEvent.click(screen.getByTestId("kb-chooser-bind-submit"));
-
-		await waitFor(() => {
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_free",
-				"kb_free",
-			);
-		});
-		// The list-binding flow stays on the list (no navigation to a dashboard).
-		await waitFor(() => {
-			expect(
-				screen.queryByTestId("kb-onboarding-modal"),
-			).not.toBeInTheDocument();
-		});
-		expect(mockedApi.listAgents).toHaveBeenCalledTimes(2);
-	});
-
-	it("unbinds a bound agent after confirmation, calling the API with null", async () => {
-		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-		renderAgents();
-
-		await screen.findByText("Bound Agent");
-		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_bound"));
-
-		await waitFor(() => {
-			expect(confirmSpy).toHaveBeenCalledTimes(1);
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_bound",
-				null,
-			);
-		});
-		confirmSpy.mockRestore();
-	});
-
-	it("does not call the API when unbind is not confirmed", async () => {
-		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-		renderAgents();
-
-		await screen.findByText("Bound Agent");
-		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_bound"));
-
-		await waitFor(() => {
-			expect(confirmSpy).toHaveBeenCalledTimes(1);
-		});
-		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
-		confirmSpy.mockRestore();
 	});
 });
 
@@ -306,7 +265,10 @@ describe("agent knowledge page", () => {
 		expect(mockedApi.getKnowledgeBase).not.toHaveBeenCalled();
 	});
 
-	it("redirects an unbound agent to the KB list with the bind query", async () => {
+	// Spec §13 (lane SHELL) inverted this: an unbound agent now sees a bind
+	// prompt in place (no silent bounce to the KB list) whose primary action
+	// carries `?bindAgent=<id>`. The agent page itself stays put.
+	it("prompts an unbound agent to bind, linking to the KB list with the bind query", async () => {
 		mockedApi.kbStatus.mockResolvedValue({
 			agent_id: "agt_free",
 			kb_id: null,
@@ -316,10 +278,10 @@ describe("agent knowledge page", () => {
 
 		const router = renderAgentKnowledgePage("agt_free");
 
-		await waitFor(() => {
-			expect(router.state.location.pathname).toBe("/knowledge-bases");
-		});
-		expect(router.state.location.search).toContain("bindAgent=agt_free");
+		const action = await screen.findByTestId("kb-bind-prompt-action");
+		expect(router.state.location.pathname).toBe("/agents/agt_free/knowledge");
+		expect(action.getAttribute("href")).toContain("bindAgent=agt_free");
+		expect(action.getAttribute("href")).toContain("/knowledge-bases");
 		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
 		expect(screen.queryByTestId("kb-bind-existing")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("kb-bind-submit")).not.toBeInTheDocument();

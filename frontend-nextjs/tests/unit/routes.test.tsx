@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/App";
 import { api } from "../../src/services/api";
+import zhCN from "../../src/locales/zh-CN/common.json";
+import enUS from "../../src/locales/en-US/common.json";
 
 // --- View mocks -------------------------------------------------------------
 // Every view is replaced with a marker element so the route table can be
@@ -19,8 +21,8 @@ vi.mock("../../src/views/Register", () => ({
 vi.mock("../../src/views/AgentSelector", () => ({
 	default: () => <div>view:AgentSelector</div>,
 }));
-vi.mock("../../src/views/AgentPanel", () => ({
-	default: () => <div>view:AgentPanel</div>,
+vi.mock("../../src/views/Home", () => ({
+	default: () => <div data-testid="home-view">view:Home</div>,
 }));
 vi.mock("../../src/views/Agents", () => ({
 	default: () => <div>view:Agents</div>,
@@ -55,9 +57,6 @@ vi.mock("../../src/views/AccountSettings", () => ({
 vi.mock("../../src/views/URLManagement", () => ({
 	default: () => <div>view:URLManagement</div>,
 }));
-vi.mock("../../src/views/AdminUsers", () => ({
-	AdminUsers: () => <div>view:AdminUsers</div>,
-}));
 vi.mock("../../src/views/Chat", () => ({
 	default: () => <div>view:Chat</div>,
 }));
@@ -65,6 +64,12 @@ vi.mock("../../src/views/Chat", () => ({
 // Layout dependencies: pass auth straight through, and mark the auth switcher.
 vi.mock("../../src/components/RequireAuth", () => ({
 	RequireAuth: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+// The shell is asserted by its own suite; here it must only pass children
+// through so the real Home can be rendered without an AuthContext.
+vi.mock("../../src/components/AdminLayout", () => ({
+	__esModule: true,
+	default: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../../src/components/AuthLanguageSwitcher", () => ({
 	AuthLanguageSwitcher: () => <div>layout:AuthLanguageSwitcher</div>,
@@ -99,7 +104,7 @@ const routes: Array<[path: string, view: string]> = [
 	["/login", "view:Login"],
 	["/register", "view:Register"],
 	["/agent-selector", "view:AgentSelector"],
-	["/", "view:AgentPanel"],
+	["/", "view:Home"],
 	["/agents", "view:Agents"],
 	["/agents/some-id/dashboard", "view:Dashboard"],
 	["/agents/some-id/files", "view:KnowledgeBaseSetup"],
@@ -110,7 +115,6 @@ const routes: Array<[path: string, view: string]> = [
 	["/agents/some-id/playground", "view:Playground"],
 	["/agents/some-id/sessions", "view:Sessions"],
 	["/agents/some-id/settings/agent", "view:AgentSettings"],
-	["/agents/some-id/users", "view:AdminUsers"],
 	["/chat/some-session", "view:Chat"],
 	["/settings/agent", "view:AgentSettings"],
 	["/settings/account", "view:AccountSettings"],
@@ -123,14 +127,15 @@ describe("route table", () => {
 		expect(currentPath()).toBe(path);
 	});
 
-	// --- The 7 redirect entries ----------------------------------------------
+	// --- The 5 remaining redirect entries ------------------------------------
+	//
+	// §14/§13: `/sessions` and `/users` are no longer routes at all, so they are
+	// asserted below as *unmounted* paths instead of as redirects.
 
 	const redirects: Array<[from: string, to: string, view: string]> = [
-		["/sessions", "/", "view:AgentPanel"],
 		["/knowledge", "/knowledge-bases", "view:KnowledgeBases"],
-		["/playground", "/", "view:AgentPanel"],
+		["/playground", "/", "view:Home"],
 		["/urls", "/knowledge-bases", "view:KnowledgeBases"],
-		["/users", "/", "view:AgentPanel"],
 		["/files", "/knowledge-bases", "view:KnowledgeBases"],
 		["/qa", "/knowledge-bases", "view:KnowledgeBases"],
 	];
@@ -139,6 +144,77 @@ describe("route table", () => {
 		renderAt(from);
 		expect(currentPath()).toBe(to);
 		expect(screen.getByText(view)).toBeInTheDocument();
+	});
+
+	// --- Removed root routes (§13/§14) ---------------------------------------
+	//
+	// `/sessions` and `/users` used to be `Redirect` stubs to `/`. Both the nav
+	// entries and the routes are gone, so navigating there must leave the
+	// pathname untouched and mount no view at all.
+
+	it.each(["/sessions", "/users"])(
+		"%s is not a route any more: nothing mounts and the path stays",
+		(path) => {
+			renderAt(path);
+			expect(currentPath()).toBe(path);
+			// No view marker of any kind is rendered.
+			expect(screen.queryByText(/^view:/)).not.toBeInTheDocument();
+			// In particular, not the removed home destination either.
+			expect(screen.queryByTestId("home-view")).not.toBeInTheDocument();
+		},
+	);
+
+	// --- §14: `/` is the emptied Home page -----------------------------------
+	//
+	// The view mocks above replace Home with a marker. This block re-imports the
+	// REAL Home (the module mock is disabled for this import only) so the actual
+	// markup contract can be asserted: one page, one heading, no old dashboard.
+
+	it("/ renders one heading plus the workspace overview", async () => {
+		// Bypass the module mock: this contract is about the REAL view markup.
+		const { default: HomeReal } =
+			await vi.importActual<{ default: ComponentType }>(
+				"../../src/views/Home",
+			);
+
+		const { container } = render(
+			<MemoryRouter initialEntries={["/"]}>
+				<HomeReal />
+			</MemoryRouter>,
+		);
+
+		// Exactly one heading: the page title, and nothing else.
+		expect(screen.getAllByRole("heading")).toHaveLength(1);
+		const title = screen.getByRole("heading");
+		expect(title).toHaveClass("page-title");
+		// react-i18next is not initialised in this suite, so `t` echoes the key:
+		// the title is the `home.title` string and nothing is hard-coded.
+		expect(title.textContent).toBe("home.title");
+
+		// Nothing from the removed dashboard / agent panel survives here.
+		expect(screen.queryByTestId("dashboard-page")).toBeNull();
+		expect(screen.queryByTestId("dashboard-stats")).toBeNull();
+		expect(screen.queryByTestId("dashboard-status")).toBeNull();
+		expect(screen.queryByTestId("agent-panel-page")).toBeNull();
+		expect(screen.getByTestId("home-page")).toBeInTheDocument();
+
+		// The overview is a signpost: two linked figures plus API status, and it
+		// renders placeholders (never fabricated numbers) until the API answers.
+		const overview = screen.getByTestId("home-overview");
+		expect(overview.querySelectorAll("a")).toHaveLength(2);
+		expect(screen.getByTestId("home-api-status")).toBeInTheDocument();
+		expect(overview.querySelectorAll(".stat-value")).toHaveLength(3);
+
+		// The page root is the admin page surface (same contract as every other
+		// view, so the 375px suite can assert it).
+		expect(container.querySelector(".admin-page")).not.toBeNull();
+		expect(container.querySelector(".page-header")).not.toBeNull();
+	});
+
+	it("renders / as the Home marker and never the agent panel", () => {
+		renderAt("/");
+		expect(screen.getByTestId("home-view")).toBeInTheDocument();
+		expect(screen.queryByText("view:AgentPanel")).not.toBeInTheDocument();
 	});
 
 	it("wraps the (auth) routes in the auth layout and not the dashboard layout", () => {
@@ -170,6 +246,23 @@ describe("route table", () => {
 			).not.toBeInTheDocument();
 		},
 	);
+});
+
+// --- §14 i18n contract ------------------------------------------------------
+//
+// Home renders `t("home.title")`, so the key must exist in BOTH locales (shared
+// hard rule), and the workspace nav label key `navigation.home` must exist too.
+
+describe("home i18n keys", () => {
+	it("defines home.title in both locales", () => {
+		expect(zhCN.home.title).toBe("首页");
+		expect(enUS.home.title).toBe("Home");
+	});
+
+	it("defines navigation.home in both locales", () => {
+		expect(zhCN.navigation.home).toBe("首页");
+		expect(enUS.navigation.home).toBe("Home");
+	});
 });
 
 // --- api.ts kb-scoped source helpers -----------------------------------------

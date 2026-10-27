@@ -156,11 +156,21 @@ function renderAgents(initialAgents: Agent[] = [activeAgent, deletedAgent]) {
 	return router;
 }
 
-async function createAgentThroughForm() {
+/**
+ * §15: the create form is no longer inline. It lives in a sheet that the `+`
+ * in `page-actions` opens, so every create flow starts by opening that sheet.
+ */
+async function openCreateSheet() {
+	fireEvent.click(screen.getByTestId("agent-create-open"));
+	return screen.findByTestId("agent-create-sheet");
+}
+
+async function createAgentThroughForm(name = "New Agent") {
+	await openCreateSheet();
 	fireEvent.change(screen.getByPlaceholderText("agents.namePlaceholder"), {
-		target: { value: "New Agent" },
+		target: { value: name },
 	});
-	fireEvent.click(screen.getByText("agents.create"));
+	fireEvent.click(screen.getByRole("button", { name: "agents.create" }));
 	return screen.findByTestId("kb-onboarding-modal");
 }
 
@@ -267,7 +277,9 @@ describe("Agents knowledge-base chooser after creating an agent", () => {
 		fireEvent.change(within(form).getByLabelText("kbForm.apiKey"), {
 			target: { value: "jina_test_key" },
 		});
-		fireEvent.click(within(form).getByText("kbForm.createSubmit"));
+		fireEvent.click(
+			within(form).getByRole("button", { name: "kbForm.createSubmit" }),
+		);
 
 		await waitFor(() => {
 			expect(mockedApi.createKnowledgeBase).toHaveBeenCalledWith(
@@ -316,14 +328,36 @@ describe("Agents lifecycle actions", () => {
 		await screen.findByText("Active Agent");
 		await screen.findByText("Deleted Agent");
 
-		// Two open buttons: one top-level (for selected activeAgent), one row-level.
-		const openButtons = screen.getAllByRole("button", { name: "agents.open" });
-		expect(openButtons).toHaveLength(2);
+		// R4 made the row itself the way in, so the header no longer keeps an
+		// "open current agent" shortcut at all: the row name (a link) and the
+		// whole row navigate, and the row-level open also lives in the menu.
+		expect(
+			screen.queryByRole("button", { name: "agents.openCurrent" }),
+		).not.toBeInTheDocument();
 
-		const restoreButtons = screen.getAllByRole("button", {
-			name: "agents.restore",
-		});
-		expect(restoreButtons).toHaveLength(1);
+		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
+		expect(
+			within(screen.getByTestId("agent-menu-agt_active")).getAllByRole(
+				"menuitem",
+				{ name: "agents.open" },
+			),
+		).toHaveLength(1);
+		expect(
+			within(screen.getByTestId("agent-menu-agt_active")).queryByRole(
+				"menuitem",
+				{ name: "agents.restore" },
+			),
+		).not.toBeInTheDocument();
+
+		// The deactivated agent offers restore and no open action.
+		fireEvent.click(screen.getByTestId("agent-actions-agt_deleted"));
+		const deletedMenu = screen.getByTestId("agent-menu-agt_deleted");
+		expect(
+			within(deletedMenu).getAllByRole("menuitem", { name: "agents.restore" }),
+		).toHaveLength(1);
+		expect(
+			within(deletedMenu).queryByRole("menuitem", { name: "agents.open" }),
+		).not.toBeInTheDocument();
 	});
 
 	it("restores an agent and stores it as the selected agent so opening works", async () => {
@@ -340,7 +374,8 @@ describe("Agents lifecycle actions", () => {
 		renderAgents();
 		await screen.findByText("Deleted Agent");
 
-		fireEvent.click(screen.getByRole("button", { name: "agents.restore" }));
+		fireEvent.click(screen.getByTestId("agent-actions-agt_deleted"));
+		fireEvent.click(screen.getByTestId("agent-restore-agt_deleted"));
 
 		await waitFor(() => {
 			expect(mockedApi.restoreAgent).toHaveBeenCalledWith("agt_deleted");
@@ -363,7 +398,14 @@ describe("Agents lifecycle actions", () => {
 		await screen.findByText("Inactive Agent");
 
 		expect(
-			screen.queryByRole("button", { name: "agents.open" }),
+			screen.queryByRole("button", { name: "agents.openCurrent" }),
+		).not.toBeInTheDocument();
+		fireEvent.click(screen.getByTestId("agent-actions-agt_inactive"));
+		expect(
+			within(screen.getByTestId("agent-menu-agt_inactive")).queryByRole(
+				"menuitem",
+				{ name: "agents.open" },
+			),
 		).not.toBeInTheDocument();
 	});
 
@@ -371,6 +413,7 @@ describe("Agents lifecycle actions", () => {
 		renderAgents([activeAgent]);
 		await screen.findByText("Active Agent");
 
+		await openCreateSheet();
 		const input = screen.getByPlaceholderText("agents.namePlaceholder");
 		fireEvent.change(input, { target: { value: "客服助手一二三" } });
 
@@ -381,10 +424,11 @@ describe("Agents lifecycle actions", () => {
 		renderAgents([activeAgent]);
 		await screen.findByText("Active Agent");
 
+		await openCreateSheet();
 		fireEvent.change(screen.getByPlaceholderText("agents.namePlaceholder"), {
 			target: { value: "AgentName123" },
 		});
-		fireEvent.click(screen.getByText("agents.create"));
+		fireEvent.click(screen.getByRole("button", { name: "agents.create" }));
 
 		await waitFor(() => {
 			expect(mockedApi.createAgent).toHaveBeenCalledWith(

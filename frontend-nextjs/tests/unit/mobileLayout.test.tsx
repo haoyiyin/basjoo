@@ -15,9 +15,8 @@
  *          OR the element matches a selector from the mobile media block
  *             whose declaration sets `min-height` >= 44px.
  *     (Plain prose links are excluded — see `isTapTarget`.)
- *  4. The Playground renders ONE markup: settings pane before the chat pane in
- *     DOM order inside `.playground-shell`, which the media block turns into a
- *     column.
+ *  4. The Playground renders one route with two tabs (R2): only the selected
+ *     pane is mounted, and the mobile block makes the tab strip full width.
  *  5. The hamburger is inside `.mobile-header`, >= 44px, and opens the drawer.
  *
  * The CSS assertions read the real file with `fs` so the contract cannot rot
@@ -94,6 +93,7 @@ vi.mock("../../src/services/api", () => ({
 		streamChat: vi.fn(),
 		testAIApi: vi.fn(),
 		getDefaultAgent: vi.fn(),
+		checkHealth: vi.fn(),
 	},
 }));
 
@@ -330,6 +330,7 @@ beforeEach(() => {
 		status: "ready",
 	});
 	mockedApi.streamChat.mockResolvedValue(undefined);
+	mockedApi.checkHealth.mockResolvedValue({ status: "healthy" } as never);
 	// jsdom has no layout: ChatPanel scrolls its message list on every update.
 	Element.prototype.scrollIntoView = vi.fn();
 });
@@ -438,7 +439,7 @@ function assertPageRootContract(view: HTMLElement, testId: string) {
 /* --------------------------------------------------- CSS contract probes */
 
 describe("mobile CSS contract (src/index.css)", () => {
-	it("declares the playground stacking rules inside the mobile media block", () => {
+	it("declares the playground tab rules inside the mobile media block", () => {
 		const shell = rulesFor(".playground-shell");
 		expect(shell.length).toBeGreaterThan(0);
 		expect(
@@ -448,12 +449,17 @@ describe("mobile CSS contract (src/index.css)", () => {
 			shell.some((rule) => /overflow-x:\s*hidden/.test(rule.declarations)),
 		).toBe(true);
 
-		const settings = rulesFor(".playground-pane-settings");
-		expect(settings.length).toBeGreaterThan(0);
-		const settingsDecls = settings.map((rule) => rule.declarations).join(" ");
-		expect(settingsDecls).toMatch(/min-width:\s*0\s*!important/);
-		expect(settingsDecls).toMatch(/width:\s*auto\s*!important/);
-		expect(settingsDecls).toMatch(/border-right:\s*none/);
+		const tabs = rulesFor(".playground-tabs");
+		expect(tabs.length).toBeGreaterThan(0);
+		expect(tabs.map((rule) => rule.declarations).join(" ")).toMatch(
+			/width:\s*100%/,
+		);
+
+		const tab = rulesFor(".playground-tab");
+		expect(tab.length).toBeGreaterThan(0);
+		expect(tab.map((rule) => rule.declarations).join(" ")).toMatch(
+			/min-height:\s*44px/,
+		);
 	});
 
 	it("keeps the stacked rules out of the desktop media block", () => {
@@ -482,6 +488,55 @@ describe("mobile CSS contract (src/index.css)", () => {
 		expect(tapTargetRule?.declarations).toMatch(/min-height:\s*44px/);
 	});
 
+	it("keeps the document as the only vertical scroller at 375px", () => {
+		// R1: <main> must not be a scroll container on mobile. `overflow-y: clip`
+		// keeps the horizontal guard without computing to `auto` (hidden + visible
+		// becomes auto, which is exactly the bug: a 1px scrollable box that eats
+		// the touch gesture).
+		const main = rulesFor(".mobile-main").map((r) => r.declarations).join(" ");
+		expect(main).toMatch(/overflow-y:\s*clip/);
+		expect(main).toMatch(/min-height:\s*0/);
+
+		// The playground shell and both panes let the page scroll: no nested
+		// scroll box, no viewport-height floor taller than its content.
+		const shell = rulesFor(".playground-shell");
+		expect(shell.length).toBeGreaterThan(0);
+		const shellDecls = shell.map((r) => r.declarations).join(" ");
+		expect(shellDecls).toMatch(/overflow-y:\s*clip/);
+		expect(shellDecls).not.toMatch(/overflow-y:\s*auto/);
+		expect(shellDecls).not.toMatch(/min-height:\s*calc\(100vh/);
+
+		for (const pane of [
+			".playground-pane-settings",
+			".playground-pane-chat",
+		]) {
+			const decls = rulesFor(pane).map((r) => r.declarations).join(" ");
+			expect(decls).toMatch(/overflow:\s*visible/);
+		}
+	});
+
+	it("declares the R2 mobile row grid for both lists", () => {
+		const agents = rulesFor(".list-grid--agents")
+			.map((r) => r.declarations)
+			.join(" ");
+		expect(agents).toMatch(/grid-template-areas/);
+		expect(agents).toMatch(/"name status actions"/);
+		expect(agents).toMatch(/"desc desc desc"/);
+		expect(agents).toMatch(/"kb updated updated"/);
+
+		const kb = rulesFor(".list-grid--kb").map((r) => r.declarations).join(" ");
+		expect(kb).toMatch(/"name name status actions"/);
+		expect(kb).toMatch(/"docs chunks bound bound"/);
+
+		// The menu trigger is the trailing control of line 1, never x=32.
+		const actions = rulesFor(".list-cell--actions")
+			.map((r) => r.declarations)
+			.join(" ");
+		expect(actions).toMatch(/grid-area:\s*actions/);
+		expect(actions).toMatch(/justify-self:\s*end/);
+		expect(actions).toMatch(/margin-left:\s*auto/);
+	});
+
 	it("declares the KB table scroll wrapper and the mobile-main overflow guard", () => {
 		const scroll = rulesFor(".kb-table-scroll").map((r) => r.declarations);
 		expect(scroll.some((decl) => /overflow-x:\s*auto/.test(decl))).toBe(true);
@@ -499,7 +554,7 @@ const { default: KnowledgeBaseDetailView } = await import(
 );
 const { default: Agents } = await import("../../src/views/Agents");
 const { default: Dashboard } = await import("../../src/views/Dashboard");
-const { default: AgentPanel } = await import("../../src/views/AgentPanel");
+const { default: Home } = await import("../../src/views/Home");
 const { default: Playground } = await import("../../src/views/Playground");
 const { default: AdminLayout } = await import("../../src/components/AdminLayout");
 const { Login } = await import("../../src/views/Login");
@@ -524,10 +579,16 @@ describe("375px width: no horizontal overflow", () => {
 		assertNoInlineWidthOverflow(view as HTMLElement);
 		assertTapTargets(view as HTMLElement);
 
-		// The 7-column table is inside the horizontal scroll wrapper, and all
-		// pre-existing cells/actions stayed in the DOM.
-		const table = screen.getByRole("table");
-		expect(table.closest(".kb-table-scroll")).not.toBeNull();
+		// §16: the 7-column table is gone. The KB list is now the shared
+		// `list`/`list-row` primitive, same system as /agents.
+		const list = screen.getByTestId("kb-list");
+		expect(list.tagName).toBe("UL");
+		expect(list).toHaveClass("list");
+		const rows = within(list).getAllByRole("listitem");
+		expect(rows.length).toBeGreaterThan(0);
+		for (const row of rows) {
+			expect(row).toHaveClass("list-row");
+		}
 		expect(screen.getByTestId("kb-row-kb_1")).toBeInTheDocument();
 	});
 
@@ -592,20 +653,20 @@ describe("375px width: no horizontal overflow", () => {
 		assertTapTargets(view as HTMLElement);
 	});
 
-	it("AgentPanel", async () => {
+	it("Home", async () => {
 		const { container } = renderAt375(
 			<MemoryRouter initialEntries={["/"]}>
 				<Routes>
-					<Route path="/" element={<AgentPanel />} />
+					<Route path="/" element={<Home />} />
 				</Routes>
 			</MemoryRouter>,
 		);
 
-		await screen.findByTestId("agent-panel-page");
+		await screen.findByTestId("home-page");
 		const view = container.querySelector<HTMLElement>(
 			'[data-testid="viewport-375"]',
 		);
-		assertPageRootContract(view as HTMLElement, "agent-panel-page");
+		assertPageRootContract(view as HTMLElement, "home-page");
 		assertNoInlineWidthOverflow(view as HTMLElement);
 		assertTapTargets(view as HTMLElement);
 	});
@@ -667,10 +728,10 @@ describe("375px width: no horizontal overflow", () => {
 	});
 });
 
-/* ------------------------------------------------------ playground stacking */
+/* ------------------------------------------------------ playground tabs */
 
-describe("Playground stacks settings above chat at mobile width", () => {
-	it("renders one markup with the settings pane before the chat pane", async () => {
+describe("Playground tabs at mobile width", () => {
+	it("mounts only the chat pane by default", async () => {
 		renderAt375(
 			<MemoryRouter initialEntries={["/agents/agt_1/playground"]}>
 				<Routes>
@@ -683,24 +744,32 @@ describe("Playground stacks settings above chat at mobile width", () => {
 		expect(shell).toHaveClass("playground-shell");
 		expect(shell).toHaveClass("admin-page");
 
-		const settingsPane = screen.getByTestId("playground-pane-settings");
 		const chatPane = screen.getByTestId("playground-pane-chat");
-		expect(settingsPane).toHaveClass("playground-pane-settings");
 		expect(chatPane).toHaveClass("playground-pane-chat");
-
-		// DOM order == visual order once the shell is a column.
-		const relation = settingsPane.compareDocumentPosition(chatPane);
-		expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(relation & Node.DOCUMENT_POSITION_PRECEDING).toBeFalsy();
-
-		// Both panes are direct children of the shell, so `flex-direction: column`
-		// actually stacks them.
-		expect(settingsPane.parentElement).toBe(shell);
 		expect(chatPane.parentElement).toBe(shell);
-
-		// The chat pane is still fully rendered (not a single-pane tab branch).
 		expect(screen.getByTestId("chat-message-input")).toBeInTheDocument();
+		expect(screen.queryByTestId("ai-settings-form")).not.toBeInTheDocument();
+
+		// The tab strip is the single page-level control and is keyboard driven.
+		expect(screen.getByRole("tablist")).toBeInTheDocument();
+		expect(screen.getByRole("tab", { selected: true })).toHaveTextContent(
+			"playground.tabChat",
+		);
+	});
+
+	it("mounts the settings pane when ?tab=settings is on the URL", async () => {
+		renderAt375(
+			<MemoryRouter initialEntries={["/agents/agt_1/playground?tab=settings"]}>
+				<Routes>
+					<Route path="/agents/:agentId/playground" element={<Playground />} />
+				</Routes>
+			</MemoryRouter>,
+		);
+
+		const settingsPane = await screen.findByTestId("playground-pane-settings");
+		expect(settingsPane).toHaveClass("playground-pane-settings");
 		expect(screen.getByTestId("ai-settings-form")).toBeInTheDocument();
+		expect(screen.queryByTestId("chat-message-input")).not.toBeInTheDocument();
 	});
 
 	it("keeps the no-API-key banner and the disabled send control", async () => {
@@ -724,9 +793,9 @@ describe("Playground stacks settings above chat at mobile width", () => {
 		).toBeDisabled();
 	});
 
-	it("keeps the desktop shape inline (40% / min-width 360px) for >= 1025px", async () => {
+	it("caps the settings column in CSS instead of an inline side-rail width", async () => {
 		renderAt375(
-			<MemoryRouter initialEntries={["/agents/agt_1/playground"]}>
+			<MemoryRouter initialEntries={["/agents/agt_1/playground?tab=settings"]}>
 				<Routes>
 					<Route path="/agents/:agentId/playground" element={<Playground />} />
 				</Routes>
@@ -734,10 +803,11 @@ describe("Playground stacks settings above chat at mobile width", () => {
 		);
 
 		const settingsPane = await screen.findByTestId("playground-pane-settings");
-		// Desktop layout is unchanged; CSS overrides it with !important at <=768px.
-		expect(settingsPane.style.width).toBe("40%");
-		expect(settingsPane.style.minWidth).toBe("360px");
-		expect(settingsPane.style.maxWidth).toBe("480px");
+		expect(settingsPane.style.width).toBe("");
+		expect(settingsPane.style.minWidth).toBe("");
+
+		// The readable column max-width lives in index.css, not in the markup.
+		expect(CSS).toMatch(/\.playground-settings-column\s*\{[^}]*max-width:\s*760px/);
 	});
 });
 
