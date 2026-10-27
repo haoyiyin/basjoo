@@ -5,6 +5,15 @@
 #   - 开发: docker compose --profile dev up -d
 # ============================================
 
+# Pinned on purpose. Without it the project name comes from the checkout
+# directory, so the same compose file started from a worktree (`basjoo-ui`) or
+# any other copy creates a second, empty set of volumes — `backend-data` becomes
+# `basjoo-ui_backend-data` and the instance looks like it lost every admin
+# account. Keep this in sync with the deployed directory name; override with
+# `-p` only when you really want a separate stack.
+
+name: basjoo
+
 services:
   # ============================================
   # 基础设施服务 (所有环境共用)
