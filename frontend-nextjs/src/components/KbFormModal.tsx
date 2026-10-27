@@ -447,24 +447,45 @@ export default function KbFormModal({
 				<div className="sheet-footer">
 					<button
 						type="button"
-						className="btn btn-secondary"
+						className="btn btn-secondary btn-icon"
 						onClick={onClose}
 						disabled={submitting}
+						aria-label={t("buttons.cancel")}
+						title={t("buttons.cancel")}
 					>
-						{t("buttons.cancel")}
+						<Icon name="close" size={16} />
 					</button>
-					<button
-						type="button"
-						className="btn btn-primary"
-						onClick={handleSubmit}
-						disabled={submitting}
-					>
-						{submitting
-							? t("status.saving")
-							: isCreate
-								? t("kbForm.createSubmit")
-								: t("kbForm.resetSubmit")}
-					</button>
+					{/* The reset submit keeps its words: it destroys and rebuilds the whole
+					 * vector collection, and a bare glyph would understate that. */}
+					{isCreate ? (
+						<button
+							type="button"
+							className="btn btn-primary btn-icon"
+							onClick={handleSubmit}
+							disabled={submitting}
+							aria-label={t("kbForm.createSubmit")}
+							title={submitting ? t("status.saving") : t("kbForm.createSubmit")}
+							aria-busy={submitting}
+						>
+							{submitting ? (
+								<div
+									className="spinner"
+									style={{ width: "14px", height: "14px" }}
+								/>
+							) : (
+								<Icon name="check" size={16} />
+							)}
+						</button>
+					) : (
+						<button
+							type="button"
+							className="btn btn-primary"
+							onClick={handleSubmit}
+							disabled={submitting}
+						>
+							{submitting ? t("status.saving") : t("kbForm.resetSubmit")}
+						</button>
+					)}
 				</div>
 			</div>
 		</div>

@@ -201,11 +201,13 @@ export default function Dashboard() {
 									</Link>
 									<button
 										type="button"
-										className="btn btn-secondary"
+										className="btn btn-secondary btn-icon"
 										data-testid="dashboard-kb-change"
+										aria-label={t("dashboard.changeKnowledgeBase")}
+										title={t("dashboard.changeKnowledgeBase")}
 										onClick={() => setBindOpen(true)}
 									>
-										{t("dashboard.changeKnowledgeBase")}
+										<Icon name="swap" size={16} />
 									</button>
 								</span>
 							) : (

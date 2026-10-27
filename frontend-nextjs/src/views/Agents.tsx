@@ -624,23 +624,35 @@ export default function Agents() {
 						<div className="sheet-footer">
 							<button
 								type="button"
-								className="btn btn-secondary"
+								className="btn btn-secondary btn-icon"
 								disabled={saving}
+								aria-label={t("buttons.cancel")}
+								title={t("buttons.cancel")}
 								onClick={closeCreateSheet}
 							>
-								{t("buttons.cancel")}
+								<Icon name="close" size={16} />
 							</button>
 							<button
 								type="submit"
-								className="btn btn-primary"
+								className="btn btn-primary btn-icon"
+								aria-label={t("agents.create")}
+								title={saving ? t("status.saving") : t("agents.create")}
+								aria-busy={saving}
 								disabled={
 									saving ||
 									!isAgentNameValid ||
 									(form.description?.trim().length || 0) >
 										AGENT_DESCRIPTION_MAX_LENGTH
-								}
+							}
 							>
-								{saving ? t("status.saving") : t("agents.create")}
+								{saving ? (
+									<div
+										className="spinner"
+										style={{ width: "14px", height: "14px" }}
+									/>
+								) : (
+									<Icon name="check" size={16} />
+								)}
 							</button>
 						</div>
 					</form>

@@ -596,12 +596,16 @@ export default function URLManagement() {
               >
                 <button
                   type="button"
-                  className="btn btn-ghost"
+                  className="btn btn-ghost btn-icon"
                   onClick={() => setShowClearConfirm(false)}
                   disabled={clearing}
+                  aria-label={t('buttons.cancel')}
+                  title={t('buttons.cancel')}
                 >
-                  {t('buttons.cancel')}
+                  <Icon name="close" size={16} />
                 </button>
+                {/* Destructive confirm keeps its words: the user must read what
+                  * they are confirming (round-6 rule). */}
                 <button
                   type="button"
                   className="btn btn-danger"
@@ -894,18 +898,18 @@ export default function URLManagement() {
 
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary btn-icon"
               onClick={handleSaveAutoFetchSettings}
               disabled={saving}
+              aria-label={t('labels.urlManagement.saveSettings')}
+              title={t('labels.urlManagement.saveSettings')}
+              aria-busy={saving}
               style={{ marginTop: 'var(--space-4)' }}
             >
               {saving ? (
-                <>
-                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                  {t('status.saving')}
-                </>
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
               ) : (
-                t('labels.urlManagement.saveSettings')
+                <Icon name="save" size={16} />
               )}
             </button>
           </div>
@@ -934,13 +938,20 @@ export default function URLManagement() {
             {urls.length > 0 && (
               <button
                 type="button"
-                className="btn btn-danger"
+                className="btn btn-danger btn-icon"
                 onClick={handleClearAll}
                 disabled={clearing}
+                aria-label={t('labels.urlManagement.clearAll')}
+                title={t('labels.urlManagement.clearAll')}
               >
-                {clearing
-                  ? t('labels.urlManagement.clearing')
-                  : t('labels.urlManagement.clearAll')}
+                {clearing ? (
+                  <div
+                    className="spinner"
+                    style={{ width: '14px', height: '14px' }}
+                  />
+                ) : (
+                  <Icon name="trash" size={16} />
+                )}
               </button>
             )}
           </div>

@@ -109,6 +109,11 @@ describe("Icon registry (R3)", () => {
 		]) {
 			expect(ICON_NAMES).toContain(name);
 		}
+		// Round 6 additions — and only these: an unused name is dead weight.
+		for (const name of ["save", "swap"]) {
+			expect(ICON_NAMES).toContain(name);
+		}
+		expect(ICON_NAMES).toHaveLength(19);
 	});
 });
 
@@ -177,5 +182,111 @@ describe("icon-only buttons carry a label (R3)", () => {
 		expect(screen.getByRole("button", { name: "buttons.send" })).toHaveClass(
 			"btn-icon",
 		);
+	});
+});
+
+/* =============================================================================
+ * Round 6 — the remaining word buttons became icons. One assertion per
+ * converted surface: the control is `.btn-icon` AND carries `aria-label` +
+ * `title` (the glyph is never the accessible name).
+ * ============================================================================= */
+const ROUND6_SURFACES: Array<{ file: string; marker: string; name: string }> = [
+	{
+		file: "src/views/Dashboard.tsx",
+		marker: 'data-testid="dashboard-kb-change"',
+		name: "agent dashboard 更换知识库",
+	},
+	{
+		file: "src/views/AgentSettings.tsx",
+		marker: "onClick={handleSave}",
+		name: "agent settings 保存",
+	},
+	{
+		file: "src/views/AccountSettings.tsx",
+		marker: "settings.account.savePassword",
+		name: "account settings 保存密码",
+	},
+	{
+		file: "src/views/Agents.tsx",
+		marker: 'aria-label={t("agents.create")}',
+		name: "agent create sheet 创建",
+	},
+	{
+		file: "src/components/KbFormModal.tsx",
+		marker: 'aria-label={t("kbForm.createSubmit")}',
+		name: "KB create sheet 创建",
+	},
+	{
+		file: "src/views/KnowledgeBases.tsx",
+		marker: 'aria-label={t("knowledgeBases.bindSubmit")}',
+		name: "KB bind modals 绑定",
+	},
+	{
+		file: "src/components/KbBindSheet.tsx",
+		marker: 'data-testid="kb-chooser-bind-submit"',
+		name: "bind sheet 绑定",
+	},
+	{
+		file: "src/views/URLManagement.tsx",
+		marker: "labels.urlManagement.saveSettings",
+		name: "URL panel 保存",
+	},
+	{
+		file: "src/views/URLManagement.tsx",
+		marker: "labels.urlManagement.clearAll",
+		name: "URL panel 清空",
+	},
+	{
+		file: "src/views/FileUploadManagement.tsx",
+		marker: 'aria-label={t("files.clearAll")}',
+		name: "file panel 清空",
+	},
+];
+
+describe("round 6 converted surfaces", () => {
+	it("makes every converted control an icon button with aria-label + title", () => {
+		const failures: string[] = [];
+
+		for (const surface of ROUND6_SURFACES) {
+			const source = readFileSync(surface.file, "utf-8");
+			const matches = openingTags(source, "button").filter((tag) =>
+				tag.includes(surface.marker),
+			);
+			if (matches.length === 0) {
+				failures.push(`${surface.name}: no button matched ${surface.marker}`);
+				continue;
+			}
+			for (const tag of matches) {
+				if (!tag.includes("btn-icon")) {
+					failures.push(`${surface.name}: not .btn-icon — ${tag.slice(0, 90)}`);
+				}
+				if (!attributeIsNonEmpty(tag, "aria-label")) {
+					failures.push(`${surface.name}: missing aria-label`);
+				}
+				if (!attributeIsNonEmpty(tag, "title")) {
+					failures.push(`${surface.name}: missing title`);
+				}
+			}
+		}
+
+		expect(failures).toEqual([]);
+	});
+
+	it("keeps words on the destructive confirmation primary", () => {
+		// Round-6 rule: the confirm dialog's primary keeps its words, so the
+		// user reads what they are confirming. Only the dismiss becomes a glyph.
+		for (const file of [
+			"src/views/URLManagement.tsx",
+			"src/views/FileUploadManagement.tsx",
+		]) {
+			const source = readFileSync(file, "utf-8");
+			const dangerConfirm = openingTags(source, "button").filter(
+				(tag) => tag.includes("btn-danger") && !tag.includes("btn-icon"),
+			);
+			expect(dangerConfirm.length, `${file} confirm stays text`).toBeGreaterThan(0);
+			expect(source, `${file} keeps the confirm label`).toMatch(
+				/t\(["']buttons\.confirm["']\)/,
+			);
+		}
 	});
 });

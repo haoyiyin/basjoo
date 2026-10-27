@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import AdminLayout from '../components/AdminLayout';
+import { Icon } from '../components/Icon';
 import { api, type Agent } from '../services/api';
 import { API_BASE_URL } from '../lib/env';
 import {
@@ -170,11 +171,18 @@ export default function AgentSettings() {
           <div className="page-actions">
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary btn-icon"
               onClick={handleSave}
               disabled={saving}
+              aria-label={t('buttons.save')}
+              title={saving ? t('status.saving') : t('buttons.save')}
+              aria-busy={saving}
             >
-              {saving ? t('status.saving') : t('buttons.save')}
+              {saving ? (
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
+              ) : (
+                <Icon name="save" size={16} />
+              )}
             </button>
           </div>
         </header>

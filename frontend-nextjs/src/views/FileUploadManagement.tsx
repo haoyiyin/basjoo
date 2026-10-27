@@ -285,12 +285,16 @@ export default function FileUploadManagement() {
 							>
 								<button
 									type="button"
-									className="btn btn-ghost"
+									className="btn btn-ghost btn-icon"
 									onClick={() => setShowClearConfirm(false)}
 									disabled={clearing}
+									aria-label={t("buttons.cancel")}
+									title={t("buttons.cancel")}
 								>
-									{t("buttons.cancel")}
+									<Icon name="close" size={16} />
 								</button>
+								{/* Destructive confirm keeps its words: the user must read what
+								 * they are confirming (round-6 rule). */}
 								<button
 									type="button"
 									className="btn btn-danger"
@@ -426,11 +430,20 @@ export default function FileUploadManagement() {
 						{files.length > 0 && (
 							<button
 								type="button"
-								className="btn btn-danger"
+								className="btn btn-danger btn-icon"
 								onClick={handleClearAll}
 								disabled={clearing}
+								aria-label={t("files.clearAll")}
+								title={t("files.clearAll")}
 							>
-								{clearing ? t("files.clearing") : t("files.clearAll")}
+								{clearing ? (
+									<div
+										className="spinner"
+										style={{ width: "14px", height: "14px" }}
+									/>
+								) : (
+									<Icon name="trash" size={16} />
+								)}
 							</button>
 						)}
 					</div>

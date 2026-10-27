@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import AdminLayout from '../components/AdminLayout';
+import { Icon } from '../components/Icon';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE_URL } from '../lib/env';
 import { parseErrorResponse } from '../services/api';
@@ -235,8 +236,19 @@ export default function AccountSettings() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-6)' }}>
-              <button type="submit" className="btn btn-primary" disabled={saving}>
-                {saving ? t('status.saving') : t('settings.account.savePassword')}
+              <button
+                type="submit"
+                className="btn btn-primary btn-icon"
+                disabled={saving}
+                aria-label={t('settings.account.savePassword')}
+                title={saving ? t('status.saving') : t('settings.account.savePassword')}
+                aria-busy={saving}
+              >
+                {saving ? (
+                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                ) : (
+                  <Icon name="save" size={16} />
+                )}
               </button>
             </div>
           </form>

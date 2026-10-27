@@ -41,9 +41,11 @@ const workspaceNavItems: NavItem[] = [
 ];
 
 /**
- * Agent-scoped navigation. `/agents/:id/dashboard` replaces the workspace home,
- * and the new 知识库 entry points at `/agents/:id/knowledge`, which resolves the
- * bound KB (or renders the bind prompt) — spec §13.
+ * Agent-scoped navigation — exactly four entries. `/agents/:id/dashboard`
+ * replaces the workspace home. The old 知识库 sidebar door (which pointed at
+ * `/agents/:id/knowledge`) is gone: the dashboard's knowledge row links to the
+ * KB, so the sidebar entry was a second door to the same place. The route
+ * itself still resolves (deep link / legacy `/urls`+`/files` redirects).
  */
 function agentNavItems(agentBasePath: string): NavItem[] {
 	return [
@@ -51,11 +53,6 @@ function agentNavItems(agentBasePath: string): NavItem[] {
 			path: `${agentBasePath}/dashboard`,
 			i18nKey: "navigation.dashboard",
 			icon: "dashboard",
-		},
-		{
-			path: `${agentBasePath}/knowledge`,
-			i18nKey: "navigation.knowledge",
-			icon: "knowledge",
 		},
 		{
 			path: `${agentBasePath}/playground`,

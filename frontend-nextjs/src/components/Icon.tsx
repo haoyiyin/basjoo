@@ -24,6 +24,8 @@ export const ICON_NAMES = [
 	"more",
 	"copy",
 	"check",
+	"save",
+	"swap",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -137,6 +139,21 @@ const ICON_PATHS: Record<IconName, ReactElement> = {
 		</>
 	),
 	check: <polyline points="20 6 9 17 4 12" />,
+	save: (
+		<>
+			<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+			<polyline points="17 21 17 13 7 13 7 21" />
+			<polyline points="7 3 7 8 15 8" />
+		</>
+	),
+	swap: (
+		<>
+			<polyline points="17 1 21 5 17 9" />
+			<path d="M3 11V9a4 4 0 0 1 4-4h14" />
+			<polyline points="7 23 3 19 7 15" />
+			<path d="M21 13v2a4 4 0 0 1-4 4H3" />
+		</>
+	),
 };
 
 interface IconProps {

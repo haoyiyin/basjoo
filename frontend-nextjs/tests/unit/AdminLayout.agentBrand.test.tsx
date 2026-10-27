@@ -87,22 +87,25 @@ describe("AdminLayout agent brand", () => {
 		await screen.findByRole("heading", { name: "官网客服" });
 
 		// The group parent and both children used to render these i18n keys. §13
-		// removes the 网站管理/文件上传 children but adds a single agent-scoped
-		// 知识库 entry pointing at `/agents/:id/knowledge`.
+		// removed the 网站管理/文件上传 children; round 6 removed the agent-scoped
+		// 知识库 entry too (the dashboard's knowledge row is the door now, and the
+		// `/agents/:id/knowledge` route stays as a deep link).
 		expect(
-			screen.getByRole("link", { name: "navigation.knowledge" }),
-		).toHaveAttribute("href", "/agents/agt_1/knowledge");
+			screen.queryByRole("link", { name: "navigation.knowledge" }),
+		).toBeNull();
 		expect(
 			screen.queryByText("navigation.urlKnowledge"),
 		).not.toBeInTheDocument();
 		expect(
 			screen.queryByText("navigation.fileManagement"),
 		).not.toBeInTheDocument();
-		// No anchor may point at the removed agent-scoped source routes.
+		// No anchor may point at the removed agent-scoped source routes, nor at
+		// the de-linked knowledge route.
 		const hrefs = screen
 			.queryAllByRole("link")
 			.map((link) => link.getAttribute("href") ?? "");
 		expect(hrefs.filter((href) => /\/urls|\/files$/.test(href))).toEqual([]);
+		expect(hrefs).not.toContain("/agents/agt_1/knowledge");
 	});
 
 	it("keeps the workspace 知识库列表 entry", async () => {

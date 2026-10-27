@@ -613,18 +613,22 @@ export default function KnowledgeBases() {
 						>
 							<button
 								type="button"
-								className="btn btn-secondary"
+								className="btn btn-secondary btn-icon"
 								onClick={() => setBindTarget(null)}
+								aria-label={t("buttons.cancel")}
+								title={t("buttons.cancel")}
 							>
-								{t("buttons.cancel")}
+								<Icon name="close" size={16} />
 							</button>
 							<button
 								type="button"
-								className="btn btn-primary"
+								className="btn btn-primary btn-icon"
 								disabled={!bindAgentId}
 								onClick={handleBind}
+								aria-label={t("knowledgeBases.bindSubmit")}
+								title={t("knowledgeBases.bindSubmit")}
 							>
-								{t("knowledgeBases.bindSubmit")}
+								<Icon name="check" size={16} />
 							</button>
 						</div>
 					</div>
@@ -682,18 +686,22 @@ export default function KnowledgeBases() {
 						>
 							<button
 								type="button"
-								className="btn btn-secondary"
+								className="btn btn-secondary btn-icon"
 								onClick={closeBindAgentModal}
+								aria-label={t("buttons.cancel")}
+								title={t("buttons.cancel")}
 							>
-								{t("buttons.cancel")}
+								<Icon name="close" size={16} />
 							</button>
 							<button
 								type="button"
-								className="btn btn-primary"
+								className="btn btn-primary btn-icon"
 								disabled={!bindKbId}
 								onClick={handleBindAgentToKb}
+								aria-label={t("knowledgeBases.bindSubmit")}
+								title={t("knowledgeBases.bindSubmit")}
 							>
-								{t("knowledgeBases.bindSubmit")}
+								<Icon name="check" size={16} />
 							</button>
 						</div>
 					</div>

@@ -123,11 +123,18 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - **Nav is four entries, not six**: 首页 `/`, 智能体 `/agents`, 知识库 `/knowledge-bases`,
   账号设置 `/settings/account`. `/sessions` and `/users` are not routes and not nav — do not
   re-add them. `super_admin` sees those four at the root; inside an agent scope it sees
-  仪表盘 / 知识库 / 调试区 / 会话中心 / 智能体设置, and `support` sees only 会话中心.
-- **Agent-scoped 知识库** points at `/agents/:id/knowledge`: a bound agent redirects to that KB's
-  source page, an unbound one renders an inline bind prompt (`kb-bind-prompt`) whose primary action
-  opens the bind sheet on `/knowledge-bases?bindAgent=<id>`. That query param is a live contract
-  between `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
+  仪表盘 / 调试区 / 会话中心 / 智能体设置 (four — round 6 removed the 知识库 sidebar door), and
+  `support` sees only 会话中心.
+- **Agent-scoped 知识库 is a route, not a nav entry**: `/agents/:id/knowledge` still resolves (a bound
+  agent redirects to that KB's source page, an unbound one renders an inline bind prompt
+  `kb-bind-prompt`), and it is what the legacy `/urls` + `/files` paths redirect to. The door is the
+  agent dashboard's knowledge row. The bind prompt's primary action opens the bind sheet on
+  `/knowledge-bases?bindAgent=<id>`. That query param is a live contract between
+  `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
+- The agent-dashboard 更换 button is the `swap` icon (`.btn-icon`, `aria-label` = 更换知识库); every
+  icon-only control takes its accessible name from the locale files plus a `title`, never the glyph.
+  Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 19). Destructive **confirm** primaries
+  keep their words.
 - **Lists are one system**: `/agents` and `/knowledge-bases` both render `list-header` + `list-row`
   as a shared column grid. The row's NAME is the navigation affordance (link + chevron); the row
   itself is not a link, so it can still host a menu button. Every list has an `empty` state with its

@@ -836,7 +836,7 @@
     "sessionCount": "会话数",
     "boundKnowledgeBase": "已绑定知识库",
     "unboundKnowledgeBase": "当前未绑定知识库",
-    "changeKnowledgeBase": "更换",
+    "changeKnowledgeBase": "更换知识库",
     "bindExisting": "绑定现有",
     "createKnowledgeBase": "创建新知识库"
   }

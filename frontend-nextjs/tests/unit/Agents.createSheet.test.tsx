@@ -222,8 +222,11 @@ describe("Agents create sheet (§15)", () => {
 		);
 		const input = within(sheet).getByPlaceholderText("agents.namePlaceholder");
 		expect(input).toHaveFocus();
-		// The submit control keeps the `agents.create` label.
-		expect(within(sheet).getByText("agents.create")).toBeInTheDocument();
+		// Round 6: the submit is the `check` icon; its accessible name is still
+		// the `agents.create` label, so the glyph is never the name.
+		const submit = within(sheet).getByRole("button", { name: "agents.create" });
+		expect(submit).toHaveClass("btn-icon");
+		expect(submit).toHaveAttribute("title", "agents.create");
 	});
 
 	it("closes the sheet on Escape and returns focus to the `+`", async () => {
@@ -270,7 +273,7 @@ describe("Agents create sheet (§15)", () => {
 		fireEvent.change(within(sheet).getByLabelText("labels.description"), {
 			target: { value: "  Handles support  " },
 		});
-		fireEvent.click(within(sheet).getByText("agents.create"));
+		fireEvent.click(within(sheet).getByRole("button", { name: "agents.create" }));
 
 		await waitFor(() => {
 			expect(mockedApi.createAgent).toHaveBeenCalledTimes(1);
@@ -300,7 +303,7 @@ describe("Agents create sheet (§15)", () => {
 		fireEvent.change(within(sheet).getByLabelText("labels.description"), {
 			target: { value: "   " },
 		});
-		fireEvent.click(within(sheet).getByText("agents.create"));
+		fireEvent.click(within(sheet).getByRole("button", { name: "agents.create" }));
 
 		await waitFor(() => {
 			expect(mockedApi.createAgent).toHaveBeenCalledTimes(1);
@@ -323,7 +326,7 @@ describe("Agents create sheet (§15)", () => {
 		fireEvent.change(input, { target: { value: "客服助手一二三" } });
 		expect(input).toHaveValue("客服助手一二");
 
-		fireEvent.click(within(sheet).getByText("agents.create"));
+		fireEvent.click(within(sheet).getByRole("button", { name: "agents.create" }));
 		await waitFor(() => {
 			expect(mockedApi.createAgent).toHaveBeenCalledTimes(1);
 		});

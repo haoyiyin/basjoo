@@ -170,7 +170,7 @@ async function createAgentThroughForm(name = "New Agent") {
 	fireEvent.change(screen.getByPlaceholderText("agents.namePlaceholder"), {
 		target: { value: name },
 	});
-	fireEvent.click(screen.getByText("agents.create"));
+	fireEvent.click(screen.getByRole("button", { name: "agents.create" }));
 	return screen.findByTestId("kb-onboarding-modal");
 }
 
@@ -277,7 +277,9 @@ describe("Agents knowledge-base chooser after creating an agent", () => {
 		fireEvent.change(within(form).getByLabelText("kbForm.apiKey"), {
 			target: { value: "jina_test_key" },
 		});
-		fireEvent.click(within(form).getByText("kbForm.createSubmit"));
+		fireEvent.click(
+			within(form).getByRole("button", { name: "kbForm.createSubmit" }),
+		);
 
 		await waitFor(() => {
 			expect(mockedApi.createKnowledgeBase).toHaveBeenCalledWith(
@@ -426,7 +428,7 @@ describe("Agents lifecycle actions", () => {
 		fireEvent.change(screen.getByPlaceholderText("agents.namePlaceholder"), {
 			target: { value: "AgentName123" },
 		});
-		fireEvent.click(screen.getByText("agents.create"));
+		fireEvent.click(screen.getByRole("button", { name: "agents.create" }));
 
 		await waitFor(() => {
 			expect(mockedApi.createAgent).toHaveBeenCalledWith(

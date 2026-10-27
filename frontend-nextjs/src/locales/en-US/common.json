@@ -836,7 +836,7 @@
     "sessionCount": "Sessions",
     "boundKnowledgeBase": "Bound knowledge base",
     "unboundKnowledgeBase": "No knowledge base bound",
-    "changeKnowledgeBase": "Change",
+    "changeKnowledgeBase": "Change knowledge base",
     "bindExisting": "Bind existing",
     "createKnowledgeBase": "Create new knowledge base"
   }

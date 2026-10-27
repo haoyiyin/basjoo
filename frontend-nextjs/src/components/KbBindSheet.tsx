@@ -287,11 +287,13 @@ export default function KbBindSheet({
 								<button
 									type="button"
 									data-testid="kb-chooser-bind-submit"
-									className="btn-primary"
+									className="btn btn-primary btn-icon"
 									disabled={busy || !kbId}
 									onClick={bindExisting}
+									aria-label={t("knowledgeBases.bindSubmit")}
+									title={t("knowledgeBases.bindSubmit")}
 								>
-									{t("knowledgeBases.bindSubmit")}
+									<Icon name="check" size={16} />
 								</button>
 							</div>
 						</>

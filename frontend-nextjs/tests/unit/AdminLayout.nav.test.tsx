@@ -8,11 +8,12 @@
  * Covered:
  *   1. workspace (super_admin, root) nav = 首页 / 智能体 / 知识库 / 设置, in order,
  *      and no 会话 / 用户 entry (both routes were deleted from App.tsx);
- *   2. agent scope gains 知识库 at `/agents/:id/knowledge` and keeps the rest;
+ *   2. agent scope has exactly four entries (仪表盘 / 调试区 / 会话中心 / 智能体设置,
+ *      asserted by href) — round 6 removed the 知识库 sidebar door;
  *   3. `support` in agent scope still sees only that agent's sessions entry;
- *   4. `KnowledgeBaseSetup`: unbound `/knowledge` is an inline bind PROMPT (not a
- *      redirect), `/urls` + `/files` keep the plain redirect, and a bound agent
- *      forwards to `/knowledge-bases/:kbId`.
+ *   4. `KnowledgeBaseSetup`: the `/agents/:id/knowledge` deep link still resolves
+ *      (unbound = inline bind PROMPT, not a redirect), `/urls` + `/files` keep the
+ *      plain redirect, and a bound agent forwards to `/knowledge-bases/:kbId`.
  */
 import React from "react";
 import { readFileSync } from "node:fs";
@@ -216,22 +217,37 @@ describe("§13 workspace nav (super_admin)", () => {
 /* ------------------------------------------------------------ agent scope */
 
 describe("§13 agent-scoped nav", () => {
-	it("a super_admin in an agent workspace sees 知识库 at /agents/<id>/knowledge", () => {
+	it("a super_admin in an agent workspace sees exactly four entries, and no 知识库 door", () => {
 		setRole("super_admin");
 		renderShell("/agents/agt_1/dashboard");
 
+		// Round 6: the 知识库 sidebar entry is gone. The KB is reached from the
+		// dashboard's knowledge row, and `/agents/:id/knowledge` stays as a deep
+		// link (covered by the KnowledgeBaseSetup block below).
 		expect(navHrefs()).toEqual([
 			"/agents/agt_1/dashboard",
-			"/agents/agt_1/knowledge",
 			"/agents/agt_1/playground",
 			"/agents/agt_1/sessions",
 			"/agents/agt_1/settings/agent",
 		]);
-		const knowledge = screen.getByRole("link", {
-			name: "navigation.knowledge",
-		});
-		expect(knowledge).toHaveAttribute("href", "/agents/agt_1/knowledge");
-		expect(within(knowledge).getByText("navigation.knowledge")).toBeInTheDocument();
+		expect(navLabels()).toEqual([
+			"navigation.dashboard",
+			"navigation.playground",
+			"navigation.sessions",
+			"navigation.agentSettings",
+		]);
+		// The item is gone by href, not merely relabelled.
+		expect(navHrefs()).not.toContain("/agents/agt_1/knowledge");
+		expect(
+			screen.queryByRole("link", { name: "navigation.knowledge" }),
+		).toBeNull();
+	});
+
+	it("still renders the `/agents/:id/knowledge` deep link destination", async () => {
+		// The route keeps working even though the sidebar item was removed.
+		const router = renderShell("/agents/agt_1/knowledge");
+		expect(router.state.location.pathname).toBe("/agents/agt_1/knowledge");
+		expect(screen.getByText("Body")).toBeInTheDocument();
 	});
 
 	it("support in an agent workspace still sees only that agent's sessions entry", () => {
