@@ -146,9 +146,8 @@ interface CssRule {
 	declarations: string;
 }
 
-/** Extract the body of the first `@media (max-width: 768px) { ... }` block. */
-function mobileMediaBlock(css: string): string {
-	const marker = "@media (max-width: 768px)";
+/** Extract the body of the first `@media (marker) { ... }` block. */
+function mediaBlock(css: string, marker: string): string {
 	const at = css.indexOf(marker);
 	expect(at, `src/index.css must contain "${marker}"`).toBeGreaterThanOrEqual(0);
 	const open = css.indexOf("{", at);
@@ -160,7 +159,11 @@ function mobileMediaBlock(css: string): string {
 			if (depth === 0) return css.slice(open + 1, i);
 		}
 	}
-	throw new Error("unbalanced @media (max-width: 768px) block in src/index.css");
+	throw new Error(`unbalanced ${marker} block in src/index.css`);
+}
+
+function mobileMediaBlock(css: string): string {
+	return mediaBlock(css, "@media (max-width: 768px)");
 }
 
 /** Parse flat `selector { declarations }` rules out of a media-block body. */
@@ -182,7 +185,12 @@ function parseRules(block: string): CssRule[] {
 
 const CSS = readFileSync(INDEX_CSS_PATH, "utf-8");
 const MOBILE_BLOCK = mobileMediaBlock(CSS);
-const MOBILE_RULES = parseRules(MOBILE_BLOCK);
+// The playground's tabbed layout is not mobile-only: it owns the whole
+// 769-1024px band, so its rules live in their own `max-width: 1024px` block
+// (the admin shell keeps its 768px contract). Both blocks feed the tap-target
+// and rule lookups below.
+const NARROW_BLOCK = mediaBlock(CSS, "@media (max-width: 1024px)");
+const MOBILE_RULES = [...parseRules(MOBILE_BLOCK), ...parseRules(NARROW_BLOCK)];
 
 function rulesFor(selector: string): CssRule[] {
 	return MOBILE_RULES.filter((rule) => rule.selectors.includes(selector));
@@ -463,12 +471,46 @@ describe("mobile CSS contract (src/index.css)", () => {
 	});
 
 	it("keeps the stacked rules out of the desktop media block", () => {
-		const desktopAt = CSS.indexOf("@media (min-width: 1025px)");
+		const desktopAt = CSS.indexOf("/* Desktop (min-width: 1025px) */");
 		expect(desktopAt).toBeGreaterThan(0);
-		const desktopBlock = CSS.slice(desktopAt);
+		const desktopEnd = CSS.indexOf("/* Print */", desktopAt);
+		expect(desktopEnd).toBeGreaterThan(desktopAt);
+		const desktopBlock = CSS.slice(desktopAt, desktopEnd);
 		expect(desktopBlock).not.toMatch(/\.playground-shell/);
 		expect(desktopBlock).not.toMatch(/\.playground-pane-settings/);
 		expect(desktopBlock).not.toMatch(/\.hamburger-btn/);
+	});
+
+	it("flips the playground to two columns at 1025px, tabbed through 1024px", () => {
+		// The first `min-width: 1025px` block is the playground's two-column one.
+		const twoColumnRules = parseRules(mediaBlock(CSS, "@media (min-width: 1025px)"));
+		const declarationsFor = (selector: string) =>
+			twoColumnRules
+				.filter((rule) => rule.selectors.includes(selector))
+				.map((rule) => rule.declarations)
+				.join(" ");
+
+		expect(declarationsFor(".playground-shell")).toMatch(/flex-direction:\s*row/);
+		// 40%/480px settings rail with a 320px floor: the chat pane only reaches
+		// its own >= 320px width once the shell has 1025px to spend.
+		const rail = declarationsFor(".playground-pane-settings");
+		expect(rail).toMatch(/min-width:\s*320px/);
+		expect(rail).toMatch(/max-width:\s*480px/);
+		expect(declarationsFor(".playground-pane-chat")).toMatch(/flex:\s*1 1 0/);
+
+		// 769-1024px stays the tabbed, single-column layout (one pane mounted,
+		// full-width strip, 44px tab targets).
+		const narrowShell = rulesFor(".playground-shell")
+			.map((rule) => rule.declarations)
+			.join(" ");
+		expect(narrowShell).toMatch(/flex-direction:\s*column/);
+		expect(narrowShell).toMatch(/overflow-y:\s*clip/);
+		expect(
+			rulesFor(".playground-tab").map((rule) => rule.declarations).join(" "),
+		).toMatch(/min-height:\s*44px/);
+
+		// No 769px two-column rule survives to contradict the 1024px block.
+		expect(CSS).not.toContain("@media (min-width: 769px) {\n  .playground-shell");
 	});
 
 	it("declares the 44px hamburger and 44px tap-target rules in the mobile block", () => {

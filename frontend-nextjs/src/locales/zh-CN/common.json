@@ -161,10 +161,11 @@
       "status": "状态",
       "actions": "操作"
     },
-    "open": "打开",
     "current": "当前",
     "switch": "切换",
-    "deactivate": "停用",
+    "pause": "停用",
+    "resume": "启用",
+    "delete": "删除",
     "restore": "恢复",
     "autoDeleteCountdown": "将在 {{time}} 后自动删除",
     "characterCount": "{{count}}/{{max}}",
@@ -187,9 +188,13 @@
     "kbCreateNew": "新建知识库",
     "kbNoneAvailable": "没有可用的未绑定知识库，请先到知识库页面创建。",
     "rowActions": "{{name}} 的操作",
-    "deactivateConfirm": "确定要停用「{{name}}」吗？超过清理期限后将被自动删除。",
+    "pauseConfirm": "确定要停用「{{name}}」吗？停用后该智能体将不再回复对话，可随时重新启用。",
+    "deleteConfirm": "确定要删除「{{name}}」吗？删除后 7 天自动清除，期间可恢复。",
+    "unbindKnowledgeBase": "解绑知识库 {{name}}",
+    "unbindKnowledgeBaseConfirm": "确定要将「{{name}}」与该智能体解绑吗？知识库本身及其内容会保留。",
     "updatedAt": "更新于 {{date}}",
-    "statusInactive": "已停用"
+    "statusPaused": "已停用",
+    "statusDeleted": "已删除"
   },
   "placeholders": {
     "enterMessage": "输入消息...",
@@ -490,7 +495,6 @@
       "fetchIntervalHelpContent3": "建议设置为7-14天，平衡实时性和负载。",
       "fetchIntervalDesc": "建议设置为 7-14 天，避免频繁抓取",
       "days": "天",
-      "saveSettings": "保存设置",
       "urlList": "URL 列表",
       "noUrls": "暂无 URL",
       "pleaseAddUrl": "请先添加网页链接",
@@ -507,7 +511,6 @@
       "confirmRefetch": "确定要重新抓取所有URL吗？",
       "confirmDelete": "确定要删除这个URL吗？",
       "deleteFailed": "删除失败",
-      "autoFetchSaved": "自动抓取设置保存成功！",
       "crawlSite": "全站抓取",
       "crawling": "抓取中...",
       "crawlStarted": "全站抓取已启动: {{jobId}}",
@@ -764,6 +767,8 @@
       "details": "详情",
       "bind": "绑定到智能体",
       "unbind": "解绑",
+      "unbindAgent": "解绑 {{name}}",
+      "unbindAgentConfirm": "确定要将「{{name}}」与该知识库解绑吗？知识库及其文档都会保留。",
       "reset": "重置",
       "delete": "删除",
       "close": "关闭",
@@ -836,7 +841,6 @@
     "sessionCount": "会话数",
     "boundKnowledgeBase": "已绑定知识库",
     "unboundKnowledgeBase": "当前未绑定知识库",
-    "changeKnowledgeBase": "更换知识库",
     "bindExisting": "绑定现有",
     "createKnowledgeBase": "创建新知识库"
   }

@@ -37,9 +37,13 @@ const providerLabelKey: Record<EmbeddingProvider, string> = {
  *
  * Mirrors the agent list (§16): every KB is one `list-row`, and the row's name
  * is the only navigation affordance — it opens `/knowledge-bases/:kbId`, the
- * source-management page. There is deliberately no inline detail panel, no
- * "manage sources" action and no unbind control: unbinding happens from the
- * agent side only.
+ * source-management page. There is deliberately no inline detail panel and no
+ * "manage sources" action.
+ *
+ * Unbinding is available from *both* lists since #27: the bound-agent cell
+ * carries an icon button that clears the binding (`bind_agent_knowledge_base`
+ * with `null`), alongside the agent list's own unbind control. Both paths call
+ * the same agent-scoped endpoint, so a KB and its documents survive either.
  *
  * The KB lifecycle is decoupled from agents: this view is the only place that
  * creates, resets, deletes and binds KBs. Mutations are super_admin only.
@@ -208,6 +212,23 @@ export default function KnowledgeBases() {
 		await runAction(
 			kbId,
 			() => api.bindAgentKnowledgeBase(agentId, kbId).then(() => undefined),
+			"knowledgeBases.errors.bindFailed",
+		);
+	};
+
+	// #27: unbind from the KB side. The KB, its documents and its chunks are kept
+	// — only `agents.kb_id` is cleared — so this is a confirm plus one PATCH.
+	const handleUnbindAgent = async (kb: KnowledgeBaseDetail) => {
+		const agent = kb.bound_agent;
+		if (!agent) return;
+		const confirmed = window.confirm(
+			t("knowledgeBases.actions.unbindAgentConfirm", { name: agent.name }),
+		);
+		if (!confirmed) return;
+		await runAction(
+			kb.id,
+			() =>
+				api.bindAgentKnowledgeBase(agent.id, null).then(() => undefined),
 			"knowledgeBases.errors.bindFailed",
 		);
 	};
@@ -505,16 +526,46 @@ export default function KnowledgeBases() {
 									<span className="list-cell-label">
 										{t("knowledgeBases.columns.boundAgent")}
 									</span>
+									{/* Name + unbind sit on one line: the cell itself is a column. */}
 									<span
 										style={{
-											color: kb.bound_agent
-												? "var(--color-text-secondary)"
-												: "var(--color-text-muted)",
+											display: "inline-flex",
+											alignItems: "center",
+											gap: "var(--space-2)",
 										}}
 									>
-										{kb.bound_agent
-											? kb.bound_agent.name
-											: t("knowledgeBases.unboundValue")}
+										<span
+											style={{
+												color: kb.bound_agent
+													? "var(--color-text-secondary)"
+													: "var(--color-text-muted)",
+											}}
+										>
+											{kb.bound_agent
+												? kb.bound_agent.name
+												: t("knowledgeBases.unboundValue")}
+										</span>
+										{isSuperAdmin && kb.bound_agent && (
+											<button
+												type="button"
+												className="btn btn-ghost btn-icon"
+												data-testid={`kb-unbind-agent-${kb.id}`}
+												aria-label={t("knowledgeBases.actions.unbindAgent", {
+													name: kb.bound_agent.name,
+												})}
+												title={t("knowledgeBases.actions.unbindAgent", {
+													name: kb.bound_agent.name,
+												})}
+												disabled={busyId === kb.id}
+												style={{ ...iconButtonStyle, flexShrink: 0 }}
+												onClick={(event) => {
+													event.stopPropagation();
+													void handleUnbindAgent(kb);
+												}}
+											>
+												<Icon name="close" size={16} />
+											</button>
+										)}
 									</span>
 								</div>
 								{/* Column 5 — status. */}

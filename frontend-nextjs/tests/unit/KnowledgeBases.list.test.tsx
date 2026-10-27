@@ -191,24 +191,75 @@ describe("KnowledgeBases list (§16 row contract)", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("never renders an unbind button in any row", async () => {
+	it("renders the #27 unbind icon only on a bound row, and unbinds on confirm", async () => {
+		mockedApi.bindAgentKnowledgeBase.mockResolvedValue({
+			agent: agents[0],
+			knowledge_base: unboundKb,
+		});
 		renderView();
 
-		await waitFor(() =>
-			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
+		const boundRow = await screen.findByTestId("kb-row-kb_bound");
+		const freeRow = screen.getByTestId("kb-row-kb_free");
+
+		const icon = within(boundRow).getByTestId("kb-unbind-agent-kb_bound");
+		expect(icon.tagName).toBe("BUTTON");
+		expect(icon).toHaveClass("btn-icon");
+		expect(icon).toHaveAttribute(
+			"aria-label",
+			'knowledgeBases.actions.unbindAgent|{"name":"Support Bot"}',
 		);
+		expect(icon).toHaveAttribute(
+			"title",
+			'knowledgeBases.actions.unbindAgent|{"name":"Support Bot"}',
+		);
+		expect(icon.querySelector("svg")).not.toBeNull();
+		// Nothing to unbind on an unbound KB.
 		expect(
-			screen.queryByRole("button", {
-				name: "knowledgeBases.actions.unbind",
-			}),
-		).not.toBeInTheDocument();
-		expect(
-			screen.queryByRole("menuitem", {
-				name: "knowledgeBases.actions.unbind",
-			}),
-		).not.toBeInTheDocument();
-		// §16: unbinding only happens from the agent side.
+			within(freeRow).queryByTestId("kb-unbind-agent-kb_free"),
+		).toBeNull();
+
+		await userEvent.click(icon);
+
+		expect(window.confirm).toHaveBeenCalledWith(
+			'knowledgeBases.actions.unbindAgentConfirm|{"name":"Support Bot"}',
+		);
+		await waitFor(() =>
+			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
+				"agt_1",
+				null,
+			),
+		);
+		expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledTimes(1);
+		// The icon sits inside the row, which navigates: clicking it must not
+		// follow the row.
+		expect(screen.getByTestId("location")).toHaveTextContent(
+			/^\/knowledge-bases$/,
+		);
+	});
+
+	it("unbinds nothing when the confirm is dismissed", async () => {
+		vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
+		renderView();
+
+		const boundRow = await screen.findByTestId("kb-row-kb_bound");
+		await userEvent.click(
+			within(boundRow).getByTestId("kb-unbind-agent-kb_bound"),
+		);
+
+		expect(window.confirm).toHaveBeenCalled();
 		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
+	});
+
+	it("hides the unbind icon for a non super_admin", async () => {
+		authState.role = "admin";
+		renderView();
+
+		const boundRow = await screen.findByTestId("kb-row-kb_bound");
+		expect(
+			within(boundRow).queryByTestId("kb-unbind-agent-kb_bound"),
+		).toBeNull();
+		// The list's row menu is super-admin only too.
+		expect(screen.queryByTestId("kb-actions-kb_bound")).toBeNull();
 	});
 
 	it("renders no manual refresh button (spec §18)", async () => {

@@ -190,9 +190,10 @@ async def _bound_agents_by_kb(
 ) -> dict[str, dict[str, str]]:
     """Fetch the bound agent per KB in a single grouped query (no N+1).
 
-    Soft-deleted agents are ignored on purpose: a deleted agent must never make a
-    KB look bound (the UI would then hide the KB behind a dead agent). Deleting an
-    agent also clears `Agent.kb_id`, so this filter is the defensive second line.
+    Deleted agents are ignored on purpose: a deleted agent must never make a KB
+    look bound (the UI would then hide the KB behind a dead agent). A paused agent
+    is still the owner and must show as bound. Deleting an agent also clears
+    `Agent.kb_id`, so this filter is the defensive second line.
     """
     if not kb_ids:
         return {}
@@ -200,7 +201,6 @@ async def _bound_agents_by_kb(
         select(Agent.id, Agent.name, Agent.kb_id).where(
             Agent.kb_id.in_(kb_ids),
             Agent.deleted_at.is_(None),
-            Agent.is_active.is_(True),
         )
     )
     return {

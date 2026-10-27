@@ -39,6 +39,8 @@ async def test_chat_calls_kb_retrieval_with_agent_threshold():
     mock_agent.model = "test-model"
     mock_agent.rate_limit_per_minute = 0
     mock_agent.restricted_reply = None
+    mock_agent.deleted_at = None
+    mock_agent.is_active = True
 
     mock_session = AsyncMock()
     mock_result = MagicMock()
@@ -110,6 +112,8 @@ async def test_chat_system_message_includes_kb_context():
     mock_agent.model = "test-model"
     mock_agent.rate_limit_per_minute = 0
     mock_agent.restricted_reply = None
+    mock_agent.deleted_at = None
+    mock_agent.is_active = True
 
     mock_session = AsyncMock()
     mock_result = MagicMock()
@@ -184,6 +188,8 @@ async def test_chat_kb_retrieval_without_kb_id_returns_no_context():
     mock_agent.model = "test-model"
     mock_agent.rate_limit_per_minute = 0
     mock_agent.restricted_reply = None
+    mock_agent.deleted_at = None
+    mock_agent.is_active = True
 
     mock_session = AsyncMock()
     mock_result = MagicMock()
@@ -380,6 +386,8 @@ async def test_ready_kb_content_with_unique_phrase_passed_to_chat_context():
     mock_agent.model = "test-model"
     mock_agent.rate_limit_per_minute = 0
     mock_agent.restricted_reply = None
+    mock_agent.deleted_at = None
+    mock_agent.is_active = True
 
     mock_session = AsyncMock()
     mock_result = MagicMock()

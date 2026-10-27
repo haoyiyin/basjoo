@@ -720,6 +720,18 @@ class APIService {
 		return result;
 	}
 
+	async pauseAgent(agentId: string): Promise<Agent> {
+		return this.request<Agent>(`/api/v1/agents/${agentId}:pause`, {
+			method: "POST",
+		});
+	}
+
+	async resumeAgent(agentId: string): Promise<Agent> {
+		return this.request<Agent>(`/api/v1/agents/${agentId}:resume`, {
+			method: "POST",
+		});
+	}
+
 	async restoreAgent(agentId: string): Promise<Agent> {
 		const agent = await this.request<Agent>(
 			`/api/v1/agents/${agentId}:restore`,

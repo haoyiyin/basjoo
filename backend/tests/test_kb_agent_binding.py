@@ -6,6 +6,8 @@ new one. Binding is strictly one-to-one and explicit — there is no auto-create
 path, so an unbound agent is simply unbound.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import func, select
 
@@ -224,3 +226,82 @@ async def test_bind_inactive_kb_is_rejected(setup_test_db):
 
     assert exc_info.value.status_code == 400
     assert str(exc_info.value.detail) == "KB is not active"
+
+# ---- paused agents still own their binding ---------------------------------
+#
+# Pause (`POST /agents/{id}:pause`, issue #29) sets `is_active = False` and keeps
+# `kb_id` on purpose. Only `deleted_at` means "no longer an owner", so a paused
+# agent must keep the KB bound: it blocks a competing bind and blocks deletion.
+
+async def _pause_agent(agent_id: str) -> None:
+    async with database.AsyncSessionLocal() as session:
+        agent = await session.get(Agent, agent_id)
+        agent.is_active = False
+        await session.commit()
+
+async def _kb_id_of(agent_id: str) -> str | None:
+    async with database.AsyncSessionLocal() as session:
+        return (await session.get(Agent, agent_id)).kb_id
+
+@pytest.mark.asyncio
+async def test_paused_agent_blocks_a_competing_bind(setup_test_db):
+    from fastapi import HTTPException
+
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Paused Owner KB")
+    owner_id = await _create_agent(workspace_id, "Paused Owner")
+    rival_id = await _create_agent(workspace_id, "Rival Agent")
+
+    service = KbService()
+    await service.bind_agent(owner_id, workspace_id, kb_id)
+    await _pause_agent(owner_id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bind_agent(rival_id, workspace_id, kb_id)
+
+    assert exc_info.value.status_code == 409
+    assert str(exc_info.value.detail) == "KB is already bound to another agent"
+    assert await _kb_id_of(owner_id) == kb_id, "paused owner keeps its binding"
+    assert await _kb_id_of(rival_id) is None, "no silent steal"
+
+@pytest.mark.asyncio
+async def test_paused_agent_blocks_kb_deletion(setup_test_db, fake_qdrant):
+    from fastapi import HTTPException
+
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Paused Delete KB")
+    owner_id = await _create_agent(workspace_id, "Delete Guard Owner")
+
+    service = KbService()
+    await service.bind_agent(owner_id, workspace_id, kb_id)
+    await _pause_agent(owner_id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.delete_knowledge_base(kb_id, workspace_id)
+
+    assert exc_info.value.status_code == 409
+    assert str(exc_info.value.detail) == "KB is bound to an agent. Unbind it first."
+    async with database.AsyncSessionLocal() as session:
+        assert await session.get(KnowledgeBase, kb_id) is not None
+    assert await _kb_id_of(owner_id) == kb_id
+    assert not [c for c in fake_qdrant if c[0] == "delete"]
+
+@pytest.mark.asyncio
+async def test_deleted_agent_never_blocks_a_bind(setup_test_db):
+    """Purge-window rows that still hold a kb_id must not block (or steal) a bind."""
+    workspace_id = await _workspace_id()
+    kb_id = await _create_kb(workspace_id, "Legacy Deleted KB")
+    dead_id = await _create_agent(workspace_id, "Legacy Deleted Agent")
+    successor_id = await _create_agent(workspace_id, "Legacy Successor")
+
+    async with database.AsyncSessionLocal() as session:
+        dead = await session.get(Agent, dead_id)
+        dead.kb_id = kb_id
+        dead.is_active = False
+        dead.deleted_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    agent = await KbService().bind_agent(successor_id, workspace_id, kb_id)
+
+    assert agent.kb_id == kb_id
+    assert await _kb_id_of(dead_id) is None, "the dead binding is released"

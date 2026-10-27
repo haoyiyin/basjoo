@@ -39,6 +39,8 @@ def _agent_mock(agent_id: str, kb_id: str | None, threshold: float = 0.04) -> Ma
     agent.model = "test-model"
     agent.rate_limit_per_minute = 0
     agent.restricted_reply = None
+    agent.deleted_at = None
+    agent.is_active = True
     return agent
 
 def _patched_chat_deps(agent: MagicMock):

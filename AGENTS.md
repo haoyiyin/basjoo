@@ -132,24 +132,52 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   agent dashboard's knowledge row. The bind prompt's primary action opens the bind sheet on
   `/knowledge-bases?bindAgent=<id>`. That query param is a live contract between
   `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
-- The agent-dashboard 更换 button is the `swap` icon (`.btn-icon`, `aria-label` = 更换知识库); every
-  icon-only control takes its accessible name from the locale files plus a `title`, never the glyph.
-  Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 19). Destructive **confirm** primaries
-  keep their words.
+- The agent-dashboard KB row links to the KB source page and carries **no** rebind control (the `swap`
+  icon was removed). Every icon-only control takes its accessible name from the locale files plus a
+  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 18).
+  Destructive **confirm** primaries keep their words.
+- **Rebinding is unbind-then-bind**: detach from either list (the unbind icon beside the bound KB name
+  on `/agents`, or beside the bound agent name on `/knowledge-bases`), then use the dashboard's
+  `dashboard-kb-bind` (unbound state only). Both icons go through `bindAgentKnowledgeBase(id, null)`.
 - **Lists are one system**: `/agents` and `/knowledge-bases` both render `list-header` + `list-row`
-  as a shared column grid. The row's NAME is the navigation affordance (link + chevron); the row
-  itself is not a link, so it can still host a menu button. Every list has an `empty` state with its
-  create action. The header row hides below 768px and rows stack.
-- Knowledge-base rows carry **no unbind and no refresh control**; unbinding happens from the agent
-  side, and every panel auto-polls. Clicking a KB's name opens its source page — there is no
-  separate "manage sources" action and no inline expand panel.
+  as a shared column grid. Clicking a row opens the record (the name is a link + chevron) while a
+  click that originates on a row control — the unbind icon, the row menu — is ignored. Every list has
+  an `empty` state with its create action. The header row hides below 768px and rows stack.
+- **Agent lifecycle is three states, not two** (`is_active` + `deleted_at`):
+  `active` (badge-success, 进行中) · `paused` (`is_active=false`, `deleted_at` NULL → badge-warning, 已停用,
+  reversible via `:resume`) · `deleted` (`deleted_at` set → badge-error, 已删除, reversible via `:restore`
+  inside a `purge_after` 7-day window). **Only `deleted_at` ends KB ownership**: a paused agent keeps
+  `kb_id`, still blocks a competing bind (409) and still blocks KB deletion (409), and still shows as
+  `bound_agent`. Every "who owns this KB?" query must filter `Agent.deleted_at.is_(None)` and must not
+  look at `is_active` — that predicate was a soft-delete alias before pause existed and reading it
+  again lets a paused agent be silently stripped of its KB. The row menu is 停用/启用 + 删除 (never 打开),
+  and pause refuses chat (403 `Agent is paused`, SSE code `AGENT_PAUSED`) at both entry points.
+- KB rows carry **no unbind and no refresh control**; unbinding happens from the agent side, and every
+  panel auto-polls. Clicking a KB's name opens its source page — there is no separate "manage sources"
+  action and no inline expand panel.
+- **Auto-fetch settings on the KB detail page have no save button**: each control PATCHes
+  `updateAgent` on change (inputs debounced, switches immediate) and the card shows an inline
+  save state (`playground-status` pattern) with "保存失败" on a failed write. Do not reintroduce a
+  save control or an `alert()`.
 - Agent creation is a `+` icon button in `page-actions` opening a `sheet`, never an inline form.
   Escape and backdrop click close it; focus returns to the `+`.
 - The agent dashboard (`/agents/:id/dashboard`) shows API status, agent name, user count, session
   count and one status region. It must not render knowledge-base parameters (index size, URL/file
   counts, chunk counts) — those belong to the KB page.
 - Playground: if `!agent.api_key_set`, do not open the SSE stream; disable send; keep the
-  configure-key banner.
+  configure-key banner. Two layouts driven by the same 1025px boundary: from 1025px both panes are
+  mounted side by side (settings left as a 40%/480px rail, chat right, each its own scroll, plain
+  `region`s labelled by their heading) and the tab strip is hidden; at ≤1024px the tab strip is the
+  only layout and exactly one pane is mounted (`?tab=settings|chat`, `role=tabpanel`, roving
+  tabindex). CSS owns the switch (`@media (max-width: 1024px)` / `(min-width: 1025px)` in
+  `index.css`), and `Playground.tsx` must mirror it with its own `useMediaQuery('(max-width: 1024px)')`
+  — not `useIsMobile`, which is the 768px admin-shell contract. The rail needs the whole 1025px:
+  below it 320px + a sidebar leaves the chat pane under 320px wide and its input 54px.
+- Chat is transparent: `ChatPanel`'s messages node paints no background, so the page surface shows
+  through. Bubbles, the composer, the meta chips and the empty-state icon tile keep their own fills.
+- Page chrome is transparent everywhere: `.admin-page` is the shared surface and no route adds a
+  fill of its own behind it (KB list/detail included). Panels inside may carry `card` surfaces;
+  the page must not.
 - `ThemeProvider` (in `AppProviders`) applies `data-theme` on `<html>`, which `src/index.css` keys off. Keep it even though `useTheme` itself has no live consumer.
 
 ### Widget
@@ -201,4 +229,4 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 
 **This is living documentation. Update when patterns change.**
 
-Last updated: 2026-10-27 (admin SPA redesign: design system in `index.css`, 首页/智能体/知识库/账号设置 nav, `/sessions`+`/users` removed, agent-scoped 知识库 entry, `+`-opened create sheet, unified list grid, agent dashboard without KB parameters, all manual refresh buttons removed)
+Last updated: 2026-10-28 (agent lifecycle pause/delete split with paused agents keeping KB ownership; row-click navigation and the 停用/启用/删除 row menu; unbind icons on both list views; dashboard rebind icon removed; auto-fetch persists per control; transparent page chrome on KB pages and the playground chat; two-column playground at ≥1025px)

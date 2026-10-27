@@ -1061,11 +1061,16 @@ describe("design tokens: interaction and material (spec §12 c)", () => {
 
 describe("design tokens: the mobile layout contract (spec §12 d)", () => {
   const MOBILE_PRELUDE = "@media (max-width: 768px)";
+  // The playground's tabbed layout is not mobile-only: it owns 769-1024px, so
+  // its stacked rules live in their own `max-width: 1024px` block (the admin
+  // shell keeps its 768px contract).
+  const TABBED_PRELUDE = "@media (max-width: 1024px)";
   const DESKTOP_PRELUDE = "@media (min-width: 1025px)";
   const mobile = mediaBlock(MOBILE_PRELUDE);
+  const tabbed = mediaBlock(TABBED_PRELUDE);
 
   function mobileDecl(selector: string, property: string): string[] {
-    return mobile
+    return [...mobile, ...tabbed]
       .filter((rule) => rule.selectors.includes(selector))
       .map((rule) => declarationMap(rule.declarations).get(property))
       .filter((value): value is string => value !== undefined);
@@ -1113,7 +1118,7 @@ describe("design tokens: the mobile layout contract (spec §12 d)", () => {
     }
   });
 
-  it("stacks the playground tabs at mobile width and never in the desktop block", () => {
+  it("stacks the playground tabs through 1024px and never inside the desktop block", () => {
     const shell = mobileDecl(".playground-shell", "flex-direction");
     expect(shell).toContain("column");
     expect(mobileDecl(".playground-shell", "overflow-x")).toContain("hidden");
@@ -1122,9 +1127,36 @@ describe("design tokens: the mobile layout contract (spec §12 d)", () => {
     expect(mobileDecl(".playground-tabs", "width")).toContain("100%");
     expect(mobileDecl(".playground-tab", "min-height")).toContain("44px");
 
-    const desktopAt = CSS.indexOf(DESKTOP_PRELUDE);
-    expect(desktopAt, `${DESKTOP_PRELUDE} must exist`).toBeGreaterThan(0);
-    expect(CSS.indexOf(MOBILE_PRELUDE), "mobile before desktop").toBeLessThan(desktopAt);
+    // Two panes only from 1025px: 320px settings rail, chat pane first gets its
+    // >= 320px there (1024px and below stays tabbed).
+    const twoColumn = mediaBlock(DESKTOP_PRELUDE);
+    const railRule = twoColumn.find((rule) =>
+      rule.selectors.includes(".playground-pane-settings"),
+    );
+    expect(railRule, "the 1025px settings rail rule must exist").not.toEqual(
+      undefined,
+    );
+    const rail = declarationMap((railRule as CssRule).declarations);
+    expect(String(rail.get("width"))).toBe("40%");
+    expect(String(rail.get("min-width"))).toBe("320px");
+    expect(String(rail.get("max-width"))).toBe("480px");
+    const chatRule = twoColumn.find((rule) =>
+      rule.selectors.includes(".playground-pane-chat"),
+    );
+    expect(
+      String(declarationMap((chatRule as CssRule).declarations).get("flex")),
+    ).toBe("1 1 0");
+
+    // The admin Desktop block is the second `min-width: 1025px` block (the
+    // playground's two-column block comes first); comments are stripped here,
+    // so the prelude is the only anchor.
+    const firstDesktop = CSS.indexOf(DESKTOP_PRELUDE);
+    expect(firstDesktop, `${DESKTOP_PRELUDE} must exist`).toBeGreaterThan(0);
+    const desktopAt = CSS.indexOf(DESKTOP_PRELUDE, firstDesktop + 1);
+    expect(desktopAt, `a second ${DESKTOP_PRELUDE} block must exist`).toBeGreaterThan(0);
+    expect(CSS.indexOf(MOBILE_PRELUDE), "mobile before desktop").toBeLessThan(
+      desktopAt,
+    );
     const afterDesktop = CSS.slice(desktopAt);
     expect(afterDesktop).not.toMatch(/\.playground-shell/);
     expect(afterDesktop).not.toMatch(/\.playground-pane-settings/);

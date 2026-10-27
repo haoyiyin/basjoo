@@ -35,6 +35,8 @@ vi.mock("../../src/services/api", () => ({
 		createAgent: vi.fn(),
 		deleteAgent: vi.fn(),
 		restoreAgent: vi.fn(),
+		pauseAgent: vi.fn(),
+		resumeAgent: vi.fn(),
 		setSelectedAgentId: vi.fn(),
 		clearSelectedAgentId: vi.fn(),
 		getSelectedAgentId: vi.fn(),
@@ -180,6 +182,8 @@ beforeEach(() => {
 	mockedApi.createAgent.mockResolvedValue(newAgent);
 	mockedApi.deleteAgent.mockResolvedValue({ success: true });
 	mockedApi.restoreAgent.mockResolvedValue(restoredAgent);
+	mockedApi.pauseAgent.mockResolvedValue({ ...activeAgent, is_active: false });
+	mockedApi.resumeAgent.mockResolvedValue(activeAgent);
 	mockedApi.listKnowledgeBases.mockResolvedValue({
 		knowledge_bases: [unboundKb, boundKb, inactiveKb],
 		total: 3,
@@ -322,34 +326,35 @@ describe("Agents knowledge-base chooser after creating an agent", () => {
 });
 
 describe("Agents lifecycle actions", () => {
-	it("hides open actions for deactivated agents", async () => {
+	it("offers pause + delete for an active agent and restore only for a deleted one", async () => {
 		renderAgents();
 
 		await screen.findByText("Active Agent");
 		await screen.findByText("Deleted Agent");
 
 		// R4 made the row itself the way in, so the header no longer keeps an
-		// "open current agent" shortcut at all: the row name (a link) and the
-		// whole row navigate, and the row-level open also lives in the menu.
+		// "open current agent" shortcut at all.
 		expect(
 			screen.queryByRole("button", { name: "agents.openCurrent" }),
 		).not.toBeInTheDocument();
 
+		// #29: the menu no longer carries `agents.open` — the row navigates.
 		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
+		const activeMenu = screen.getByTestId("agent-menu-agt_active");
 		expect(
-			within(screen.getByTestId("agent-menu-agt_active")).getAllByRole(
-				"menuitem",
-				{ name: "agents.open" },
-			),
+			within(activeMenu).getAllByRole("menuitem", { name: "agents.pause" }),
 		).toHaveLength(1);
 		expect(
-			within(screen.getByTestId("agent-menu-agt_active")).queryByRole(
-				"menuitem",
-				{ name: "agents.restore" },
-			),
+			within(activeMenu).getAllByRole("menuitem", { name: "agents.delete" }),
+		).toHaveLength(1);
+		expect(
+			within(activeMenu).queryByRole("menuitem", { name: "agents.open" }),
+		).not.toBeInTheDocument();
+		expect(
+			within(activeMenu).queryByRole("menuitem", { name: "agents.restore" }),
 		).not.toBeInTheDocument();
 
-		// The deactivated agent offers restore and no open action.
+		// The soft-deleted agent offers restore and nothing else.
 		fireEvent.click(screen.getByTestId("agent-actions-agt_deleted"));
 		const deletedMenu = screen.getByTestId("agent-menu-agt_deleted");
 		expect(
@@ -357,6 +362,9 @@ describe("Agents lifecycle actions", () => {
 		).toHaveLength(1);
 		expect(
 			within(deletedMenu).queryByRole("menuitem", { name: "agents.open" }),
+		).not.toBeInTheDocument();
+		expect(
+			within(deletedMenu).queryByTestId("agent-delete-agt_deleted"),
 		).not.toBeInTheDocument();
 	});
 
@@ -400,13 +408,19 @@ describe("Agents lifecycle actions", () => {
 		expect(
 			screen.queryByRole("button", { name: "agents.openCurrent" }),
 		).not.toBeInTheDocument();
+		// A paused agent is still openable (its row navigates) but the menu shows
+		// 启用 + 删除, never `open`.
 		fireEvent.click(screen.getByTestId("agent-actions-agt_inactive"));
+		const pausedMenu = screen.getByTestId("agent-menu-agt_inactive");
 		expect(
-			within(screen.getByTestId("agent-menu-agt_inactive")).queryByRole(
-				"menuitem",
-				{ name: "agents.open" },
-			),
+			within(pausedMenu).queryByRole("menuitem", { name: "agents.open" }),
 		).not.toBeInTheDocument();
+		expect(
+			within(pausedMenu).getAllByRole("menuitem", { name: "agents.resume" }),
+		).toHaveLength(1);
+		expect(
+			within(pausedMenu).getAllByRole("menuitem", { name: "agents.delete" }),
+		).toHaveLength(1);
 	});
 
 	it("limits created agent names to twelve display units", async () => {

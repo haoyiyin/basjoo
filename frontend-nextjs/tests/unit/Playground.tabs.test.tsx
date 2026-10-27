@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
 /**
- * R2 — the playground is one route with two tabs.
+ * Playground layout contract, in two halves.
  *
- * The behavioural contract: exactly one pane is mounted (not hidden with CSS),
- * the tab lives in `?tab=settings|chat` (default chat) and survives a reload,
- * switching writes it back to the URL, and the tab strip is arrow-key driven.
+ * Tabbed (<= 1024px, the two-column breakpoint in `src/index.css`): exactly one
+ * pane is mounted (not hidden with CSS), the tab lives in `?tab=settings|chat`
+ * (default chat) and survives a reload, switching writes it back to the URL, and
+ * the strip is arrow-key driven.
+ *
+ * Desktop (>= 1025px): both panes are mounted at once — settings left, chat
+ * right. The tab strip stays in the DOM (the tabbed contract) but is hidden, the
+ * panes are `region`s labelled by their own heading (no `tabpanel`), and
+ * `?tab=` hides nothing.
  */
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -22,8 +28,12 @@ vi.mock("../../src/services/api", () => ({
 	},
 }));
 
+const mediaState = vi.hoisted(() => ({ isNarrow: false }));
+
 vi.mock("../../src/hooks/useMediaQuery", () => ({
-	useIsMobile: () => false,
+	// The playground reads its own `max-width: 1024px` query, not `useIsMobile`.
+	useMediaQuery: () => mediaState.isNarrow,
+	useIsMobile: () => mediaState.isNarrow,
 }));
 
 vi.mock("react-i18next", () => ({
@@ -90,7 +100,61 @@ beforeEach(() => {
 	Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe("Playground tabs (R2)", () => {
+describe("Playground panes (desktop, >= 1025px)", () => {
+	beforeEach(() => {
+		mediaState.isNarrow = false;
+	});
+
+	it("mounts both panes and hides the tab strip", async () => {
+		renderPlayground();
+
+		await screen.findByTestId("playground-pane-chat");
+		expect(screen.getByTestId("playground-pane-settings")).toBeInTheDocument();
+		expect(screen.getByTestId("ai-settings-form")).toBeInTheDocument();
+		expect(screen.getByTestId("chat-message-input")).toBeInTheDocument();
+
+		// Still in the DOM for the tabbed contract, hidden visually and from the
+		// a11y tree (jsdom has no cascade, so the inline declaration is the proof).
+		expect(screen.getByTestId("playground-tabs")).toHaveStyle({
+			display: "none",
+		});
+	});
+
+	it("renders the panes as regions labelled by their heading, never as tabpanels", async () => {
+		renderPlayground();
+
+		await screen.findByTestId("playground-pane-chat");
+		expect(screen.queryAllByRole("tabpanel", { hidden: true })).toHaveLength(0);
+
+		expect(
+			screen.getByRole("region", { name: "navigation.aiSettings" }),
+		).toBe(screen.getByTestId("playground-pane-settings"));
+		expect(screen.getByRole("region", { name: "playground.tabChat" })).toBe(
+			screen.getByTestId("playground-pane-chat"),
+		);
+	});
+
+	it("ignores ?tab=settings — nothing is hidden", async () => {
+		renderPlayground("/agents/agt_1/playground?tab=settings");
+
+		await screen.findByTestId("playground-pane-settings");
+		expect(screen.getByTestId("playground-pane-chat")).toBeInTheDocument();
+		expect(screen.getByTestId("chat-message-input")).toBeInTheDocument();
+	});
+
+	it("ignores an unknown ?tab= value", async () => {
+		renderPlayground("/agents/agt_1/playground?tab=bogus");
+
+		await screen.findByTestId("playground-pane-chat");
+		expect(screen.getByTestId("playground-pane-settings")).toBeInTheDocument();
+	});
+});
+
+describe("Playground tabs (tabbed, <= 1024px)", () => {
+	beforeEach(() => {
+		mediaState.isNarrow = true;
+	});
+
 	it("defaults to the chat tab with the settings form absent from the DOM", async () => {
 		renderPlayground();
 
@@ -102,6 +166,9 @@ describe("Playground tabs (R2)", () => {
 			"id",
 			"playground-tab-chat",
 		);
+		expect(screen.getByTestId("playground-tabs")).not.toHaveStyle({
+			display: "none",
+		});
 	});
 
 	it("honours ?tab=settings on load", async () => {
