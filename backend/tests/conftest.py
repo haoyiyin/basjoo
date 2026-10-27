@@ -115,6 +115,30 @@ async def prepare_test_db_dir():
     yield
 
 
+# Login attempts are rate-limited per client IP in a *shared* Redis, and every
+# test client presents the same address, so the counter survives from one run
+# (and one test) to the next. Without this, a suite run five logins deep starts
+# returning 429 and `test_login` fails for a reason that has nothing to do with
+# login. The limiter itself is covered by its own tests, which seed the key
+# deliberately, so clearing before each test hides nothing.
+@pytest.fixture(autouse=True)
+def clear_login_rate_limit():
+    """Drop the login limiter's sliding window before every test."""
+    import redis as redis_lib
+
+    url = os.environ.get("REDIS_URL", "")
+    try:
+        client = redis_lib.Redis.from_url(url, socket_connect_timeout=1)
+        for key in client.scan_iter("login:ip:*"):
+            client.delete(key)
+        client.close()
+    except Exception:
+        # No Redis in this environment: the in-memory fallback is already
+        # per-process and cannot leak between runs.
+        pass
+    yield
+
+
 TEST_KB_EMBEDDING_PROVIDER = "jina"
 TEST_KB_EMBEDDING_MODEL = "jina-embeddings-v3"
 TEST_KB_EMBEDDING_DIMENSION = 1024
