@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import AdminLayout from "../components/AdminLayout";
@@ -62,6 +62,9 @@ export default function KnowledgeBases() {
 	const [agents, setAgents] = useState<Agent[]>([]);
 
 	const [createOpen, setCreateOpen] = useState(false);
+	// The `+` in `page-actions`; focus returns to it when the sheet closes, same
+	// contract as the agents list.
+	const createTriggerRef = useRef<HTMLButtonElement | null>(null);
 	const [resetTarget, setResetTarget] = useState<KnowledgeBaseDetail | null>(
 		null,
 	);
@@ -362,13 +365,27 @@ export default function KnowledgeBases() {
 						{isSuperAdmin && (
 							<button
 								type="button"
-								className="btn btn-primary"
+								ref={createTriggerRef}
+								className="btn btn-icon"
+								data-testid="kb-create-open"
+								aria-label={t("knowledgeBases.newKnowledgeBase")}
 								onClick={() => {
 									setActionError(null);
 									setCreateOpen(true);
 								}}
 							>
-								{t("knowledgeBases.newKnowledgeBase")}
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 16 16"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="1.75"
+									strokeLinecap="round"
+									aria-hidden="true"
+								>
+									<path d="M8 3.5v9M3.5 8h9" />
+								</svg>
 							</button>
 						)}
 					</div>
@@ -569,7 +586,10 @@ export default function KnowledgeBases() {
 				<KbFormModal
 					mode="create"
 					onSubmit={handleCreate}
-					onClose={() => setCreateOpen(false)}
+					onClose={() => {
+						setCreateOpen(false);
+						createTriggerRef.current?.focus();
+					}}
 				/>
 			)}
 

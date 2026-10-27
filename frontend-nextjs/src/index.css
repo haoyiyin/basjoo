@@ -1081,9 +1081,18 @@ a.btn-danger:hover {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* The name and the description are stacked lines of one block. `stretch`
+   * (the default, declared so it cannot be inherited away) is what lets the
+   * nowrap description widen to its cell and then ellipsize; `flex-start`
+   * would instead size each line to its text. */
+  align-items: stretch;
   gap: var(--space-1);
   font-size: var(--text-base);
   color: var(--fg-strong);
+  /* This cell is a button that stacks a name and a description. Without a clip
+   * the nowrap description escapes it and is cut by whatever ancestor happens
+   * to clip first — visible as text sliced at both ends. */
+  overflow: hidden;
 }
 
 .list-row-meta {
@@ -1113,6 +1122,11 @@ a.btn-danger:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* `white-space: nowrap` makes the automatic minimum size resolve to the full
+   * text width. Inside a column flex box that floor beats the stretch sizing, so
+   * the line widens past its cell and gets clipped at BOTH ends. `min-width: 0`
+   * lets the ellipsis work instead. */
+  min-width: 0;
 }
 
 /* The name cluster: the row name plus the chevron that marks it as the
@@ -2548,6 +2562,15 @@ tbody tr:hover td {
     min-width: 640px;
   }
 
+  /* The URL cell is a plain anchor (inline `display: block` from the view), so
+   * its 20px line box is under the tap floor. !important because the inline
+   * style wins otherwise. */
+  .kb-table a {
+    display: flex !important;
+    align-items: center;
+    min-height: 24px;
+  }
+
   /* ------------------------------------------------------------------
    * Tap targets (#15): every interactive control in a page (or in the mobile
    * shell) is at least 44px tall. The resolution rule used by the test is
@@ -2703,6 +2726,21 @@ tbody tr:hover td {
   .list-cell,
   .list-cell:last-child {
     justify-self: stretch;
+  }
+
+  /* At 375px the cells stack. A `stretch` column flex box would blow a pill or
+   * a button out to the full width — a status badge then reads as a button and
+   * becomes a phantom tap target. The cell stays full width (it is the row
+   * line); the control inside hugs its content. */
+  .list-cell > .badge,
+  .list-cell > .btn {
+    align-self: flex-start;
+  }
+
+  /* The description keeps a zero automatic minimum so `text-overflow` can act
+   * instead of the line widening past its cell. */
+  .list-cell > .list-row-description {
+    min-width: 0;
   }
 
   .show-mobile {

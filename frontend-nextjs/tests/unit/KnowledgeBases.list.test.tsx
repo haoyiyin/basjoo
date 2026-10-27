@@ -290,6 +290,30 @@ describe("KnowledgeBases list (§16 row contract)", () => {
 			expect(row.querySelector(".list-row-main")).not.toBeNull();
 		}
 	});
+	it("puts creation behind a labelled `+` in page-actions, not a labelled page button", async () => {
+		renderView();
+
+		await waitFor(() =>
+			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
+		);
+
+		// Same create affordance as the agents list: an icon button in
+		// `page-actions` whose accessible name is the create action.
+		const trigger = screen.getByTestId("kb-create-open");
+		expect(trigger.tagName).toBe("BUTTON");
+		expect(trigger).toHaveClass("btn-icon");
+		expect(trigger).toHaveAttribute(
+			"aria-label",
+			"knowledgeBases.newKnowledgeBase",
+		);
+		expect(trigger.closest(".page-actions")).not.toBeNull();
+		expect(trigger.querySelector("svg")).not.toBeNull();
+		// Nothing inline: no name field until the sheet opens.
+		expect(document.querySelector("input")).toBeNull();
+
+		await userEvent.click(trigger);
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+	});
 });
 
 describe("KnowledgeBases ?bindAgent= entry point (§16 keeps the bind flow)", () => {
