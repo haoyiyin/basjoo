@@ -597,11 +597,11 @@ export default function Agents() {
 						</div>
 					</div>
 				) : (
-					<>
+					<div className="list-frame">
 						{/* Column-label row: desktop-only plan for R1. It uses the same grid
 						 * contract (`list-grid` + `list-grid--agents`) as the rows below, so
-						 * header cell N sits exactly above data cell N. Outside the <ul> so the
-						 * list keeps exactly one <li> per agent. */}
+						 * header cell N sits exactly above data cell N. Sharing `.list-frame`
+						 * with the <ul> keeps exactly one <li> per agent. */}
 						<div
 							className="list-header list-grid list-grid--agents"
 							data-testid="agents-list-header"
@@ -747,7 +747,7 @@ export default function Agents() {
 							);
 						})}
 					</ul>
-					</>
+					</div>
 				)}
 			</div>
 

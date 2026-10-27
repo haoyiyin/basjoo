@@ -439,12 +439,12 @@ export default function KnowledgeBases() {
 						)}
 					</div>
 				) : (
-					<>
+					<div className="list-frame">
 						{/* Column-label row: desktop-only plan for R1. It carries the SAME grid
 						 * contract as the data rows beneath (`list-grid` + the `list-grid--kb`
 						 * flavour), so header cell N and data cell N share one column index.
-						 * It lives OUTSIDE the <ul class="list"> so the list keeps exactly one
-						 * child per KB (no header <li>, no extra listitem). */}
+						 * It shares `.list-frame` with the <ul>, so both resolve one inner
+						 * width; the frame keeps exactly one <li> per KB (no header <li>). */}
 						<div
 							className="list-header list-grid list-grid--kb"
 							data-testid="kb-list-header"
@@ -561,7 +561,7 @@ export default function KnowledgeBases() {
 							</li>
 						))}
 					</ul>
-					</>
+					</div>
 				)}
 			</div>
 

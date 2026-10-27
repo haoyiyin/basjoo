@@ -219,6 +219,15 @@ describe("spec §4 — desktop column header row", () => {
 		expect(list.contains(header)).toBe(false);
 		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
 
+		// The header and the <ul> are siblings inside ONE bordered frame. That is
+		// what gives both the same inner width, so their shared column template
+		// lands on the same pixel columns. A header outside the frame (or the
+		// border faked onto the header instead) makes the header 2px wider and
+		// every column after the first drifts.
+		const frame = list.parentElement;
+		expect(frame).toHaveClass("list-frame");
+		expect(header.parentElement).toBe(frame);
+
 		const labels = Array.from(
 			header.querySelectorAll(".list-header-cell"),
 		).map((cell) => cell.textContent);
@@ -284,6 +293,16 @@ describe("spec §4 — desktop column header row", () => {
 			);
 		}
 
+		// The header and the <ul> derive their inner width from the SAME bordered
+		// box. That must come from structure — one `.list-frame` wrapping both —
+		// and not from a border faked onto the header, which silently breaks the
+		// moment either side's border changes.
+		const headerRule = base(".list-header");
+		expect(
+			headerRule,
+			".list-header must not fake its own box to match the <ul>",
+		).not.toMatch(/border:\s*1px solid transparent/);
+
 		// Each list flavour declares the ONE template the rows and the header
 		// share. It must be a concrete track list, and the trailing tracks must
 		// be fixed widths rather than `auto`: an `auto` track sizes to its own
@@ -341,6 +360,10 @@ describe("spec §4 — desktop column header row", () => {
 		expect(list.tagName).toBe("UL");
 		expect(list.contains(header)).toBe(false);
 		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+
+		const frame = list.parentElement;
+		expect(frame).toHaveClass("list-frame");
+		expect(header.parentElement).toBe(frame);
 
 		const labels = Array.from(
 			header.querySelectorAll(".list-header-cell"),

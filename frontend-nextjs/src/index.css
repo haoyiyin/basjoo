@@ -1018,6 +1018,27 @@ a.btn-danger:hover {
 /* =============================================================================
  * 10. Lists — rows separated by a hairline, never nested containers
  * ============================================================================= */
+/* Bordered container for a list that has a column-label row. The frame owns the
+ * border, radius and surface; the header and the <ul> are its two children, so
+ * they resolve the same inner width and their shared grid template lands on the
+ * same pixel columns. Without the frame the header would sit outside the
+ * bordered <ul> and be 2px wider — every fr track would drift. */
+.list-frame {
+  width: 100%;
+  min-width: 0;
+  background: var(--surface-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Inside the frame the frame already draws the border. */
+.list-frame > .list {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .list {
   display: flex;
   flex-direction: column;
@@ -1201,21 +1222,16 @@ a.btn-danger:hover {
 
 /* Desktop column-label row. It sits on the SAME grid template as the rows
  * beneath (`.list-grid` + the flavour class), so each label's column index is
- * the column index of the value it names. It lives outside the <ul>, and the
- * mobile media block hides it because a stacked row has no columns to label. */
+ * the column index of the value it names. It shares `.list-frame` with the
+ * <ul>, which is what makes the two grids resolve to one inner width. The
+ * mobile media block hides it: a stacked row has no columns to label. */
 .list-header {
   display: grid;
   grid-template-columns: var(--list-columns);
   align-items: center;
   gap: var(--space-4);
-  /* The header lives OUTSIDE the bordered <ul>, so it must carry the same
-   * horizontal border allowance (1px each side) or its inner width — and every
-   * fr track derived from it — is 2px wider than the rows, drifting every
-   * column. box-sizing is border-box globally, so a transparent border of the
-   * same width is what keeps the two grids identical. */
-  border: 1px solid transparent;
   padding: var(--space-2) var(--space-4);
-  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   line-height: var(--leading-snug);
