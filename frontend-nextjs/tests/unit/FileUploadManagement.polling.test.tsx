@@ -133,12 +133,8 @@ describe("FileUploadManagement file status polling", () => {
 			expect(mockedApi.listKbFiles).toHaveBeenCalledWith("kb_test");
 		});
 
-		vi.advanceTimersByTime(6000);
-		await waitFor(() => {
-			expect(mockedApi.listKbFiles.mock.calls.length).toBeGreaterThanOrEqual(2);
-		});
-
-		// Files become ready: the next poll should be the last one.
+		// Files become ready: the next poll should be the last one. Set the mock
+		// BEFORE advancing so no poll can observe the still-processing payload.
 		const readyFiles = [createMockFile("ready")];
 		mockedApi.listKbFiles.mockResolvedValue({
 			files: readyFiles,
@@ -148,13 +144,27 @@ describe("FileUploadManagement file status polling", () => {
 
 		const callCountBefore = mockedApi.listKbFiles.mock.calls.length;
 
-		vi.advanceTimersByTime(3000);
-		await vi.runAllTimersAsync();
-		vi.advanceTimersByTime(9000);
-		await vi.runAllTimersAsync();
+		// `advanceTimersByTime` is synchronous: it fires the interval but does not
+		// flush the promises the poll then awaits. Advancing twice in a row (as
+		// this test used to, via 3000 then 9000) lets the interval fire again
+		// before React has re-rendered with the "ready" payload, so the call delta
+		// drifts between 1 and 4 depending on how the fake clock interleaves with
+		// the real one under `shouldAdvanceTime`. Advance asynchronously once, so
+		// each poll's promise settles and the effect can clear the interval.
+		await vi.advanceTimersByTimeAsync(3000);
+		await waitFor(() => {
+			expect(mockedApi.listKbFiles.mock.calls.length).toBeGreaterThan(
+				callCountBefore,
+			);
+		});
 
-		const finalCallCount = mockedApi.listKbFiles.mock.calls.length;
-		expect(finalCallCount - callCountBefore).toBeLessThanOrEqual(1);
+		// The interval must now be gone. Two more polling windows with a ready
+		// payload may add at most the one poll that was already in flight.
+		const countAfterFirstPoll = mockedApi.listKbFiles.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(9000);
+		expect(mockedApi.listKbFiles.mock.calls.length).toBeLessThanOrEqual(
+			countAfterFirstPoll + 1,
+		);
 	});
 
 	it("should call loadFiles during polling", async () => {
