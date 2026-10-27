@@ -107,6 +107,9 @@ services:
       dockerfile: Dockerfile
     container_name: basjoo-scrapling
     restart: unless-stopped
+    environment:
+      # Same switch as the backend (see services/url_safety.py). Off by default.
+      - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
     networks:
       - basjoo-network
     healthcheck:
@@ -146,6 +149,7 @@ services:
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=INFO
       - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
+      - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
     volumes:
       - backend-data:/app/data
     depends_on:
@@ -235,6 +239,7 @@ services:
       - RATE_LIMIT_BURST_SIZE=${RATE_LIMIT_BURST_SIZE:-200}
       - LOG_LEVEL=DEBUG
       - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
+      - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
     volumes:
       - backend-data:/app/data
       - ./backend:/app

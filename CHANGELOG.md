@@ -20,6 +20,7 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ### Changed
 
+- SSRF protection for URL ingestion is now opt-in (`SSRF_PROTECTION_ENABLED`, default off): the resolved-IP rule broke every fetch on hosts whose resolver returns fake-ip/ULA addresses for public sites. Scheme, credential, empty-host, `localhost` and direct-IP-literal validation still always run; only the DNS-range lookup is gated. `scrapling-service` honours the same flag.
 - CORS policy tightened: missing `Origin` headers no longer receive wildcard CORS; `Origin: null` only allowed when `cors_allow_null_origin` is explicitly enabled.
 - Early-response CORS handling unified through a single shared helper (`apply_cors_headers` in `backend/middleware/rate_limit.py`).
 - URL validation in schemas replaced with the shared SSRF safety check, removing localhost and direct IP acceptance.

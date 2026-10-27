@@ -173,6 +173,13 @@ class Settings(BaseSettings):
     # Off by default; enable explicitly in dev environments.
     cors_allow_null_origin: bool = False
 
+    # SSRF protection on user-supplied ingest URLs (see services/url_safety.py).
+    # Off by default: a host whose resolver answers with fake-ip / ULA addresses
+    # (sing-box, clash, split-horizon DNS) would otherwise have every real fetch
+    # rejected as "Resolved to blocked IP". Turn it on where the deployment is
+    # exposed to untrusted users and guards its own metadata/internal network.
+    ssrf_protection_enabled: bool = False
+
     # 应用
     app_name: str = "Basjoo"
     app_port: int = 8000

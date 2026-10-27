@@ -1,10 +1,23 @@
-"""URL safety validation to prevent SSRF attacks."""
+"""URL safety validation.
+
+SSRF protection is OFF by default: an installation behind a proxy resolver
+(sing-box / clash fake-ip, corporate split-horizon DNS) hands out addresses in
+private and ULA ranges for ordinary public sites, so the resolved-IP check
+rejects every real fetch. Enable it with `SSRF_PROTECTION_ENABLED=true` when
+the deployment is reachable by untrusted users and its own network is worth
+protecting (cloud metadata, internal admin surfaces).
+
+Scheme, credential and empty-host checks always run — they are input hygiene,
+not SSRF: they cost no DNS lookup and keep `file://` out of the fetcher.
+"""
 
 from functools import lru_cache
 import ipaddress
 import logging
 import socket
 from urllib.parse import urlsplit
+
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +66,11 @@ def _resolve_and_check(hostname: str) -> tuple[bool, str]:
 def validate_url_safe(url: str) -> tuple[bool, str]:
     """Validate that a URL is safe to fetch.
 
-    Returns (is_safe, reason).
-    Blocks localhost, private IPs, cloud metadata, and credentials in URLs.
+    Returns (is_safe, reason). Scheme, credential, empty-host, `localhost` and
+    direct-IP-literal checks always run. With SSRF protection enabled the
+    validator also resolves the hostname and rejects private/special-use IPs
+    (loopback, RFC1918, link-local, cloud metadata); with it disabled only the
+    no-DNS checks apply.
     """
     if not url:
         return False, "URL is empty"
@@ -77,7 +93,7 @@ def validate_url_safe(url: str) -> tuple[bool, str]:
 
     hostname_lower = hostname.lower()
 
-    if hostname_lower in ("localhost", ""):
+    if hostname_lower == "localhost":
         return False, "localhost is not allowed"
 
     # Reject direct IP literals
@@ -86,6 +102,13 @@ def validate_url_safe(url: str) -> tuple[bool, str]:
         return False, "Direct IP literals are not allowed"
     except ValueError:
         pass
+
+    # Only the DNS-range half is gated: it is the check that misfires behind a
+    # fake-ip / ULA resolver. The literal checks above need no lookup, so they
+    # stay on and keep `scrapling-service` (which enforces the same pair
+    # unconditionally) from accepting URLs the backend would have rejected.
+    if not settings.ssrf_protection_enabled:
+        return True, ""
 
     # Resolve hostname and check resolved IPs
     return _resolve_and_check(hostname_lower)

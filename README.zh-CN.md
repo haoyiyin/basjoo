@@ -387,7 +387,7 @@ Embedding 设置与聊天模型服务商相互独立。管理员可以在 Playgr
 
 ### 安全模型
 
-- **SSRF 防护**：`backend/services/url_safety.py` 校验所有用户提供的 URL。阻止 `localhost`、直接 IP 字面量、含嵌入凭据的 URL，以及解析到私有/特殊用途 IP 的主机名（环回、RFC1918、链路本地、云元数据）。DNS 解析结果缓存 512 条 LRU，避免抓取时重复查询。
+- **SSRF 防护**（`SSRF_PROTECTION_ENABLED`，默认 **关闭**）：`backend/services/url_safety.py` 校验所有用户 URL。开启后阻止解析到私有/特殊用途 IP 的主机名（环回、RFC1918、链路本地、云元数据），DNS 结果缓存 512 条 LRU。默认关闭的原因是 fake-ip / ULA 代理 DNS（sing-box、clash、分离解析）会把普通公网站点解析到私有网段，导致“解析 IP”规则拒绝所有真实抓取；面向不受信任用户的实例应显式开启。scheme、嵌入凭据、空主机名、`localhost`、直接 IP 字面量始终拦截——这些不需要 DNS，也不会被代理 DNS 误伤。
 - **Widget 来源白名单**：公开聊天路由强制执行按 agent 配置的来源白名单。管理员用户可绕过白名单用于测试。
 - **CORS 策略**：早返回响应（限流 429、请求体 413）通过 `backend/middleware/rate_limit.py` 中的共享 helper 处理 CORS 头。`Origin: null` 仅在显式启用 `cors_allow_null_origin` 时获得通配符 CORS。缺少 `Origin` 头的请求不会获得 CORS 头。
 - **密钥持久化**：`SECRET_KEY`、`DEFAULT_AGENT_ID` 和 `ENCRYPTION_KEY` 在首次启动时自动生成并持久化，确保 widget 嵌入行为稳定以及 API 密钥加密存储在重新部署后保持一致。

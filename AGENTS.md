@@ -50,7 +50,7 @@ Docker-oriented AI customer support platform:
 - **Structure**: Backend logic strictly in `backend/services/`; thin routers in `backend/api/`. Models in `backend/models.py`. Frontend views in `src/views/`, shared components in `src/components/`, hooks in `src/hooks/`. Widget self-contained in `widget/src/`.
 - **Style**: Python — 4 spaces, snake_case for modules/functions/tests. TypeScript/React — **tabs** (every file in `src/` uses tabs; there is no prettier/editorconfig, so the existing code is the style), PascalCase for components/views, `use*` hooks. Explicit TS types; no `any`.
 - **Commits**: Conventional (`feat:`, `fix:`, `docs:`), scoped, imperative. PRs require summary, test commands+output, UI screenshots, migration notes.
-- **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
+- **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). SSRF is a switch (`SSRF_PROTECTION_ENABLED`, default **off** — a fake-ip/ULA proxy resolver makes the DNS-range rule reject every real site); enabling it turns on the private/link-local/metadata block. Scheme, credential, empty-host, `localhost` and direct-IP-literal checks always run, and `scrapling-service` mirrors the same split. Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
 
 ## Architecture boundaries
 - `backend/main.py` owns the app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`, legacy `/api/tenants`), static asset routes (`/sdk.js`, `/basjoo-logo.png`, `/widget-demo`), and scheduler/Redis lifespan.
