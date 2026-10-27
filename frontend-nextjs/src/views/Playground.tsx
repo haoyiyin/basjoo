@@ -11,6 +11,7 @@ import AdminLayout from '../components/AdminLayout';
 import AISettingsForm from '../components/AISettingsForm';
 import ChatPanel from '../components/ChatPanel';
 import type { Message as ChatPanelMessage, Agent as ChatPanelAgent } from '../components/ChatPanel';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 interface ChatParamOverrides {
   temperature: number;
@@ -27,6 +28,11 @@ export default function Playground() {
   const { t, i18n } = useTranslation('common');
   const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  /* Tabbed mode owns its own breakpoint: CSS switches to two columns at
+   * 1025px (index.css), so JS must flip at the same width or both panes mount
+   * into a one-column shell. `useIsMobile` (768px) is the admin shell's
+   * contract and must not move. */
+  const isNarrow = useMediaQuery('(max-width: 1024px)');
   const tab: PlaygroundTab =
     searchParams.get('tab') === 'settings' ? 'settings' : 'chat';
   const settingsTabRef = useRef<HTMLButtonElement>(null);
@@ -418,9 +424,19 @@ export default function Playground() {
   }, []);
 
   /*
-   * One route, two tabs, one pane mounted at a time (spec R2). The tab lives in
-   * `?tab=settings|chat` so a reload or a shared link keeps the last view; the
-   * chat tab is the default because testing is the frequent action.
+   * Two layouts, one URL contract.
+   *
+   * Tabbed (<= 1024px, the two-column breakpoint in index.css): two tabs,
+   * exactly one pane mounted (`?tab=settings|chat`, default chat) so chat owns
+   * the full width; the strip is arrow-key driven and the panes are
+   * `tabpanel`s.
+   *
+   * Desktop (>= 1025px): both panes are mounted side by side — settings left, chat right, each with its own scroll — and
+   * they are plain `region`s labelled by their own heading. The tab strip stays
+   * in the DOM for the mobile contract but is hidden (from the screen and from
+   * the a11y tree), and `?tab=` no longer hides a pane: on desktop it only
+   * records the last tab picked on a phone. Mounting both is the point —
+   * `AISettingsForm`'s chat params reach the chat panel without a remount.
    */
   return (
     <AdminLayout>
@@ -431,10 +447,12 @@ export default function Playground() {
             <p className="page-subtitle">{t('playground.testAiEffect')}</p>
           </div>
           <div
+            data-testid="playground-tabs"
             className="playground-tabs"
             role="tablist"
             aria-label={t('navigation.playground')}
             onKeyDown={handleTabKeyDown}
+            style={isNarrow ? undefined : { display: 'none' }}
           >
             <button
               ref={settingsTabRef}
@@ -465,42 +483,21 @@ export default function Playground() {
           </div>
         </header>
 
-        {tab === 'chat' ? (
-          <section
-            data-testid="playground-pane-chat"
-            id="playground-panel-chat"
-            className="playground-panel playground-pane-chat"
-            role="tabpanel"
-            aria-labelledby="playground-tab-chat"
-          >
-            {apiKeySet === false && (
-              <div role="alert" className="playground-warning">
-                {t('labels.pleaseConfigureApiKey')}
-              </div>
-            )}
-            <ChatPanel
-              messages={messages}
-              input={input}
-              isLoading={isLoading}
-              isSettingsSaving={isSettingsSaving}
-              agent={agent}
-              sendDisabled={apiKeySet !== true}
-              onInputChange={handleInputChange}
-              onSendMessage={handleSendMessage}
-              onClearChat={handleClearChat}
-            />
-          </section>
-        ) : (
+        {(isNarrow ? tab === 'settings' : true) && (
           <section
             data-testid="playground-pane-settings"
             id="playground-panel-settings"
             className="playground-panel playground-pane-settings"
-            role="tabpanel"
-            aria-labelledby="playground-tab-settings"
+            role={isNarrow ? 'tabpanel' : 'region'}
+            aria-labelledby={
+              isNarrow ? 'playground-tab-settings' : 'playground-settings-heading'
+            }
           >
             <div className="playground-settings-column">
               <div className="card-header playground-settings-header">
-                <h2 className="card-title">{t('navigation.aiSettings')}</h2>
+                <h2 className="card-title" id="playground-settings-heading">
+                  {t('navigation.aiSettings')}
+                </h2>
                 <div
                   role="status"
                   aria-live="polite"
@@ -519,6 +516,42 @@ export default function Playground() {
               </div>
               <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
             </div>
+          </section>
+        )}
+
+        {(isNarrow ? tab === 'chat' : true) && (
+          <section
+            data-testid="playground-pane-chat"
+            id="playground-panel-chat"
+            className="playground-panel playground-pane-chat"
+            role={isNarrow ? 'tabpanel' : 'region'}
+            aria-labelledby={
+              isNarrow ? 'playground-tab-chat' : 'playground-chat-heading'
+            }
+          >
+            {!isNarrow && (
+              <div className="card-header playground-pane-header">
+                <h2 className="card-title" id="playground-chat-heading">
+                  {t('playground.tabChat')}
+                </h2>
+              </div>
+            )}
+            {apiKeySet === false && (
+              <div role="alert" className="playground-warning">
+                {t('labels.pleaseConfigureApiKey')}
+              </div>
+            )}
+            <ChatPanel
+              messages={messages}
+              input={input}
+              isLoading={isLoading}
+              isSettingsSaving={isSettingsSaving}
+              agent={agent}
+              sendDisabled={apiKeySet !== true}
+              onInputChange={handleInputChange}
+              onSendMessage={handleSendMessage}
+              onClearChat={handleClearChat}
+            />
           </section>
         )}
       </div>

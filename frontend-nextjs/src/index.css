@@ -2193,7 +2193,8 @@ tbody tr:hover td {
 }
 
 /* -----------------------------------------------------------------------------
- * Playground (R2): one route, two tabs, one mounted pane.
+ * Playground: below 1025px one route with two tabs and one mounted pane; from
+ * 1025px up both panes side by side (see the `min-width: 1025px` block below).
  * The header owns the tab strip; each panel owns its own scroll.
  * -------------------------------------------------------------------------- */
 .playground-shell {
@@ -2271,7 +2272,8 @@ tbody tr:hover td {
   overflow-y: auto;
 }
 
-/* The settings form reads as a column, not as a 40% side rail. */
+/* The settings form reads as a column: capped and centred when it is the only
+ * pane (tabbed, one tab), a 40%/480px rail beside the chat from 1025px up. */
 .playground-settings-column {
   width: 100%;
   max-width: 760px;
@@ -2280,7 +2282,8 @@ tbody tr:hover td {
   padding-bottom: var(--space-6);
 }
 
-.playground-settings-header {
+.playground-settings-header,
+.playground-pane-header {
   margin: 0;
   padding: 0 0 var(--space-4);
   border-bottom: 1px solid var(--color-border);
@@ -2328,8 +2331,6 @@ tbody tr:hover td {
   flex-direction: column;
   min-width: 0;
   height: 100%;
-  background: var(--surface-bg);
-  border-right: 1px solid var(--color-border);
 }
 
 /* =============================================================================
@@ -2972,46 +2973,6 @@ tbody tr:hover td {
   }
 
   /* ------------------------------------------------------------------
-   * Playground (R2): one route, two tabs, one mounted pane. At mobile width
-   * the shell is a single scrolling column and the tab strip spans the header
-   * width; there is no side-by-side settings rail any more.
-   * ------------------------------------------------------------------ */
-  .playground-shell {
-    flex-direction: column;
-    /* Let <main>/the document scroll: no second scroll container, and no
-     * viewport-height floor that makes the box taller than its content while
-     * still being unable to move. */
-    overflow-x: hidden;
-    overflow-y: clip;
-    height: auto !important;
-    min-height: 0;
-  }
-
-  .playground-header {
-    align-items: flex-start;
-  }
-
-  .playground-tabs {
-    width: 100%;
-  }
-
-  .playground-tab {
-    flex: 1;
-    min-height: 44px;
-  }
-
-  .playground-pane-settings,
-  .playground-pane-chat {
-    flex: none;
-    min-width: 0;
-    overflow: visible;
-  }
-
-  .playground-settings-column {
-    max-width: none;
-  }
-
-  /* ------------------------------------------------------------------
    * Source panels (`URLManagement` / `FileUploadManagement`) are composed on
    * the KB detail page. They are grid children, so `min-width: 0` is what
    * stops a long URL or file name from widening the page.
@@ -3283,6 +3244,51 @@ tbody tr:hover td {
   }
 }
 
+/* Playground (R2): one route, two tabs, one mounted pane.
+ *
+ * Tabbed mode is the only sane layout until the chat pane has room: the admin
+ * shell keeps a ~257px sidebar, so at a 769px viewport the 320px settings rail
+ * would leave the chat pane 151px wide (input 54px). The shell therefore stays
+ * a single scrolling column with a full-width tab strip, 44px tab targets and
+ * one mounted pane until 1025px — the same width the two-column block and the
+ * Playground's own `max-width: 1024px` matchMedia query flip at. */
+@media (max-width: 1024px) {
+  .playground-shell {
+    flex-direction: column;
+    /* Let <main>/the document scroll: no second scroll container, and no
+     * viewport-height floor that makes the box taller than its content while
+     * still being unable to move. */
+    overflow-x: hidden;
+    overflow-y: clip;
+    height: auto !important;
+    min-height: 0;
+  }
+
+  .playground-header {
+    align-items: flex-start;
+  }
+
+  .playground-tabs {
+    width: 100%;
+  }
+
+  .playground-tab {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .playground-pane-settings,
+  .playground-pane-chat {
+    flex: none;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .playground-settings-column {
+    max-width: none;
+  }
+}
+
 /* Tablet (769px - 1024px) */
 @media (min-width: 769px) and (max-width: 1024px) {
   :root {
@@ -3299,6 +3305,41 @@ tbody tr:hover td {
 
   .hide-tablet {
     display: none !important;
+  }
+}
+
+/* Side by side from 1025px up: settings left, chat right. That is the first
+ * width where the 320px settings rail leaves the chat pane >= 320px next to
+ * the admin sidebar (1024px is still tabbed — see the `max-width: 1024px`
+ * block above). The shell wraps, so the header keeps the full first row
+ * without an extra DOM wrapper. */
+@media (min-width: 1025px) {
+  .playground-shell {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .playground-header {
+    flex: 0 0 100%;
+  }
+
+  .playground-pane-settings {
+    flex: 0 0 auto;
+    width: 40%;
+    max-width: 480px;
+    min-width: 320px;
+  }
+
+  .playground-pane-chat {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* No side rail: the column fills its pane instead of centring at 760px. */
+  .playground-settings-column {
+    max-width: none;
+    margin: 0;
   }
 }
 

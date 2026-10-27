@@ -14,7 +14,6 @@ from pathlib import Path
 from sqlalchemy import (
     delete as sa_delete,
     func,
-    or_,
     select,
     update as sa_update,
 )
@@ -116,9 +115,9 @@ class KbService:
                     select(Agent.id, Agent.name)
                     .where(
                         Agent.kb_id == kb_id,
-                        # Defensive: a soft-deleted agent never counts as bound.
+                        # Only deletion ends ownership: a paused agent (is_active
+                        # False, deleted_at NULL) still owns its binding.
                         Agent.deleted_at.is_(None),
-                        Agent.is_active.is_(True),
                     )
                     .limit(1)
                 )
@@ -284,9 +283,9 @@ class KbService:
                 select(Agent.id)
                 .where(
                     Agent.kb_id == kb_id,
-                    # Defensive: a soft-deleted agent must not keep the KB undeletable.
+                    # Only deletion releases the KB: a paused agent still owns it,
+                    # so it must keep blocking deletion.
                     Agent.deleted_at.is_(None),
-                    Agent.is_active.is_(True),
                 )
                 .limit(1)
             )
@@ -455,16 +454,17 @@ class KbService:
             if agent.kb_id == kb_id:
                 return agent  # idempotent
 
-            # A soft-deleted agent that still points at this KB (a row written by a
+            # A deleted agent that still points at this KB (a row written by a
             # release that did not clear the binding on delete) would keep the
             # UNIQUE index busy and every rebind would fail with a 409. Release it
-            # here so old databases heal on the next bind.
+            # here so old databases heal on the next bind. Only deletion qualifies:
+            # a paused agent (is_active False) keeps its binding.
             await session.execute(
                 sa_update(Agent)
                 .where(
                     Agent.kb_id == kb_id,
                     Agent.id != agent_id,
-                    or_(Agent.deleted_at.is_not(None), Agent.is_active.is_(False)),
+                    Agent.deleted_at.is_not(None),
                 )
                 .values(kb_id=None)
             )
@@ -474,9 +474,9 @@ class KbService:
                 .where(
                     Agent.kb_id == kb_id,
                     Agent.id != agent_id,
-                    # Defensive: a soft-deleted agent never blocks a fresh binding.
+                    # Only a deleted agent stops blocking: a paused agent is still
+                    # the owner, so a competing bind answers 409 instead of stealing.
                     Agent.deleted_at.is_(None),
-                    Agent.is_active.is_(True),
                 )
                 .limit(1)
             )

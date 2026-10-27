@@ -122,6 +122,32 @@ describe("ChatPanel Component", () => {
   });
 });
 
+describe("ChatPanel messages area (#32)", () => {
+  it("paints no background of its own", () => {
+    // jsdom has no cascade, so assert the inline declaration: the pane must not
+    // set a fill at all (a page-sized rectangle behind the bubbles was a second
+    // surface).
+    render(
+      <ChatPanel
+        messages={[]}
+        input=""
+        isLoading={false}
+        isSettingsSaving={false}
+        agent={mockAgent}
+        onInputChange={() => {}}
+        onSendMessage={() => {}}
+        onClearChat={() => {}}
+      />
+    );
+
+    const messages = screen.getByTestId("chat-messages");
+    const inline = messages.style.background;
+    expect(inline === "" || inline === "transparent").toBe(true);
+    expect(messages.getAttribute("style") ?? "").not.toContain("background");
+    expect(messages.getAttribute("style") ?? "").not.toContain("app-bg");
+  });
+});
+
 describe("ChatPanel Selectors - E2E Regression Prevention", () => {
   it("exposes stable selector for Playwright E2E tests", () => {
     // This test ensures data-testid="chat-message-input" is always present

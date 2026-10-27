@@ -202,7 +202,7 @@ describe("KnowledgeBases view", () => {
 		).toBeInTheDocument();
 	});
 
-	it("shows the bound agent name and no Unbind action for a bound KB", async () => {
+	it("shows the bound agent name plus the #27 unbind icon for a bound KB", async () => {
 		renderView();
 
 		await waitFor(() =>
@@ -210,13 +210,11 @@ describe("KnowledgeBases view", () => {
 		);
 		const boundRow = screen.getByTestId("kb-row-kb_bound");
 		expect(within(boundRow).getByText("Support Bot")).toBeInTheDocument();
-		// §16: unbinding happens from the agent side only, so the KB list never
-		// offers an Unbind control (in either direction).
+		// #27: unbinding is reachable from both lists now — the KB row owns an
+		// icon button that clears the binding.
 		expect(
-			within(boundRow).queryByRole("button", {
-				name: "knowledgeBases.actions.unbind",
-			}),
-		).not.toBeInTheDocument();
+			within(boundRow).getByTestId("kb-unbind-agent-kb_bound"),
+		).toBeInTheDocument();
 		expect(
 			within(boundRow).queryByRole("button", {
 				name: "knowledgeBases.actions.bind",
@@ -262,27 +260,38 @@ describe("KnowledgeBases view", () => {
 		);
 	});
 
-	it("offers no unbind control anywhere in the KB list", async () => {
+	it("unbinds the agent from the row icon and from nowhere else", async () => {
+		mockedApi.bindAgentKnowledgeBase.mockResolvedValue({
+			agent: agents[0],
+			knowledge_base: boundKb,
+		});
 		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
 		);
-		// §16: the per-row Unbind action is gone; unbinding lives on the agent
-		// side. Nothing may call the bind API to unbind from this page.
-		expect(
-			screen.queryByRole("button", {
-				name: "knowledgeBases.actions.unbind",
-			}),
-		).not.toBeInTheDocument();
+		// The unbind lives in the bound-agent cell, not in the row menu (the menu
+		// keeps bind/reset/delete only).
 		const boundRow = screen.getByTestId("kb-row-kb_bound");
 		await openRowMenu(boundRow);
 		expect(
 			within(screen.getByTestId("kb-menu-kb_bound")).queryByRole("menuitem", {
-				name: "knowledgeBases.actions.unbind",
+				name: "knowledgeBases.actions.unbindAgent",
 			}),
 		).not.toBeInTheDocument();
 		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
+
+		await userEvent.click(
+			within(boundRow).getByTestId("kb-unbind-agent-kb_bound"),
+		);
+		expect(window.confirm).toHaveBeenCalled();
+		await waitFor(() =>
+			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
+				"agt_1",
+				null,
+			),
+		);
+		expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledTimes(1);
 	});
 
 	it("hides every mutating action for a non super_admin", async () => {
@@ -305,6 +314,8 @@ describe("KnowledgeBases view", () => {
 				}),
 			).not.toBeInTheDocument();
 		}
+		// Neither direction of the binding is mutable without super_admin.
+		expect(screen.queryByTestId("kb-unbind-agent-kb_bound")).toBeNull();
 		// Read-only affordances stay available: the KB name is now the link that
 		// opens /knowledge-bases/:kbId (§16 replaced the `details` button).
 		expect(

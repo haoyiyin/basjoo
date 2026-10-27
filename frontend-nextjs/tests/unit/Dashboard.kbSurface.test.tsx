@@ -93,7 +93,7 @@ beforeEach(() => {
 });
 
 describe("Dashboard knowledge-base row (R3)", () => {
-	it("links a bound agent to its KB by name and offers one change action", async () => {
+	it("links a bound agent to its KB by name and offers no rebind action (#30)", async () => {
 		renderDashboard();
 
 		const row = await screen.findByTestId("dashboard-kb-row");
@@ -103,9 +103,8 @@ describe("Dashboard knowledge-base row (R3)", () => {
 		const link = within(row).getByTestId("dashboard-kb-link");
 		expect(link).toHaveTextContent("Product Docs");
 		expect(link).toHaveAttribute("href", "/knowledge-bases/kb_1");
-		expect(
-			within(row).getByTestId("dashboard-kb-change"),
-		).toBeInTheDocument();
+		// #30: the swap icon is gone; rebinding happens from the lists.
+		expect(within(row).queryByTestId("dashboard-kb-change")).toBeNull();
 
 		// The bound state never shows the bind/create CTAs.
 		expect(within(row).queryByTestId("dashboard-kb-bind")).toBeNull();

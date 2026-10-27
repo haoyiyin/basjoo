@@ -161,10 +161,11 @@
       "status": "Status",
       "actions": "Actions"
     },
-    "open": "Open",
     "current": "Current",
     "switch": "Switch",
-    "deactivate": "Deactivate",
+    "pause": "Pause",
+    "resume": "Resume",
+    "delete": "Delete",
     "restore": "Restore",
     "autoDeleteCountdown": "Auto-deletes in {{time}}",
     "characterCount": "{{count}}/{{max}}",
@@ -187,9 +188,13 @@
     "kbCreateNew": "Create a new knowledge base",
     "kbNoneAvailable": "No unbound active knowledge base available. Create one under Knowledge Bases.",
     "rowActions": "Actions for {{name}}",
-    "deactivateConfirm": "Deactivate \"{{name}}\"? It will be deleted automatically after the purge window.",
+    "pauseConfirm": "Pause \"{{name}}\"? It will stop answering chats and can be resumed at any time.",
+    "deleteConfirm": "Delete \"{{name}}\"? It is purged automatically after 7 days; you can restore it before then.",
+    "unbindKnowledgeBase": "Unbind knowledge base from {{name}}",
+    "unbindKnowledgeBaseConfirm": "Unbind the knowledge base from \"{{name}}\"? The knowledge base and its sources are kept.",
     "updatedAt": "Updated {{date}}",
-    "statusInactive": "Inactive"
+    "statusPaused": "Paused",
+    "statusDeleted": "Deleted"
   },
   "placeholders": {
     "enterMessage": "Enter message...",
@@ -490,7 +495,6 @@
       "fetchIntervalHelpContent3": "Recommended to set 7-14 days to balance real-time and load.",
       "fetchIntervalDesc": "Recommended to set 7-14 days to avoid frequent fetching",
       "days": "days",
-      "saveSettings": "Save Settings",
       "urlList": "URL List",
       "noUrls": "No URLs",
       "pleaseAddUrl": "Please add webpage links first",
@@ -507,7 +511,6 @@
       "confirmRefetch": "Are you sure you want to refetch all URLs?",
       "confirmDelete": "Are you sure you want to delete this URL?",
       "deleteFailed": "Failed to delete",
-      "autoFetchSaved": "Auto fetch settings saved successfully!",
       "crawlSite": "Crawl Site",
       "crawling": "Crawling...",
       "crawlStarted": "Site crawl started: {{jobId}}",
@@ -764,6 +767,8 @@
       "details": "Details",
       "bind": "Bind to agent",
       "unbind": "Unbind",
+      "unbindAgent": "Unbind {{name}}",
+      "unbindAgentConfirm": "Unbind {{name}} from this knowledge base? The knowledge base and its documents are kept.",
       "reset": "Reset",
       "delete": "Delete",
       "close": "Close",
@@ -836,7 +841,6 @@
     "sessionCount": "Sessions",
     "boundKnowledgeBase": "Bound knowledge base",
     "unboundKnowledgeBase": "No knowledge base bound",
-    "changeKnowledgeBase": "Change knowledge base",
     "bindExisting": "Bind existing",
     "createKnowledgeBase": "Create new knowledge base"
   }

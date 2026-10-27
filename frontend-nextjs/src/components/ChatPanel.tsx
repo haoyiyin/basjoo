@@ -342,7 +342,9 @@ function ChatPanel({
 				</div>
 			)}
 
-			{/* Messages area */}
+			{/* Messages area: no fill of its own (#32). The bubbles, the meta bar and
+			 * the composer carry their own surfaces; a page-sized rectangle behind
+			 * them only added a second background. */}
 			<div
 				data-testid="chat-messages"
 				style={{
@@ -350,7 +352,6 @@ function ChatPanel({
 					minHeight: 0,
 					overflow: "auto",
 					padding: "var(--space-4)",
-					background: "var(--app-bg)",
 				}}
 				aria-live="polite"
 			>

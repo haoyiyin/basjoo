@@ -1,7 +1,7 @@
 // @ts-nocheck
 // @vitest-environment jsdom
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom";
@@ -175,18 +175,25 @@ describe("URLManagement", () => {
     expect(mockedApi.getAgent).not.toHaveBeenCalled();
   });
 
-  it("saves auto-fetch settings against the KB's bound agent, not the KB id", async () => {
+  it("has no save button and persists the switch on change (#25)", async () => {
     mockedApi.updateAgent.mockResolvedValue(mockAgent as any);
     renderComponent([], mockAgent);
 
-    expect(await screen.findByTestId("kb-url-autofetch")).toBeInTheDocument();
+    const card = await screen.findByTestId("kb-url-autofetch");
     await waitFor(() => {
       expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_test");
     });
 
-    fireEvent.click(
-      screen.getByRole("button", {
+    // No save button: every control persists itself.
+    expect(
+      screen.queryByRole("button", {
         name: "labels.urlManagement.saveSettings",
+      }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(card).getByRole("checkbox", {
+        name: "labels.urlManagement.enableAutoFetch",
       }),
     );
 
@@ -195,15 +202,110 @@ describe("URLManagement", () => {
     });
 
     // The auto-fetch knobs live on the *agent*; the KB page must never PATCH a
-    // KB-scoped endpoint for them.
-    const [agentId, patch] = mockedApi.updateAgent.mock.calls[0];
-    expect(agentId).toBe("agt_test");
-    expect(patch).toMatchObject({
-      enable_auto_fetch: false,
-      url_fetch_interval_days: 7,
-      crawl_max_depth: 2,
-      crawl_max_pages: 20,
+    // KB-scoped endpoint for them, and one settled value is one PATCH — the
+    // payload carries only the field that changed.
+    expect(mockedApi.updateAgent).toHaveBeenCalledWith("agt_test", {
+      enable_auto_fetch: true,
     });
+  });
+
+  it("debounces the interval into one PATCH carrying only the interval (#25)", async () => {
+    mockedApi.updateAgent.mockResolvedValue(mockAgent as any);
+    renderComponent([], mockAgent);
+
+    const card = await screen.findByTestId("kb-url-autofetch");
+    await waitFor(() => {
+      expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_test");
+    });
+
+    // The interval only renders once auto-fetch is on; that toggle is its own
+    // PATCH, so clear it before counting the debounced one.
+    fireEvent.click(
+      within(card).getByRole("checkbox", {
+        name: "labels.urlManagement.enableAutoFetch",
+      }),
+    );
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledTimes(1);
+    });
+    mockedApi.updateAgent.mockClear();
+
+    const interval = within(card).getByRole("spinbutton", {
+      name: "labels.urlManagement.fetchInterval",
+    });
+    fireEvent.change(interval, { target: { value: "5" } });
+    fireEvent.change(interval, { target: { value: "14" } });
+    expect(mockedApi.updateAgent).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedApi.updateAgent).toHaveBeenCalledWith("agt_test", {
+      url_fetch_interval_days: 14,
+    });
+  });
+
+  it("debounces the crawl knobs into one PATCH each (#25)", async () => {
+    mockedApi.updateAgent.mockResolvedValue(mockAgent as any);
+    renderComponent([], mockAgent);
+
+    await waitFor(() => {
+      expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_test");
+    });
+
+    fireEvent.change(
+      screen.getByRole("spinbutton", {
+        name: "labels.urlManagement.crawlDepth",
+      }),
+      { target: { value: "4" } },
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedApi.updateAgent).toHaveBeenCalledWith("agt_test", {
+      crawl_max_depth: 4,
+    });
+
+    mockedApi.updateAgent.mockClear();
+    fireEvent.change(
+      screen.getByRole("spinbutton", {
+        name: "labels.urlManagement.crawlMaxPages",
+      }),
+      { target: { value: "30" } },
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedApi.updateAgent).toHaveBeenCalledWith("agt_test", {
+      crawl_max_pages: 30,
+    });
+  });
+
+  it("reports a failed PATCH in the card's status region, not an alert (#25)", async () => {
+    mockedApi.updateAgent.mockRejectedValue(new Error("boom"));
+    renderComponent([], mockAgent);
+
+    const card = await screen.findByTestId("kb-url-autofetch");
+    await waitFor(() => {
+      expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_test");
+    });
+
+    fireEvent.click(
+      within(card).getByRole("checkbox", {
+        name: "labels.urlManagement.enableAutoFetch",
+      }),
+    );
+
+    const status = within(card).getByRole("status");
+    await waitFor(() => {
+      expect(status).toHaveAttribute("data-state", "error");
+    });
+    expect(status).toHaveTextContent("errors.saveFailed");
+    expect(window.alert).not.toHaveBeenCalled();
   });
 });
 

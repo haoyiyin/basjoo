@@ -31,6 +31,8 @@ vi.mock("../../src/services/api", () => ({
 		createAgent: vi.fn(),
 		deleteAgent: vi.fn(),
 		restoreAgent: vi.fn(),
+		pauseAgent: vi.fn(),
+		resumeAgent: vi.fn(),
 		setSelectedAgentId: vi.fn(),
 		clearSelectedAgentId: vi.fn(),
 		getSelectedAgentId: vi.fn(),
@@ -96,6 +98,14 @@ const freeAgent: Agent = {
 	kb_status: null,
 };
 
+const pausedAgent: Agent = {
+	...baseAgent,
+	id: "agt_paused",
+	name: "Paused Agent",
+	is_active: false,
+	deleted_at: null,
+};
+
 const unboundKb: KnowledgeBaseDetail = {
 	id: "kb_free",
 	name: "Unbound KB",
@@ -142,6 +152,9 @@ beforeEach(() => {
 		agent: { ...freeAgent, kb_id: "kb_free" },
 		knowledge_base: unboundKb,
 	});
+	mockedApi.pauseAgent.mockResolvedValue({ ...baseAgent, is_active: false });
+	mockedApi.resumeAgent.mockResolvedValue(baseAgent);
+	mockedApi.deleteAgent.mockResolvedValue({ success: true });
 });
 
 /**
@@ -189,11 +202,15 @@ describe("Agents knowledge-base column", () => {
 		).not.toBeInTheDocument();
 		// The non-KB actions stay.
 		expect(
-			within(freeMenu).getByRole("menuitem", { name: "agents.open" }),
+			within(freeMenu).getByRole("menuitem", { name: "agents.pause" }),
 		).toBeInTheDocument();
 		expect(
-			within(freeMenu).getByRole("menuitem", { name: "agents.deactivate" }),
+			within(freeMenu).getByRole("menuitem", { name: "agents.delete" }),
 		).toBeInTheDocument();
+		// R4/#29: `agents.open` is gone — the row itself is the way in.
+		expect(
+			within(freeMenu).queryByRole("menuitem", { name: "agents.open" }),
+		).not.toBeInTheDocument();
 	});
 
 	it("keeps the knowledge-base column readable for a non super_admin", async () => {
@@ -204,6 +221,165 @@ describe("Agents knowledge-base column", () => {
 		expect(screen.getByTestId("agent-kb-name-agt_bound")).toHaveTextContent(
 			"Product Docs",
 		);
+	});
+});
+
+/**
+ * #28: unbinding moved next to the KB name in the agent row. The KB and its
+ * sources survive; only the `agents.kb_id` pointer is cleared.
+ */
+describe("Agents knowledge-base unbind icon (#28)", () => {
+	function unbindButton(agentId: string) {
+		return screen.queryByTestId(`agent-kb-unbind-${agentId}`);
+	}
+
+	it("renders no unbind icon for an agent without a knowledge base", async () => {
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		expect(unbindButton("agt_bound")).not.toBeNull();
+		expect(unbindButton("agt_free")).toBeNull();
+	});
+
+	it("names the unbind icon from the locale files and keeps it a btn-icon", async () => {
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		const button = unbindButton("agt_bound") as HTMLElement;
+		expect(button).toHaveClass("btn");
+		expect(button).toHaveClass("btn-ghost");
+		expect(button).toHaveClass("btn-icon");
+		expect(button).toHaveAttribute("type", "button");
+		expect(button).toHaveAttribute(
+			"aria-label",
+			"agents.unbindKnowledgeBase",
+		);
+		expect(button).toHaveAttribute("title", "agents.unbindKnowledgeBase");
+	});
+
+	it("hides the unbind icon from a non super_admin", async () => {
+		authState.role = "admin";
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		expect(unbindButton("agt_bound")).toBeNull();
+	});
+
+	it("unbinds once on confirm, reloads the list, and never navigates", async () => {
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+		const router = renderAgents();
+
+		await screen.findByText("Bound Agent");
+		expect(mockedApi.listAgents).toHaveBeenCalledTimes(1);
+
+		fireEvent.click(unbindButton("agt_bound") as HTMLElement);
+
+		await waitFor(() => {
+			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledTimes(1);
+		});
+		expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
+			"agt_bound",
+			null,
+		);
+		// One reload follows the mutation.
+		await waitFor(() => {
+			expect(mockedApi.listAgents).toHaveBeenCalledTimes(2);
+		});
+		expect(confirmSpy).toHaveBeenCalledWith(
+			"agents.unbindKnowledgeBaseConfirm",
+		);
+		// The row navigates on click; the button must not.
+		expect(router.state.location.pathname).toBe("/agents");
+
+		confirmSpy.mockRestore();
+	});
+
+	it("does nothing when the unbind confirmation is declined", async () => {
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		fireEvent.click(unbindButton("agt_bound") as HTMLElement);
+
+		expect(confirmSpy).toHaveBeenCalledTimes(1);
+		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
+		expect(mockedApi.listAgents).toHaveBeenCalledTimes(1);
+
+		confirmSpy.mockRestore();
+	});
+
+	it("surfaces a failed unbind in the page error banner, never an alert", async () => {
+		const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		mockedApi.bindAgentKnowledgeBase.mockRejectedValueOnce(
+			new Error("unbind failed"),
+		);
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		fireEvent.click(unbindButton("agt_bound") as HTMLElement);
+
+		expect(await screen.findByText("unbind failed")).toBeInTheDocument();
+		expect(alertSpy).not.toHaveBeenCalled();
+
+		alertSpy.mockRestore();
+	});
+});
+
+/** #29: the row menu is 停用 + 删除 (or 启用 + 删除 once paused), never "open". */
+describe("Agents lifecycle menu (#29)", () => {
+	it("pauses an agent once through the pause item", async () => {
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		openRowMenu("agt_bound");
+		fireEvent.click(screen.getByTestId("agent-pause-agt_bound"));
+
+		await waitFor(() => {
+			expect(mockedApi.pauseAgent).toHaveBeenCalledTimes(1);
+		});
+		expect(mockedApi.pauseAgent).toHaveBeenCalledWith("agt_bound");
+		expect(confirmSpy).toHaveBeenCalledWith("agents.pauseConfirm");
+		// Pause is not a delete.
+		expect(mockedApi.deleteAgent).not.toHaveBeenCalled();
+
+		confirmSpy.mockRestore();
+	});
+
+	it("resumes a paused agent once through the resume item", async () => {
+		renderAgents([pausedAgent]);
+
+		await screen.findByText("Paused Agent");
+		openRowMenu("agt_paused");
+		expect(
+			screen.queryByTestId("agent-pause-agt_paused"),
+		).not.toBeInTheDocument();
+		fireEvent.click(screen.getByTestId("agent-resume-agt_paused"));
+
+		await waitFor(() => {
+			expect(mockedApi.resumeAgent).toHaveBeenCalledTimes(1);
+		});
+		expect(mockedApi.resumeAgent).toHaveBeenCalledWith("agt_paused");
+	});
+
+	it("deletes an agent once through the delete item with the delete copy", async () => {
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+		renderAgents();
+
+		await screen.findByText("Bound Agent");
+		openRowMenu("agt_bound");
+		fireEvent.click(screen.getByTestId("agent-delete-agt_bound"));
+
+		await waitFor(() => {
+			expect(mockedApi.deleteAgent).toHaveBeenCalledTimes(1);
+		});
+		expect(mockedApi.deleteAgent).toHaveBeenCalledWith("agt_bound");
+		// The confirm copy now describes the delete, not the old 停用 label.
+		expect(confirmSpy).toHaveBeenCalledWith("agents.deleteConfirm");
+		expect(mockedApi.pauseAgent).not.toHaveBeenCalled();
+
+		confirmSpy.mockRestore();
 	});
 });
 

@@ -17,6 +17,7 @@ vi.mock("../../src/services/api", () => ({
 
 vi.mock("../../src/hooks/useMediaQuery", () => ({
 	useIsMobile: () => false,
+	useMediaQuery: () => false,
 }));
 
 vi.mock("react-i18next", () => ({

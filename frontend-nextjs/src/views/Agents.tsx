@@ -8,6 +8,7 @@ import RowMenu, { isRowControl } from "../components/RowMenu";
 import { Icon } from "../components/Icon";
 import { Agent, AgentCreateInput, api } from "../services/api";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "../context/AuthContext";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
 	AGENT_NAME_MAX_DISPLAY_WIDTH,
@@ -47,12 +48,18 @@ function formatAgentUpdatedAt(agent: Agent): string | null {
 	return parsed.toLocaleDateString();
 }
 
+/**
+ * Only a soft-deleted row is inert. A paused agent still opens: the operator
+ * has to reach its dashboard to resume it or to fix its configuration.
+ */
 function isOpenableAgent(agent: Agent | null) {
-	return Boolean(agent && agent.is_active === true && !agent.deleted_at);
+	return Boolean(agent && !agent.deleted_at);
 }
 
 export default function Agents() {
 	const { t } = useTranslation("common");
+	const { admin } = useAuth();
+	const isSuperAdmin = admin?.role === "super_admin";
 	const navigate = useNavigate();
 	const isMobile = useIsMobile();
 	const [agents, setAgents] = useState<Agent[]>([]);
@@ -75,9 +82,12 @@ export default function Agents() {
 	// Row actions are collapsed into one overflow menu per row.
 	const [openMenuAgentId, setOpenMenuAgentId] = useState<string | null>(null);
 
-	// KB binding chooser: opened after an agent is created. Binding and
-	// unbinding an existing agent live on its dashboard (R3); the row menu no
-	// longer toggles the binding blindly.
+	// The KB column's unbind button is per-row: only its own row goes busy.
+	const [busyKbId, setBusyKbId] = useState<string | null>(null);
+
+	// KB binding chooser: opened after an agent is created. Rebinding lives on
+	// the agent dashboard; the row's KB column unbinds directly (the KB and its
+	// sources are kept). The row menu never toggles the binding.
 	const [chooserAgent, setChooserAgent] = useState<Agent | null>(null);
 
 	const agentNameDisplayWidth = getAgentNameDisplayWidth(form.name.trim());
@@ -169,7 +179,7 @@ export default function Agents() {
 		}
 	};
 
-	const handleDeactivate = async (agent: Agent) => {
+	const handleDelete = async (agent: Agent) => {
 		setSaving(true);
 		setError(null);
 		try {
@@ -184,12 +194,69 @@ export default function Agents() {
 
 	// Soft delete is destructive enough to ask first; the row then shows the
 	// purge countdown until the workspace reaps it.
-	const handleRequestDeactivate = (agent: Agent) => {
+	const handleRequestDelete = (agent: Agent) => {
 		const confirmed = window.confirm(
-			t("agents.deactivateConfirm", { name: agent.name }),
+			t("agents.deleteConfirm", { name: agent.name }),
 		);
 		if (!confirmed) return;
-		void handleDeactivate(agent);
+		void handleDelete(agent);
+	};
+
+	const handlePause = async (agent: Agent) => {
+		setSaving(true);
+		setError(null);
+		try {
+			await api.pauseAgent(agent.id);
+			await loadAgents();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("errors.networkError"));
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	// Pausing stops the chat API (the widget included) and keeps the KB
+	// binding, so it is worth one confirmation.
+	const handleRequestPause = (agent: Agent) => {
+		const confirmed = window.confirm(
+			t("agents.pauseConfirm", { name: agent.name }),
+		);
+		if (!confirmed) return;
+		void handlePause(agent);
+	};
+
+	const handleResume = async (agent: Agent) => {
+		setSaving(true);
+		setError(null);
+		try {
+			await api.resumeAgent(agent.id);
+			await loadAgents();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("errors.networkError"));
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	// Unbinding keeps the knowledge base and its sources; it only drops the
+	// pointer, so it is offered from the KB column itself.
+	const handleUnbind = async (agent: Agent) => {
+		const kbName = agent.kb_name;
+		if (!kbName) return;
+		const confirmed = window.confirm(
+			t("agents.unbindKnowledgeBaseConfirm", { name: kbName }),
+		);
+		if (!confirmed) return;
+		setBusyKbId(agent.id);
+		setError(null);
+		try {
+			await api.bindAgentKnowledgeBase(agent.id, null);
+			await loadAgents();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("errors.networkError"));
+		} finally {
+			setBusyKbId(null);
+		}
 	};
 
 	const handleRestore = async (agent: Agent) => {
@@ -243,16 +310,6 @@ export default function Agents() {
 					alignSelf: isMobile ? "flex-start" : "flex-end",
 				}}
 			>
-				{isOpenableAgent(agent) && (
-					<button
-						type="button"
-						role="menuitem"
-						className="row-menu-item"
-						onClick={() => navigate(`/agents/${agent.id}/dashboard`)}
-					>
-						{t("agents.open")}
-					</button>
-				)}
 				{agent.deleted_at ? (
 					<button
 						type="button"
@@ -268,19 +325,49 @@ export default function Agents() {
 						{t("agents.restore")}
 					</button>
 				) : (
-					<button
-						type="button"
-						role="menuitem"
-						data-testid={`agent-deactivate-${agent.id}`}
-						className="row-menu-item"
-						style={{ color: "var(--color-error)" }}
-						disabled={saving}
-						onClick={() => {
-							handleRequestDeactivate(agent);
-						}}
-					>
-						{t("agents.deactivate")}
-					</button>
+					<>
+						{agent.is_active ? (
+							<button
+								type="button"
+								role="menuitem"
+								data-testid={`agent-pause-${agent.id}`}
+								className="row-menu-item"
+								disabled={saving}
+								onClick={() => {
+									handleRequestPause(agent);
+								}}
+							>
+								{t("agents.pause")}
+							</button>
+						) : (
+							<button
+								type="button"
+								role="menuitem"
+								data-testid={`agent-resume-${agent.id}`}
+								className="row-menu-item"
+								style={{ color: "var(--color-success)" }}
+								disabled={saving}
+								onClick={() => {
+									void handleResume(agent);
+								}}
+							>
+								{t("agents.resume")}
+							</button>
+						)}
+						<button
+							type="button"
+							role="menuitem"
+							data-testid={`agent-delete-${agent.id}`}
+							className="row-menu-item"
+							style={{ color: "var(--color-error)" }}
+							disabled={saving}
+							onClick={() => {
+								handleRequestDelete(agent);
+							}}
+						>
+							{t("agents.delete")}
+						</button>
+					</>
 				)}
 			</RowMenu>
 		);
@@ -398,7 +485,7 @@ export default function Agents() {
 									style={rowStyle}
 									onClick={(event) => {
 										// A soft-deleted agent restores or purges first: its row is inert.
-										if (agent.deleted_at || isRowControl(event.target)) return;
+										if (!isOpenableAgent(agent) || isRowControl(event.target)) return;
 										navigate(`/agents/${agent.id}/dashboard`);
 									}}
 								>
@@ -464,9 +551,42 @@ export default function Agents() {
 										<span className="list-cell-label">
 											{t("agents.columns.knowledgeBase")}
 										</span>
-										<span data-testid={`agent-kb-name-${agent.id}`}>
-											{agent.kb_name ||
-												t("knowledgeBases.unboundValue")}
+										<span
+											style={{
+												display: "inline-flex",
+												alignItems: "center",
+												gap: "var(--space-2)",
+												minWidth: 0,
+											}}
+										>
+											<span data-testid={`agent-kb-name-${agent.id}`}>
+												{agent.kb_name ||
+													t("knowledgeBases.unboundValue")}
+											</span>
+											{/* The row navigates on click, so the button relies on
+											 * `isRowControl` (a <button>) rather than on
+											 * stopPropagation alone. Unbinding keeps the KB. */}
+											{isSuperAdmin && agent.kb_name && (
+												<button
+													type="button"
+													className="btn btn-ghost btn-icon"
+													data-testid={`agent-kb-unbind-${agent.id}`}
+													aria-label={t("agents.unbindKnowledgeBase", {
+														name: agent.kb_name,
+													})}
+													title={t("agents.unbindKnowledgeBase", {
+														name: agent.kb_name,
+													})}
+													disabled={busyKbId === agent.id}
+													style={iconButtonStyle}
+													onClick={(event) => {
+														event.stopPropagation();
+														void handleUnbind(agent);
+													}}
+												>
+													<Icon name="close" size={16} />
+												</button>
+											)}
 										</span>
 									</div>
 									{/* Column 3 — updated. */}
@@ -485,7 +605,7 @@ export default function Agents() {
 									>
 										{agent.deleted_at ? (
 											<span className="badge badge-error">
-												{t("agents.statusInactive")}
+												{t("agents.statusDeleted")}
 											</span>
 										) : agent.is_active ? (
 											<span className="badge badge-success">
@@ -493,7 +613,7 @@ export default function Agents() {
 											</span>
 										) : (
 											<span className="badge badge-warning">
-												{t("agents.statusInactive")}
+												{t("agents.statusPaused")}
 											</span>
 										)}
 									</div>

@@ -582,6 +582,9 @@ def build_chat_usage(
 
 WIDGET_ORIGIN_NOT_ALLOWED_DETAIL = "Widget origin not allowed"
 WIDGET_ORIGIN_NOT_ALLOWED_CODE = "ORIGIN_NOT_ALLOWED"
+# #29: pause is a lifecycle state of its own, kept distinct from a soft delete so
+# the widget can tell "temporarily off" from "gone".
+AGENT_PAUSED_DETAIL = "Agent is paused"
 
 
 def normalize_request_origin(value: str) -> Optional[str]:
@@ -651,9 +654,13 @@ def get_stream_error_code(error: HTTPException) -> str:
         if "Daily message quota exceeded" in detail:
             return "QUOTA_EXCEEDED"
         return "RATE_LIMITED"
+    if error.status_code == status.HTTP_410_GONE:
+        return "AGENT_DELETED"
     if error.status_code == status.HTTP_403_FORBIDDEN:
         if detail == WIDGET_ORIGIN_NOT_ALLOWED_DETAIL:
             return WIDGET_ORIGIN_NOT_ALLOWED_CODE
+        if detail == AGENT_PAUSED_DETAIL:
+            return "AGENT_PAUSED"
         return "FORBIDDEN"
     if error.status_code == status.HTTP_400_BAD_REQUEST:
         if detail == "Agent has no LLM API key configured":
@@ -670,6 +677,8 @@ def get_safe_stream_error_message(code: str) -> str:
         "RATE_LIMITED": "Rate limit exceeded",
         WIDGET_ORIGIN_NOT_ALLOWED_CODE: WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
         "FORBIDDEN": "Request was denied",
+        "AGENT_PAUSED": "This assistant is paused",
+        "AGENT_DELETED": "This assistant is no longer available",
         "BAD_REQUEST": "Invalid chat request",
         "API_KEY_MISSING": "Configure an LLM API key before chatting",
         "PERSISTENCE_ERROR": "Failed to save streamed chat response",
@@ -773,6 +782,15 @@ async def prepare_chat_request(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent {request.agent_id} not found",
+        )
+
+    # #29: a paused agent, and a soft-deleted one still inside its purge window,
+    # must not answer chat — including through the public widget.
+    if getattr(agent, "deleted_at", None):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
+    if not agent.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=AGENT_PAUSED_DETAIL
         )
 
     authorization = http_request.headers.get("Authorization", "")
@@ -1801,6 +1819,53 @@ async def restore_agent(
     agent = await require_workspace_super_for_agent(
         db, agent_id, current_user, include_deleted=True
     )
+    purge_after = as_utc(agent.purge_after)
+    if purge_after and purge_after <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE, detail="Agent purge window has expired"
+        )
+    agent.is_active = True
+    agent.deleted_at = None
+    agent.purge_after = None
+    agent.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(agent)
+    return await build_agent_config_with_stats(agent, db)
+
+@router.post("/agents/{agent_id}:pause", response_model=AgentConfig)
+async def pause_agent(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pause an agent: chat stops, the settings and the KB binding are kept."""
+    agent = await require_workspace_super_for_agent(
+        db, agent_id, current_user, include_deleted=True
+    )
+    # A soft-deleted agent comes back through `:restore` only.
+    if getattr(agent, "deleted_at", None):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
+    if agent.is_active:
+        agent.is_active = False
+        agent.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(agent)
+    # `deleted_at` / `purge_after` stay NULL and `kb_id` stays bound: pause is not
+    # a detach. Idempotent — pausing an already paused agent is a no-op 200.
+    return await build_agent_config_with_stats(agent, db)
+
+@router.post("/agents/{agent_id}:resume", response_model=AgentConfig)
+async def resume_agent(
+    agent_id: str,
+    current_user: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resume a paused agent. A deleted agent must go through `:restore`."""
+    agent = await require_workspace_super_for_agent(
+        db, agent_id, current_user, include_deleted=True
+    )
+    if getattr(agent, "deleted_at", None):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Agent is deleted")
     purge_after = as_utc(agent.purge_after)
     if purge_after and purge_after <= datetime.now(timezone.utc):
         raise HTTPException(

@@ -52,6 +52,8 @@ vi.mock("../../src/services/api", () => ({
 		createAgent: vi.fn(),
 		deleteAgent: vi.fn(),
 		restoreAgent: vi.fn(),
+		pauseAgent: vi.fn(),
+		resumeAgent: vi.fn(),
 		setSelectedAgentId: vi.fn(),
 		clearSelectedAgentId: vi.fn(),
 		getSelectedAgentId: vi.fn(),
@@ -105,6 +107,14 @@ const deletedAgent: Agent = {
 	is_active: false,
 	deleted_at: "2026-06-01T00:00:00Z",
 	purge_after: "2026-06-08T00:00:00Z",
+};
+
+const pausedAgent: Agent = {
+	...activeAgent,
+	id: "agt_paused",
+	name: "Paused Agent",
+	is_active: false,
+	deleted_at: null,
 };
 
 const createdAgent: Agent = {
@@ -164,6 +174,8 @@ beforeEach(() => {
 	mockedApi.createAgent.mockResolvedValue(createdAgent);
 	mockedApi.deleteAgent.mockResolvedValue({ success: true });
 	mockedApi.restoreAgent.mockResolvedValue(activeAgent);
+	mockedApi.pauseAgent.mockResolvedValue({ ...activeAgent, is_active: false });
+	mockedApi.resumeAgent.mockResolvedValue(activeAgent);
 	mockedApi.listKnowledgeBases.mockResolvedValue({
 		knowledge_bases: [unboundKb],
 		total: 1,
@@ -333,47 +345,71 @@ describe("Agents create sheet (§15)", () => {
 		expect(mockedApi.createAgent.mock.calls[0][0].name).toBe("客服助手一二");
 	});
 
-	it("keeps every row action in the overflow menu: open, deactivate, restore", async () => {
-		renderAgents([activeAgent, deletedAgent]);
+	it("keeps every row action in the overflow menu: pause, delete, restore", async () => {
+		renderAgents([activeAgent, pausedAgent, deletedAgent]);
 		await screen.findByText("Active Agent");
+		await screen.findByText("Paused Agent");
 		await screen.findByText("Deleted Agent");
 
 		// Nothing row-scoped is inline; each row exposes one overflow trigger.
 		expect(
-			screen.queryByRole("button", { name: "agents.deactivate" }),
+			screen.queryByRole("button", { name: "agents.delete" }),
 		).not.toBeInTheDocument();
 		const triggers = screen.getAllByRole("button", {
 			name: /^agents\.rowActions$/,
 		});
-		expect(triggers).toHaveLength(2);
+		expect(triggers).toHaveLength(3);
 
+		// An active agent: pause + delete, and never `open` — the row itself is
+		// the way in (the row navigates, the name is a link).
 		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
 		const activeMenu = screen.getByTestId("agent-menu-agt_active");
 		expect(
-			within(activeMenu).getByRole("menuitem", { name: "agents.open" }),
-		).toBeInTheDocument();
+			within(activeMenu).getByTestId("agent-pause-agt_active"),
+		).toHaveTextContent("agents.pause");
+		expect(
+			within(activeMenu).getByTestId("agent-delete-agt_active"),
+		).toHaveTextContent("agents.delete");
+		expect(
+			within(activeMenu).queryByRole("menuitem", { name: "agents.open" }),
+		).not.toBeInTheDocument();
+		expect(
+			within(activeMenu).queryByRole("menuitem", { name: "agents.restore" }),
+		).not.toBeInTheDocument();
 		// R3: knowledge-base binding is no longer a blind row-menu toggle.
 		expect(
 			within(activeMenu).queryByRole("menuitem", {
 				name: /knowledgeBases\.actions\.(bind|unbind)/,
 			}),
 		).not.toBeInTheDocument();
+
+		// A paused agent: resume + delete (it can still be deleted).
+		fireEvent.click(screen.getByTestId("agent-actions-agt_paused"));
+		const pausedMenu = screen.getByTestId("agent-menu-agt_paused");
 		expect(
-			within(activeMenu).getByRole("menuitem", { name: "agents.deactivate" }),
-		).toBeInTheDocument();
+			within(pausedMenu).getByTestId("agent-resume-agt_paused"),
+		).toHaveTextContent("agents.resume");
 		expect(
-			within(activeMenu).queryByRole("menuitem", { name: "agents.restore" }),
+			within(pausedMenu).getByTestId("agent-delete-agt_paused"),
+		).toHaveTextContent("agents.delete");
+		expect(
+			within(pausedMenu).queryByTestId("agent-pause-agt_paused"),
+		).not.toBeInTheDocument();
+		expect(
+			within(pausedMenu).queryByRole("menuitem", { name: "agents.open" }),
 		).not.toBeInTheDocument();
 
+		// A soft-deleted agent: restore only.
 		fireEvent.click(screen.getByTestId("agent-actions-agt_deleted"));
 		const deletedMenu = screen.getByTestId("agent-menu-agt_deleted");
 		expect(
 			within(deletedMenu).getByRole("menuitem", { name: "agents.restore" }),
 		).toBeInTheDocument();
 		expect(
-			within(deletedMenu).queryByRole("menuitem", {
-				name: "agents.deactivate",
-			}),
+			within(deletedMenu).queryByTestId("agent-delete-agt_deleted"),
+		).not.toBeInTheDocument();
+		expect(
+			within(deletedMenu).queryByTestId("agent-pause-agt_deleted"),
 		).not.toBeInTheDocument();
 		// The soft-deleted row keeps its purge countdown visible.
 		expect(
@@ -389,14 +425,14 @@ describe("Agents create sheet (§15)", () => {
 		await screen.findByText("Active Agent");
 
 		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
-		fireEvent.click(screen.getByTestId("agent-deactivate-agt_active"));
+		fireEvent.click(screen.getByTestId("agent-delete-agt_active"));
 
 		expect(confirmSpy).toHaveBeenCalledTimes(1);
 		expect(mockedApi.deleteAgent).not.toHaveBeenCalled();
 
 		confirmSpy.mockReturnValue(true);
 		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
-		fireEvent.click(screen.getByTestId("agent-deactivate-agt_active"));
+		fireEvent.click(screen.getByTestId("agent-delete-agt_active"));
 
 		await waitFor(() => {
 			expect(mockedApi.deleteAgent).toHaveBeenCalledWith("agt_active");

@@ -183,7 +183,8 @@ export default function Dashboard() {
 						</dd>
 					</div>
 					{/* R3: the knowledge base is part of the agent's identity, with the
-					 * name as a link to its source page and one action to change it. */}
+					 * name as a link to its source page. Rebinding is deliberately absent
+					 * here (#30): the binding is changed from the agent or the KB list. */}
 					<div className="identity-row" data-testid="dashboard-kb-row">
 						<dt className="identity-label">
 							{kbId
@@ -199,16 +200,6 @@ export default function Dashboard() {
 									>
 										{kbName || kbId}
 									</Link>
-									<button
-										type="button"
-										className="btn btn-secondary btn-icon"
-										data-testid="dashboard-kb-change"
-										aria-label={t("dashboard.changeKnowledgeBase")}
-										title={t("dashboard.changeKnowledgeBase")}
-										onClick={() => setBindOpen(true)}
-									>
-										<Icon name="swap" size={16} />
-									</button>
 								</span>
 							) : (
 								<span className="identity-actions">

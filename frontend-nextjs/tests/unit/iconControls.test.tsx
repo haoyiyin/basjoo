@@ -192,11 +192,6 @@ describe("icon-only buttons carry a label (R3)", () => {
  * ============================================================================= */
 const ROUND6_SURFACES: Array<{ file: string; marker: string; name: string }> = [
 	{
-		file: "src/views/Dashboard.tsx",
-		marker: 'data-testid="dashboard-kb-change"',
-		name: "agent dashboard 更换知识库",
-	},
-	{
 		file: "src/views/AgentSettings.tsx",
 		marker: "onClick={handleSave}",
 		name: "agent settings 保存",
@@ -225,11 +220,6 @@ const ROUND6_SURFACES: Array<{ file: string; marker: string; name: string }> = [
 		file: "src/components/KbBindSheet.tsx",
 		marker: 'data-testid="kb-chooser-bind-submit"',
 		name: "bind sheet 绑定",
-	},
-	{
-		file: "src/views/URLManagement.tsx",
-		marker: "labels.urlManagement.saveSettings",
-		name: "URL panel 保存",
 	},
 	{
 		file: "src/views/URLManagement.tsx",

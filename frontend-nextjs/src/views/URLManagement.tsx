@@ -13,6 +13,14 @@ interface KbIndexState {
   status: string;
 }
 
+/** The auto-fetch knobs live on the *agent*; one PATCH carries exactly one. */
+type AutoFetchField =
+  | 'enable_auto_fetch'
+  | 'url_fetch_interval_days'
+  | 'crawl_max_depth'
+  | 'crawl_max_pages';
+type AutoFetchPatch = Pick<Agent, AutoFetchField>;
+
 /**
  * URL source panel for one knowledge base.
  *
@@ -20,6 +28,11 @@ interface KbIndexState {
  * id from the route and uses only the canonical kb-scoped source routes, so it
  * works for an unbound KB too. The auto-fetch toggle is agent-preconditioned —
  * it is hidden unless the KB has a bound agent (the toggle PATCHes that agent).
+ *
+ * Auto-fetch settings persist on change (#25): there is no save button. Each
+ * control PATCHes only the field it owns — the switch immediately, the numeric
+ * inputs 500 ms after the last keystroke — and the card header reports the
+ * result of the last PATCH (`role="status"`, `data-state`).
  */
 export default function URLManagement() {
   const { t } = useTranslation('common');
@@ -33,7 +46,9 @@ export default function URLManagement() {
   const [newUrl, setNewUrl] = useState('');
   const [refetching, setRefetching] = useState(false);
   const [crawling, setCrawling] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<
+    'idle' | 'saving' | 'saved' | 'error'
+  >('idle');
   const [autoFetchEnabled, setAutoFetchEnabled] = useState(false);
   const [fetchIntervalDays, setFetchIntervalDays] = useState(7);
   const [crawlMaxDepth, setCrawlMaxDepth] = useState(2);
@@ -52,6 +67,12 @@ export default function URLManagement() {
   const stopPollingRequestedRef = useRef(false);
   const crawlPollingRef = useRef(false);
   crawlPollingRef.current = crawlPolling;
+  // #25 save plumbing: one debounce timer per field, and a mount flag so a late
+  // PATCH never sets state on an unmounted panel.
+  const autoFetchTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {},
+  );
+  const mountedRef = useRef(true);
 
   // Auto-complete URL with https:// if missing protocol
   const normalizeUrl = (url: string): string => {
@@ -94,6 +115,17 @@ export default function URLManagement() {
   useEffect(() => {
     void loadBoundAgent();
   }, [loadBoundAgent]);
+
+  // #25: drop pending debounces on unmount, and never write state afterwards.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const timers = autoFetchTimersRef.current;
+      for (const field of Object.keys(timers)) clearTimeout(timers[field]);
+      autoFetchTimersRef.current = {};
+    };
+  }, []);
 
   const loadUrls = useCallback(async () => {
     if (!kbId) return;
@@ -446,28 +478,44 @@ export default function URLManagement() {
     }
   };
 
-  const handleSaveAutoFetchSettings = async () => {
+  // #25 — persist on change. One field per PATCH so two quick edits never
+  // overwrite each other with a stale full payload.
+  const persistAutoFetch = useCallback(
+    async (agentId: string, patch: AutoFetchPatch) => {
+      if (!mountedRef.current) return;
+      setSaveStatus('saving');
+      try {
+        await api.updateAgent(agentId, patch);
+        if (mountedRef.current) setSaveStatus('saved');
+      } catch (error) {
+        console.error('Failed to save auto-fetch settings:', error);
+        if (mountedRef.current) setSaveStatus('error');
+      }
+    },
+    [],
+  );
+
+  const queueAutoFetchPatch = (
+    field: keyof AutoFetchPatch,
+    patch: AutoFetchPatch,
+  ) => {
+    // An unbound KB has no agent to PATCH: the crawl knobs stay local and only
+    // feed `crawl:create`.
     if (!boundAgent) return;
-    setSaving(true);
-    try {
-      await api.updateAgent(boundAgent.id, {
-        enable_auto_fetch: autoFetchEnabled,
-        url_fetch_interval_days: fetchIntervalDays,
-        crawl_max_depth: crawlMaxDepth,
-        crawl_max_pages: crawlMaxPages,
-      });
-      alert(t('labels.urlManagement.autoFetchSaved'));
-    } catch (error) {
-      alert(
-        `${t('errors.saveFailed')}: ${
-          error instanceof Error ? error.message : t('errors.unknown')
-        }`,
-      );
-    } finally {
-      setSaving(false);
-    }
+    const agentId = boundAgent.id;
+    const pending = autoFetchTimersRef.current[field];
+    if (pending) clearTimeout(pending);
+    autoFetchTimersRef.current[field] = setTimeout(() => {
+      delete autoFetchTimersRef.current[field];
+      void persistAutoFetch(agentId, patch);
+    }, 500);
   };
 
+  const handleAutoFetchToggle = (checked: boolean) => {
+    setAutoFetchEnabled(checked);
+    if (!boundAgent) return;
+    void persistAutoFetch(boundAgent.id, { enable_auto_fetch: checked });
+  };
   const backendBusy =
     indexState !== null &&
     (indexState.status === 'indexing' || indexState.status === 'rebuilding');
@@ -711,11 +759,16 @@ export default function URLManagement() {
                 type="number"
                 aria-label={t('labels.urlManagement.crawlDepth')}
                 value={crawlMaxDepth}
-                onChange={(e) =>
-                  setCrawlMaxDepth(
-                    Math.max(1, Math.min(5, parseInt(e.target.value) || 2)),
-                  )
-                }
+                onChange={(e) => {
+                  const next = Math.max(
+                    1,
+                    Math.min(5, parseInt(e.target.value) || 2),
+                  );
+                  setCrawlMaxDepth(next);
+                  queueAutoFetchPatch('crawl_max_depth', {
+                    crawl_max_depth: next,
+                  });
+                }}
                 min={1}
                 max={5}
               />
@@ -735,11 +788,16 @@ export default function URLManagement() {
                 type="number"
                 aria-label={t('labels.urlManagement.crawlMaxPages')}
                 value={crawlMaxPages}
-                onChange={(e) =>
-                  setCrawlMaxPages(
-                    Math.max(1, Math.min(500, parseInt(e.target.value) || 20)),
-                  )
-                }
+                onChange={(e) => {
+                  const next = Math.max(
+                    1,
+                    Math.min(500, parseInt(e.target.value) || 20),
+                  );
+                  setCrawlMaxPages(next);
+                  queueAutoFetchPatch('crawl_max_pages', {
+                    crawl_max_pages: next,
+                  });
+                }}
                 min={1}
                 max={500}
               />
@@ -808,6 +866,22 @@ export default function URLManagement() {
         <div data-testid="kb-url-autofetch" className="card">
           <div className="card-header">
             <h3 className="card-title">{t('labels.urlManagement.autoFetch')}</h3>
+            <div
+              role="status"
+              aria-live="polite"
+              className="playground-status"
+              data-testid="kb-url-autofetch-status"
+              data-state={saveStatus}
+            >
+              {saveStatus === 'saving' && (
+                <>
+                  <div className="spinner playground-status-spinner" />
+                  <span>{t('status.saving')}</span>
+                </>
+              )}
+              {saveStatus === 'saved' && <span>{t('status.saved')}</span>}
+              {saveStatus === 'error' && <span>{t('errors.saveFailed')}</span>}
+            </div>
             <span
               className="badge badge-neutral"
               style={{ whiteSpace: 'normal', textAlign: 'left' }}
@@ -820,7 +894,7 @@ export default function URLManagement() {
               <input
                 type="checkbox"
                 checked={autoFetchEnabled}
-                onChange={(e) => setAutoFetchEnabled(e.target.checked)}
+                onChange={(e) => handleAutoFetchToggle(e.target.checked)}
                 aria-label={t('labels.urlManagement.enableAutoFetch')}
               />
               <span style={{ minWidth: 0 }}>
@@ -875,11 +949,13 @@ export default function URLManagement() {
                     type="number"
                     aria-label={t('labels.urlManagement.fetchInterval')}
                     value={fetchIntervalDays}
-                    onChange={(e) =>
-                      setFetchIntervalDays(
-                        Math.max(1, parseInt(e.target.value) || 7),
-                      )
-                    }
+                    onChange={(e) => {
+                      const next = Math.max(1, parseInt(e.target.value) || 7);
+                      setFetchIntervalDays(next);
+                      queueAutoFetchPatch('url_fetch_interval_days', {
+                        url_fetch_interval_days: next,
+                      });
+                    }}
                     min={1}
                     max={30}
                     style={{ width: '120px' }}
@@ -895,23 +971,6 @@ export default function URLManagement() {
                 </div>
               </div>
             )}
-
-            <button
-              type="button"
-              className="btn btn-primary btn-icon"
-              onClick={handleSaveAutoFetchSettings}
-              disabled={saving}
-              aria-label={t('labels.urlManagement.saveSettings')}
-              title={t('labels.urlManagement.saveSettings')}
-              aria-busy={saving}
-              style={{ marginTop: 'var(--space-4)' }}
-            >
-              {saving ? (
-                <div className="spinner" style={{ width: '14px', height: '14px' }} />
-              ) : (
-                <Icon name="save" size={16} />
-              )}
-            </button>
           </div>
         </div>
       )}
