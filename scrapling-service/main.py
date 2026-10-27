@@ -6,6 +6,7 @@ Uses curl_cffi for TLS-impersonated HTTP and readability-lxml for content extrac
 import hashlib
 import ipaddress
 import logging
+import os
 import re
 import socket
 from datetime import datetime, timezone
@@ -48,6 +49,19 @@ def _is_unsafe_ip(host: str) -> bool:
     )
 
 
+# SSRF_PROTECTION_ENABLED mirrors the backend flag. Off by default: behind a
+# fake-ip / ULA proxy resolver every public site resolves into a private range,
+# so the resolved-IP check would reject every fetch. Scheme, credential,
+# localhost and IP-literal checks always run (no DNS, cannot misfire); only the
+# DNS-range check is gated — same split as backend/services/url_safety.py.
+_SSRF_ENABLED = os.getenv("SSRF_PROTECTION_ENABLED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+
 def _validate_fetch_url_safe(url: str):
     parsed = urlsplit(url)
     if parsed.scheme.lower() not in {"http", "https"}:
@@ -63,6 +77,8 @@ def _validate_fetch_url_safe(url: str):
     except ValueError as e:
         if "Unsafe" in str(e):
             raise
+    if not _SSRF_ENABLED:
+        return
     for info in socket.getaddrinfo(hostname, None):
         if _is_unsafe_ip(info[4][0]):
             raise ValueError("Unsafe redirect target resolved IP")
