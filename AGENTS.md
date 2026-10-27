@@ -23,6 +23,7 @@ Docker-oriented AI customer support platform:
 
 ## Required tools and setup
 - Dev stack: `docker compose --profile dev up --watch`.
+- The project name is pinned as `name: basjoo` in `docker-compose.yml`. Do not remove it and do not add `name:` to a volume: volumes are prefixed with the project name, so without the pin a second checkout (a worktree, a tarball) starts on `basjoo-ui_backend-data` — an empty database that looks like every admin account was lost. Use `-p` only for a deliberately separate stack.
 - Backend local: `cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && python3 main.py`.
 - Frontend: `cd frontend-nextjs && npm install`.
 - Widget: `cd widget && npm install`.
