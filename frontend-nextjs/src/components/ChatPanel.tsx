@@ -4,6 +4,7 @@ import { useRef, useEffect, memo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Source, UsageInfo } from "../services/api";
 import { formatAssistantMessageContent } from "../utils/citations";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 export interface Message {
@@ -38,6 +39,17 @@ interface ChatPanelProps {
 	onClearChat: () => void;
 }
 
+/*
+ * Shared chat surface (spec §20). Used by Playground and by the admin chat
+ * screen, so this file is a restyle only: the props contract, the streamed
+ * message shapes and the `data-testid` hooks (`chat-messages`,
+ * `message-bubble`, `chat-message-input`) are unchanged.
+ *
+ * Colour rule: every fill/stroke below resolves to a design token — the chat
+ * pane has no literal hex and no alpha-tinted glass, so it reads the same in
+ * both themes.
+ */
+
 const streamingCursorStyle: React.CSSProperties = {
 	display: "inline-block",
 	width: "0.5rem",
@@ -45,6 +57,20 @@ const streamingCursorStyle: React.CSSProperties = {
 	verticalAlign: "text-bottom",
 	background: "var(--color-accent-primary)",
 	animation: "blinkCursor 1s steps(1) infinite",
+};
+
+const metaTagStyle: React.CSSProperties = {
+	display: "flex",
+	alignItems: "center",
+	gap: "var(--space-2)",
+	minWidth: 0,
+	padding: "2px var(--space-2)",
+	fontSize: "var(--text-xs)",
+	lineHeight: "var(--leading-snug)",
+	color: "var(--fg-default)",
+	background: "var(--color-bg-tertiary)",
+	border: "1px solid var(--color-border)",
+	borderRadius: "var(--radius-full)",
 };
 
 function StreamingCursor({ marginLeft }: { marginLeft?: string }) {
@@ -62,12 +88,12 @@ function StreamingCursor({ marginLeft }: { marginLeft?: string }) {
 // Loading dots animation
 function LoadingDots() {
 	return (
-		<div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+		<div style={{ display: "flex", gap: "var(--space-1)", alignItems: "center" }}>
 			<span
 				style={{
 					width: "6px",
 					height: "6px",
-					borderRadius: "50%",
+					borderRadius: "var(--radius-full)",
 					background: "var(--color-accent-primary)",
 					animation: "bounce 1.4s ease-in-out 0s infinite both",
 				}}
@@ -76,7 +102,7 @@ function LoadingDots() {
 				style={{
 					width: "6px",
 					height: "6px",
-					borderRadius: "50%",
+					borderRadius: "var(--radius-full)",
 					background: "var(--color-accent-primary)",
 					animation: "bounce 1.4s ease-in-out 0.16s infinite both",
 				}}
@@ -85,7 +111,7 @@ function LoadingDots() {
 				style={{
 					width: "6px",
 					height: "6px",
-					borderRadius: "50%",
+					borderRadius: "var(--radius-full)",
 					background: "var(--color-accent-primary)",
 					animation: "bounce 1.4s ease-in-out 0.32s infinite both",
 				}}
@@ -117,7 +143,7 @@ function ReferenceList({
 				style={{
 					fontSize: "var(--text-xs)",
 					fontWeight: 600,
-					color: "var(--color-text-muted)",
+					color: "var(--fg-dim)",
 					marginBottom: "var(--space-2)",
 				}}
 			>
@@ -163,8 +189,13 @@ function ChatPanel({
 	onClearChat,
 }: ChatPanelProps) {
 	const { t } = useTranslation("common");
+	const isMobile = useIsMobile();
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const [agentIdCopied, setAgentIdCopied] = useState(false);
+	// MobileLayout idiom: icon-only controls become >= 44px tap targets.
+	const iconButtonStyle = isMobile
+		? { minWidth: 44, minHeight: 44 }
+		: undefined;
 
 	const handleCopyAgentId = async () => {
 		if (!agent?.id) {
@@ -189,6 +220,9 @@ function ChatPanel({
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 	}, [messages]);
 
+	const sendBlocked =
+		isLoading || isSettingsSaving || sendDisabled || !input.trim();
+
 	return (
 		<div
 			style={{
@@ -197,178 +231,125 @@ function ChatPanel({
 				flexDirection: "column",
 				overflow: "hidden",
 				height: "100%",
+				minWidth: 0,
 			}}
 		>
-			{/* Agent Info Bar */}
+			{/* Agent info bar: one row of meta pills, no container chrome. */}
 			{agent && (
 				<div
 					style={{
-						padding: "var(--space-3) var(--space-4)",
+						display: "flex",
+						flexWrap: "wrap",
+						gap: "var(--space-2)",
+						alignItems: "center",
+						padding: "var(--space-2) var(--space-4)",
 						borderBottom: "1px solid var(--color-border)",
-						background: "var(--color-bg-tertiary)",
+						background: "var(--surface-bg)",
 						flexShrink: 0,
 					}}
 				>
-					<div
+					<span style={metaTagStyle}>
+						<svg
+							width="12"
+							height="12"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							aria-hidden="true"
+							style={{ color: "var(--color-accent-primary)" }}
+						>
+							<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+							<path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+							<line x1="12" y1="19" x2="12" y2="23" />
+							<line x1="8" y1="23" x2="16" y2="23" />
+						</svg>
+						<span style={{ color: "var(--fg-dim)" }}>
+							{t("playground.agent")}
+						</span>
+						<span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>
+							{agent.name}
+						</span>
+					</span>
+
+					<span
 						style={{
-							display: "flex",
-							flexWrap: "wrap",
-							gap: "var(--space-3)",
-							alignItems: "center",
+							...metaTagStyle,
+							background: "var(--color-accent-bg)",
+							border: "1px solid var(--color-accent-primary)",
+							color: "var(--color-accent-primary)",
 						}}
 					>
-						{/* Agent Name Tag */}
-						<div
+						<svg
+							width="12"
+							height="12"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							aria-hidden="true"
+						>
+							<rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+							<line x1="8" y1="21" x2="16" y2="21" />
+							<line x1="12" y1="17" x2="12" y2="21" />
+						</svg>
+						<span style={{ fontWeight: 500 }}>{agent.model}</span>
+					</span>
+
+					<span style={metaTagStyle}>
+						<svg
+							width="12"
+							height="12"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							aria-hidden="true"
+							style={{ color: "var(--color-warning)" }}
+						>
+							<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
+						</svg>
+						<span style={{ color: "var(--fg-dim)" }}>
+							{t("playground.temperature")}
+						</span>
+						<span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>
+							{agent.temperature}
+						</span>
+					</span>
+
+					{agent.id && (
+						<button
+							type="button"
+							onClick={handleCopyAgentId}
+							aria-label={`${t("buttons.copy")} ${t("labels.agentId")}`}
+							title={agentIdCopied ? t("status.success") : t("buttons.copy")}
 							style={{
-								display: "flex",
-								alignItems: "center",
-								gap: "6px",
-								padding: "4px 10px",
-								background: "var(--color-bg-glass)",
-								border: "1px solid var(--color-border)",
-								borderRadius: "var(--radius-full)",
-								fontSize: "var(--text-xs)",
+								...metaTagStyle,
+								cursor: "pointer",
+								color: agentIdCopied
+									? "var(--color-success)"
+									: "var(--fg-dim)",
+								fontFamily: "var(--font-mono)",
 							}}
 						>
-							<svg
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								style={{ color: "var(--color-accent-primary)" }}
-							>
-								<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-								<path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-								<line x1="12" y1="19" x2="12" y2="23" />
-								<line x1="8" y1="23" x2="16" y2="23" />
-							</svg>
-							<span style={{ color: "var(--color-text-muted)" }}>
-								{t("playground.agent")}
+							<span>{t("labels.agentId")}</span>
+							<span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>
+								{agent.id}
 							</span>
-							<span
-								style={{ color: "var(--color-text-primary)", fontWeight: 500 }}
-							>
-								{agent.name}
-							</span>
-						</div>
-
-						{/* Model Tag */}
-						<div
-							style={{
-								display: "flex",
-								alignItems: "center",
-								gap: "6px",
-								padding: "4px 10px",
-								background: "var(--color-accent-bg, rgba(6, 182, 212, 0.1))",
-								border: "1px solid var(--color-accent-primary)",
-								borderRadius: "var(--radius-full)",
-								fontSize: "var(--text-xs)",
-							}}
-						>
-							<svg
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								style={{ color: "var(--color-accent-primary)" }}
-							>
-								<rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-								<line x1="8" y1="21" x2="16" y2="21" />
-								<line x1="12" y1="17" x2="12" y2="21" />
-							</svg>
-							<span
-								style={{
-									color: "var(--color-accent-primary)",
-									fontWeight: 500,
-								}}
-							>
-								{agent.model}
-							</span>
-						</div>
-
-						{/* Temperature Tag */}
-						<div
-							style={{
-								display: "flex",
-								alignItems: "center",
-								gap: "6px",
-								padding: "4px 10px",
-								background: "var(--color-bg-glass)",
-								border: "1px solid var(--color-border)",
-								borderRadius: "var(--radius-full)",
-								fontSize: "var(--text-xs)",
-							}}
-						>
-							<svg
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								style={{ color: "var(--color-warning)" }}
-							>
-								<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
-							</svg>
-							<span style={{ color: "var(--color-text-muted)" }}>
-								{t("playground.temperature")}
-							</span>
-							<span
-								style={{ color: "var(--color-text-primary)", fontWeight: 500 }}
-							>
-								{agent.temperature}
-							</span>
-						</div>
-
-						{agent.id && (
-							<button
-								onClick={handleCopyAgentId}
-								aria-label="Copy Agent ID"
-								style={{
-									display: "flex",
-									alignItems: "center",
-									gap: "6px",
-									padding: "4px 10px",
-									background: "var(--color-bg-glass)",
-									border: "1px solid var(--color-border)",
-									borderRadius: "var(--radius-full)",
-									fontSize: "var(--text-xs)",
-									cursor: "pointer",
-									color: agentIdCopied
-										? "var(--color-success)"
-										: "var(--color-text-muted)",
-									fontFamily:
-										'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
-								}}
-								title={agentIdCopied ? t("status.success") : t("buttons.copy")}
-							>
-								<span>Agent ID</span>
-								<span
-									style={{
-										color: "var(--color-text-primary)",
-										fontWeight: 500,
-									}}
-								>
-									{agent.id}
-								</span>
-							</button>
-						)}
-					</div>
+						</button>
+					)}
 				</div>
 			)}
 
-			{/* Messages Area */}
+			{/* Messages area */}
 			<div
 				data-testid="chat-messages"
 				style={{
 					flex: 1,
+					minHeight: 0,
 					overflow: "auto",
 					padding: "var(--space-4)",
-					background: "var(--color-bg-primary)",
+					background: "var(--app-bg)",
 				}}
 				aria-live="polite"
 			>
@@ -380,55 +361,38 @@ function ChatPanel({
 							flexDirection: "column",
 							alignItems: "center",
 							justifyContent: "center",
-							color: "var(--color-text-muted)",
+							textAlign: "center",
+							gap: "var(--space-2)",
 						}}
 					>
 						<div
 							style={{
-								width: "72px",
-								height: "72px",
-								background: "hsla(220deg, 20%, 13%, 0.5)",
-								backdropFilter: "blur(16px)",
-								WebkitBackdropFilter: "blur(16px)",
-								borderRadius: "var(--radius-xl)",
+								width: "56px",
+								height: "56px",
+								background: "var(--color-bg-tertiary)",
+								borderRadius: "var(--radius-lg)",
 								display: "flex",
 								alignItems: "center",
 								justifyContent: "center",
-								marginBottom: "var(--space-4)",
-								border: "1px solid hsla(188deg, 90%, 50%, 0.15)",
-								boxShadow: "0 0 30px hsla(188deg, 90%, 50%, 0.1)",
+								marginBottom: "var(--space-2)",
+								border: "1px solid var(--color-border)",
 							}}
 						>
 							<svg
-								width="32"
-								height="32"
+								width="28"
+								height="28"
 								viewBox="0 0 24 24"
 								fill="none"
 								stroke="currentColor"
 								strokeWidth="1.5"
+								aria-hidden="true"
 								style={{ color: "var(--color-accent-primary)" }}
 							>
 								<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
 							</svg>
 						</div>
-						<p
-							style={{
-								fontSize: "var(--text-lg)",
-								fontWeight: 600,
-								color: "var(--color-text-primary)",
-							}}
-						>
-							{t("playground.startChat")}
-						</p>
-						<p
-							style={{
-								fontSize: "var(--text-sm)",
-								marginTop: "var(--space-2)",
-								color: "var(--color-text-muted)",
-							}}
-						>
-							{t("playground.startChatHint")}
-						</p>
+						<p className="empty-title">{t("playground.startChat")}</p>
+						<p className="empty-description">{t("playground.startChatHint")}</p>
 					</div>
 				) : (
 					<div
@@ -459,52 +423,39 @@ function ChatPanel({
 									<div
 										style={{
 											maxWidth: "85%",
+											minWidth: 0,
 											display: "flex",
 											flexDirection: "column",
-											gap: "var(--space-2)",
+											gap: "var(--space-1)",
+											alignItems:
+												msg.role === "user" ? "flex-end" : "flex-start",
 										}}
 									>
-										{/* Message Bubble */}
+										{/* Message bubble */}
 										<div
-											className={
-												msg.role === "assistant" ? "rainbow-border" : undefined
-											}
 											style={{
 												padding: "var(--space-3) var(--space-4)",
-												borderRadius:
-													msg.role === "user"
-														? "var(--radius-lg) var(--radius-lg) 4px var(--radius-lg)"
-														: "var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px",
+												borderRadius: "var(--radius-lg)",
 												background:
 													msg.role === "user"
-														? "linear-gradient(135deg, hsla(265deg, 80%, 55%, 0.9), hsla(225deg, 30%, 15%, 0.95))"
-														: "hsla(220deg, 20%, 13%, 0.6)",
-												backdropFilter:
-													msg.role === "assistant"
-														? "blur(16px) saturate(180%)"
-														: undefined,
-												WebkitBackdropFilter:
-													msg.role === "assistant"
-														? "blur(16px) saturate(180%)"
-														: undefined,
+														? "var(--color-accent-primary)"
+														: "var(--color-bg-elevated)",
 												color:
 													msg.role === "user"
 														? "var(--color-text-inverse)"
-														: "var(--color-text-primary)",
-												boxShadow:
-													msg.role === "user"
-														? "0 4px 20px hsla(265deg, 80%, 55%, 0.3), inset 0 1px 1px hsla(0deg, 0%, 100%, 0.1)"
-														: "0 2px 12px rgba(0, 0, 0, 0.2), inset 0 1px 1px hsla(0deg, 0%, 100%, 0.05)",
+														: "var(--fg-strong)",
 												border:
 													msg.role === "assistant"
-														? "1px solid hsla(188deg, 90%, 50%, 0.1)"
+														? "1px solid var(--color-border)"
 														: "none",
+												boxShadow: "var(--shadow-sm)",
 											}}
 										>
 											<div
 												style={{
 													fontSize: "var(--text-sm)",
-													lineHeight: 1.7,
+													lineHeight: "var(--leading-relaxed)",
+													minWidth: 0,
 												}}
 											>
 												{msg.role === "assistant" ? (
@@ -520,9 +471,7 @@ function ChatPanel({
 																}}
 															>
 																<LoadingDots />
-																<span
-																	style={{ color: "var(--color-text-muted)" }}
-																>
+																<span style={{ color: "var(--fg-dim)" }}>
 																	{typeof msg.thinkingElapsed === "number"
 																		? `${t("status.thinking")} ${msg.thinkingElapsed}s`
 																		: t("status.thinking")}
@@ -576,23 +525,23 @@ function ChatPanel({
 											</div>
 										</div>
 
-										{/* Token Usage (for assistant messages) */}
+										{/* Token usage (assistant messages only) */}
 										{msg.role === "assistant" && msg.usage && (
 											<div
 												style={{
 													display: "flex",
 													alignItems: "center",
 													gap: "var(--space-3)",
-													marginLeft: "var(--space-2)",
+													padding: "0 var(--space-1)",
 													fontSize: "var(--text-xs)",
-													color: "var(--color-text-muted)",
+													color: "var(--fg-dim)",
 												}}
 											>
 												<span
 													style={{
 														display: "flex",
 														alignItems: "center",
-														gap: "4px",
+														gap: "var(--space-1)",
 													}}
 												>
 													<svg
@@ -602,6 +551,7 @@ function ChatPanel({
 														fill="none"
 														stroke="currentColor"
 														strokeWidth="2"
+														aria-hidden="true"
 													>
 														<polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
 													</svg>
@@ -614,7 +564,7 @@ function ChatPanel({
 							);
 						})}
 
-						{/* Loading State */}
+						{/* Loading state */}
 						{isLoading && !messages.some((message) => message.isStreaming) && (
 							<div
 								style={{
@@ -625,22 +575,20 @@ function ChatPanel({
 								<div
 									style={{
 										padding: "var(--space-3) var(--space-4)",
-										background: "hsla(220deg, 20%, 13%, 0.6)",
-										backdropFilter: "blur(16px)",
-										WebkitBackdropFilter: "blur(16px)",
-										borderRadius:
-											"var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px",
-										borderLeft: "3px solid hsla(188deg, 90%, 50%, 0.5)",
+										background: "var(--color-bg-elevated)",
+										borderRadius: "var(--radius-lg)",
+										border: "1px solid var(--color-border)",
+										borderLeft: "3px solid var(--color-accent-primary)",
 										display: "flex",
 										alignItems: "center",
 										gap: "var(--space-3)",
-										boxShadow: "0 2px 12px rgba(0, 0, 0, 0.2)",
+										boxShadow: "var(--shadow-sm)",
 									}}
 								>
 									<LoadingDots />
 									<span
 										style={{
-											color: "var(--color-text-muted)",
+											color: "var(--fg-dim)",
 											fontSize: "var(--text-sm)",
 										}}
 									>
@@ -654,168 +602,116 @@ function ChatPanel({
 				)}
 			</div>
 
-			{/* Input Area */}
+			{/* Composer */}
 			<div
 				style={{
-					padding: "var(--space-4)",
+					display: "flex",
+					gap: "var(--space-2)",
+					alignItems: "stretch",
+					flexWrap: "wrap",
+					padding: "var(--space-3) var(--space-4)",
 					borderTop: "1px solid var(--color-border)",
-					background: "var(--color-bg-secondary)",
+					background: "var(--surface-bg)",
 					flexShrink: 0,
-					boxShadow: "0 -4px 12px rgba(0, 0, 0, 0.1)",
 				}}
 			>
-				<div
-					style={{
-						display: "flex",
-						gap: "var(--space-2)",
-						alignItems: "stretch",
-					}}
-				>
-					<div
-						style={{
-							flex: 1,
-							position: "relative",
-						}}
-					>
-						<input
-							type="text"
-							data-testid="chat-message-input"
-							aria-label={t("playground.inputPlaceholder")}
-							value={input}
-							onChange={(e) => onInputChange(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-									e.preventDefault();
-									onSendMessage();
-								}
-							}}
-							placeholder={
-								isSettingsSaving
-									? t("status.saving")
-									: t("playground.inputPlaceholder")
+				<div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+					<input
+						type="text"
+						className="input"
+						data-testid="chat-message-input"
+						aria-label={t("playground.inputPlaceholder")}
+						value={input}
+						onChange={(e) => onInputChange(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+								e.preventDefault();
+								onSendMessage();
 							}
-							disabled={isLoading || isSettingsSaving}
+						}}
+						placeholder={
+							isSettingsSaving
+								? t("status.saving")
+								: t("playground.inputPlaceholder")
+						}
+						disabled={isLoading || isSettingsSaving}
+						style={{ paddingRight: "var(--space-10)" }}
+					/>
+					{input.length > 0 && (
+						<button
+							type="button"
+							className="btn btn-icon"
+							onClick={() => onInputChange("")}
+							aria-label={t("buttons.clear")}
 							style={{
-								width: "100%",
-								height: "100%",
-								padding: "var(--space-3) var(--space-4)",
-								paddingRight: "var(--space-10)",
-								borderRadius: "var(--radius-lg)",
-								border: "1px solid var(--color-border)",
-								background: "var(--color-bg-tertiary)",
-								color: "var(--color-text-primary)",
-								fontSize: "var(--text-sm)",
-								outline: "none",
-								transition: "all var(--transition-fast)",
+								position: "absolute",
+								right: "var(--space-2)",
+								top: "50%",
+								transform: "translateY(-50%)",
+								width: "24px",
+								minWidth: "24px",
+								height: "24px",
+								minHeight: "24px",
 							}}
-						/>
-						{input.length > 0 && (
-							<button
-								onClick={() => onInputChange("")}
-								aria-label={t("buttons.clear")}
-								style={{
-									position: "absolute",
-									right: "12px",
-									top: "50%",
-									transform: "translateY(-50%)",
-									background: "var(--color-bg-tertiary)",
-									border: "none",
-									borderRadius: "50%",
-									width: "20px",
-									height: "20px",
-									display: "flex",
-									alignItems: "center",
-									justifyContent: "center",
-									cursor: "pointer",
-									color: "var(--color-text-muted)",
-									padding: 0,
-								}}
+						>
+							<svg
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								aria-hidden="true"
 							>
-								<svg
-									width="12"
-									height="12"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-								>
-									<line x1="18" y1="6" x2="6" y2="18" />
-									<line x1="6" y1="6" x2="18" y2="18" />
-								</svg>
-							</button>
-						)}
-					</div>
-					<button
-						onClick={onClearChat}
-						aria-label={t("buttons.clear")}
-						className="btn-secondary"
-						style={{
-							padding: "var(--space-3)",
-							display: "flex",
-							alignItems: "center",
-							justifyContent: "center",
-							minWidth: "44px",
-							borderRadius: "var(--radius-lg)",
-						}}
-						title={t("buttons.clear")}
-					>
-						<svg
-							width="18"
-							height="18"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-						>
-							<polyline points="3 6 5 6 21 6" />
-							<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-						</svg>
-					</button>
-					<button
-						onClick={onSendMessage}
-						aria-label={t("buttons.send")}
-						disabled={isLoading || isSettingsSaving || sendDisabled || !input.trim()}
-						style={{
-							padding: "var(--space-3) var(--space-5)",
-							background: "var(--color-accent-gradient)",
-							color: "var(--color-text-inverse)",
-							border: "none",
-							borderRadius: "var(--radius-lg)",
-							fontWeight: 600,
-							fontSize: "var(--text-sm)",
-							cursor:
-								isLoading || isSettingsSaving || sendDisabled || !input.trim()
-									? "not-allowed"
-									: "pointer",
-							opacity:
-								isLoading || isSettingsSaving || sendDisabled || !input.trim()
-									? 0.5
-									: 1,
-							display: "flex",
-							alignItems: "center",
-							gap: "var(--space-2)",
-							boxShadow:
-								isLoading || isSettingsSaving || sendDisabled || !input.trim()
-									? "none"
-									: "0 0 20px hsla(188deg, 90%, 50%, 0.3)",
-							transition: "all var(--transition-fast)",
-							minWidth: "100px",
-						}}
-					>
-						{isSettingsSaving ? t("status.saving") : t("buttons.send")}
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-						>
-							<line x1="22" y1="2" x2="11" y2="13" />
-							<polygon points="22 2 15 22 11 13 2 9 22 2" />
-						</svg>
-					</button>
+								<line x1="18" y1="6" x2="6" y2="18" />
+								<line x1="6" y1="6" x2="18" y2="18" />
+							</svg>
+						</button>
+					)}
 				</div>
+				<button
+					type="button"
+					onClick={onClearChat}
+					aria-label={t("buttons.clear")}
+					title={t("buttons.clear")}
+					className="btn btn-icon"
+					style={iconButtonStyle}
+				>
+					<svg
+						width="18"
+						height="18"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						aria-hidden="true"
+					>
+						<polyline points="3 6 5 6 21 6" />
+						<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+					</svg>
+				</button>
+				<button
+					type="button"
+					onClick={onSendMessage}
+					aria-label={t("buttons.send")}
+					disabled={sendBlocked}
+					className="btn btn-primary"
+					style={{ minWidth: "100px" }}
+				>
+					{isSettingsSaving ? t("status.saving") : t("buttons.send")}
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						aria-hidden="true"
+					>
+						<line x1="22" y1="2" x2="11" y2="13" />
+						<polygon points="22 2 15 22 11 13 2 9 22 2" />
+					</svg>
+				</button>
 			</div>
 
 			{/* Animations */}
@@ -828,17 +724,6 @@ function ChatPanel({
           to {
             opacity: 1;
             transform: translateY(0);
-          }
-        }
-
-        @keyframes slideDown {
-          from {
-            opacity: 0;
-            max-height: 0;
-          }
-          to {
-            opacity: 1;
-            max-height: 200px;
           }
         }
 

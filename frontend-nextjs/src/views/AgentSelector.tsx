@@ -6,12 +6,22 @@ import { useTranslation } from 'react-i18next'
 import AdminLayout from '../components/AdminLayout'
 import { Agent, api } from '../services/api'
 import { useAuth } from '../context/AuthContext'
-import { useIsMobile } from '../hooks/useMediaQuery'
 
+/**
+ * Agent picker for non-workspace roles.
+ *
+ * A "support" user only ever lands here (and on the agent's sessions list), so
+ * the screen is the whole navigation for that role: one `list` of agents, each
+ * row a full-width button that opens the role-appropriate destination.
+ *
+ * Restyle (spec §20): the page scaffold, the `list`/`list-row` primitive and
+ * the `empty` state replace the old glass cards and hand-mixed error banner.
+ * The single-agent auto-redirect and the 10s loading-timeout fallback are
+ * unchanged.
+ */
 export default function AgentSelector() {
   const { t } = useTranslation('common')
   const navigate = useNavigate()
-  const isMobile = useIsMobile()
   const { admin } = useAuth()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
@@ -54,8 +64,14 @@ export default function AgentSelector() {
   if (loading) {
     return (
       <AdminLayout>
-        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: 800, margin: '0 auto' }}>
-          <div style={{ color: 'var(--color-text-muted)' }}>{t('status.loading')}</div>
+        <div className="admin-page" data-testid="agent-selector-page">
+          <div className="list" aria-busy="true" data-testid="agent-selector-loading">
+            {[0, 1, 2].map(index => (
+              <div key={index} className="list-row">
+                <div className="skeleton skeleton-text" style={{ width: '100%' }} />
+              </div>
+            ))}
+          </div>
         </div>
       </AdminLayout>
     )
@@ -64,15 +80,11 @@ export default function AgentSelector() {
   if (error) {
     return (
       <AdminLayout>
-        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: 800, margin: '0 auto' }}>
-          <div style={{
-            padding: 'var(--space-4)',
-            border: '1px solid rgba(239,68,68,.3)',
-            background: 'rgba(239,68,68,.08)',
-            color: 'var(--color-error)',
-            borderRadius: 'var(--radius-md)',
-          }}>
-            {error}
+        <div className="admin-page" data-testid="agent-selector-page">
+          <div className="empty" data-testid="agent-selector-error">
+            <p className="empty-title" role="alert">
+              {error}
+            </p>
           </div>
         </div>
       </AdminLayout>
@@ -82,15 +94,11 @@ export default function AgentSelector() {
   if (agents.length === 0) {
     return (
       <AdminLayout>
-        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: 800, margin: '0 auto' }}>
-          <section className="liquid-glass-card" style={{ padding: 'var(--space-8)', textAlign: 'center' }}>
-            <h2 style={{ color: 'var(--color-text-primary)', marginBottom: 'var(--space-3)' }}>
-              {t('agents.noAssigned')}
-            </h2>
-            <p style={{ color: 'var(--color-text-secondary)' }}>
-              {t('agents.contactSuperAdmin')}
-            </p>
-          </section>
+        <div className="admin-page" data-testid="agent-selector-page">
+          <div className="empty" data-testid="agent-selector-empty">
+            <p className="empty-title">{t('agents.noAssigned')}</p>
+            <p className="empty-description">{t('agents.contactSuperAdmin')}</p>
+          </div>
         </div>
       </AdminLayout>
     )
@@ -106,62 +114,58 @@ export default function AgentSelector() {
 
   return (
     <AdminLayout>
-      <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: 800, margin: '0 auto' }}>
-        <header style={{ marginBottom: 'var(--space-6)' }}>
-          <h1 style={{ fontSize: isMobile ? 'var(--text-2xl)' : 'var(--text-4xl)', fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: 'var(--space-2)' }}>
-            {t('agents.selectAgent')}
-          </h1>
-          <p style={{ color: 'var(--color-text-secondary)' }}>
-            {isSupport ? t('agents.selectForSessions') : t('agents.selectForDashboard')}
-          </p>
+      <div className="admin-page" data-testid="agent-selector-page">
+        <header className="page-header">
+          <div style={{ minWidth: 0 }}>
+            <h1 className="page-title">{t('agents.selectAgent')}</h1>
+            <p className="page-subtitle">
+              {isSupport ? t('agents.selectForSessions') : t('agents.selectForDashboard')}
+            </p>
+          </div>
         </header>
 
-        <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
+        <ul className="list" data-testid="agent-selector-list">
           {agents.map(agent => (
-            <button
-              key={agent.id}
-              onClick={() => handleSelect(agent)}
-              className="liquid-glass-card"
-              style={{
-                textAlign: 'left',
-                padding: 'var(--space-5)',
-                border: '1px solid var(--color-border)',
-                cursor: 'pointer',
-                color: 'inherit',
-                width: '100%',
-                minWidth: 0,
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-              }}
-            >
-              <div style={{
-                color: 'var(--color-text-primary)',
-                fontSize: 'var(--text-xl)',
-                fontWeight: 700,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {agent.name}
+            <li key={agent.id} className="list-row">
+              <button
+                type="button"
+                className="list-row-main"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  gap: 'var(--space-1)',
+                }}
+                onClick={() => handleSelect(agent)}
+              >
+                <span className="list-row-title">{agent.name}</span>
+                {agent.description && (
+                  <span
+                    className="list-row-description"
+                    style={{ whiteSpace: 'normal' }}
+                  >
+                    {agent.description}
+                  </span>
+                )}
+              </button>
+              <div className="list-row-meta">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
               </div>
-              {agent.description && (
-                <p style={{
-                  color: 'var(--color-text-secondary)',
-                  fontSize: 'var(--text-sm)',
-                  marginTop: 'var(--space-2)',
-                  overflow: 'hidden',
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  wordBreak: 'break-word',
-                }}>
-                  {agent.description}
-                </p>
-              )}
-            </button>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
     </AdminLayout>
   )

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
@@ -39,6 +39,19 @@ function formatPurgeCountdown(
 	return `${days} ${dayLabel} ${hours} ${hourLabel}`;
 }
 
+/**
+ * `updated_at` is optional on the API payload; fall back to `created_at` and
+ * return null when neither parses so the meta line can be dropped entirely
+ * rather than rendering "Invalid Date".
+ */
+function formatAgentUpdatedAt(agent: Agent): string | null {
+	const raw = agent.updated_at || agent.created_at;
+	if (!raw) return null;
+	const parsed = new Date(raw);
+	if (Number.isNaN(parsed.getTime())) return null;
+	return parsed.toLocaleDateString();
+}
+
 function isOpenableAgent(agent: Agent | null) {
 	return Boolean(agent && agent.is_active === true && !agent.deleted_at);
 }
@@ -62,6 +75,16 @@ export default function Agents() {
 	});
 	const { admin } = useAuth();
 	const isSuperAdmin = admin?.role === "super_admin";
+
+	// The create form lives in a sheet (§15): nothing inline in the page body.
+	// `createTriggerRef` is the `+` in `page-actions`; focus returns to it when
+	// the sheet closes so keyboard users never lose their place.
+	const [createSheetOpen, setCreateSheetOpen] = useState(false);
+	const createTriggerRef = useRef<HTMLButtonElement | null>(null);
+	const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+	// Row actions are collapsed into one overflow menu per row.
+	const [openMenuAgentId, setOpenMenuAgentId] = useState<string | null>(null);
 
 	// KB binding chooser: opened after an agent is created and by the per-agent
 	// Bind control. The KB itself is created in /knowledge-bases; this modal only
@@ -122,6 +145,32 @@ export default function Agents() {
 		return () => window.clearInterval(timer);
 	}, []);
 
+	const openCreateSheet = () => {
+		setError(null);
+		setCreateSheetOpen(true);
+	};
+
+	const closeCreateSheet = () => {
+		setCreateSheetOpen(false);
+		createTriggerRef.current?.focus();
+	};
+
+	// Focus moves into the sheet on open; Escape closes it from anywhere inside
+	// the dialog (the listener is on `document`, not the input, so it also works
+	// while focus sits on the footer buttons).
+	useEffect(() => {
+		if (!createSheetOpen) return;
+		nameInputRef.current?.focus();
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				closeCreateSheet();
+			}
+		};
+		document.addEventListener("keydown", handleKeyDown);
+		return () => document.removeEventListener("keydown", handleKeyDown);
+	}, [createSheetOpen]);
+
 	const handleSelect = (agentId: string) => {
 		setSelectedAgentId(agentId);
 	};
@@ -151,6 +200,7 @@ export default function Agents() {
 				name: "",
 				description: "",
 			});
+			setCreateSheetOpen(false);
 			await openKbChooser(created, "onboarding");
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.networkError"));
@@ -170,6 +220,16 @@ export default function Agents() {
 		} finally {
 			setSaving(false);
 		}
+	};
+
+	// Soft delete is destructive enough to ask first; the row then shows the
+	// purge countdown until the workspace reaps it.
+	const handleRequestDeactivate = (agent: Agent) => {
+		const confirmed = window.confirm(
+			t("agents.deactivateConfirm", { name: agent.name }),
+		);
+		if (!confirmed) return;
+		void handleDeactivate(agent);
 	};
 
 	const handleRestore = async (agent: Agent) => {
@@ -297,465 +357,545 @@ export default function Agents() {
 		}
 	};
 
-	return (
-		<AdminLayout>
+	const rowStyle = isMobile
+		? { flexDirection: "column" as const, alignItems: "stretch" as const }
+		: undefined;
+	const iconButtonStyle = isMobile
+		? { minWidth: 44, minHeight: 44 }
+		: undefined;
+
+	const renderRowActions = (agent: Agent) => {
+		const menuOpen = openMenuAgentId === agent.id;
+		return (
 			<div
-				className="admin-page"
-				data-testid="agents-page"
 				style={{
-					padding: isMobile ? "var(--space-4)" : "var(--space-8)",
-					maxWidth: "1200px",
-					margin: "0 auto",
-					minWidth: 0,
+					position: "relative",
+					display: "flex",
+					justifyContent: isMobile ? "flex-start" : "flex-end",
+					flexShrink: 0,
 				}}
 			>
-				<div
-					style={{
-						display: "flex",
-						justifyContent: "space-between",
-						gap: "var(--space-4)",
-						alignItems: "flex-start",
-						marginBottom: "var(--space-6)",
-					}}
+				<button
+					type="button"
+					className="btn btn-icon"
+					data-testid={`agent-actions-${agent.id}`}
+					aria-label={t("agents.rowActions", { name: agent.name })}
+					aria-haspopup="menu"
+					aria-expanded={menuOpen}
+					style={iconButtonStyle}
+					onClick={() =>
+						setOpenMenuAgentId((current) =>
+							current === agent.id ? null : agent.id,
+						)
+					}
 				>
-					<div>
-						<h1
-							style={{
-								fontSize: "var(--text-3xl)",
-								fontWeight: 700,
-								color: "var(--color-text-primary)",
-								marginBottom: "var(--space-2)",
-							}}
-						>
-							{t("agents.title")}
-						</h1>
-						<p
-							style={{
-								color: "var(--color-text-secondary)",
-								fontSize: "var(--text-sm)",
-							}}
-						>
-							{t("agents.subtitle")}
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 16 16"
+						fill="currentColor"
+						aria-hidden="true"
+					>
+						<circle cx="8" cy="3" r="1.4" />
+						<circle cx="8" cy="8" r="1.4" />
+						<circle cx="8" cy="13" r="1.4" />
+					</svg>
+				</button>
+				{menuOpen && (
+					<div
+						role="menu"
+						data-testid={`agent-menu-${agent.id}`}
+						aria-label={t("agents.rowActions", { name: agent.name })}
+						style={{
+							position: "absolute",
+							top: "calc(100% + var(--space-1))",
+							right: isMobile ? "auto" : 0,
+							left: isMobile ? 0 : "auto",
+							zIndex: 20,
+							minWidth: 200,
+							display: "flex",
+							flexDirection: "column",
+							gap: "var(--space-1)",
+							padding: "var(--space-1)",
+							background: "var(--color-bg-elevated)",
+							border: "1px solid var(--color-border)",
+							borderRadius: "var(--radius-md)",
+							boxShadow: "var(--shadow-lg)",
+						}}
+					>
+						{isOpenableAgent(agent) && (
+							<button
+								type="button"
+								role="menuitem"
+								className="btn btn-ghost"
+								style={{ justifyContent: "flex-start" }}
+								onClick={() => {
+									setOpenMenuAgentId(null);
+									navigate(`/agents/${agent.id}/dashboard`);
+								}}
+							>
+								{t("agents.open")}
+							</button>
+						)}
+						{isSuperAdmin && !agent.deleted_at && (
+							<button
+								type="button"
+								role="menuitem"
+								data-testid={`agent-kb-bind-${agent.id}`}
+								className="btn btn-ghost"
+								style={{ justifyContent: "flex-start" }}
+								disabled={saving}
+								onClick={() => {
+									setOpenMenuAgentId(null);
+									if (agent.kb_id) {
+										void handleUnbindAgentKb(agent);
+										return;
+									}
+									void openKbChooser(agent, "list");
+								}}
+							>
+								{agent.kb_id
+									? t("knowledgeBases.actions.unbind")
+									: t("knowledgeBases.actions.bind")}
+							</button>
+						)}
+						{agent.deleted_at ? (
+							<button
+								type="button"
+								role="menuitem"
+								data-testid={`agent-restore-${agent.id}`}
+								className="btn btn-ghost"
+								style={{
+									justifyContent: "flex-start",
+									color: "var(--color-success)",
+								}}
+								disabled={saving}
+								onClick={() => {
+									setOpenMenuAgentId(null);
+									void handleRestore(agent);
+								}}
+							>
+								{t("agents.restore")}
+							</button>
+						) : (
+							<button
+								type="button"
+								role="menuitem"
+								data-testid={`agent-deactivate-${agent.id}`}
+								className="btn btn-ghost"
+								style={{
+									justifyContent: "flex-start",
+									color: "var(--color-error)",
+								}}
+								disabled={saving}
+								onClick={() => {
+									setOpenMenuAgentId(null);
+									handleRequestDeactivate(agent);
+								}}
+							>
+								{t("agents.deactivate")}
+							</button>
+						)}
+					</div>
+				)}
+			</div>
+		);
+	};
+
+	return (
+		<AdminLayout>
+			<div className="admin-page" data-testid="agents-page">
+				<header className="page-header">
+					<div style={{ minWidth: 0 }}>
+						<h1 className="page-title">{t("agents.title")}</h1>
+						<p className="page-subtitle">{t("agents.subtitle")}</p>
+						<p className="page-subtitle" data-testid="agents-count">
+							{t("agents.allAgents")} · {agents.length}
 						</p>
 					</div>
-					{selectedOpenableAgent && (
+					<div className="page-actions">
+						{selectedOpenableAgent && (
+							<button
+								type="button"
+								className="btn btn-secondary"
+								onClick={() =>
+									navigate(
+										`/agents/${selectedOpenableAgent.id}/dashboard`,
+									)
+								}
+							>
+								{t("agents.openCurrent")}
+							</button>
+						)}
 						<button
-							onClick={() =>
-								navigate(`/agents/${selectedOpenableAgent.id}/dashboard`)
-							}
-							style={{
-								border: "1px solid var(--color-border)",
-								background: "var(--color-bg-secondary)",
-								color: "var(--color-text-primary)",
-								borderRadius: "var(--radius-md)",
-								padding: "var(--space-3) var(--space-4)",
-								cursor: "pointer",
-							}}
+							type="button"
+							ref={createTriggerRef}
+							className="btn btn-icon"
+							data-testid="agent-create-open"
+							aria-label={t("agents.createTitle")}
+							style={iconButtonStyle}
+							onClick={openCreateSheet}
 						>
-							{t("agents.open")}
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 16 16"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="1.75"
+								strokeLinecap="round"
+								aria-hidden="true"
+							>
+								<path d="M8 3v10M3 8h10" />
+							</svg>
 						</button>
-					)}
-				</div>
+					</div>
+				</header>
 
 				{error && (
 					<div
+						role="alert"
 						style={{
-							padding: "var(--space-4)",
-							border: "1px solid rgba(239, 68, 68, 0.3)",
-							background: "rgba(239, 68, 68, 0.08)",
-							color: "var(--color-error)",
+							padding: "var(--space-3) var(--space-4)",
 							borderRadius: "var(--radius-md)",
-							marginBottom: "var(--space-5)",
+							fontSize: "var(--text-sm)",
+							background: "var(--color-error-bg)",
+							border: "1px solid var(--color-error)",
+							color: "var(--color-error)",
+							marginBottom: "var(--space-4)",
 						}}
 					>
 						{error}
 					</div>
 				)}
 
-				<div
-					style={{
-						display: "grid",
-						gridTemplateColumns: isMobile
-							? "1fr"
-							: "minmax(0, 1.25fr) minmax(320px, 0.75fr)",
-						gap: "var(--space-5)",
-					}}
-				>
-					<section
-						className="liquid-glass-card"
-						style={{ padding: "var(--space-5)" }}
-					>
-						<h2
-							style={{
-								color: "var(--color-text-primary)",
-								fontSize: "var(--text-xl)",
-								marginBottom: "var(--space-4)",
-							}}
-						>
-							{t("agents.allAgents")}
-						</h2>
-						{loading ? (
-							<div style={{ color: "var(--color-text-muted)" }}>
-								{t("status.loading")}
+				{loading ? (
+					<div className="list" aria-busy="true" data-testid="agents-loading">
+						{[0, 1, 2].map((index) => (
+							<div key={index} className="list-row">
+								<div
+									className="skeleton skeleton-text"
+									style={{ width: "100%" }}
+								/>
 							</div>
-						) : agents.length === 0 ? (
-							<div
-								style={{
-									color: "var(--color-text-muted)",
-									padding: "var(--space-8)",
-									textAlign: "center",
-								}}
+						))}
+					</div>
+				) : agents.length === 0 ? (
+					<div className="empty" data-testid="agents-empty">
+						<p className="empty-title">{t("agents.empty")}</p>
+						<p className="empty-description">
+							{t("agents.emptyHint")}
+						</p>
+						<div className="empty-actions">
+							<button
+								type="button"
+								className="btn btn-primary"
+								onClick={openCreateSheet}
 							>
-								{t("agents.empty")}
-							</div>
-						) : (
-							<div style={{ display: "grid", gap: "var(--space-3)" }}>
-								{agents.map((agent) => (
-									<div
-										key={agent.id}
+								{t("agents.createTitle")}
+							</button>
+						</div>
+					</div>
+				) : (
+					<>
+						{/* Column-label row: desktop-only plan for R1. It uses the same grid
+						 * contract (`list-grid` + `list-grid--agents`) as the rows below, so
+						 * header cell N sits exactly above data cell N. Outside the <ul> so the
+						 * list keeps exactly one <li> per agent. */}
+						<div
+							className="list-header list-grid list-grid--agents"
+							data-testid="agents-list-header"
+						>
+							<span className="list-header-cell">
+								{t("agents.columns.name")}
+							</span>
+							<span className="list-header-cell">
+								{t("agents.columns.knowledgeBase")}
+							</span>
+							<span className="list-header-cell">
+								{t("agents.columns.updated")}
+							</span>
+							<span className="list-header-cell">
+								{t("agents.columns.status")}
+							</span>
+							<span className="list-header-cell">
+								{t("agents.columns.actions")}
+							</span>
+						</div>
+						<ul className="list" data-testid="agents-list">
+						{agents.map((agent) => {
+							const isSelected = agent.id === selectedAgentId;
+							const updatedAt = formatAgentUpdatedAt(agent);
+							const purgeCountdown = agent.deleted_at
+								? formatPurgeCountdown(agent.purge_after, t) ||
+									t("status.pending")
+								: null;
+							return (
+								<li
+									key={agent.id}
+									className={
+										isSelected
+											? "list-row list-grid list-grid--agents is-selected"
+											: "list-row list-grid list-grid--agents"
+									}
+									data-testid={`agent-row-${agent.id}`}
+									style={rowStyle}
+								>
+									{/* Column 1 — name. The selection control IS this cell (so the
+									 * aria-pressed affordance covers the name and its description),
+									 * and the description stacks under the name inside it. */}
+									<button
+										type="button"
+										className="list-cell list-row-main"
+										aria-pressed={isSelected}
 										style={{
-											display: "grid",
-											gridTemplateColumns: isMobile ? "1fr" : "1fr auto",
-											gap: "var(--space-3)",
-											alignItems: "start",
-											padding: "var(--space-4)",
-											border: `1px solid ${agent.id === selectedAgentId ? "var(--color-accent-primary)" : "var(--color-border)"}`,
-											borderRadius: "var(--radius-md)",
-											background:
-												agent.id === selectedAgentId
-													? "hsla(188deg, 90%, 50%, 0.08)"
-													: "var(--color-bg-secondary)",
+											background: "transparent",
+											border: "none",
+											padding: 0,
+											textAlign: "left",
+											cursor: "pointer",
+											gap: "var(--space-1)",
 										}}
+										onClick={() => handleSelect(agent.id)}
 									>
-										<button
-											onClick={() => handleSelect(agent.id)}
-											style={{
-												width: "100%",
-												display: "flex",
-												flexDirection: "column",
-												alignItems: "flex-start",
-												textAlign: "left",
-												background: "transparent",
-												border: "none",
-												color: "inherit",
-												cursor: "pointer",
-												padding: 0,
-											}}
-										>
-											<div
+										<span className="list-row-name">
+											<span className="list-row-title list-row-affordance">
+												{agent.name}
+											</span>
+											<svg
+												className="list-row-chevron"
+												viewBox="0 0 16 16"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="1.75"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												aria-hidden="true"
+												data-testid={`agent-chevron-${agent.id}`}
+											>
+												<path d="M6 3.5 10.5 8 6 12.5" />
+											</svg>
+										</span>
+										<span className="list-row-description">
+											{agent.description || t("agents.noDescription")}
+										</span>
+										{purgeCountdown && (
+											<span
 												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "var(--space-3)",
-													marginBottom: "var(--space-2)",
-													width: "100%",
+													fontSize: "var(--text-xs)",
+													fontWeight:
+														"var(--weight-semibold)",
+													lineHeight: "var(--leading-snug)",
+													color: "var(--color-error)",
+													wordBreak: "break-word",
 												}}
 											>
-												<span
-													style={{
-														width: 36,
-														height: 36,
-														borderRadius: "var(--radius-md)",
-														display: "inline-flex",
-														alignItems: "center",
-														justifyContent: "center",
-														background: "var(--color-accent-gradient)",
-														color: "var(--color-text-inverse)",
-														fontWeight: 700,
-													}}
-												>
-													{agent.name.charAt(0).toUpperCase()}
-												</span>
-												<div>
-													<div
-														style={{
-															color: "var(--color-text-primary)",
-															fontWeight: 700,
-														}}
-													>
-														{agent.name}
-													</div>
-													<div
-														style={{
-															color: "var(--color-text-muted)",
-															fontSize: "var(--text-xs)",
-														}}
-													>
-														{agent.id}
-													</div>
-												</div>
-											</div>
-											<div
-												style={{
-													display: "flex",
-													flexDirection: "column",
-													alignItems: "flex-start",
-													width: "100%",
-												}}
-											>
-												<div
-													style={{
-														color: "var(--color-text-secondary)",
-														fontSize: "var(--text-sm)",
-														width: "100%",
-														whiteSpace: "normal",
-													}}
-												>
-													{agent.description || t("agents.noDescription")}
-												</div>
-												<div
-													data-testid={`agent-kb-${agent.id}`}
-													style={{
-														display: "flex",
-														alignItems: "center",
-														gap: "var(--space-2)",
-														flexWrap: "wrap",
-														marginTop: "var(--space-2)",
-														fontSize: "var(--text-xs)",
-														color: "var(--color-text-muted)",
-													}}
-												>
-													<span style={{ fontWeight: 600 }}>
-														{t("agents.kbColumn", { defaultValue: "Knowledge base" })}:
-													</span>
-													<span data-testid={`agent-kb-name-${agent.id}`}>
-														{agent.kb_name || t("knowledgeBases.unboundValue")}
-													</span>
-												</div>
-												{agent.deleted_at && (
-													<div
-														style={{
-															display: "block",
-															width: "100%",
-															marginTop: "var(--space-2)",
-															lineHeight: 1.4,
-															color: "var(--color-error)",
-															fontSize: "var(--text-xs)",
-															fontWeight: 600,
-															wordBreak: "break-word",
-															whiteSpace: "normal",
-														}}
-													>
-														{t("agents.autoDeleteCountdown", {
-															time:
-																formatPurgeCountdown(agent.purge_after, t) ||
-																t("status.pending"),
-														})}
-													</div>
-												)}
-											</div>
-										</button>
-										<div
-											style={{
-												display: "flex",
-												gap: "var(--space-2)",
-												justifyContent: isMobile ? "flex-start" : "flex-end",
-											}}
-										>
-											{isSuperAdmin && !agent.deleted_at && (
-												<button
-													type="button"
-													data-testid={`agent-kb-bind-${agent.id}`}
-													className="btn-secondary"
-													disabled={saving}
-													onClick={() =>
-														agent.kb_id
-															? handleUnbindAgentKb(agent)
-															: openKbChooser(agent, "list")
-													}
-												>
-													{agent.kb_id
-														? t("knowledgeBases.actions.unbind")
-														: t("knowledgeBases.actions.bind")}
-												</button>
-											)}
-											{isOpenableAgent(agent) && (
-												<button
-													onClick={() =>
-														navigate(`/agents/${agent.id}/dashboard`)
-													}
-													style={{
-														padding: "var(--space-2) var(--space-3)",
-														borderRadius: "var(--radius-md)",
-														border: "1px solid var(--color-border)",
-														background: "transparent",
-														color: "var(--color-text-primary)",
-														cursor: "pointer",
-													}}
-												>
-													{t("agents.open")}
-												</button>
-											)}
-											{agent.deleted_at ? (
-												<button
-													onClick={() => handleRestore(agent)}
-													disabled={saving}
-													style={{
-														padding: "var(--space-2) var(--space-3)",
-														borderRadius: "var(--radius-md)",
-														border: "1px solid rgba(16, 185, 129, 0.3)",
-														background: "transparent",
-														color: "var(--color-success)",
-														cursor: saving ? "not-allowed" : "pointer",
-													}}
-												>
-													{t("agents.restore")}
-												</button>
-											) : (
-												<button
-													onClick={() => handleDeactivate(agent)}
-													disabled={saving}
-													style={{
-														padding: "var(--space-2) var(--space-3)",
-														borderRadius: "var(--radius-md)",
-														border: "1px solid rgba(239, 68, 68, 0.3)",
-														background: "transparent",
-														color: "var(--color-error)",
-														cursor: saving ? "not-allowed" : "pointer",
-													}}
-												>
-													{t("agents.deactivate")}
-												</button>
-											)}
-										</div>
+												{t("agents.autoDeleteCountdown", {
+													time: purgeCountdown,
+												})}
+											</span>
+										)}
+									</button>
+									{/* Column 2 — knowledge base. Its own cell, with its own header
+									 * label: the 知识库 text that used to repeat inside the row is gone
+									 * (R2). */}
+									<div
+										className="list-cell"
+										data-testid={`agent-kb-${agent.id}`}
+									>
+										<span data-testid={`agent-kb-name-${agent.id}`}>
+											{agent.kb_name ||
+												t("knowledgeBases.unboundValue")}
+										</span>
 									</div>
-								))}
-							</div>
-						)}
-					</section>
-
-					<form
-						onSubmit={handleCreate}
-						className="liquid-glass-card"
-						style={{ padding: "var(--space-5)", alignSelf: "start" }}
-					>
-						<h2
-							style={{
-								color: "var(--color-text-primary)",
-								fontSize: "var(--text-xl)",
-								marginBottom: "var(--space-4)",
-							}}
-						>
-							{t("agents.createTitle")}
-						</h2>
-						<label
-							style={{
-								display: "block",
-								color: "var(--color-text-secondary)",
-								fontSize: "var(--text-sm)",
-								marginBottom: "var(--space-2)",
-							}}
-						>
-							{t("labels.agentName")}
-						</label>
-						<input
-							value={form.name}
-							onChange={(event) =>
-								setForm((prev) => ({
-									...prev,
-									name: trimToAgentNameMaxDisplayWidth(event.target.value),
-								}))
-							}
-							maxLength={AGENT_NAME_MAX_DISPLAY_WIDTH}
-							placeholder={t("agents.namePlaceholder")}
-							style={{
-								width: "100%",
-								marginBottom: "var(--space-2)",
-								padding: "var(--space-3)",
-								borderRadius: "var(--radius-md)",
-								border: "1px solid var(--color-border)",
-								background: "var(--color-bg-secondary)",
-								color: "var(--color-text-primary)",
-							}}
-						/>
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "flex-end",
-								color: "var(--color-text-muted)",
-								fontSize: "var(--text-xs)",
-								marginBottom: "var(--space-4)",
-							}}
-						>
-							{t("agents.characterCount", {
-								count: agentNameDisplayWidth,
-								max: AGENT_NAME_MAX_DISPLAY_WIDTH,
-							})}
-						</div>
-						<label
-							style={{
-								display: "block",
-								color: "var(--color-text-secondary)",
-								fontSize: "var(--text-sm)",
-								marginBottom: "var(--space-2)",
-							}}
-						>
-							{t("labels.description")}
-						</label>
-						<textarea
-							value={form.description}
-							onChange={(event) =>
-								setForm((prev) => ({
-									...prev,
-									description: event.target.value.slice(
-										0,
-										AGENT_DESCRIPTION_MAX_LENGTH,
-									),
-								}))
-							}
-							maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
-							rows={4}
-							placeholder={t("agents.descriptionPlaceholder")}
-							style={{
-								width: "100%",
-								marginBottom: "var(--space-2)",
-								padding: "var(--space-3)",
-								borderRadius: "var(--radius-md)",
-								border: "1px solid var(--color-border)",
-								background: "var(--color-bg-secondary)",
-								color: "var(--color-text-primary)",
-								resize: "vertical",
-							}}
-						/>
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "flex-end",
-								color: "var(--color-text-muted)",
-								fontSize: "var(--text-xs)",
-								marginBottom: "var(--space-4)",
-							}}
-						>
-							{t("agents.characterCount", {
-								count: form.description?.length || 0,
-								max: AGENT_DESCRIPTION_MAX_LENGTH,
-							})}
-						</div>
-						<button
-							type="submit"
-							disabled={
-								saving ||
-								!isAgentNameValid ||
-								(form.description?.trim().length || 0) >
-									AGENT_DESCRIPTION_MAX_LENGTH
-							}
-							style={{
-								width: "100%",
-								padding: "var(--space-3)",
-								borderRadius: "var(--radius-md)",
-								border: "none",
-								background: "var(--color-accent-gradient)",
-								color: "var(--color-text-inverse)",
-								fontWeight: 700,
-								cursor: saving || !isAgentNameValid ? "not-allowed" : "pointer",
-								opacity: saving || !isAgentNameValid ? 0.6 : 1,
-							}}
-						>
-							{saving ? t("status.saving") : t("agents.create")}
-						</button>
-					</form>
-				</div>
+									{/* Column 3 — updated. */}
+									<div
+										className="list-cell"
+										data-testid={`agent-updated-${agent.id}`}
+									>
+										{updatedAt
+											? t("agents.updatedAt", { date: updatedAt })
+											: null}
+									</div>
+									{/* Column 4 — status. */}
+									<div
+										className="list-cell"
+										data-testid={`agent-status-${agent.id}`}
+									>
+										{agent.deleted_at ? (
+											<span className="badge badge-error">
+												{t("agents.statusInactive")}
+											</span>
+										) : agent.is_active ? (
+											<span className="badge badge-success">
+												{t("status.active")}
+											</span>
+										) : (
+											<span className="badge badge-warning">
+												{t("agents.statusInactive")}
+											</span>
+										)}
+									</div>
+									{/* Column 5 — actions. */}
+									<div
+										className="list-cell"
+										data-testid={`agent-actions-cell-${agent.id}`}
+									>
+										{renderRowActions(agent)}
+									</div>
+								</li>
+							);
+						})}
+					</ul>
+					</>
+				)}
 			</div>
+
+			{createSheetOpen && (
+				<>
+					<div
+						className="sheet-backdrop"
+						data-testid="agent-create-backdrop"
+						onClick={closeCreateSheet}
+					/>
+					<form
+						className="sheet"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="agent-create-sheet-title"
+						data-testid="agent-create-sheet"
+						style={{
+							position: "fixed",
+							zIndex: 60,
+							...(isMobile
+								? {}
+								: {
+										top: "var(--space-8)",
+										left: "50%",
+										width: "min(520px, 92vw)",
+										transform: "translateX(-50%)",
+										borderRadius: "var(--radius-lg)",
+									}),
+						}}
+						onSubmit={handleCreate}
+					>
+						<div className="sheet-header">
+							<h2 id="agent-create-sheet-title">
+								{t("agents.createTitle")}
+							</h2>
+							<button
+								type="button"
+								className="btn btn-icon"
+								aria-label={t("knowledgeBases.actions.close")}
+								style={iconButtonStyle}
+								onClick={closeCreateSheet}
+							>
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 16 16"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="1.75"
+									strokeLinecap="round"
+									aria-hidden="true"
+								>
+									<path d="M4 4l8 8M12 4l-8 8" />
+								</svg>
+							</button>
+						</div>
+						<div className="sheet-body">
+							<div className="field">
+								<label className="field-label" htmlFor="agent-create-name">
+									{t("labels.agentName")}
+								</label>
+								<input
+									id="agent-create-name"
+									ref={nameInputRef}
+									className="input"
+									value={form.name}
+									onChange={(event) =>
+										setForm((prev) => ({
+											...prev,
+											name: trimToAgentNameMaxDisplayWidth(
+												event.target.value,
+											),
+										}))
+									}
+									maxLength={AGENT_NAME_MAX_DISPLAY_WIDTH}
+									placeholder={t("agents.namePlaceholder")}
+								/>
+								<div
+									className="field-hint"
+									style={{ textAlign: "right" }}
+								>
+									{t("agents.characterCount", {
+										count: agentNameDisplayWidth,
+										max: AGENT_NAME_MAX_DISPLAY_WIDTH,
+									})}
+								</div>
+							</div>
+							<div className="field">
+								<label
+									className="field-label"
+									htmlFor="agent-create-description"
+								>
+									{t("labels.description")}
+								</label>
+								<textarea
+									id="agent-create-description"
+									className="input textarea"
+									value={form.description}
+									onChange={(event) =>
+										setForm((prev) => ({
+											...prev,
+											description: event.target.value.slice(
+												0,
+												AGENT_DESCRIPTION_MAX_LENGTH,
+											),
+										}))
+									}
+									maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
+									rows={4}
+									placeholder={t("agents.descriptionPlaceholder")}
+								/>
+								<div
+									className="field-hint"
+									style={{ textAlign: "right" }}
+								>
+									{t("agents.characterCount", {
+										count: form.description?.length || 0,
+										max: AGENT_DESCRIPTION_MAX_LENGTH,
+									})}
+								</div>
+							</div>
+						</div>
+						<div className="sheet-footer">
+							<button
+								type="button"
+								className="btn btn-secondary"
+								disabled={saving}
+								onClick={closeCreateSheet}
+							>
+								{t("buttons.cancel")}
+							</button>
+							<button
+								type="submit"
+								className="btn btn-primary"
+								disabled={
+									saving ||
+									!isAgentNameValid ||
+									(form.description?.trim().length || 0) >
+										AGENT_DESCRIPTION_MAX_LENGTH
+								}
+							>
+								{saving ? t("status.saving") : t("agents.create")}
+							</button>
+						</div>
+					</form>
+				</>
+			)}
+
 			{chooserAgent && (
 				<div
 					data-testid="kb-onboarding-modal"
@@ -763,7 +903,7 @@ export default function Agents() {
 						position: "fixed",
 						inset: 0,
 						zIndex: 9999,
-						background: "rgba(0,0,0,0.55)",
+						background: "var(--color-bg-overlay)",
 						display: "flex",
 						alignItems: "center",
 						justifyContent: "center",
@@ -795,7 +935,7 @@ export default function Agents() {
 						</div>
 					) : (
 						<div
-							className="liquid-glass-card"
+							className="card"
 							style={{
 								maxWidth: 560,
 								width: "100%",
@@ -806,12 +946,8 @@ export default function Agents() {
 							onClick={(event) => event.stopPropagation()}
 						>
 							<h3
-								style={{
-									fontSize: "var(--text-lg)",
-									fontWeight: 600,
-									marginBottom: "var(--space-2)",
-									color: "var(--color-text-primary)",
-								}}
+								className="card-title"
+								style={{ marginBottom: "var(--space-2)" }}
 							>
 								{t("agents.kbOnboardingTitle")}
 							</h3>
@@ -863,9 +999,7 @@ export default function Agents() {
 											setChooserView("bind");
 										}}
 									>
-										{t("agents.kbBindExisting", {
-											defaultValue: "Bind an existing knowledge base",
-										})}
+										{t("agents.kbBindExisting")}
 									</button>
 									<button
 										type="button"
@@ -877,9 +1011,7 @@ export default function Agents() {
 											setChooserView("create");
 										}}
 									>
-										{t("agents.kbCreateNew", {
-											defaultValue: "Create a new knowledge base",
-										})}
+										{t("agents.kbCreateNew")}
 									</button>
 									<button
 										type="button"
@@ -906,6 +1038,7 @@ export default function Agents() {
 									</label>
 									<select
 										id="agent-kb-binding-select"
+										className="select"
 										data-testid="kb-chooser-select"
 										aria-label={t("knowledgeBases.bindAgentLabel")}
 										value={chooserKbId}
@@ -929,10 +1062,7 @@ export default function Agents() {
 												color: "var(--color-text-muted)",
 											}}
 										>
-											{t("agents.kbNoneAvailable", {
-												defaultValue:
-													"No unbound active knowledge base available. Create one under Knowledge Bases.",
-											})}
+											{t("agents.kbNoneAvailable")}
 										</p>
 									)}
 									<div

@@ -86,10 +86,12 @@ describe("AdminLayout agent brand", () => {
 
 		await screen.findByRole("heading", { name: "官网客服" });
 
-		// The group parent and both children used to render these i18n keys.
+		// The group parent and both children used to render these i18n keys. §13
+		// removes the 网站管理/文件上传 children but adds a single agent-scoped
+		// 知识库 entry pointing at `/agents/:id/knowledge`.
 		expect(
-			screen.queryByText("navigation.knowledge"),
-		).not.toBeInTheDocument();
+			screen.getByRole("link", { name: "navigation.knowledge" }),
+		).toHaveAttribute("href", "/agents/agt_1/knowledge");
 		expect(
 			screen.queryByText("navigation.urlKnowledge"),
 		).not.toBeInTheDocument();

@@ -129,8 +129,17 @@ export default function AgentSettings() {
   if (loading) {
     return (
       <AdminLayout>
-        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', textAlign: 'center' }}>
-          {t('status.loading')}
+        <div className="admin-page">
+          <p className="field-hint" role="status">
+            {t('status.loading')}
+          </p>
+          <div className="list" aria-busy="true">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="list-row">
+                <div className="skeleton skeleton-text" style={{ width: '100%' }} />
+              </div>
+            ))}
+          </div>
         </div>
       </AdminLayout>
     );
@@ -139,8 +148,12 @@ export default function AgentSettings() {
   if (error && !agent) {
     return (
       <AdminLayout>
-        <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', textAlign: 'center', color: 'var(--color-error)' }}>
-          {error}
+        <div className="admin-page">
+          <div className="empty">
+            <p className="empty-title" role="alert">
+              {error}
+            </p>
+          </div>
         </div>
       </AdminLayout>
     );
@@ -148,355 +161,224 @@ export default function AgentSettings() {
 
   return (
     <AdminLayout>
-      <div style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: '800px', margin: '0 auto' }}>
-        <h1 style={{
-          fontSize: isMobile ? 'var(--text-2xl)' : 'var(--text-3xl)',
-          fontWeight: 700,
-          marginBottom: 'var(--space-6)',
-          color: 'var(--color-text-primary)',
-        }}>
-          {t('navigation.agentSettings')}
-        </h1>
-
-        <p style={{
-          fontSize: 'var(--text-base)',
-          color: 'var(--color-text-secondary)',
-          marginBottom: 'var(--space-6)',
-        }}>
-          {t('labels.configAgentSettings')}
-        </p>
+      <div className="admin-page" data-testid="agent-settings-page">
+        <header className="page-header">
+          <div style={{ minWidth: 0 }}>
+            <h1 className="page-title">{t('navigation.agentSettings')}</h1>
+            <p className="page-subtitle">{t('labels.configAgentSettings')}</p>
+          </div>
+          <div className="page-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? t('status.saving') : t('buttons.save')}
+            </button>
+          </div>
+        </header>
 
         {validationError && (
-          <div style={{
-            padding: 'var(--space-3)',
-            marginBottom: 'var(--space-4)',
-            background: 'hsla(350deg, 85%, 58%, 0.1)',
-            border: '1px solid hsla(350deg, 85%, 58%, 0.3)',
-            borderRadius: 'var(--radius-md)',
-            color: 'var(--color-error)',
-            fontSize: 'var(--text-sm)',
-          }}>
+          <div
+            role="alert"
+            style={{
+              padding: 'var(--space-3) var(--space-4)',
+              marginBottom: 'var(--space-4)',
+              background: 'var(--color-error-bg)',
+              border: '1px solid var(--color-error)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--color-error)',
+              fontSize: 'var(--text-sm)',
+              lineHeight: 'var(--leading-normal)',
+            }}
+          >
             {validationError}
           </div>
         )}
 
         {saved && (
-          <div style={{
-            padding: 'var(--space-3)',
-            marginBottom: 'var(--space-4)',
-            background: 'hsla(150deg, 80%, 45%, 0.1)',
-            border: '1px solid hsla(150deg, 80%, 45%, 0.3)',
-            borderRadius: 'var(--radius-md)',
-            color: 'var(--color-success)',
-            fontSize: 'var(--text-sm)',
-          }}>
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              padding: 'var(--space-3) var(--space-4)',
+              marginBottom: 'var(--space-4)',
+              background: 'var(--color-success-bg)',
+              border: '1px solid var(--color-success)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--color-success)',
+              fontSize: 'var(--text-sm)',
+              lineHeight: 'var(--leading-normal)',
+            }}
+          >
             {t('labels.settingsSaved')}
           </div>
         )}
 
-        <div className="liquid-glass-card" style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
-          <div style={{ display: 'grid', gap: 'var(--space-5)' }}>
-            {/* Widget Title */}
-            <div>
-              <label htmlFor="widget_title" style={{
-                display: 'block',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-2)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.widgetTitle')}
-              </label>
-              <input
-                id="widget_title"
-                type="text"
-                value={formData?.widget_title || ''}
-                onChange={(e) => updateField('widget_title', e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: 'var(--space-3)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: 'var(--text-base)',
-                  background: 'var(--color-bg-secondary)',
-                  color: 'var(--color-text-primary)',
-                }}
-              />
-            </div>
-
-            {/* Theme Color */}
-            <div>
-              <label htmlFor="widget_color" style={{
-                display: 'block',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-2)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.themeColor')}
-              </label>
-              <input
-                id="widget_color"
-                type="color"
-                value={formData?.widget_color || DEFAULT_WIDGET_COLOR}
-                onChange={(e) => updateField('widget_color', e.target.value)}
-                style={{
-                  width: '60px',
-                  height: '40px',
-                  padding: 'var(--space-1)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  cursor: 'pointer',
-                }}
-              />
-            </div>
-
-            {/* Welcome Message */}
-            <div>
-              <label htmlFor="welcome_message" style={{
-                display: 'block',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-2)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.welcomeMessage')}
-              </label>
-              <textarea
-                id="welcome_message"
-                value={formData?.welcome_message || ''}
-                onChange={(e) => updateField('welcome_message', e.target.value)}
-                rows={3}
-                style={{
-                  width: '100%',
-                  padding: 'var(--space-3)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: 'var(--text-base)',
-                  background: 'var(--color-bg-secondary)',
-                  color: 'var(--color-text-primary)',
-                  resize: 'vertical',
-                }}
-              />
-            </div>
-
-            {/* History Retention */}
-            <div>
-              <label htmlFor="history_days" style={{
-                display: 'block',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-2)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.historyRetention')}
-              </label>
-              <input
-                id="history_days"
-                type="number"
-                value={formData?.history_days || DEFAULT_HISTORY_DAYS}
-                onChange={(e) => updateField('history_days', parseInt(e.target.value, 10) || DEFAULT_HISTORY_DAYS)}
-                min={1}
-                max={365}
-                style={{
-                  width: '120px',
-                  padding: 'var(--space-3)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: 'var(--text-base)',
-                  background: 'var(--color-bg-secondary)',
-                  color: 'var(--color-text-primary)',
-                }}
-              />
-            </div>
-
-            {/* Embed Whitelist */}
-            <div>
-              <label htmlFor="allowed_widget_origins" style={{
-                display: 'block',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-2)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.embedWhitelist')}
-              </label>
-              <textarea
-                id="allowed_widget_origins"
-                value={originsText}
-                onChange={(e) => {
-                  setOriginsText(e.target.value);
-                  setValidationError(null);
-                }}
-                rows={3}
-                placeholder={t('placeholders.embedWhitelist')}
-                style={{
-                  width: '100%',
-                  padding: 'var(--space-3)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: 'var(--text-base)',
-                  background: 'var(--color-bg-secondary)',
-                  color: 'var(--color-text-primary)',
-                  resize: 'vertical',
-                }}
-              />
-              <p style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-                marginTop: 'var(--space-2)',
-              }}>
-                {t('labels.embedWhitelistFormatHint')}
-              </p>
-            </div>
-
-            {/* AI Conversation Limit */}
-            <div>
-              <label style={{
-                display: 'block',
-                fontSize: 'var(--text-base)',
-                fontWeight: 600,
-                marginBottom: 'var(--space-3)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.aiConversationLimit')}
-              </label>
-              <p style={{
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-secondary)',
-                marginBottom: 'var(--space-4)',
-              }}>
-                {t('labels.aiConversationLimitDesc')}
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 'var(--space-4)', alignItems: isMobile ? 'stretch' : 'center' }}>
-                <div>
-                  <label htmlFor="rate_limit_per_minute" style={{
-                    display: 'block',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    marginBottom: 'var(--space-2)',
-                    color: 'var(--color-text-primary)',
-                  }}>
-                    {t('labels.perMinuteLimit')}
-                  </label>
-                  <input
-                    id="rate_limit_per_minute"
-                    type="number"
-                    value={formData?.rate_limit_per_minute ?? 20}
-                    onChange={(e) => {
-                      const value = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
-                      updateField('rate_limit_per_minute', isNaN(value) ? 0 : value);
-                    }}
-                    min={0}
-                    style={{
-                      width: '120px',
-                      padding: 'var(--space-3)',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: 'var(--radius-md)',
-                      fontSize: 'var(--text-base)',
-                      background: 'var(--color-bg-secondary)',
-                      color: 'var(--color-text-primary)',
-                    }}
-                  />
-                </div>
-              </div>
-              <p style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-                marginTop: 'var(--space-2)',
-              }}>
-                {t('labels.zeroMeansNoLimit')}
-              </p>
-
-              <div style={{ marginTop: 'var(--space-4)' }}>
-                <label htmlFor="restricted_reply" style={{
-                  display: 'block',
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 500,
-                  marginBottom: 'var(--space-2)',
-                  color: 'var(--color-text-primary)',
-                }}>
-                  {t('labels.restrictedReplyLabel')}
-                </label>
-                <textarea
-                  id="restricted_reply"
-                  value={formData?.restricted_reply || ''}
-                  onChange={(e) => updateField('restricted_reply', e.target.value)}
-                  rows={2}
-                  placeholder={t('labels.restrictedReplyPlaceholder')}
-                  style={{
-                    width: '100%',
-                    padding: 'var(--space-3)',
-                    border: '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: 'var(--text-base)',
-                    background: 'var(--color-bg-secondary)',
-                    color: 'var(--color-text-primary)',
-                    resize: 'vertical',
-                  }}
-                />
-                <p style={{
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-muted)',
-                  marginTop: 'var(--space-2)',
-                }}>
-                  {t('labels.restrictedReplyDesc')}
-                </p>
-              </div>
-            </div>
-
-            {/* Embed Code */}
-            <div>
-              <label style={{
-                display: 'block',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-2)',
-                color: 'var(--color-text-primary)',
-              }}>
-                {t('labels.widgetEmbedCode')}
-              </label>
-              <div style={{
-                padding: 'var(--space-3)',
-                background: 'var(--color-bg-tertiary)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-md)',
-                fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-secondary)',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-              }}>
-                {embedCode}
-              </div>
-            </div>
+        {/* Widget appearance + embed code */}
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('settings.widgetSettings')}</h2>
           </div>
 
-          {/* Save Button */}
-          <div style={{ marginTop: 'var(--space-6)' }}>
-            <button
-              onClick={handleSave}
-              disabled={saving}
+          <div className="field">
+            <label className="field-label" htmlFor="widget_title">
+              {t('labels.widgetTitle')}
+            </label>
+            <input
+              id="widget_title"
+              className="input"
+              type="text"
+              value={formData?.widget_title || ''}
+              onChange={(e) => updateField('widget_title', e.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="widget_color">
+              {t('labels.themeColor')}
+            </label>
+            <input
+              id="widget_color"
+              className="input"
+              type="color"
+              value={formData?.widget_color || DEFAULT_WIDGET_COLOR}
+              onChange={(e) => updateField('widget_color', e.target.value)}
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 'var(--space-2)',
-                padding: 'var(--space-3) var(--space-6)',
-                background: saving ? 'var(--color-bg-tertiary)' : 'var(--color-accent-primary)',
-                color: 'var(--color-text-inverse)',
-                border: 'none',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--text-base)',
-                fontWeight: 500,
-                cursor: saving ? 'not-allowed' : 'pointer',
-                transition: 'all var(--transition-fast)',
+                width: '60px',
+                minHeight: '40px',
+                padding: 'var(--space-1)',
+                cursor: 'pointer',
               }}
-            >
-              {saving ? t('status.saving') : t('buttons.save')}
-            </button>
+            />
           </div>
-        </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="welcome_message">
+              {t('labels.welcomeMessage')}
+            </label>
+            <textarea
+              id="welcome_message"
+              className="input textarea"
+              value={formData?.welcome_message || ''}
+              onChange={(e) => updateField('welcome_message', e.target.value)}
+              rows={3}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="history_days">
+              {t('labels.historyRetention')}
+            </label>
+            <input
+              id="history_days"
+              className="input"
+              type="number"
+              value={formData?.history_days || DEFAULT_HISTORY_DAYS}
+              onChange={(e) => updateField('history_days', parseInt(e.target.value, 10) || DEFAULT_HISTORY_DAYS)}
+              min={1}
+              max={365}
+              style={{ width: '120px' }}
+            />
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="allowed_widget_origins">
+              {t('labels.embedWhitelist')}
+            </label>
+            <textarea
+              id="allowed_widget_origins"
+              className="input textarea"
+              value={originsText}
+              onChange={(e) => {
+                setOriginsText(e.target.value);
+                setValidationError(null);
+              }}
+              rows={3}
+              placeholder={t('placeholders.embedWhitelist')}
+            />
+            <p className="field-hint">{t('labels.embedWhitelistFormatHint')}</p>
+          </div>
+        </section>
+
+        {/* AI conversation limit */}
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('labels.aiConversationLimit')}</h2>
+          </div>
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('labels.aiConversationLimitDesc')}
+          </p>
+
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
+              gap: 'var(--space-4)',
+              alignItems: isMobile ? 'stretch' : 'flex-start',
+              marginBottom: 'var(--space-4)',
+            }}
+          >
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label className="field-label" htmlFor="rate_limit_per_minute">
+                {t('labels.perMinuteLimit')}
+              </label>
+              <input
+                id="rate_limit_per_minute"
+                className="input"
+                type="number"
+                value={formData?.rate_limit_per_minute ?? 20}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
+                  updateField('rate_limit_per_minute', isNaN(value) ? 0 : value);
+                }}
+                min={0}
+                style={{ width: '120px' }}
+              />
+              <p className="field-hint">{t('labels.zeroMeansNoLimit')}</p>
+            </div>
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="restricted_reply">
+              {t('labels.restrictedReplyLabel')}
+            </label>
+            <textarea
+              id="restricted_reply"
+              className="input textarea"
+              value={formData?.restricted_reply || ''}
+              onChange={(e) => updateField('restricted_reply', e.target.value)}
+              rows={2}
+              placeholder={t('labels.restrictedReplyPlaceholder')}
+            />
+            <p className="field-hint">{t('labels.restrictedReplyDesc')}</p>
+          </div>
+        </section>
+
+        {/* Embed code */}
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('labels.widgetEmbedCode')}</h2>
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              padding: 'var(--space-3)',
+              background: 'var(--color-bg-tertiary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--text-sm)',
+              color: 'var(--color-text-secondary)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              overflowX: 'auto',
+            }}
+          >
+            {embedCode}
+          </pre>
+        </section>
       </div>
     </AdminLayout>
   );

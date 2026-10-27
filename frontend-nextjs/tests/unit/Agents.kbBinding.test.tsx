@@ -144,6 +144,16 @@ beforeEach(() => {
 	});
 });
 
+/**
+ * §15 moved the per-row actions (bind/unbind, open, delete/restore) into an
+ * overflow menu, so the raw `agent-kb-bind-*` control is only in the DOM once
+ * that row's menu is open. The binding behaviour itself is unchanged.
+ */
+function openRowMenu(agentId: string) {
+	fireEvent.click(screen.getByTestId(`agent-actions-${agentId}`));
+	return screen.getByTestId(`agent-menu-${agentId}`);
+}
+
 describe("Agents knowledge-base column", () => {
 	it("shows the bound knowledge base name and an em dash when unbound", async () => {
 		renderAgents();
@@ -161,9 +171,11 @@ describe("Agents knowledge-base column", () => {
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
+		openRowMenu("agt_bound");
 		expect(screen.getByTestId("agent-kb-bind-agt_bound")).toHaveTextContent(
 			"knowledgeBases.actions.unbind",
 		);
+		openRowMenu("agt_free");
 		expect(screen.getByTestId("agent-kb-bind-agt_free")).toHaveTextContent(
 			"knowledgeBases.actions.bind",
 		);
@@ -174,6 +186,8 @@ describe("Agents knowledge-base column", () => {
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
+		openRowMenu("agt_bound");
+		openRowMenu("agt_free");
 		expect(
 			screen.queryByTestId("agent-kb-bind-agt_bound"),
 		).not.toBeInTheDocument();
@@ -190,6 +204,7 @@ describe("Agents knowledge-base column", () => {
 		renderAgents();
 
 		await screen.findByText("Free Agent");
+		openRowMenu("agt_free");
 		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_free"));
 
 		const modal = await screen.findByTestId("kb-onboarding-modal");
@@ -221,6 +236,7 @@ describe("Agents knowledge-base column", () => {
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
+		openRowMenu("agt_bound");
 		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_bound"));
 
 		await waitFor(() => {
@@ -238,6 +254,7 @@ describe("Agents knowledge-base column", () => {
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
+		openRowMenu("agt_bound");
 		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_bound"));
 
 		await waitFor(() => {
@@ -306,7 +323,10 @@ describe("agent knowledge page", () => {
 		expect(mockedApi.getKnowledgeBase).not.toHaveBeenCalled();
 	});
 
-	it("redirects an unbound agent to the KB list with the bind query", async () => {
+	// Spec §13 (lane SHELL) inverted this: an unbound agent now sees a bind
+	// prompt in place (no silent bounce to the KB list) whose primary action
+	// carries `?bindAgent=<id>`. The agent page itself stays put.
+	it("prompts an unbound agent to bind, linking to the KB list with the bind query", async () => {
 		mockedApi.kbStatus.mockResolvedValue({
 			agent_id: "agt_free",
 			kb_id: null,
@@ -316,10 +336,10 @@ describe("agent knowledge page", () => {
 
 		const router = renderAgentKnowledgePage("agt_free");
 
-		await waitFor(() => {
-			expect(router.state.location.pathname).toBe("/knowledge-bases");
-		});
-		expect(router.state.location.search).toContain("bindAgent=agt_free");
+		const action = await screen.findByTestId("kb-bind-prompt-action");
+		expect(router.state.location.pathname).toBe("/agents/agt_free/knowledge");
+		expect(action.getAttribute("href")).toContain("bindAgent=agt_free");
+		expect(action.getAttribute("href")).toContain("/knowledge-bases");
 		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
 		expect(screen.queryByTestId("kb-bind-existing")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("kb-bind-submit")).not.toBeInTheDocument();

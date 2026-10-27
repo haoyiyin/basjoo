@@ -90,250 +90,183 @@ export default function AccountSettings() {
     }
   };
 
-  const sectionTitleStyle = {
-    fontSize: 'var(--text-lg)',
-    fontWeight: 600,
-    marginBottom: 'var(--space-1)',
-    color: 'var(--color-text-primary)',
-  } as const;
-
-  const sectionDescStyle = {
-    fontSize: 'var(--text-sm)',
-    color: 'var(--color-text-muted)',
-    marginBottom: 'var(--space-4)',
-  } as const;
-
-  const labelStyle = {
-    display: 'block',
-    fontSize: 'var(--text-sm)',
-    fontWeight: 500,
-    marginBottom: 'var(--space-2)',
-    color: 'var(--color-text-primary)',
-  } as const;
-
-  const inputStyle = {
-    width: '100%',
-    padding: 'var(--space-3)',
-    border: '1px solid var(--color-border)',
-    borderRadius: 'var(--radius-md)',
-    fontSize: 'var(--text-base)',
-    background: 'var(--color-bg-secondary)',
-    color: 'var(--color-text-primary)',
-  } as const;
-
-  const cardStyle = {
-    padding: isMobile ? 'var(--space-4)' : 'var(--space-6)',
-    marginBottom: 'var(--space-6)',
-  } as const;
-
   return (
     <AdminLayout>
-      <div
-        className="admin-page"
-        data-testid="account-settings-page"
-        style={{ padding: isMobile ? 'var(--space-4)' : 'var(--space-8)', maxWidth: '800px', margin: '0 auto', minWidth: 0 }}
-      >
-        <h1 style={{
-          fontSize: isMobile ? 'var(--text-2xl)' : 'var(--text-3xl)',
-          fontWeight: 700,
-          marginBottom: 'var(--space-6)',
-          color: 'var(--color-text-primary)',
-        }}>
-          {t('settings.account.title')}
-        </h1>
-
-        <p style={{
-          fontSize: 'var(--text-base)',
-          color: 'var(--color-text-secondary)',
-          marginBottom: 'var(--space-6)',
-        }}>
-          {t('settings.account.description')}
-        </p>
+      <div className="admin-page" data-testid="account-settings-page">
+        <header className="page-header">
+          <div style={{ minWidth: 0 }}>
+            <h1 className="page-title">{t('settings.account.title')}</h1>
+            <p className="page-subtitle">{t('settings.account.description')}</p>
+          </div>
+        </header>
 
         {/* Language */}
-        <div className="liquid-glass-card" style={cardStyle}>
-          <h2 style={sectionTitleStyle}>{t('settings.account.languageSection')}</h2>
-          <p style={sectionDescStyle}>{t('settings.account.languageDescription')}</p>
-          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('settings.account.languageSection')}</h2>
+          </div>
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('settings.account.languageDescription')}
+          </p>
+          <div
+            role="group"
+            aria-label={t('settings.account.languageSection')}
+            style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 'var(--space-2)' }}
+          >
             {LANGUAGES.map((lang) => {
               const active = i18n.language === lang.code;
               return (
                 <button
                   key={lang.code}
                   type="button"
+                  className={active ? 'btn btn-primary' : 'btn btn-secondary'}
                   onClick={() => handleLanguageChange(lang.code)}
                   aria-pressed={active}
-                  style={{
-                    flex: 1,
-                    padding: 'var(--space-3)',
-                    background: active
-                      ? 'var(--color-accent-primary)'
-                      : 'var(--color-bg-tertiary)',
-                    color: active
-                      ? 'var(--color-text-inverse)'
-                      : 'var(--color-text-secondary)',
-                    border: active ? 'none' : '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-md)',
-                    cursor: 'pointer',
-                    fontSize: 'var(--text-sm)',
-                    fontWeight: 500,
-                    transition: 'all var(--transition-fast)',
-                  }}
+                  style={{ flex: 1 }}
                 >
                   {t(lang.labelKey)}
                 </button>
               );
             })}
           </div>
-        </div>
+        </section>
 
         {/* Change password */}
-        <div className="liquid-glass-card" style={cardStyle}>
-          <h2 style={sectionTitleStyle}>{t('settings.account.passwordSection')}</h2>
-          <p style={sectionDescStyle}>{t('settings.account.passwordDescription')}</p>
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('settings.account.passwordSection')}</h2>
+          </div>
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('settings.account.passwordDescription')}
+          </p>
 
           {error && (
-            <div style={{
-              padding: 'var(--space-3)',
-              marginBottom: 'var(--space-4)',
-              background: 'hsla(350deg, 85%, 58%, 0.1)',
-              border: '1px solid hsla(350deg, 85%, 58%, 0.3)',
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--color-error)',
-              fontSize: 'var(--text-sm)',
-            }}>
+            <div
+              role="alert"
+              style={{
+                padding: 'var(--space-3) var(--space-4)',
+                marginBottom: 'var(--space-4)',
+                background: 'var(--color-error-bg)',
+                border: '1px solid var(--color-error)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--color-error)',
+                fontSize: 'var(--text-sm)',
+                lineHeight: 'var(--leading-normal)',
+              }}
+            >
               {error}
             </div>
           )}
 
           {saved && (
-            <div style={{
-              padding: 'var(--space-3)',
-              marginBottom: 'var(--space-4)',
-              background: 'hsla(150deg, 80%, 45%, 0.1)',
-              border: '1px solid hsla(150deg, 80%, 45%, 0.3)',
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--color-success)',
-              fontSize: 'var(--text-sm)',
-            }}>
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                padding: 'var(--space-3) var(--space-4)',
+                marginBottom: 'var(--space-4)',
+                background: 'var(--color-success-bg)',
+                border: '1px solid var(--color-success)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--color-success)',
+                fontSize: 'var(--text-sm)',
+                lineHeight: 'var(--leading-normal)',
+              }}
+            >
               {t('settings.account.passwordChanged')}
             </div>
           )}
 
           <form onSubmit={handleSubmit}>
-            <div style={{ display: 'grid', gap: 'var(--space-5)' }}>
-              <div>
-                <label htmlFor="current_password" style={labelStyle}>
-                  {t('settings.account.currentPassword')}
-                </label>
-                <input
-                  id="current_password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={currentPassword}
-                  onChange={(e) => {
-                    setCurrentPassword(e.target.value);
-                    setError(null);
-                  }}
-                  disabled={saving}
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label htmlFor="new_password" style={labelStyle}>
-                  {t('settings.account.newPassword')}
-                </label>
-                <input
-                  id="new_password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={newPassword}
-                  onChange={(e) => {
-                    setNewPassword(e.target.value);
-                    setError(null);
-                  }}
-                  disabled={saving}
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label htmlFor="confirm_password" style={labelStyle}>
-                  {t('settings.account.confirmPassword')}
-                </label>
-                <input
-                  id="confirm_password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => {
-                    setConfirmPassword(e.target.value);
-                    setError(null);
-                  }}
-                  disabled={saving}
-                  style={inputStyle}
-                />
-              </div>
+            <div className="field">
+              <label className="field-label" htmlFor="current_password">
+                {t('settings.account.currentPassword')}
+              </label>
+              <input
+                id="current_password"
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => {
+                  setCurrentPassword(e.target.value);
+                  setError(null);
+                }}
+                disabled={saving}
+              />
             </div>
 
-            <div style={{ marginTop: 'var(--space-6)' }}>
-              <button
-                type="submit"
-                disabled={saving}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                  padding: 'var(--space-3) var(--space-6)',
-                  background: saving ? 'var(--color-bg-tertiary)' : 'var(--color-accent-primary)',
-                  color: 'var(--color-text-inverse)',
-                  border: 'none',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: 'var(--text-base)',
-                  fontWeight: 500,
-                  cursor: saving ? 'not-allowed' : 'pointer',
-                  transition: 'all var(--transition-fast)',
+            <div className="field">
+              <label className="field-label" htmlFor="new_password">
+                {t('settings.account.newPassword')}
+              </label>
+              <input
+                id="new_password"
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => {
+                  setNewPassword(e.target.value);
+                  setError(null);
                 }}
-              >
+                disabled={saving}
+              />
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="confirm_password">
+                {t('settings.account.confirmPassword')}
+              </label>
+              <input
+                id="confirm_password"
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setError(null);
+                }}
+                disabled={saving}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-6)' }}>
+              <button type="submit" className="btn btn-primary" disabled={saving}>
                 {saving ? t('status.saving') : t('settings.account.savePassword')}
               </button>
             </div>
           </form>
-        </div>
+        </section>
 
         {/* Account info */}
-        <div className="liquid-glass-card" style={cardStyle}>
-          <h2 style={sectionTitleStyle}>{t('settings.account.accountInfoSection')}</h2>
-          <div style={{ display: 'grid', gap: 'var(--space-4)', marginTop: 'var(--space-4)' }}>
-            <div>
-              <div style={{
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-1)',
-                color: 'var(--color-text-secondary)',
-              }}>
-                {t('settings.account.name')}
-              </div>
-              <div style={{ fontSize: 'var(--text-base)', color: 'var(--color-text-primary)' }}>
-                {admin?.name || '-'}
-              </div>
-            </div>
-            <div>
-              <div style={{
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                marginBottom: 'var(--space-1)',
-                color: 'var(--color-text-secondary)',
-              }}>
-                {t('settings.account.email')}
-              </div>
-              <div style={{ fontSize: 'var(--text-base)', color: 'var(--color-text-primary)' }}>
-                {admin?.email || '-'}
-              </div>
-            </div>
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('settings.account.accountInfoSection')}</h2>
           </div>
-        </div>
+          <dl
+            style={{
+              display: 'grid',
+              gap: 'var(--space-4)',
+              margin: 0,
+              minWidth: 0,
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <dt className="field-label">{t('settings.account.name')}</dt>
+              <dd style={{ margin: 0, fontSize: 'var(--text-base)', color: 'var(--color-text-primary)', wordBreak: 'break-word' }}>
+                {admin?.name || '-'}
+              </dd>
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <dt className="field-label">{t('settings.account.email')}</dt>
+              <dd style={{ margin: 0, fontSize: 'var(--text-base)', color: 'var(--color-text-primary)', wordBreak: 'break-word' }}>
+                {admin?.email || '-'}
+              </dd>
+            </div>
+          </dl>
+        </section>
       </div>
     </AdminLayout>
   );

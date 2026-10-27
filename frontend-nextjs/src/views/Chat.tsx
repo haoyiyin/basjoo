@@ -12,6 +12,14 @@ interface Message {
   created_at: string
 }
 
+/**
+ * Read-along admin chat view for one session (`/chat/:sessionId`).
+ *
+ * Restyle (spec §20): the page is now the shared `page` scaffold and the
+ * bubbles use token surfaces instead of the old hard-coded grey / blue fills.
+ * The WebSocket connect/reconnect/close lifecycle, the message list state and
+ * the scroll behaviour are untouched.
+ */
 export default function Chat() {
   const { t } = useTranslation('common')
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -169,40 +177,132 @@ export default function Chat() {
   }
 
   return (
-    <div style={{ padding: '20px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <header style={{ marginBottom: '20px' }}>
-        <button onClick={() => navigate('/sessions')}>{t('buttons.back')}</button>
-        <h1>{t('settings.sessionWithId')} #{sessionId}</h1>
+    <div
+      className="page"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        minWidth: 0,
+      }}
+    >
+      <header className="page-header" style={{ flexShrink: 0 }}>
+        <div style={{ minWidth: 0 }}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => navigate('/sessions')}
+            style={{ marginBottom: 'var(--space-2)', paddingLeft: 0 }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            {t('buttons.back')}
+          </button>
+          <h1 className="page-title">
+            {t('settings.sessionWithId', { id: sessionId })}
+          </h1>
+        </div>
       </header>
 
-      <div style={{ flex: 1, overflowY: 'auto', marginBottom: '20px' }}>
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            style={{
-              padding: '10px',
-              margin: '10px 0',
-              backgroundColor: msg.role === 'user' ? '#f0f0f0' : '#e3f2fd',
-              borderRadius: '8px',
-            }}
-          >
-            <strong>{msg.role === 'user' ? t('roles.visitor') : t('roles.agent')}: </strong>
-            {msg.content}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 'var(--space-3)',
+          paddingBottom: 'var(--space-3)',
+        }}
+      >
+        {messages.length === 0 ? (
+          <div className="empty">
+            <p className="empty-title">{t('labels.noMessages')}</p>
           </div>
-        ))}
+        ) : (
+          messages.map((msg) => {
+            const isUser = msg.role === 'user'
+            return (
+              <div
+                key={msg.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: isUser ? 'flex-end' : 'flex-start',
+                }}
+              >
+                <div
+                  style={{
+                    maxWidth: '85%',
+                    minWidth: 0,
+                    padding: 'var(--space-3) var(--space-4)',
+                    borderRadius: 'var(--radius-lg)',
+                    background: isUser
+                      ? 'var(--color-bg-tertiary)'
+                      : 'var(--color-accent-bg)',
+                    border: '1px solid var(--color-border)',
+                    color: 'var(--fg-strong)',
+                    fontSize: 'var(--text-sm)',
+                    lineHeight: 'var(--leading-relaxed)',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'block',
+                      marginBottom: 'var(--space-1)',
+                      fontSize: 'var(--text-xs)',
+                      fontWeight: 500,
+                      color: 'var(--fg-dim)',
+                    }}
+                  >
+                    {isUser ? t('roles.visitor') : t('roles.agent')}
+                  </span>
+                  {msg.content}
+                </div>
+              </div>
+            )
+          })
+        )}
         <div ref={messagesEndRef} />
       </div>
 
-      <div style={{ display: 'flex', gap: '10px' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 'var(--space-2)',
+          alignItems: 'stretch',
+          paddingTop: 'var(--space-3)',
+          borderTop: '1px solid var(--color-border)',
+          flexShrink: 0,
+        }}
+      >
         <input
           type="text"
+          className="input"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyPress={(e) => e.key === 'Enter' && handleSend()}
           placeholder={t('placeholders.enterMessage')}
-          style={{ flex: 1, padding: '10px' }}
+          style={{ flex: 1, minWidth: 0 }}
         />
-        <button onClick={handleSend}>{t('buttons.send')}</button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={handleSend}
+          disabled={!inputValue.trim()}
+        >
+          {t('buttons.send')}
+        </button>
       </div>
     </div>
   )

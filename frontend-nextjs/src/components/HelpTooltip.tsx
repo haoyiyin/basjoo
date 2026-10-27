@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 interface HelpTooltipProps {
   title: string;
@@ -19,6 +20,12 @@ interface HelpTooltipProps {
  * - 支持多段内容展示
  * - 使用Portal渲染，避免被父容器裁剪
  * - 自动边界检测和位置调整
+ *
+ * Restyle (spec §20): the trigger is the shared `.btn .btn-icon` (44px tap
+ * target on mobile, per the `iconButtonStyle` idiom) and the floating panel is
+ * a popover layer on tokens. Portal rendering, the hover/click/focus
+ * behaviour, Escape/blur dismissal and the viewport boundary detection are
+ * unchanged.
  */
 export default function HelpTooltip({
   title,
@@ -33,6 +40,7 @@ export default function HelpTooltip({
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
   const tooltipRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const isMobile = useIsMobile();
 
   const contentArray = Array.isArray(content) ? content : [content];
 
@@ -125,6 +133,21 @@ export default function HelpTooltip({
     }
   }, [isVisible, calculatePosition]);
 
+  // Escape / blur dismissal
+  useEffect(() => {
+    if (!isVisible) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsVisible(false);
+        triggerRef.current?.blur();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isVisible]);
+
   // 窗口大小变化时重新计算 - 使用 ref 避免频繁重新注册
   useEffect(() => {
     if (!isVisible) return;
@@ -199,12 +222,21 @@ export default function HelpTooltip({
     }
   }, [isVisible]);
 
+  /**
+   * Trigger size steps. The glyph stays inline with the label it annotates,
+   * while the button itself is a 32px box on desktop and a >= 44px tap target
+   * on mobile (`iconButtonStyle`, the mobileLayout idiom).
+   */
   const sizeStyles = {
-    xs: { fontSize: '12px', lineHeight: '12px' },
-    sm: { fontSize: '14px', lineHeight: '14px' },
-    md: { fontSize: '16px', lineHeight: '16px' },
-    lg: { fontSize: '18px', lineHeight: '18px' },
+    xs: { width: '20px', minWidth: '20px', height: '20px', minHeight: '20px', fontSize: 'var(--text-xs)' },
+    sm: { width: '24px', minWidth: '24px', height: '24px', minHeight: '24px', fontSize: 'var(--text-xs)' },
+    md: { width: '28px', minWidth: '28px', height: '28px', minHeight: '28px', fontSize: 'var(--text-sm)' },
+    lg: { width: '32px', minWidth: '32px', height: '32px', minHeight: '32px', fontSize: 'var(--text-base)' },
   };
+
+  const iconButtonStyle = isMobile
+    ? { minWidth: 44, minHeight: 44 }
+    : undefined;
 
   const getArrowStyles = () => {
     const baseStyle = {
@@ -264,37 +296,45 @@ export default function HelpTooltip({
   const tooltipContent = isVisible && (
     <div
       ref={tooltipRef}
+      role="tooltip"
       style={{
         position: 'fixed',
         zIndex: 10000,
-        minWidth: '280px',
-        maxWidth: '400px',
-        padding: '16px',
-        background: 'var(--color-bg-primary)',
-        backdropFilter: 'blur(12px)',
+        minWidth: '240px',
+        maxWidth: '360px',
+        padding: 'var(--space-4)',
+        background: 'var(--color-bg-elevated)',
         border: '1px solid var(--color-border)',
-        borderRadius: '12px',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2)',
+        borderRadius: 'var(--radius-md)',
+        boxShadow: 'var(--shadow-lg)',
         ...tooltipStyle,
         animation: 'tooltipFadeIn 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
       }}
     >
       {/* 小箭头 */}
-      <div style={getArrowStyles()} />
+      <div style={getArrowStyles()} aria-hidden="true" />
 
       {/* 标题 */}
       <div
         style={{
-          fontSize: '13px',
-          fontWeight: 700,
-          color: 'var(--color-accent-primary)',
-          marginBottom: '8px',
           display: 'flex',
           alignItems: 'center',
-          gap: '6px',
+          gap: 'var(--space-2)',
+          marginBottom: 'var(--space-2)',
+          fontSize: 'var(--text-sm)',
+          fontWeight: 500,
+          color: 'var(--color-accent-primary)',
         }}
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          aria-hidden="true"
+        >
           <circle cx="12" cy="12" r="10" />
           <path d="M12 16v-4" />
           <path d="M12 8h.01" />
@@ -303,9 +343,21 @@ export default function HelpTooltip({
       </div>
 
       {/* 内容 */}
-      <div style={{ fontSize: '12px', lineHeight: '1.6', color: 'var(--color-text-secondary)' }}>
+      <div
+        style={{
+          fontSize: 'var(--text-xs)',
+          lineHeight: 'var(--leading-relaxed)',
+          color: 'var(--fg-default)',
+        }}
+      >
         {contentArray.map((item, index) => (
-          <div key={index} style={{ marginBottom: index < contentArray.length - 1 ? '8px' : 0 }}>
+          <div
+            key={index}
+            style={{
+              marginBottom:
+                index < contentArray.length - 1 ? 'var(--space-2)' : 0,
+            }}
+          >
             {item}
           </div>
         ))}
@@ -327,9 +379,22 @@ export default function HelpTooltip({
   );
 
   return (
-    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'flex-start', marginLeft: '4px', verticalAlign: 'top' }}>
+    <span
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        marginLeft: 'var(--space-1)',
+        verticalAlign: 'middle',
+      }}
+    >
       <button
         ref={triggerRef}
+        type="button"
+        className="btn btn-icon"
+        aria-label={title}
+        aria-haspopup="true"
+        aria-expanded={isVisible}
         onClick={() => {
           calculatePosition();
           setIsVisible(!isVisible);
@@ -343,22 +408,32 @@ export default function HelpTooltip({
           setIsVisible(false);
           setIsHovered(false);
         }}
+        onFocus={() => {
+          calculatePosition();
+          setIsVisible(true);
+        }}
+        onBlur={() => {
+          setIsVisible(false);
+          setIsHovered(false);
+        }}
         style={{
           ...sizeStyles[size],
-          borderRadius: '50%',
+          ...iconButtonStyle,
+          padding: 0,
+          borderRadius: 'var(--radius-full)',
           background: 'transparent',
           border: 'none',
-          color: isHovered ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
+          color: isHovered
+            ? 'var(--color-accent-primary)'
+            : 'var(--fg-dim)',
           cursor: 'pointer',
-          display: 'flex',
+          display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
           fontWeight: 500,
-          transition: 'color 0.2s ease',
-          padding: 0,
-          marginTop: size === 'xs' ? '3px' : size === 'sm' ? '2px' : '0',
+          lineHeight: 1,
+          transition: 'color var(--transition-fast)',
         }}
-        type="button"
       >
         ?
       </button>

@@ -1,9 +1,8 @@
 "use client";
 
 import { useNavigate, useParams } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 import AdminLayout from "../components/AdminLayout";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "../services/api";
 import { useTranslation } from "react-i18next";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -18,8 +17,6 @@ interface QuickAction {
 	 */
 	scope: "agent" | "sources";
 	icon: JSX.Element;
-	gradient: string;
-	glowColor: string;
 }
 
 const quickActionsConfig: QuickAction[] = [
@@ -30,19 +27,17 @@ const quickActionsConfig: QuickAction[] = [
 		scope: "agent",
 		icon: (
 			<svg
-				width="24"
-				height="24"
+				width="20"
+				height="20"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
 				strokeWidth="2"
+				aria-hidden="true"
 			>
 				<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
 			</svg>
 		),
-		gradient:
-			"linear-gradient(135deg, hsl(188deg, 90%, 50%) 0%, hsl(188deg, 80%, 40%) 100%)",
-		glowColor: "hsla(188deg, 90%, 50%, 0.25)",
 	},
 	{
 		titleKey: "navigation.fileManagement",
@@ -51,20 +46,18 @@ const quickActionsConfig: QuickAction[] = [
 		scope: "sources",
 		icon: (
 			<svg
-				width="24"
-				height="24"
+				width="20"
+				height="20"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
 				strokeWidth="2"
+				aria-hidden="true"
 			>
 				<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
 				<polyline points="14 2 14 8 20 8" />
 			</svg>
 		),
-		gradient:
-			"linear-gradient(135deg, hsl(265deg, 90%, 65%) 0%, hsl(265deg, 80%, 55%) 100%)",
-		glowColor: "hsla(265deg, 90%, 65%, 0.25)",
 	},
 	{
 		titleKey: "navigation.urlKnowledge",
@@ -73,150 +66,58 @@ const quickActionsConfig: QuickAction[] = [
 		scope: "sources",
 		icon: (
 			<svg
-				width="24"
-				height="24"
+				width="20"
+				height="20"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
 				strokeWidth="2"
+				aria-hidden="true"
 			>
 				<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
 				<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
 			</svg>
 		),
-		gradient:
-			"linear-gradient(135deg, hsl(150deg, 80%, 45%) 0%, hsl(150deg, 70%, 35%) 100%)",
-		glowColor: "hsla(150deg, 80%, 45%, 0.25)",
 	},
 ];
 
-/* Stat card with mouse-tracking gradient */
-function StatCard({
-	stat,
-	idx,
-	isMobile,
-}: {
-	stat: {
-		label: string;
-		value: string | number;
-		indexed?: number;
-		color: string;
-		accentHue: number;
-	};
-	idx: number;
-	isMobile: boolean;
-}) {
-	const cardRef = useRef<HTMLDivElement>(null);
-	const [mousePos, setMousePos] = useState({ x: 50, y: 50 });
+interface QuotaState {
+	used_urls: number;
+	max_urls: number;
+	used_files: number;
+	max_files: number;
+	used_messages_today: number;
+	max_messages_per_day: number;
+}
 
-	const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-		if (!cardRef.current) return;
-		const rect = cardRef.current.getBoundingClientRect();
-		const x = ((e.clientX - rect.left) / rect.width) * 100;
-		const y = ((e.clientY - rect.top) / rect.height) * 100;
-		setMousePos({ x, y });
-	}, []);
+/**
+ * Placeholder for statistics the API cannot currently supply. It is a
+ * typographic symbol, not translatable copy: it must never be replaced with a
+ * fabricated number.
+ */
+const NO_VALUE = "—";
 
-	return (
-		<div
-			ref={cardRef}
-			onMouseMove={handleMouseMove}
-			className="liquid-glass-card"
-			style={{
-				padding: isMobile ? "var(--space-5)" : "var(--space-6)",
-				animation: "fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards",
-				animationDelay: `${idx * 0.1}s`,
-				opacity: 0,
-				position: "relative",
-				overflow: "hidden",
-				cursor: "default",
-			}}
-		>
-			{/* Mouse-tracking aurora gradient */}
-			<div
-				style={{
-					position: "absolute",
-					inset: 0,
-					background: `radial-gradient(circle at ${mousePos.x}% ${mousePos.y}%, hsla(${stat.accentHue}deg, 90%, 50%, 0.08) 0%, transparent 50%)`,
-					transition: "background 0.3s ease",
-					pointerEvents: "none",
-				}}
-			/>
-
-			<div
-				style={{
-					fontSize: "var(--text-sm)",
-					color: "var(--color-text-muted)",
-					marginBottom: "var(--space-2)",
-					textTransform: "uppercase",
-					letterSpacing: "0.05em",
-					position: "relative",
-				}}
-			>
-				{stat.label}
-			</div>
-			<div
-				style={{
-					display: "flex",
-					alignItems: "baseline",
-					gap: "var(--space-2)",
-					position: "relative",
-				}}
-			>
-				<span
-					style={{
-						fontSize: "var(--text-3xl)",
-						fontWeight: 700,
-						color: stat.color,
-						textShadow: `0 0 30px hsla(${stat.accentHue}deg, 90%, 50%, 0.3)`,
-					}}
-				>
-					{stat.value}
-				</span>
-				{typeof stat.indexed === "number" && stat.indexed > 0 && (
-					<span
-						style={{
-							fontSize: "var(--text-sm)",
-							color: "var(--color-text-muted)",
-						}}
-					>
-						({stat.indexed}{" "}
-						{stat.label.includes("URL") || stat.label.includes("url")
-							? "indexed"
-							: "ready"}
-						)
-					</span>
-				)}
-			</div>
-		</div>
-	);
+interface StatItem {
+	id: string;
+	label: string;
+	value: string;
 }
 
 export default function Dashboard() {
 	const { t } = useTranslation("common");
 	const navigate = useNavigate();
 	const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
-	const { admin } = useAuth();
 	const isMobile = useIsMobile();
 	const agentIdCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
-	const [quota, setQuota] = useState<{
-		used_urls: number;
-		max_urls: number;
-		used_files: number;
-		max_files: number;
-		used_messages_today: number;
-		max_messages_per_day: number;
-	} | null>(null);
-	const [sourcesSummary, setSourcesSummary] = useState<{
-		urls: { total: number; indexed: number; pending: number };
-		files: { total: number; ready: number; processing: number };
-		has_pending: boolean;
-	} | null>(null);
+	const [quota, setQuota] = useState<QuotaState | null>(null);
 	const [agentId, setAgentId] = useState<string | null>(null);
 	const [agentName, setAgentName] = useState<string>("");
 	const [kbId, setKbId] = useState<string | null>(null);
+	const [activeSessionCount, setActiveSessionCount] = useState<number | null>(
+		null,
+	);
 	const [agentIdCopied, setAgentIdCopied] = useState(false);
 
 	useEffect(() => {
@@ -233,12 +134,13 @@ export default function Dashboard() {
 			setAgentId(agent.id);
 			setAgentName(agent.name);
 			setKbId(agent.kb_id ?? null);
-			const [quotaData, sourcesData] = await Promise.all([
-				api.getQuota(agent.id),
-				api.getSourcesSummary(agent.id),
-			]);
+			setActiveSessionCount(
+				typeof agent.active_session_count === "number"
+					? agent.active_session_count
+					: null,
+			);
+			const quotaData = await api.getQuota(agent.id);
 			setQuota(quotaData);
-			setSourcesSummary(sourcesData);
 		} catch (error) {
 			console.error("Failed to load data:", error);
 			navigate("/agents");
@@ -256,13 +158,6 @@ export default function Dashboard() {
 			return "/knowledge-bases";
 		}
 		return routeAgentId ? `/agents/${routeAgentId}${action.path}` : action.path;
-	};
-
-	const getGreeting = () => {
-		const hour = new Date().getHours();
-		if (hour < 12) return t("time.goodMorning");
-		if (hour < 18) return t("time.goodAfternoon");
-		return t("time.goodEvening");
 	};
 
 	const handleCopyAgentId = async () => {
@@ -286,28 +181,38 @@ export default function Dashboard() {
 		);
 	};
 
-	const stats = [
+	useEffect(() => {
+		return () => {
+			if (agentIdCopiedTimerRef.current)
+				clearTimeout(agentIdCopiedTimerRef.current);
+		};
+	}, []);
+
+	// Section 17 keeps exactly four statistics: API health, agent identity and
+	// the two usage counters. Knowledge-base parameters are intentionally gone.
+	const stats: StatItem[] = [
 		{
-			label: t("labels.urlKnowledgeSource"),
-			value: sourcesSummary?.urls.total ?? 0,
-			indexed: sourcesSummary?.urls.indexed ?? 0,
-			color: "var(--color-accent-primary)",
-			accentHue: 188,
+			id: "api",
+			label: t("labels.apiStatus"),
+			value: t("labels.normalOperation"),
 		},
 		{
-			label: t("labels.fileItems"),
-			value: sourcesSummary?.files.total ?? 0,
-			indexed: sourcesSummary?.files.ready ?? 0,
-			color: "var(--color-accent-secondary)",
-			accentHue: 265,
+			id: "agent",
+			label: t("labels.agentName"),
+			value: agentName || NO_VALUE,
 		},
 		{
-			label: t("labels.indexedDocBlocks"),
-			value: sourcesSummary
-				? sourcesSummary.urls.indexed + sourcesSummary.files.ready
-				: "-",
-			color: "var(--color-warning)",
-			accentHue: 38,
+			id: "users",
+			label: t("dashboard.userCount"),
+			value: NO_VALUE,
+		},
+		{
+			id: "sessions",
+			label: t("dashboard.sessionCount"),
+			value:
+				typeof activeSessionCount === "number"
+					? String(activeSessionCount)
+					: NO_VALUE,
 		},
 	];
 
@@ -318,68 +223,167 @@ export default function Dashboard() {
 				data-testid="dashboard-page"
 				style={{
 					padding: isMobile ? "var(--space-4)" : "var(--space-8)",
-					maxWidth: "1400px",
 					margin: "0 auto",
 					minWidth: 0,
 				}}
 			>
-				{/* Greeting header */}
-				<header
-					style={{
-						marginBottom: isMobile ? "var(--space-6)" : "var(--space-10)",
-						animation:
-							"fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards",
-					}}
-				>
-					<h1
-						style={{
-							fontSize: isMobile ? "var(--text-2xl)" : "var(--text-4xl)",
-							fontWeight: 700,
-							marginBottom: "var(--space-2)",
-							background: "var(--color-accent-gradient)",
-							WebkitBackgroundClip: "text",
-							backgroundClip: "text",
-							WebkitTextFillColor: "transparent",
-						}}
-					>
-						{getGreeting()}，{admin?.name}
-					</h1>
-					<p
-						style={{
-							fontSize: isMobile ? "var(--text-base)" : "var(--text-lg)",
-							color: "var(--color-text-secondary)",
-						}}
-					>
-						{t("labels.welcome", { agentName: agentName || t("appName") })}
-					</p>
+				<header className="page-header">
+					<div>
+						<h1 className="page-title">{t("navigation.dashboard")}</h1>
+						{/*
+						 * Spec §17 asks for no greeting paragraph, but
+						 * tests/unit/Dashboard.agentScope.test.tsx asserts this exact
+						 * string, so it is kept as a restrained secondary line instead
+						 * of a gradient hero. See report: DEVIATION + BLOCKER.
+						 */}
+						<p
+							style={{
+								margin: "var(--space-1) 0 0",
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-muted)",
+							}}
+						>
+							{t("labels.welcome", { agentName: agentName || t("appName") })}
+						</p>
+					</div>
 				</header>
 
-				{/* Stat cards */}
 				<div
-					className="responsive-grid-3"
+					data-testid="dashboard-stats"
 					style={{
 						display: "grid",
-						gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+						gridTemplateColumns: isMobile
+							? "1fr"
+							: "repeat(auto-fit, minmax(200px, 1fr))",
 						gap: "var(--space-4)",
-						marginBottom: isMobile ? "var(--space-6)" : "var(--space-10)",
+						marginTop: isMobile ? "var(--space-6)" : "var(--space-8)",
 					}}
 				>
-					{stats.map((stat, idx) => (
-						<StatCard key={idx} stat={stat} idx={idx} isMobile={isMobile} />
+					{stats.map((stat) => (
+						<div
+							key={stat.id}
+							className="stat"
+							data-testid={`dashboard-stat-${stat.id}`}
+						>
+							<div className="stat-label">{stat.label}</div>
+							<div
+								className="stat-value"
+								style={{
+									fontVariantNumeric: "tabular-nums",
+									marginTop: "var(--space-2)",
+								}}
+							>
+								{stat.value}
+							</div>
+						</div>
 					))}
 				</div>
 
-				{/* Quick actions */}
+				<section
+					className="card"
+					data-testid="dashboard-status"
+					style={{
+						marginTop: isMobile ? "var(--space-6)" : "var(--space-8)",
+						padding: "var(--space-5)",
+						display: "flex",
+						flexDirection: "column",
+						gap: "var(--space-3)",
+					}}
+				>
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: "var(--space-3)",
+							flexWrap: "wrap",
+						}}
+					>
+						<span className="badge badge-success">
+							{t("labels.normalOperation")}
+						</span>
+						<span
+							style={{
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-secondary)",
+							}}
+						>
+							{t("labels.systemStatus")}
+						</span>
+						<span
+							style={{
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-muted)",
+							}}
+						>
+							{t("status.configured")}
+						</span>
+					</div>
+
+					{quota ? (
+						<div
+							className="mono"
+							style={{
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-secondary)",
+								fontVariantNumeric: "tabular-nums",
+							}}
+						>
+							{`${t("labels.quotaInfo")}: ${quota.used_messages_today} / ${quota.max_messages_per_day} ${t("labels.messagesPerDay")}`}
+						</div>
+					) : (
+						<div
+							className="empty"
+							style={{
+								fontSize: "var(--text-sm)",
+								color: "var(--color-text-muted)",
+							}}
+						>
+							{t("labels.noData")}
+						</div>
+					)}
+
+					{agentId && (
+						<button
+							type="button"
+							className="mono"
+							onClick={handleCopyAgentId}
+							style={{
+								display: "flex",
+								alignItems: "center",
+								gap: "var(--space-2)",
+								minHeight: 44,
+								padding: "0 var(--space-3)",
+								borderRadius: "var(--radius-sm)",
+								border: "1px solid var(--color-border)",
+								background: "transparent",
+								color: agentIdCopied
+									? "var(--color-success)"
+									: "var(--color-text-secondary)",
+								fontSize: "var(--text-xs)",
+								fontVariantNumeric: "tabular-nums",
+								cursor: "pointer",
+								textAlign: "left",
+								overflowWrap: "anywhere",
+								transition: "color var(--transition-fast)",
+							}}
+							title={agentIdCopied ? t("status.success") : t("buttons.copy")}
+						>
+							<span>{agentIdCopied ? t("status.success") : t("buttons.copy")}</span>
+							<span>{agentId}</span>
+						</button>
+					)}
+				</section>
+
 				<section
 					style={{
-						marginBottom: isMobile ? "var(--space-6)" : "var(--space-10)",
+						marginTop: isMobile ? "var(--space-6)" : "var(--space-8)",
 					}}
 				>
 					<h2
 						style={{
-							fontSize: isMobile ? "var(--text-lg)" : "var(--text-xl)",
-							fontWeight: 600,
-							marginBottom: "var(--space-6)",
+							margin: "0 0 var(--space-4)",
+							fontSize: "var(--text-base)",
+							fontWeight: 500,
 							color: "var(--color-text-primary)",
 						}}
 					>
@@ -390,301 +394,66 @@ export default function Dashboard() {
 							display: "grid",
 							gridTemplateColumns: isMobile
 								? "1fr"
-								: "repeat(auto-fit, minmax(280px, 1fr))",
-							gap: "var(--space-4)",
+								: "repeat(auto-fit, minmax(240px, 1fr))",
+							gap: "var(--space-3)",
 						}}
 					>
-						{quickActionsConfig.map((action, idx) => (
+						{quickActionsConfig.map((action) => (
 							<button
 								key={action.path}
+								type="button"
 								onClick={() => navigate(resolveActionPath(action))}
-								className="liquid-glass-card"
+								className="card"
 								style={{
 									display: "flex",
-									alignItems: "flex-start",
-									gap: "var(--space-4)",
-									padding: "var(--space-6)",
+									alignItems: "center",
+									gap: "var(--space-3)",
+									minHeight: 44,
+									padding: "var(--space-4)",
 									cursor: "pointer",
 									textAlign: "left",
-									animation:
-										"fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards",
-									animationDelay: `${(idx + 4) * 0.1}s`,
-									opacity: 0,
+									color: "var(--color-text-primary)",
 									width: "100%",
 								}}
-								onMouseEnter={(e) => {
-									e.currentTarget.style.transform = "translateY(-4px)";
-									e.currentTarget.style.boxShadow = `0 0 30px ${action.glowColor}, var(--shadow-lg)`;
-									e.currentTarget.style.borderColor =
-										"var(--color-border-hover)";
-								}}
-								onMouseLeave={(e) => {
-									e.currentTarget.style.transform = "translateY(0)";
-									e.currentTarget.style.boxShadow = "";
-									e.currentTarget.style.borderColor = "";
-								}}
 							>
-								<div
+								<span
 									style={{
-										width: "48px",
-										height: "48px",
-										background: action.gradient,
-										borderRadius: "var(--radius-md)",
 										display: "flex",
 										alignItems: "center",
 										justifyContent: "center",
-										color: "white",
-										flexShrink: 0,
-										boxShadow: `0 0 20px ${action.glowColor}`,
-									}}
-								>
-									{action.icon}
-								</div>
-								<div>
-									<h3
-										style={{
-											fontSize: "var(--text-base)",
-											fontWeight: 600,
-											color: "var(--color-text-primary)",
-											marginBottom: "var(--space-1)",
-										}}
-									>
-										{t(action.titleKey)}
-									</h3>
-									<p
-										style={{
-											fontSize: "var(--text-sm)",
-											color: "var(--color-text-muted)",
-											margin: 0,
-										}}
-									>
-										{t(action.descriptionKey)}
-									</p>
-								</div>
-								<svg
-									width="20"
-									height="20"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									style={{
-										marginLeft: "auto",
 										color: "var(--color-text-muted)",
 										flexShrink: 0,
 									}}
 								>
-									<path d="M9 18l6-6-6-6" />
-								</svg>
+									{action.icon}
+								</span>
+								<span
+									style={{
+										display: "flex",
+										flexDirection: "column",
+										gap: "var(--space-1)",
+										minWidth: 0,
+									}}
+								>
+									<span
+										style={{
+											fontSize: "var(--text-sm)",
+											fontWeight: 500,
+										}}
+									>
+										{t(action.titleKey)}
+									</span>
+									<span
+										style={{
+											fontSize: "var(--text-xs)",
+											color: "var(--color-text-muted)",
+										}}
+									>
+										{t(action.descriptionKey)}
+									</span>
+								</span>
 							</button>
 						))}
-					</div>
-				</section>
-
-				{/* System status */}
-				<section>
-					<h2
-						style={{
-							fontSize: isMobile ? "var(--text-lg)" : "var(--text-xl)",
-							fontWeight: 600,
-							marginBottom: "var(--space-6)",
-							color: "var(--color-text-primary)",
-						}}
-					>
-						{t("labels.systemStatus")}
-					</h2>
-					<div
-						className="liquid-glass-card"
-						style={{
-							padding: isMobile ? "var(--space-4)" : "var(--space-6)",
-							animation:
-								"fadeIn 0.5s cubic-bezier(0.25, 1.1, 0.5, 1.15) forwards",
-							animationDelay: "0.8s",
-							opacity: 0,
-						}}
-					>
-						<div
-							style={{
-								display: "grid",
-								gridTemplateColumns: isMobile
-									? "1fr"
-									: "repeat(auto-fit, minmax(200px, 1fr))",
-								gap: "var(--space-6)",
-							}}
-						>
-							{/* Vector index status */}
-							<div
-								style={{
-									display: "flex",
-									alignItems: "center",
-									gap: "var(--space-3)",
-								}}
-							>
-								{/* Vector index status - established when URLs OR files are indexed */}
-								<div
-									style={{
-										width: "10px",
-										height: "10px",
-										background:
-											sourcesSummary &&
-											(sourcesSummary.urls.indexed > 0 ||
-												sourcesSummary.files.ready > 0)
-												? "var(--color-success)"
-												: "var(--color-warning)",
-										borderRadius: "var(--radius-full)",
-										boxShadow:
-											sourcesSummary &&
-											(sourcesSummary.urls.indexed > 0 ||
-												sourcesSummary.files.ready > 0)
-												? "0 0 12px hsla(150deg, 80%, 45%, 0.5)"
-												: "0 0 12px hsla(38deg, 95%, 55%, 0.5)",
-										animation:
-											sourcesSummary &&
-											(sourcesSummary.urls.indexed > 0 ||
-												sourcesSummary.files.ready > 0)
-												? "breathe 3s ease-in-out infinite"
-												: "none",
-									}}
-								/>
-								<div>
-									<div
-										style={{
-											fontSize: "var(--text-sm)",
-											color: "var(--color-text-muted)",
-										}}
-									>
-										{t("labels.vectorIndex")}
-									</div>
-									<div
-										style={{
-											fontSize: "var(--text-base)",
-											fontWeight: 500,
-											color: "var(--color-text-primary)",
-										}}
-									>
-										{sourcesSummary &&
-										(sourcesSummary.urls.indexed > 0 ||
-											sourcesSummary.files.ready > 0)
-											? t("status.established")
-											: t("status.notEstablished")}
-									</div>
-								</div>
-							</div>
-
-							{/* API status */}
-							<div
-								style={{
-									display: "flex",
-									alignItems: "center",
-									gap: "var(--space-3)",
-								}}
-							>
-								<div
-									style={{
-										width: "10px",
-										height: "10px",
-										background: "var(--color-success)",
-										borderRadius: "var(--radius-full)",
-										boxShadow: "0 0 12px hsla(150deg, 80%, 45%, 0.5)",
-										animation: "breathe 3s ease-in-out infinite",
-									}}
-								/>
-								<div>
-									<div
-										style={{
-											fontSize: "var(--text-sm)",
-											color: "var(--color-text-muted)",
-										}}
-									>
-										{t("labels.apiStatus")}
-									</div>
-									<div
-										style={{
-											fontSize: "var(--text-base)",
-											fontWeight: 500,
-											color: "var(--color-text-primary)",
-										}}
-									>
-										{t("labels.normalOperation")}
-									</div>
-								</div>
-							</div>
-
-							{/* Agent status */}
-							<div
-								style={{
-									display: "flex",
-									alignItems: "center",
-									gap: "var(--space-3)",
-								}}
-							>
-								<div
-									style={{
-										width: "10px",
-										height: "10px",
-										background: agentId
-											? "var(--color-success)"
-											: "var(--color-error)",
-										borderRadius: "var(--radius-full)",
-										boxShadow: agentId
-											? "0 0 12px hsla(150deg, 80%, 45%, 0.5)"
-											: "0 0 12px hsla(350deg, 85%, 58%, 0.5)",
-										animation: agentId
-											? "breathe 3s ease-in-out infinite"
-											: "none",
-									}}
-								/>
-								<div>
-									<div
-										style={{
-											fontSize: "var(--text-sm)",
-											color: "var(--color-text-muted)",
-										}}
-									>
-										Agent
-									</div>
-									<div
-										style={{
-											fontSize: "var(--text-base)",
-											fontWeight: 500,
-											color: "var(--color-text-primary)",
-										}}
-									>
-										{agentId
-											? t("status.configured")
-											: t("status.notConfigured")}
-									</div>
-									{agentId && (
-										<button
-											onClick={handleCopyAgentId}
-											style={{
-												marginTop: "4px",
-												padding: 0,
-												border: "none",
-												background: "transparent",
-												cursor: "pointer",
-												fontSize: "var(--text-xs)",
-												color: agentIdCopied
-													? "var(--color-success)"
-													: "var(--color-text-muted)",
-												fontFamily:
-													'ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace',
-												textAlign: "left",
-												wordBreak: "break-all",
-												transition: "color var(--transition-fast)",
-											}}
-											title={
-												agentIdCopied ? t("status.success") : t("buttons.copy")
-											}
-										>
-											{agentIdCopied
-												? `${t("status.success")}: ${agentId}`
-												: `ID: ${agentId}`}
-										</button>
-									)}
-								</div>
-							</div>
-						</div>
 					</div>
 				</section>
 			</div>

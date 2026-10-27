@@ -12,6 +12,19 @@ interface State {
   errorInfo: ErrorInfo | null;
 }
 
+/**
+ * Top-level crash barrier.
+ *
+ * Mounted ABOVE I18nextProvider in `AppProviders.tsx`, so this file must never
+ * call `useTranslation()` (there is no i18n context yet when it renders). The
+ * copy below is therefore a fixed English fallback by design, not an i18n
+ * omission.
+ *
+ * Restyle (spec §20): the Tailwind-ish utility classes are gone; the fallback
+ * is built from the design-system primitives (`page` / `empty` / `card` /
+ * `btn btn-primary`). Behaviour (getDerivedStateFromError, componentDidCatch,
+ * handleReset) is untouched.
+ */
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
@@ -39,35 +52,69 @@ export class ErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-900 text-gray-100">
-          <div className="max-w-md w-full mx-4 p-6 bg-gray-800 rounded-lg shadow-lg">
-            <h1 className="text-2xl font-bold text-red-500 mb-4">
-              Something went wrong
-            </h1>
-            <p className="text-gray-300 mb-6">
+        <div className="page" role="alert">
+          <div className="empty">
+            <h1 className="empty-title">Something went wrong</h1>
+            <p className="empty-description">
               An unexpected error occurred. Please try refreshing the page.
             </p>
             {this.state.error && (
-              <details className="mb-4 text-sm text-gray-400">
-                <summary className="cursor-pointer hover:text-gray-200">
+              <details
+                className="card"
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: 'var(--space-4)',
+                  boxShadow: 'none',
+                }}
+              >
+                <summary
+                  className="caption"
+                  style={{
+                    cursor: 'pointer',
+                    color: 'var(--fg-default)',
+                    marginBottom: 'var(--space-2)',
+                  }}
+                >
                   Error Details
                 </summary>
-                <pre className="mt-2 p-3 bg-gray-900 rounded overflow-auto">
+                <pre
+                  style={{
+                    marginTop: 'var(--space-2)',
+                    maxHeight: '240px',
+                    overflow: 'auto',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--fg-dim)',
+                  }}
+                >
                   {this.state.error.toString()}
                 </pre>
                 {this.state.errorInfo && (
-                  <pre className="mt-2 p-3 bg-gray-900 rounded overflow-auto">
+                  <pre
+                    style={{
+                      marginTop: 'var(--space-2)',
+                      maxHeight: '240px',
+                      overflow: 'auto',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--text-xs)',
+                      color: 'var(--fg-dim)',
+                    }}
+                  >
                     {this.state.errorInfo.componentStack}
                   </pre>
                 )}
               </details>
             )}
-            <button
-              onClick={this.handleReset}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded transition-colors"
-            >
-              Return to Dashboard
-            </button>
+            <div className="empty-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={this.handleReset}
+              >
+                Return to Dashboard
+              </button>
+            </div>
           </div>
         </div>
       );

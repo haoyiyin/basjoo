@@ -371,29 +371,40 @@ export default function AISettingsForm({
 					alignItems: "center",
 					height: "200px",
 				}}
+				aria-busy="true"
 			>
 				<div className="spinner" />
 			</div>
 		);
 	}
 
+	/*
+	 * Restyle (spec §20): the settings column is a stack of `.field` groups on
+	 * the shared `.input` / `.select` / `.btn` primitives. Every colour below is
+	 * a design token — the four legacy literal colours and the alpha tints they
+	 * came with are gone. Field order, values and every
+	 * onChange handler are untouched: the payload, the 800ms auto-save debounce
+	 * and the default provider/model fallbacks all behave exactly as before.
+	 */
 	return (
 		<div
 			style={{
 				padding: compact ? "var(--space-4)" : "var(--space-6)",
 				overflow: "auto",
 				height: "100%",
+				minWidth: 0,
 			}}
 		>
 			{error && (
 				<div
+					role="alert"
 					style={{
-						padding: "var(--space-3)",
+						padding: "var(--space-3) var(--space-4)",
 						marginBottom: "var(--space-4)",
-						background: "rgba(239, 68, 68, 0.1)",
-						border: "1px solid rgba(239, 68, 68, 0.3)",
+						background: "var(--color-error-bg)",
+						border: "1px solid var(--color-error)",
 						borderRadius: "var(--radius-md)",
-						color: "#ef4444",
+						color: "var(--color-error)",
 						fontSize: "var(--text-sm)",
 					}}
 				>
@@ -403,16 +414,17 @@ export default function AISettingsForm({
 
 			{!agent?.api_key_set && (
 				<div
+					role="status"
 					style={{
-						padding: "var(--space-3)",
-						marginBottom: "var(--space-4)",
-						background: "rgba(245, 158, 11, 0.1)",
-						border: "1px solid rgba(245, 158, 11, 0.3)",
-						borderRadius: "var(--radius-md)",
-						color: "#f59e0b",
 						display: "flex",
 						alignItems: "center",
 						gap: "var(--space-2)",
+						padding: "var(--space-3) var(--space-4)",
+						marginBottom: "var(--space-4)",
+						background: "var(--color-warning-bg)",
+						border: "1px solid var(--color-warning)",
+						borderRadius: "var(--radius-md)",
+						color: "var(--color-warning)",
 						fontSize: "var(--text-sm)",
 					}}
 				>
@@ -423,6 +435,7 @@ export default function AISettingsForm({
 						fill="none"
 						stroke="currentColor"
 						strokeWidth="2"
+						aria-hidden="true"
 					>
 						<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
 						<line x1="12" y1="9" x2="12" y2="13" />
@@ -436,19 +449,12 @@ export default function AISettingsForm({
 				style={{
 					display: "flex",
 					flexDirection: "column",
-					gap: "var(--space-4)",
+					gap: "var(--space-2)",
+					minWidth: 0,
 				}}
 			>
-				<div>
-					<label
-						style={{
-							display: "block",
-							marginBottom: "var(--space-2)",
-							fontSize: "var(--text-sm)",
-							fontWeight: 500,
-							color: "var(--color-text-secondary)",
-						}}
-					>
+				<div className="field">
+					<span className="field-label">
 						{t("labels.presetPersona")}
 						<HelpTooltip
 							title={t("labels.presetPersona")}
@@ -462,20 +468,12 @@ export default function AISettingsForm({
 							position="top"
 							size="xs"
 						/>
-					</label>
+					</span>
 					<select
+						className="select"
+						aria-label={t("labels.presetPersona")}
 						value={selectedPersona}
 						onChange={(e) => handlePersonaChange(e.target.value as PersonaType)}
-						style={{
-							width: "100%",
-							padding: "var(--space-3)",
-							borderRadius: "var(--radius-md)",
-							border: "1px solid var(--color-border)",
-							background: "var(--color-bg-primary)",
-							color: "var(--color-text-primary)",
-							fontSize: "var(--text-sm)",
-							cursor: "pointer",
-						}}
 					>
 						{PERSONA_TYPES.map((key) => (
 							<option key={key} value={key}>
@@ -492,6 +490,8 @@ export default function AISettingsForm({
 					{selectedPersona === "custom" && (
 						<>
 							<textarea
+								className="input textarea"
+								aria-label={t("labels.customPersona")}
 								value={formData.system_prompt}
 								onChange={(e) => {
 									handlePromptChange(e.target.value);
@@ -503,59 +503,33 @@ export default function AISettingsForm({
 								rows={compact ? 4 : 6}
 								placeholder={t("placeholders.enterCustomPersona")}
 								style={{
-									marginTop: "var(--space-2)",
-									resize: "vertical",
-									fontFamily: "monospace",
-									border: personaError
-										? "2px solid var(--color-error)"
-										: "1px solid var(--color-border)",
+									fontFamily: "var(--font-mono)",
+									borderColor: personaError
+										? "var(--color-error)"
+										: "var(--color-border)",
 									background: personaError
-										? "rgba(239, 68, 68, 0.05)"
+										? "var(--color-error-bg)"
 										: undefined,
 								}}
 							/>
 							{personaError && (
-								<div
-									style={{
-										color: "var(--color-error)",
-										fontSize: "var(--text-sm)",
-										marginTop: "var(--space-1)",
-									}}
-								>
+								<span className="field-error">
 									{t("errors.customPersonaRequired")}
-								</div>
+								</span>
 							)}
 						</>
 					)}
 				</div>
 
-				<div>
-					<label
-						style={{
-							display: "block",
-							marginBottom: "var(--space-2)",
-							fontSize: "var(--text-sm)",
-							fontWeight: 500,
-							color: "var(--color-text-secondary)",
-						}}
-					>
-						{t("labels.aiProvider")}
-					</label>
+				<div className="field">
+					<span className="field-label">{t("labels.aiProvider")}</span>
 					<select
+						className="select"
+						aria-label={t("labels.aiProvider")}
 						value={formData.provider_type}
 						onChange={(e) =>
 							handleProviderChange(e.target.value as ProviderType)
 						}
-						style={{
-							width: "100%",
-							padding: "var(--space-3)",
-							borderRadius: "var(--radius-md)",
-							border: "1px solid var(--color-border)",
-							background: "var(--color-bg-primary)",
-							color: "var(--color-text-primary)",
-							fontSize: "var(--text-sm)",
-							cursor: "pointer",
-						}}
 					>
 						<option value="openai_native">OpenAI (ChatGPT)</option>
 						<option value="anthropic">Anthropic (Claude)</option>
@@ -574,44 +548,30 @@ export default function AISettingsForm({
 						<option value="openai">{t("labels.openaiCompatible")}</option>
 					</select>
 					{formData.provider_type === "siliconflow" && (
-						<div
-							style={{
-								marginTop: "var(--space-2)",
-								fontSize: "var(--text-xs)",
-								color: "var(--color-text-secondary)",
-							}}
-						>
+						<span className="field-hint">
 							{t("labels.siliconflowOfficialSite")}{" "}
 							<a
 								href={SILICONFLOW_OFFICIAL_URL}
 								target="_blank"
 								rel="noopener noreferrer"
 								style={{
-									color: "var(--color-primary)",
+									color: "var(--color-accent-primary)",
 									textDecoration: "underline",
 								}}
 							>
 								SiliconFlow
 							</a>
-						</div>
+						</span>
 					)}
 				</div>
 
 				{/* API格式选择 - 仅在自定义模式下显示 */}
 				{formData.provider_type === "openai" && (
-					<div>
-						<label
-							style={{
-								display: "block",
-								marginBottom: "var(--space-2)",
-								fontSize: "var(--text-sm)",
-								fontWeight: 500,
-								color: "var(--color-text-secondary)",
-							}}
-						>
-							{t("labels.apiFormat")}
-						</label>
+					<div className="field">
+						<span className="field-label">{t("labels.apiFormat")}</span>
 						<select
+							className="select"
+							aria-label={t("labels.apiFormat")}
 							value={formData.api_format}
 							onChange={(e) =>
 								setFormData({
@@ -619,16 +579,6 @@ export default function AISettingsForm({
 									api_format: e.target.value as ApiFormatType,
 								})
 							}
-							style={{
-								width: "100%",
-								padding: "var(--space-3)",
-								borderRadius: "var(--radius-md)",
-								border: "1px solid var(--color-border)",
-								background: "var(--color-bg-primary)",
-								color: "var(--color-text-primary)",
-								fontSize: "var(--text-sm)",
-								cursor: "pointer",
-							}}
 						>
 							<option value="openai">OpenAI</option>
 							<option value="openai_compatible">OpenAI Compatible</option>
@@ -638,16 +588,8 @@ export default function AISettingsForm({
 					</div>
 				)}
 
-				<div>
-					<label
-						style={{
-							display: "block",
-							marginBottom: "var(--space-2)",
-							fontSize: "var(--text-sm)",
-							fontWeight: 500,
-							color: "var(--color-text-secondary)",
-						}}
-					>
+				<div className="field">
+					<span className="field-label">
 						{t("labels.temperature")} ({formData.temperature})
 						<HelpTooltip
 							title={t("labels.temperature")}
@@ -661,9 +603,10 @@ export default function AISettingsForm({
 							position="top"
 							size="xs"
 						/>
-					</label>
+					</span>
 					<input
 						type="range"
+						aria-label={t("labels.temperature")}
 						min="0"
 						max="2"
 						step="0.1"
@@ -674,20 +617,12 @@ export default function AISettingsForm({
 								temperature: parseFloat(e.target.value),
 							})
 						}
-						style={{ width: "100%" }}
+						style={{ width: "100%", padding: 0, border: "none" }}
 					/>
 				</div>
 
-				<div>
-					<label
-						style={{
-							display: "block",
-							marginBottom: "var(--space-2)",
-							fontSize: "var(--text-sm)",
-							fontWeight: 500,
-							color: "var(--color-text-secondary)",
-						}}
-					>
+				<div className="field">
+					<span className="field-label">
 						{t("labels.topK")} ({formData.top_k})
 						<HelpTooltip
 							title={t("labels.topK")}
@@ -701,9 +636,10 @@ export default function AISettingsForm({
 							position="top"
 							size="xs"
 						/>
-					</label>
+					</span>
 					<input
 						type="range"
+						aria-label={t("labels.topK")}
 						min="1"
 						max="20"
 						step="1"
@@ -711,20 +647,12 @@ export default function AISettingsForm({
 						onChange={(e) =>
 							setFormData({ ...formData, top_k: parseInt(e.target.value) })
 						}
-						style={{ width: "100%" }}
+						style={{ width: "100%", padding: 0, border: "none" }}
 					/>
 				</div>
 
-				<div>
-					<label
-						style={{
-							display: "block",
-							marginBottom: "var(--space-2)",
-							fontSize: "var(--text-sm)",
-							fontWeight: 500,
-							color: "var(--color-text-secondary)",
-						}}
-					>
+				<div className="field">
+					<span className="field-label">
 						{t("labels.similarityThreshold")} (
 						{Math.round(formData.similarity_threshold * 1000)}%)
 						<HelpTooltip
@@ -745,9 +673,10 @@ export default function AISettingsForm({
 							position="top"
 							size="xs"
 						/>
-					</label>
+					</span>
 					<input
 						type="range"
+						aria-label={t("labels.similarityThreshold")}
 						min="0"
 						max="100"
 						step="1"
@@ -758,7 +687,7 @@ export default function AISettingsForm({
 								similarity_threshold: parseInt(e.target.value) / 1000,
 							})
 						}
-						style={{ width: "100%" }}
+						style={{ width: "100%", padding: 0, border: "none" }}
 					/>
 				</div>
 
@@ -769,16 +698,14 @@ export default function AISettingsForm({
 						gap: "var(--space-4)",
 					}}
 				>
-					<div>
-						<label
+					<div className="field">
+						<span
+							className="field-label"
 							style={{
 								display: "flex",
 								justifyContent: "space-between",
 								alignItems: "center",
-								marginBottom: "var(--space-2)",
-								fontSize: "var(--text-sm)",
-								fontWeight: 500,
-								color: "var(--color-text-secondary)",
+								gap: "var(--space-2)",
 							}}
 						>
 							<span>
@@ -797,25 +724,26 @@ export default function AISettingsForm({
 							</span>
 							{agent?.api_key_set && (
 								<button
+									type="button"
+									className="btn btn-ghost"
 									onClick={handleClearAIKey}
 									disabled={saving}
 									style={{
+										minHeight: 0,
+										padding: 0,
 										fontSize: "var(--text-xs)",
 										color: "var(--color-error)",
-										background: "transparent",
-										border: "none",
-										cursor: saving ? "not-allowed" : "pointer",
-										opacity: saving ? 0.5 : 1,
-										padding: "0",
 										textDecoration: "underline",
 									}}
 								>
 									{t("buttons.clear")}
 								</button>
 							)}
-						</label>
+						</span>
 						<input
+							className="input"
 							type="password"
+							aria-label={t("labels.apiKey")}
 							value={formData.api_key}
 							onChange={(e) => {
 								setFormData({ ...formData, api_key: e.target.value });
@@ -824,36 +752,26 @@ export default function AISettingsForm({
 							placeholder={
 								agent?.api_key_set ? t("placeholders.enterNewApiKey") : "sk-..."
 							}
-							style={apiKeyError ? { border: "2px solid #ef4444" } : undefined}
+							style={
+								apiKeyError
+									? { borderColor: "var(--color-error)" }
+									: undefined
+							}
 						/>
 						{apiKeyError && (
-							<div
-								style={{
-									marginTop: "var(--space-2)",
-									color: "#ef4444",
-									fontSize: "var(--text-xs)",
-								}}
-							>
+							<span className="field-error">
 								{t("errors.aiApiKeyInvalid")}
-							</div>
+							</span>
 						)}
 					</div>
 
 					{/* API Base: 所有服务商都显示 */}
-					<div>
-						<label
-							style={{
-								display: "block",
-								marginBottom: "var(--space-2)",
-								fontSize: "var(--text-sm)",
-								fontWeight: 500,
-								color: "var(--color-text-secondary)",
-							}}
-						>
-							{t("labels.apiBase")}
-						</label>
+					<div className="field">
+						<span className="field-label">{t("labels.apiBase")}</span>
 						<input
+							className="input"
 							type="text"
+							aria-label={t("labels.apiBase")}
 							value={formData.api_base}
 							onChange={(e) =>
 								setFormData({ ...formData, api_base: e.target.value })
@@ -864,16 +782,8 @@ export default function AISettingsForm({
 				</div>
 
 				{/* 模型名称单独一行 */}
-				<div>
-					<label
-						style={{
-							display: "block",
-							marginBottom: "var(--space-2)",
-							fontSize: "var(--text-sm)",
-							fontWeight: 500,
-							color: "var(--color-text-secondary)",
-						}}
-					>
+				<div className="field">
+					<span className="field-label">
 						{t("labels.modelName")}
 						<HelpTooltip
 							title={t("labels.modelName")}
@@ -885,9 +795,11 @@ export default function AISettingsForm({
 							position="top"
 							size="xs"
 						/>
-					</label>
+					</span>
 					<input
+						className="input"
 						type="text"
+						aria-label={t("labels.modelName")}
 						value={formData.model}
 						onChange={(e) =>
 							setFormData({ ...formData, model: e.target.value })
@@ -899,74 +811,75 @@ export default function AISettingsForm({
 				<div
 					style={{
 						display: "flex",
-						flexDirection: "column",
+						alignItems: "center",
+						justifyContent: "space-between",
 						gap: "var(--space-3)",
+						padding: "var(--space-3) var(--space-4)",
+						background: "var(--color-bg-tertiary)",
+						border: "1px solid var(--color-border)",
+						borderRadius: "var(--radius-md)",
 					}}
 				>
-					<div
-						style={{
-							display: "flex",
-							alignItems: "center",
-							justifyContent: "space-between",
-							padding: "var(--space-3)",
-							background: "var(--color-bg-tertiary)",
-							borderRadius: "var(--radius-md)",
-						}}
-					>
-						<div>
-							<div
-								style={{
-									fontSize: "var(--text-sm)",
-									fontWeight: 500,
-									color: "var(--color-text-primary)",
-								}}
-							>
-								{t("labels.enableContext")}
-							</div>
-							<div
-								style={{
-									fontSize: "var(--text-xs)",
-									color: "var(--color-text-muted)",
-								}}
-							>
-								{t("labels.conversationContextShort")}
-							</div>
-						</div>
-						<button
-							onClick={() =>
-								setFormData({
-									...formData,
-									enable_context: !formData.enable_context,
-								})
-							}
+					<div style={{ minWidth: 0 }}>
+						<div
 							style={{
-								width: "44px",
-								height: "24px",
-								borderRadius: "12px",
-								border: "none",
-								background: formData.enable_context
-									? "var(--color-accent-primary)"
-									: "var(--color-bg-secondary)",
-								cursor: "pointer",
-								position: "relative",
-								transition: "background 0.2s",
+								fontSize: "var(--text-sm)",
+								fontWeight: 500,
+								color: "var(--fg-strong)",
 							}}
 						>
-							<span
-								style={{
-									position: "absolute",
-									top: "2px",
-									left: formData.enable_context ? "22px" : "2px",
-									width: "20px",
-									height: "20px",
-									borderRadius: "10px",
-									background: "white",
-									transition: "left 0.2s",
-									boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-								}}
-							/>
-						</button>
+							{t("labels.enableContext")}
+						</div>
+						<div
+							style={{
+								fontSize: "var(--text-xs)",
+								color: "var(--fg-dim)",
+							}}
+						>
+							{t("labels.conversationContextShort")}
+						</div>
 					</div>
+					<button
+						type="button"
+						role="switch"
+						aria-checked={formData.enable_context}
+						aria-label={t("labels.enableContext")}
+						onClick={() =>
+							setFormData({
+								...formData,
+								enable_context: !formData.enable_context,
+							})
+						}
+						style={{
+							position: "relative",
+							flexShrink: 0,
+							width: "44px",
+							minWidth: "44px",
+							height: "24px",
+							minHeight: "24px",
+							padding: 0,
+							borderRadius: "var(--radius-full)",
+							border: "1px solid var(--color-border)",
+							background: formData.enable_context
+								? "var(--color-accent-primary)"
+								: "var(--color-bg-primary)",
+							cursor: "pointer",
+							transition: "background var(--transition-fast)",
+						}}
+					>
+						<span
+							style={{
+								position: "absolute",
+								top: "2px",
+								left: formData.enable_context ? "22px" : "2px",
+								width: "18px",
+								height: "18px",
+								borderRadius: "var(--radius-full)",
+								background: "var(--color-text-inverse)",
+								transition: "left var(--transition-fast)",
+							}}
+						/>
+					</button>
 				</div>
 			</div>
 		</div>

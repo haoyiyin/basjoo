@@ -26,6 +26,8 @@ export default function FileUploadManagement() {
 	const [clearing, setClearing] = useState(false);
 	const [showClearConfirm, setShowClearConfirm] = useState(false);
 	const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+	// Row actions live in one overflow menu per row (§19).
+	const [openMenuFileId, setOpenMenuFileId] = useState<string | null>(null);
 	const [dragActive, setDragActive] = useState(false);
 	const filesPollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
 		null,
@@ -251,96 +253,69 @@ export default function FileUploadManagement() {
 	};
 
 	return (
-		<section data-testid="kb-file-panel" className="file-panel" style={{ minWidth: 0 }}>
+		<section
+			data-testid="kb-file-panel"
+			className="file-panel"
+			aria-busy={loading}
+			style={{ minWidth: 0, borderRight: "none", height: "auto" }}
+		>
 			{showClearConfirm && (
-				<div
-					style={{
-						position: "fixed",
-						inset: 0,
-						background: "rgba(15, 23, 42, 0.6)",
-						backdropFilter: "blur(8px)",
-						WebkitBackdropFilter: "blur(8px)",
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "center",
-						padding: "var(--space-4)",
-						zIndex: 1000,
-					}}
-				>
-					<div
-						className="glass-modal"
-						style={{
-							width: "100%",
-							maxWidth: "420px",
-							padding: "var(--space-6)",
-						}}
-					>
-						<h3
-							style={{
-								margin: 0,
-								marginBottom: "var(--space-3)",
-								fontSize: "var(--text-lg)",
-								color: "var(--color-text-primary)",
-							}}
-						>
-							{t("files.clearAll")}
-						</h3>
-						<p
-							style={{
-								margin: 0,
-								marginBottom: "var(--space-5)",
-								color: "var(--color-text-secondary)",
-								lineHeight: 1.6,
-							}}
-						>
-							{t("files.confirmClearAll")}
-						</p>
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "flex-end",
-								gap: "var(--space-3)",
-							}}
-						>
-							<button
-								type="button"
-								className="btn-ghost"
-								onClick={() => setShowClearConfirm(false)}
-								disabled={clearing}
-							>
-								{t("buttons.cancel")}
-							</button>
-							<button
-								type="button"
-								className="btn-primary"
-								onClick={confirmClearAll}
-								disabled={clearing}
+				<div className="modal-backdrop">
+					<div className="card card-raised" style={{ width: "100%", maxWidth: 420 }}>
+						<div className="card-header">
+							<h2 className="card-title">{t("files.clearAll")}</h2>
+						</div>
+						<div className="card-body">
+							<p
 								style={{
-									background: "var(--color-error)",
-									borderColor: "var(--color-error)",
+									color: "var(--fg-dim)",
+									lineHeight: "var(--leading-relaxed)",
 								}}
 							>
-								{clearing ? t("files.clearing") : t("buttons.confirm")}
-							</button>
+								{t("files.confirmClearAll")}
+							</p>
+							<div
+								style={{
+									display: "flex",
+									justifyContent: "flex-end",
+									gap: "var(--space-2)",
+									marginTop: "var(--space-5)",
+								}}
+							>
+								<button
+									type="button"
+									className="btn btn-ghost"
+									onClick={() => setShowClearConfirm(false)}
+									disabled={clearing}
+								>
+									{t("buttons.cancel")}
+								</button>
+								<button
+									type="button"
+									className="btn btn-danger"
+									onClick={confirmClearAll}
+									disabled={clearing}
+								>
+									{clearing ? t("files.clearing") : t("buttons.confirm")}
+								</button>
+							</div>
 						</div>
 					</div>
 				</div>
 			)}
 
-			<header style={{ marginBottom: "var(--space-6)" }}>
-				<h2
-					style={{
-						fontSize: isMobile ? "var(--text-xl)" : "var(--text-2xl)",
-						fontWeight: 700,
-						color: "var(--color-text-primary)",
-						marginBottom: "var(--space-1)",
-					}}
-				>
-					{t("navigation.fileManagement")}
-				</h2>
-				<p style={{ color: "var(--color-text-secondary)" }}>
-					{t("files.description")}
-				</p>
+			<header className="page-header">
+				<div style={{ minWidth: 0 }}>
+					<h2 className="page-title">{t("navigation.fileManagement")}</h2>
+					<p className="page-subtitle">{t("files.description")}</p>
+				</div>
+				<div className="page-actions">
+					{files.length > 0 && (
+						<span className="badge badge-neutral">
+							{t("labels.totalItems", { total: files.length })}
+						</span>
+					)}
+				</div>
 			</header>
 
 			{error && (
@@ -348,46 +323,23 @@ export default function FileUploadManagement() {
 					role="alert"
 					style={{
 						padding: "var(--space-3) var(--space-4)",
-						borderRadius: "var(--radius-md)",
+						marginBottom: "var(--space-4)",
 						fontSize: "var(--text-sm)",
 						background: "var(--color-error-bg)",
 						border: "1px solid var(--color-error)",
+						borderRadius: "var(--radius-md)",
 						color: "var(--color-error)",
-						marginBottom: "var(--space-4)",
 					}}
 				>
 					{error}
 				</div>
 			)}
 
-			<div style={{ display: "grid", gap: "var(--space-6)", minWidth: 0 }}>
-				<div className="liquid-glass-card" style={{ padding: "var(--space-6)" }}>
-					<h3
-						style={{
-							fontSize: "var(--text-lg)",
-							fontWeight: 600,
-							marginBottom: "var(--space-5)",
-							color: "var(--color-text-primary)",
-							display: "flex",
-							alignItems: "center",
-							gap: "var(--space-3)",
-						}}
-					>
-						<svg
-							width="20"
-							height="20"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-						>
-							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-							<polyline points="17 8 12 3 7 8" />
-							<line x1="12" y1="3" x2="12" y2="15" />
-						</svg>
-						{t("files.uploadTitle")}
-					</h3>
-
+			<div className="card">
+				<div className="card-header">
+					<h3 className="card-title">{t("files.uploadTitle")}</h3>
+				</div>
+				<div className="card-body">
 					<div
 						onDragEnter={handleDrag}
 						onDragLeave={handleDrag}
@@ -395,15 +347,21 @@ export default function FileUploadManagement() {
 						onDrop={handleDrop}
 						onClick={() => fileInputRef.current?.click()}
 						style={{
-							border: `2px dashed ${dragActive ? "var(--color-accent-primary)" : "var(--color-border)"}`,
-							borderRadius: "var(--radius-xl)",
+							display: "flex",
+							flexDirection: "column",
+							alignItems: "center",
+							justifyContent: "center",
+							gap: "var(--space-2)",
 							padding: isMobile ? "var(--space-5)" : "var(--space-8)",
 							textAlign: "center",
 							cursor: "pointer",
 							background: dragActive
-								? "hsla(188deg, 90%, 50%, 0.06)"
+								? "var(--color-accent-bg)"
 								: "var(--color-bg-tertiary)",
-							transition: "all var(--transition-base)",
+							border: `2px dashed ${
+								dragActive ? "var(--color-border-focus)" : "var(--color-border)"
+							}`,
+							borderRadius: "var(--radius-lg)",
 						}}
 					>
 						<input
@@ -415,36 +373,25 @@ export default function FileUploadManagement() {
 							style={{ display: "none" }}
 						/>
 						<svg
-							width="48"
-							height="48"
+							width="32"
+							height="32"
 							viewBox="0 0 24 24"
 							fill="none"
 							stroke="currentColor"
 							strokeWidth="1.5"
-							style={{
-								margin: "0 auto var(--space-4)",
-								color: "var(--color-text-muted)",
-							}}
+							aria-hidden="true"
+							style={{ color: "var(--fg-dim)" }}
 						>
 							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
 							<polyline points="17 8 12 3 7 8" />
 							<line x1="12" y1="3" x2="12" y2="15" />
 						</svg>
-						<p
-							style={{
-								fontSize: "var(--text-base)",
-								color: "var(--color-text-primary)",
-								fontWeight: 500,
-								marginBottom: "var(--space-2)",
-							}}
-						>
+						<p style={{ color: "var(--fg-strong)", fontWeight: 500 }}>
 							{t("files.dropzoneText")}
 						</p>
 						<p
-							style={{
-								fontSize: "var(--text-sm)",
-								color: "var(--color-text-muted)",
-							}}
+							className="field-hint"
+							style={{ fontSize: "var(--text-sm)", color: "var(--fg-dim)" }}
 						>
 							{t("files.supportedFormats")}
 						</p>
@@ -453,318 +400,222 @@ export default function FileUploadManagement() {
 					{(uploading || uploadProgress) && (
 						<div
 							style={{
-								marginTop: "var(--space-4)",
-								padding: "var(--space-3)",
-								background: "rgba(6, 182, 212, 0.1)",
-								borderRadius: "var(--radius-md)",
 								display: "flex",
 								alignItems: "center",
 								gap: "var(--space-2)",
-								color: "var(--color-accent-primary)",
+								marginTop: "var(--space-4)",
+								padding: "var(--space-3)",
 								fontSize: "var(--text-sm)",
+								color: "var(--fg-default)",
+								background: "var(--color-info-bg)",
+								borderRadius: "var(--radius-md)",
 							}}
 						>
-							<div
-								className="spinner"
-								style={{ width: "14px", height: "14px" }}
-							/>
+							<div className="spinner" style={{ width: "14px", height: "14px" }} />
 							{uploadProgress ?? t("files.uploading", { count: 0 })}
 						</div>
 					)}
 				</div>
+			</div>
 
-				<div className="liquid-glass-card" style={{ padding: "var(--space-6)" }}>
-					<div
-						style={{
-							display: "flex",
-							alignItems: "center",
-							justifyContent: "space-between",
-							marginBottom: "var(--space-5)",
-							gap: "var(--space-3)",
-							flexWrap: "wrap",
-						}}
-					>
-						<h3
-							style={{
-								fontSize: "var(--text-lg)",
-								fontWeight: 600,
-								color: "var(--color-text-primary)",
-								display: "flex",
-								alignItems: "center",
-								gap: "var(--space-3)",
-							}}
-						>
-							<svg
-								width="20"
-								height="20"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-							>
-								<line x1="8" y1="6" x2="21" y2="6" />
-								<line x1="8" y1="12" x2="21" y2="12" />
-								<line x1="8" y1="18" x2="21" y2="18" />
-								<line x1="3" y1="6" x2="3.01" y2="6" />
-								<line x1="3" y1="12" x2="3.01" y2="12" />
-								<line x1="3" y1="18" x2="3.01" y2="18" />
-							</svg>
-							{t("files.fileList")}
-						</h3>
-						<div
-							style={{
-								display: "flex",
-								alignItems: "center",
-								gap: "var(--space-2)",
-								flexWrap: "wrap",
-							}}
-						>
-							{files.length > 0 && (
-								<button
-									type="button"
-									onClick={handleClearAll}
-									disabled={clearing}
-									className="btn-ghost"
-									style={{
-										display: "flex",
-										alignItems: "center",
-										gap: "var(--space-2)",
-										color: "var(--color-error)",
-										opacity: clearing ? 0.5 : 1,
-										cursor: clearing ? "not-allowed" : "pointer",
-										minHeight: "44px",
-									}}
-								>
-									{clearing ? t("files.clearing") : t("files.clearAll")}
-								</button>
-							)}
+			<div className="card">
+				<div className="card-header">
+					<h3 className="card-title">{t("files.fileList")}</h3>
+					<div className="page-actions">
+						{files.length > 0 && (
 							<button
-								onClick={() => void loadFiles()}
-								disabled={loading}
-								className="btn-ghost"
-								style={{
-									display: "flex",
-									alignItems: "center",
-									gap: "var(--space-2)",
-									minHeight: "44px",
-								}}
+								type="button"
+								className="btn btn-danger"
+								onClick={handleClearAll}
+								disabled={clearing}
 							>
-								{loading ? (
-									<div className="spinner" />
-								) : (
-									<svg
-										width="16"
-										height="16"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										strokeWidth="2"
-									>
-										<path d="M23 4v6h-6M1 20v-6h6" />
-										<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-									</svg>
-								)}
-								{t("buttons.refresh")}
+								{clearing ? t("files.clearing") : t("files.clearAll")}
 							</button>
-						</div>
-					</div>
-
-					<div
-						style={{
-							maxHeight: "500px",
-							overflow: "auto",
-							display: "flex",
-							flexDirection: "column",
-							gap: "var(--space-3)",
-						}}
-					>
-						{files.length === 0 ? (
-							<div
-								style={{
-									textAlign: "center",
-									padding: "var(--space-12)",
-									color: "var(--color-text-muted)",
-								}}
-							>
-								<p style={{ fontSize: "var(--text-base)" }}>
-									{t("files.noFiles")}
-								</p>
-								<p
-									style={{
-										fontSize: "var(--text-sm)",
-										marginTop: "var(--space-2)",
-									}}
-								>
-									{t("files.uploadHint")}
-								</p>
-							</div>
-						) : (
-							files.map((file) => (
-								<div
-									key={file.id}
-									style={{
-										padding: "var(--space-4)",
-										background:
-											file.status === "ready"
-												? "var(--color-bg-tertiary)"
-												: file.status === "processing" ||
-														file.status === "uploading" ||
-														file.status === "pending"
-													? "rgba(245, 158, 11, 0.1)"
-													: "rgba(239, 68, 68, 0.1)",
-										borderRadius: "var(--radius-md)",
-										border:
-											file.status === "ready"
-												? "1px solid var(--color-border)"
-												: file.status === "processing" ||
-														file.status === "uploading" ||
-														file.status === "pending"
-													? "2px solid var(--color-warning)"
-													: "2px solid var(--color-error)",
-									}}
-								>
-									<div
-										style={{
-											display: "flex",
-											alignItems: "center",
-											justifyContent: "space-between",
-											gap: "var(--space-4)",
-										}}
-									>
-										<div style={{ flex: 1, minWidth: 0 }}>
-											<div
-												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "var(--space-2)",
-													marginBottom: "var(--space-2)",
-													flexWrap: "wrap",
-												}}
-											>
-												<span className={getStatusBadge(file.status).className}>
-													{getStatusBadge(file.status).label}
-												</span>
-												<span
-													style={{
-														display: "flex",
-														color: "var(--color-text-muted)",
-													}}
-												>
-													{getFileTypeIcon(file.file_type)}
-												</span>
-											</div>
-											<div
-												style={{
-													fontSize: "var(--text-sm)",
-													fontWeight: 500,
-													color: "var(--color-text-primary)",
-													overflow: "hidden",
-													textOverflow: "ellipsis",
-													whiteSpace: "nowrap",
-												}}
-											>
-												{file.filename}
-											</div>
-											<div
-												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "var(--space-3)",
-													marginTop: "var(--space-1)",
-													flexWrap: "wrap",
-												}}
-											>
-												<span
-													style={{
-														fontSize: "var(--text-xs)",
-														color: "var(--color-text-muted)",
-													}}
-												>
-													{formatFileSize(file.file_size)}
-												</span>
-												<span
-													style={{
-														fontSize: "var(--text-xs)",
-														color: "var(--color-text-muted)",
-														textTransform: "uppercase",
-													}}
-												>
-													{file.file_type}
-												</span>
-												<span
-													style={{
-														fontSize: "var(--text-xs)",
-														color: "var(--color-text-muted)",
-													}}
-												>
-													{new Date(file.created_at).toLocaleDateString()}
-												</span>
-											</div>
-											{file.status === "failed" && (
-												<div
-													style={{
-														marginTop: "var(--space-2)",
-														padding: "var(--space-2) var(--space-3)",
-														background: "rgba(239, 68, 68, 0.1)",
-														borderRadius: "var(--radius-sm)",
-														borderLeft: "2px solid var(--color-error)",
-													}}
-												>
-													<p
-														style={{
-															fontSize: "var(--text-xs)",
-															color: "var(--color-error)",
-															margin: 0,
-															lineHeight: 1.4,
-														}}
-													>
-														{file.error_message?.trim() ||
-															t("files.processingFailedFallback")}
-													</p>
-												</div>
-											)}
-										</div>
-										<button
-											onClick={() => handleDelete(file.id)}
-											disabled={deletingFileId === file.id}
-											className="btn-ghost"
-											aria-label={t("buttons.delete")}
-											style={{
-												color: "var(--color-error)",
-												padding: "var(--space-2)",
-												opacity: deletingFileId === file.id ? 0.5 : 1,
-												cursor:
-													deletingFileId === file.id
-														? "not-allowed"
-														: "pointer",
-												minHeight: "44px",
-												minWidth: "44px",
-											}}
-										>
-											{deletingFileId === file.id ? (
-												<div
-													className="spinner"
-													style={{ width: "14px", height: "14px" }}
-												/>
-											) : (
-												<svg
-													width="16"
-													height="16"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													strokeWidth="2"
-												>
-													<polyline points="3 6 5 6 21 6" />
-													<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-												</svg>
-											)}
-										</button>
-									</div>
-								</div>
-							))
 						)}
 					</div>
+				</div>
+
+				<div className="card-body">
+					{files.length === 0 ? (
+						<div className="empty">
+							<p className="empty-title">{t("files.noFiles")}</p>
+							<p className="empty-description">{t("files.uploadHint")}</p>
+						</div>
+					) : (
+						<div className="kb-table-scroll">
+							<table className="kb-table">
+								<thead>
+									<tr>
+										<th>{t("knowledgeBases.columns.name")}</th>
+										<th>{t("knowledgeBases.columns.status")}</th>
+										<th>{t("knowledgeBases.columns.actions")}</th>
+									</tr>
+								</thead>
+								<tbody>
+									{files.map((file) => {
+										const badge = getStatusBadge(file.status);
+										const menuOpen = openMenuFileId === file.id;
+										const busy = deletingFileId === file.id;
+										return (
+											<tr key={file.id}>
+												<td style={{ maxWidth: 0 }}>
+													<div
+														style={{
+															display: "flex",
+															alignItems: "center",
+															gap: "var(--space-2)",
+															minWidth: 0,
+														}}
+													>
+														<span
+															aria-hidden="true"
+															style={{
+																display: "flex",
+																flexShrink: 0,
+																color: "var(--fg-dim)",
+															}}
+														>
+															{getFileTypeIcon(file.file_type)}
+														</span>
+														<span
+															style={{
+																minWidth: 0,
+																fontWeight: 500,
+																color: "var(--fg-strong)",
+																overflow: "hidden",
+																textOverflow: "ellipsis",
+																whiteSpace: "nowrap",
+															}}
+														>
+															{file.filename}
+														</span>
+													</div>
+													<div
+														style={{
+															display: "flex",
+															alignItems: "center",
+															gap: "var(--space-3)",
+															marginTop: "var(--space-1)",
+															flexWrap: "wrap",
+															fontSize: "var(--text-xs)",
+															color: "var(--fg-dim)",
+														}}
+													>
+														<span style={{ textTransform: "uppercase" }}>
+															{file.file_type}
+														</span>
+														{formatFileSize(file.file_size)}
+														<span>
+															{new Date(file.created_at).toLocaleDateString()}
+														</span>
+													</div>
+													{file.status === "failed" && (
+														<p
+															style={{
+																marginTop: "var(--space-2)",
+																padding: "var(--space-2) var(--space-3)",
+																fontSize: "var(--text-xs)",
+																lineHeight: "var(--leading-normal)",
+																color: "var(--color-error)",
+																background: "var(--color-error-bg)",
+																borderLeft: "2px solid var(--color-error)",
+																borderRadius: "var(--radius-sm)",
+															}}
+														>
+															{file.error_message?.trim() ||
+																t("files.processingFailedFallback")}
+														</p>
+													)}
+												</td>
+												<td>
+													<span className={badge.className}>{badge.label}</span>
+												</td>
+												<td>
+													<div
+														style={{
+															position: "relative",
+															display: "flex",
+															justifyContent: isMobile ? "flex-start" : "flex-end",
+															flexShrink: 0,
+														}}
+													>
+														<button
+															type="button"
+															className="btn btn-icon"
+															aria-label={`${t("knowledgeBases.columns.actions")} ${file.filename}`}
+															aria-haspopup="menu"
+															aria-expanded={menuOpen}
+															disabled={busy}
+															onClick={() =>
+																setOpenMenuFileId((current) =>
+																	current === file.id ? null : file.id,
+																)
+															}
+														>
+															{busy ? (
+																<div
+																	className="spinner"
+																	style={{ width: "14px", height: "14px" }}
+																/>
+															) : (
+																<svg
+																	width="16"
+																	height="16"
+																	viewBox="0 0 16 16"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<circle cx="8" cy="3" r="1.4" />
+																	<circle cx="8" cy="8" r="1.4" />
+																	<circle cx="8" cy="13" r="1.4" />
+																</svg>
+															)}
+														</button>
+														{menuOpen && (
+															<div
+																role="menu"
+																aria-label={`${t("knowledgeBases.columns.actions")} ${file.filename}`}
+																style={{
+																	position: "absolute",
+																	top: "calc(100% + var(--space-1))",
+																	right: isMobile ? "auto" : 0,
+																	left: isMobile ? 0 : "auto",
+																	zIndex: 20,
+																	minWidth: 200,
+																	display: "flex",
+																	flexDirection: "column",
+																	gap: "var(--space-1)",
+																	padding: "var(--space-1)",
+																	background: "var(--color-bg-elevated)",
+																	border: "1px solid var(--color-border)",
+																	borderRadius: "var(--radius-md)",
+																	boxShadow: "var(--shadow-lg)",
+																}}
+															>
+																<button
+																	type="button"
+																	role="menuitem"
+																	className="btn btn-danger"
+																	style={{ justifyContent: "flex-start" }}
+																	disabled={busy}
+																	onClick={() => {
+																		setOpenMenuFileId(null);
+																		void handleDelete(file.id);
+																	}}
+																>
+																	{t("buttons.delete")}
+																</button>
+															</div>
+														)}
+													</div>
+												</td>
+											</tr>
+										);
+									})}
+								</tbody>
+							</table>
+						</div>
+					)}
 				</div>
 			</div>
 		</section>

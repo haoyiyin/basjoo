@@ -7,6 +7,7 @@ import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
 import type { KbFormValues } from "../components/KbFormModal";
 import { useAuth } from "../context/AuthContext";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import { api } from "../services/api";
 import type {
 	Agent,
@@ -29,27 +30,14 @@ const providerLabelKey: Record<EmbeddingProvider, string> = {
 	local: "kbForm.providerLocal",
 };
 
-const thStyle = {
-	textAlign: "left",
-	padding: "var(--space-3) var(--space-4)",
-	fontSize: "var(--text-xs)",
-	fontWeight: 600,
-	letterSpacing: "0.05em",
-	textTransform: "uppercase",
-	color: "var(--color-text-muted)",
-	borderBottom: "1px solid var(--color-border)",
-} as const;
-
-const tdStyle = {
-	padding: "var(--space-4)",
-	fontSize: "var(--text-sm)",
-	color: "var(--color-text-primary)",
-	borderBottom: "1px solid var(--color-border)",
-	verticalAlign: "middle",
-} as const;
-
 /**
- * Workspace knowledge-base list with an inline detail panel.
+ * Workspace knowledge-base list.
+ *
+ * Mirrors the agent list (§16): every KB is one `list-row`, and the row's name
+ * is the only navigation affordance — it opens `/knowledge-bases/:kbId`, the
+ * source-management page. There is deliberately no inline detail panel, no
+ * "manage sources" action and no unbind control: unbinding happens from the
+ * agent side only.
  *
  * The KB lifecycle is decoupled from agents: this view is the only place that
  * creates, resets, deletes and binds KBs. Mutations are super_admin only.
@@ -57,6 +45,7 @@ const tdStyle = {
 export default function KnowledgeBases() {
 	const { t } = useTranslation("common");
 	const { admin } = useAuth();
+	const isMobile = useIsMobile();
 	const isSuperAdmin = admin?.role === "super_admin";
 
 	const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseDetail[]>(
@@ -65,8 +54,10 @@ export default function KnowledgeBases() {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [busyId, setBusyId] = useState<string | null>(null);
+	// Row mutations are collapsed into one overflow menu per row (§16 mirrors the
+	// agent list's row treatment).
+	const [openMenuKbId, setOpenMenuKbId] = useState<string | null>(null);
 	const [reloadToken, setReloadToken] = useState(0);
 	const [agents, setAgents] = useState<Agent[]>([]);
 
@@ -77,7 +68,7 @@ export default function KnowledgeBases() {
 	const [bindTarget, setBindTarget] = useState<KnowledgeBaseDetail | null>(null);
 	const [bindAgentId, setBindAgentId] = useState("");
 
-	// Agent-initiated bind: the home card sends `?bindAgent=<id>` for an agent
+	// Agent-initiated bind: the agent page sends `?bindAgent=<id>` for an agent
 	// with no KB. In that direction the agent is fixed and the operator picks
 	// which KB to bind, so the modal swaps its select around.
 	const [searchParams, setSearchParams] = useSearchParams();
@@ -91,12 +82,6 @@ export default function KnowledgeBases() {
 		try {
 			const data = await api.listKnowledgeBases();
 			setKnowledgeBases(data.knowledge_bases);
-			setSelectedId((current) => {
-				if (current && data.knowledge_bases.some((kb) => kb.id === current)) {
-					return current;
-				}
-				return data.knowledge_bases[0]?.id ?? null;
-			});
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : t("knowledgeBases.errors.loadFailed"),
@@ -106,15 +91,11 @@ export default function KnowledgeBases() {
 		}
 	};
 
-	// Load once on mount; the reload counter drives refresh/retry.
+	// Load once on mount; the reload counter drives retry and post-mutation
+	// reloads (§18: no manual refresh button, the page loads itself).
 	useEffect(() => {
 		void load();
 	}, [reloadToken]);
-
-	const selected = useMemo(
-		() => knowledgeBases.find((kb) => kb.id === selectedId) ?? null,
-		[knowledgeBases, selectedId],
-	);
 
 	// `?bindAgent=` opens the bind modal for that agent once agents are loaded.
 	useEffect(() => {
@@ -225,20 +206,6 @@ export default function KnowledgeBases() {
 		);
 	};
 
-	const handleUnbind = async (kb: KnowledgeBaseDetail) => {
-		if (!kb.bound_agent) return;
-		const confirmed = window.confirm(
-			t("knowledgeBases.unbindConfirm", { agent: kb.bound_agent.name }),
-		);
-		if (!confirmed) return;
-		const agentId = kb.bound_agent.id;
-		await runAction(
-			kb.id,
-			() => api.bindAgentKnowledgeBase(agentId, null).then(() => undefined),
-			"knowledgeBases.errors.bindFailed",
-		);
-	};
-
 	const handleDelete = async (kb: KnowledgeBaseDetail) => {
 		const confirmed = window.confirm(
 			t("knowledgeBases.deleteConfirm", { name: kb.name }),
@@ -263,161 +230,139 @@ export default function KnowledgeBases() {
 		[knowledgeBases],
 	);
 
-	const renderActions = (kb: KnowledgeBaseDetail) => {
+	const rowStyle = isMobile
+		? { flexDirection: "column" as const, alignItems: "stretch" as const }
+		: undefined;
+	const iconButtonStyle = isMobile
+		? { minWidth: 44, minHeight: 44 }
+		: undefined;
+
+	const renderRowActions = (kb: KnowledgeBaseDetail) => {
+		if (!isSuperAdmin) return null;
 		const busy = busyId === kb.id;
+		const menuOpen = openMenuKbId === kb.id;
 		return (
-			<div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+			<div
+				style={{
+					position: "relative",
+					display: "flex",
+					justifyContent: isMobile ? "flex-start" : "flex-end",
+					flexShrink: 0,
+				}}
+			>
 				<button
 					type="button"
-					className="btn-secondary"
-					onClick={() => setSelectedId(kb.id)}
+					className="btn btn-icon"
+					data-testid={`kb-actions-${kb.id}`}
+					aria-label={t("knowledgeBases.rowActions", { name: kb.name })}
+					aria-haspopup="menu"
+					aria-expanded={menuOpen}
+					style={iconButtonStyle}
+					onClick={() =>
+						setOpenMenuKbId((current) =>
+							current === kb.id ? null : kb.id,
+						)
+					}
 				>
-					{t("knowledgeBases.actions.details")}
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 16 16"
+						fill="currentColor"
+						aria-hidden="true"
+					>
+						<circle cx="8" cy="3" r="1.4" />
+						<circle cx="8" cy="8" r="1.4" />
+						<circle cx="8" cy="13" r="1.4" />
+					</svg>
 				</button>
-				<Link
-					to={`/knowledge-bases/${kb.id}`}
-					className="btn-secondary"
-					style={{ textDecoration: "none" }}
-				>
-					{t("knowledgeBases.actions.sources")}
-				</Link>
-				{isSuperAdmin && !kb.bound_agent && (
-					<button
-						type="button"
-						className="btn-secondary"
-						disabled={busy}
-						onClick={() => openBindModal(kb)}
-					>
-						{t("knowledgeBases.actions.bind")}
-					</button>
-				)}
-				{isSuperAdmin && kb.bound_agent && (
-					<button
-						type="button"
-						className="btn-secondary"
-						disabled={busy}
-						onClick={() => handleUnbind(kb)}
-					>
-						{t("knowledgeBases.actions.unbind")}
-					</button>
-				)}
-				{isSuperAdmin && (
-					<button
-						type="button"
-						className="btn-secondary"
-						disabled={busy}
-						onClick={() => {
-							setActionError(null);
-							setResetTarget(kb);
+				{menuOpen && (
+					<div
+						role="menu"
+						data-testid={`kb-menu-${kb.id}`}
+						aria-label={t("knowledgeBases.rowActions", { name: kb.name })}
+						style={{
+							position: "absolute",
+							top: "calc(100% + var(--space-1))",
+							right: isMobile ? "auto" : 0,
+							left: isMobile ? 0 : "auto",
+							zIndex: 20,
+							minWidth: 200,
+							display: "flex",
+							flexDirection: "column",
+							gap: "var(--space-1)",
+							padding: "var(--space-1)",
+							background: "var(--color-bg-elevated)",
+							border: "1px solid var(--color-border)",
+							borderRadius: "var(--radius-md)",
+							boxShadow: "var(--shadow-lg)",
 						}}
 					>
-						{t("knowledgeBases.actions.reset")}
-					</button>
-				)}
-				{isSuperAdmin && (
-					<button
-						type="button"
-						className="btn-danger"
-						disabled={busy}
-						onClick={() => handleDelete(kb)}
-					>
-						{t("knowledgeBases.actions.delete")}
-					</button>
+						{!kb.bound_agent && (
+							<button
+								type="button"
+								role="menuitem"
+								className="btn btn-ghost"
+								style={{ justifyContent: "flex-start" }}
+								disabled={busy}
+								onClick={() => {
+									setOpenMenuKbId(null);
+									void openBindModal(kb);
+								}}
+							>
+								{t("knowledgeBases.actions.bind")}
+							</button>
+						)}
+						<button
+							type="button"
+							role="menuitem"
+							className="btn btn-ghost"
+							style={{ justifyContent: "flex-start" }}
+							disabled={busy}
+							onClick={() => {
+								setOpenMenuKbId(null);
+								setActionError(null);
+								setResetTarget(kb);
+							}}
+						>
+							{t("knowledgeBases.actions.reset")}
+						</button>
+						<button
+							type="button"
+							role="menuitem"
+							data-testid={`kb-delete-${kb.id}`}
+							className="btn btn-ghost"
+							style={{
+								justifyContent: "flex-start",
+								color: "var(--color-error)",
+							}}
+							disabled={busy}
+							onClick={() => {
+								setOpenMenuKbId(null);
+								void handleDelete(kb);
+							}}
+						>
+							{t("knowledgeBases.actions.delete")}
+						</button>
+					</div>
 				)}
 			</div>
 		);
 	};
 
-	const configRow = (label: string, value: string | number) => (
-		<div
-			key={label}
-			style={{
-				display: "flex",
-				justifyContent: "space-between",
-				gap: "var(--space-4)",
-				padding: "var(--space-3) 0",
-				borderBottom: "1px solid var(--color-border)",
-			}}
-		>
-			<span
-				style={{
-					fontSize: "var(--text-sm)",
-					color: "var(--color-text-secondary)",
-				}}
-			>
-				{label}
-			</span>
-			<span
-				style={{
-					fontSize: "var(--text-sm)",
-					fontWeight: 500,
-					color: "var(--color-text-primary)",
-					textAlign: "right",
-					wordBreak: "break-word",
-				}}
-			>
-				{value}
-			</span>
-		</div>
-	);
-
 	return (
 		<AdminLayout>
-			<div
-				className="admin-page"
-				data-testid="kb-list-page"
-				style={{
-					padding: "var(--space-8)",
-					maxWidth: "1400px",
-					margin: "0 auto",
-					minWidth: 0,
-				}}
-			>
-				<div
-					style={{
-						display: "flex",
-						justifyContent: "space-between",
-						alignItems: "flex-start",
-						gap: "var(--space-4)",
-						flexWrap: "wrap",
-						marginBottom: "var(--space-6)",
-					}}
-				>
-					<div>
-						<h1
-							style={{
-								fontSize: "var(--text-2xl)",
-								fontWeight: 700,
-								color: "var(--color-text-primary)",
-								margin: 0,
-								marginBottom: "var(--space-2)",
-							}}
-						>
-							{t("knowledgeBases.title")}
-						</h1>
-						<p
-							style={{
-								fontSize: "var(--text-sm)",
-								color: "var(--color-text-secondary)",
-								margin: 0,
-							}}
-						>
-							{t("knowledgeBases.subtitle")}
-						</p>
+			<div className="admin-page" data-testid="kb-list-page">
+				<header className="page-header">
+					<div style={{ minWidth: 0 }}>
+						<h1 className="page-title">{t("knowledgeBases.title")}</h1>
+						<p className="page-subtitle">{t("knowledgeBases.subtitle")}</p>
 					</div>
-					<div style={{ display: "flex", gap: "var(--space-2)" }}>
-						<button
-							type="button"
-							className="btn-secondary"
-							onClick={() => load()}
-							disabled={loading}
-						>
-							{t("buttons.refresh")}
-						</button>
+					<div className="page-actions">
 						{isSuperAdmin && (
 							<button
 								type="button"
-								className="btn-primary"
+								className="btn btn-primary"
 								onClick={() => {
 									setActionError(null);
 									setCreateOpen(true);
@@ -427,7 +372,7 @@ export default function KnowledgeBases() {
 							</button>
 						)}
 					</div>
-				</div>
+				</header>
 
 				{actionError && (
 					<div
@@ -446,222 +391,177 @@ export default function KnowledgeBases() {
 					</div>
 				)}
 
-				<div className="liquid-glass-card" style={{ padding: "var(--space-2)" }}>
-					{loading ? (
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "center",
-								alignItems: "center",
-								minHeight: "200px",
-							}}
-						>
-							<div className="spinner" />
-						</div>
-					) : error ? (
-						<div
-							style={{
-								padding: "var(--space-6)",
-								textAlign: "center",
-								color: "var(--color-error)",
-								fontSize: "var(--text-sm)",
-							}}
-						>
-							<p style={{ marginBottom: "var(--space-4)" }}>{error}</p>
-							<button type="button" className="btn-secondary" onClick={() => load()}>
+				{loading ? (
+					<div className="list" aria-busy="true" data-testid="kb-list-loading">
+						{[0, 1, 2].map((index) => (
+							<div key={index} className="list-row">
+								<div
+									className="skeleton skeleton-text"
+									style={{ width: "100%" }}
+								/>
+							</div>
+						))}
+					</div>
+				) : error ? (
+					<div className="empty" data-testid="kb-list-error">
+						<p className="empty-title" role="alert">
+							{error}
+						</p>
+						<div className="empty-actions">
+							<button
+								type="button"
+								className="btn btn-secondary"
+								onClick={() => setReloadToken((value) => value + 1)}
+							>
 								{t("knowledgeBases.retry")}
 							</button>
 						</div>
-					) : knowledgeBases.length === 0 ? (
-						<div
-							style={{
-								padding: "var(--space-8)",
-								textAlign: "center",
-								color: "var(--color-text-secondary)",
-								fontSize: "var(--text-sm)",
-							}}
-						>
-							<p style={{ marginBottom: "var(--space-2)" }}>
-								{t("knowledgeBases.empty")}
-							</p>
-							<p style={{ color: "var(--color-text-muted)" }}>
-								{t("knowledgeBases.emptyHint")}
-							</p>
-						</div>
-					) : (
-						<div className="kb-table-scroll">
-							<table style={{ width: "100%", borderCollapse: "collapse" }}>
-								<thead>
-									<tr>
-										<th style={thStyle}>{t("knowledgeBases.columns.name")}</th>
-										<th style={thStyle}>
-											{t("knowledgeBases.columns.embedding")}
-										</th>
-										<th style={thStyle}>
-											{t("knowledgeBases.columns.documents")}
-										</th>
-										<th style={thStyle}>{t("knowledgeBases.columns.chunks")}</th>
-										<th style={thStyle}>{t("knowledgeBases.columns.status")}</th>
-										<th style={thStyle}>
-											{t("knowledgeBases.columns.boundAgent")}
-										</th>
-										<th style={thStyle}>
-											{t("knowledgeBases.columns.actions")}
-										</th>
-									</tr>
-								</thead>
-								<tbody>
-									{knowledgeBases.map((kb) => (
-										<tr key={kb.id} data-testid={`kb-row-${kb.id}`}>
-											<td style={tdStyle}>
-												<Link
-													to={`/knowledge-bases/${kb.id}`}
-													style={{
-														color: "var(--color-accent-primary)",
-														fontWeight: 500,
-													}}
-												>
-													{kb.name}
-												</Link>
-											</td>
-											<td style={tdStyle}>
-												<div style={{ fontWeight: 500 }}>
-													{t(providerLabelKey[kb.embedding_provider])}
-												</div>
-												<div
-													style={{
-														fontSize: "var(--text-xs)",
-														color: "var(--color-text-muted)",
-													}}
-												>
-													{kb.embedding_model}
-												</div>
-											</td>
-											<td style={tdStyle}>
-												{kb.ready_document_count}/{kb.document_count}
-											</td>
-											<td style={tdStyle}>{kb.total_chunks}</td>
-											<td style={tdStyle}>
-												<span className={statusBadgeClass[kb.status]}>
-													{t(`knowledgeBases.status.${kb.status}`)}
-												</span>
-											</td>
-											<td style={tdStyle}>
-												{kb.bound_agent ? (
-													kb.bound_agent.name
-												) : (
-													<span style={{ color: "var(--color-text-muted)" }}>
-														{t("knowledgeBases.unboundValue")}
-													</span>
-												)}
-											</td>
-											<td style={tdStyle}>{renderActions(kb)}</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						</div>
-					)}
-				</div>
-
-				{selected && (
-					<div
-						data-testid="kb-detail-panel"
-						className="liquid-glass-card"
-						style={{ padding: "var(--space-6)", marginTop: "var(--space-6)" }}
-					>
-						<div
-							style={{
-								display: "flex",
-								justifyContent: "space-between",
-								alignItems: "center",
-								gap: "var(--space-4)",
-								marginBottom: "var(--space-4)",
-								flexWrap: "wrap",
-							}}
-						>
-							<h2
-								style={{
-									fontSize: "var(--text-lg)",
-									fontWeight: 600,
-									color: "var(--color-text-primary)",
-									margin: 0,
-								}}
-							>
-								{selected.name}
-							</h2>
-							<button
-								type="button"
-								className="btn-secondary"
-								onClick={() => setSelectedId(null)}
-							>
-								{t("knowledgeBases.actions.close")}
-							</button>
-						</div>
-
-						{selected.error_message && (
-							<div
-								role="alert"
-								style={{
-									padding: "var(--space-3) var(--space-4)",
-									borderRadius: "var(--radius-md)",
-									fontSize: "var(--text-sm)",
-									background: "var(--color-error-bg)",
-									border: "1px solid var(--color-error)",
-									color: "var(--color-error)",
-									marginBottom: "var(--space-4)",
-								}}
-							>
-								{selected.error_message}
+					</div>
+				) : knowledgeBases.length === 0 ? (
+					<div className="empty" data-testid="kb-list-empty">
+						<p className="empty-title">{t("knowledgeBases.empty")}</p>
+						<p className="empty-description">
+							{t("knowledgeBases.emptyHint")}
+						</p>
+						{isSuperAdmin && (
+							<div className="empty-actions">
+								<button
+									type="button"
+									className="btn btn-primary"
+									onClick={() => {
+										setActionError(null);
+										setCreateOpen(true);
+									}}
+								>
+									{t("knowledgeBases.newKnowledgeBase")}
+								</button>
 							</div>
 						)}
-
-						{configRow(
-							t("knowledgeBases.detail.provider"),
-							t(providerLabelKey[selected.embedding_provider]),
-						)}
-						{configRow(
-							t("knowledgeBases.detail.model"),
-							selected.embedding_model,
-						)}
-						{configRow(
-							t("knowledgeBases.detail.baseUrl"),
-							selected.embedding_base_url ||
-								t("knowledgeBases.detail.notSet"),
-						)}
-						{configRow(
-							t("knowledgeBases.detail.dimension"),
-							selected.embedding_dimension ?? t("knowledgeBases.detail.notSet"),
-						)}
-						{configRow(
-							t("knowledgeBases.detail.batchSize"),
-							selected.embedding_batch_size,
-						)}
-						{configRow(
-							t("knowledgeBases.detail.chunkSize"),
-							selected.chunk_size,
-						)}
-						{configRow(
-							t("knowledgeBases.detail.chunkOverlap"),
-							selected.chunk_overlap,
-						)}
-						{configRow(
-							t("knowledgeBases.detail.documents"),
-							`${selected.ready_document_count}/${selected.document_count}`,
-						)}
-						{configRow(
-							t("knowledgeBases.detail.chunks"),
-							selected.total_chunks,
-						)}
-						{configRow(
-							t("knowledgeBases.detail.boundAgent"),
-							selected.bound_agent?.name ?? t("knowledgeBases.unboundValue"),
-						)}
-
-						<div style={{ marginTop: "var(--space-4)" }}>
-							{renderActions(selected)}
-						</div>
 					</div>
+				) : (
+					<>
+						{/* Column-label row: desktop-only plan for R1. It carries the SAME grid
+						 * contract as the data rows beneath (`list-grid` + the `list-grid--kb`
+						 * flavour), so header cell N and data cell N share one column index.
+						 * It lives OUTSIDE the <ul class="list"> so the list keeps exactly one
+						 * child per KB (no header <li>, no extra listitem). */}
+						<div
+							className="list-header list-grid list-grid--kb"
+							data-testid="kb-list-header"
+						>
+							<span className="list-header-cell">
+								{t("knowledgeBases.columns.name")}
+							</span>
+							<span className="list-header-cell">
+								{t("knowledgeBases.columns.documents")}
+							</span>
+							<span className="list-header-cell">
+								{t("knowledgeBases.columns.chunks")}
+							</span>
+							<span className="list-header-cell">
+								{t("knowledgeBases.columns.boundAgent")}
+							</span>
+							<span className="list-header-cell">
+								{t("knowledgeBases.columns.status")}
+							</span>
+							<span className="list-header-cell">
+								{t("knowledgeBases.columns.actions")}
+							</span>
+						</div>
+						<ul className="list" data-testid="kb-list">
+						{knowledgeBases.map((kb) => (
+							<li
+								key={kb.id}
+								className="list-row list-grid list-grid--kb"
+								data-testid={`kb-row-${kb.id}`}
+								style={rowStyle}
+							>
+								{/* Column 1 — name. The NAME is the affordance, not the row: the link
+								 * (with its chevron) is the only navigation target, so the row can
+								 * still host the menu button. The description stacks under the name
+								 * inside this same cell. */}
+								<div className="list-cell list-row-main">
+									<span className="list-row-name">
+										<Link
+											className="list-row-title list-row-affordance"
+											to={`/knowledge-bases/${kb.id}`}
+											data-testid={`kb-name-${kb.id}`}
+										>
+											{kb.name}
+										</Link>
+										<svg
+											className="list-row-chevron"
+											viewBox="0 0 16 16"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="1.75"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											aria-hidden="true"
+											data-testid={`kb-chevron-${kb.id}`}
+										>
+											<path d="M6 3.5 10.5 8 6 12.5" />
+										</svg>
+									</span>
+									<span className="list-row-description">
+										{t(providerLabelKey[kb.embedding_provider])} ·{" "}
+										{kb.embedding_model}
+									</span>
+								</div>
+								{/* Column 2 — documents. The value only: the column header names it,
+								 * so repeating 文档 here would duplicate the header (R2). */}
+								<div
+									className="list-cell"
+									data-testid={`kb-documents-${kb.id}`}
+								>
+									<span className="list-cell-value">
+										{kb.ready_document_count}/{kb.document_count}
+									</span>
+								</div>
+								{/* Column 3 — chunks. */}
+								<div
+									className="list-cell"
+									data-testid={`kb-chunks-${kb.id}`}
+								>
+									<span className="list-cell-value">{kb.total_chunks}</span>
+								</div>
+								{/* Column 4 — bound agent. */}
+								<div
+									className="list-cell"
+									data-testid={`kb-bound-agent-${kb.id}`}
+								>
+									<span
+										style={{
+											color: kb.bound_agent
+												? "var(--color-text-secondary)"
+												: "var(--color-text-muted)",
+										}}
+									>
+										{kb.bound_agent
+											? kb.bound_agent.name
+											: t("knowledgeBases.unboundValue")}
+									</span>
+								</div>
+								{/* Column 5 — status. */}
+								<div
+									className="list-cell"
+									data-testid={`kb-status-${kb.id}`}
+								>
+									<span className={statusBadgeClass[kb.status]}>
+										{t(`knowledgeBases.status.${kb.status}`)}
+									</span>
+								</div>
+								{/* Column 6 — actions. */}
+								<div
+									className="list-cell"
+									data-testid={`kb-actions-cell-${kb.id}`}
+								>
+									{renderRowActions(kb)}
+								</div>
+							</li>
+						))}
+					</ul>
+					</>
 				)}
 			</div>
 
@@ -684,62 +584,47 @@ export default function KnowledgeBases() {
 
 			{bindTarget && (
 				<div
+					className="modal-backdrop"
 					data-testid="kb-bind-modal"
-					style={{
-						position: "fixed",
-						inset: 0,
-						zIndex: 9999,
-						background: "rgba(0, 0, 0, 0.5)",
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "center",
-					}}
 					onClick={() => setBindTarget(null)}
 				>
 					<div
-						className="liquid-glass-card"
+						className="card card-raised"
 						role="dialog"
 						aria-modal="true"
-						style={{
-							padding: "var(--space-6)",
-							maxWidth: "440px",
-							width: "100%",
-							margin: "var(--space-4)",
-						}}
+						style={{ maxWidth: "440px", width: "100%", minWidth: 0 }}
 						onClick={(event) => event.stopPropagation()}
 					>
-						<h3
-							style={{
-								fontSize: "var(--text-lg)",
-								fontWeight: 600,
-								marginBottom: "var(--space-2)",
-								color: "var(--color-text-primary)",
-							}}
-						>
+						<h3 className="card-title" style={{ marginBottom: "var(--space-2)" }}>
 							{t("knowledgeBases.bindTitle")}
 						</h3>
 						<p
-							style={{
-								fontSize: "var(--text-sm)",
-								color: "var(--color-text-secondary)",
-								marginBottom: "var(--space-4)",
-							}}
+							className="page-subtitle"
+							style={{ marginBottom: "var(--space-4)" }}
 						>
 							{t("knowledgeBases.bindDescription", { name: bindTarget.name })}
 						</p>
-						<select
-							aria-label={t("knowledgeBases.bindAgentLabel")}
-							value={bindAgentId}
-							onChange={(event) => setBindAgentId(event.target.value)}
-							style={{ width: "100%" }}
-						>
-							<option value="">{t("knowledgeBases.bindAgentPlaceholder")}</option>
-							{agents.map((agent) => (
-								<option key={agent.id} value={agent.id}>
-									{agent.name}
+						<label className="field" style={{ display: "block" }}>
+							<span className="field-label">
+								{t("knowledgeBases.bindAgentLabel")}
+							</span>
+							<select
+								className="select"
+								aria-label={t("knowledgeBases.bindAgentLabel")}
+								value={bindAgentId}
+								onChange={(event) => setBindAgentId(event.target.value)}
+								style={{ width: "100%" }}
+							>
+								<option value="">
+									{t("knowledgeBases.bindAgentPlaceholder")}
 								</option>
-							))}
-						</select>
+								{agents.map((agent) => (
+									<option key={agent.id} value={agent.id}>
+										{agent.name}
+									</option>
+								))}
+							</select>
+						</label>
 						<div
 							style={{
 								display: "flex",
@@ -750,14 +635,14 @@ export default function KnowledgeBases() {
 						>
 							<button
 								type="button"
-								className="btn-secondary"
+								className="btn btn-secondary"
 								onClick={() => setBindTarget(null)}
 							>
 								{t("buttons.cancel")}
 							</button>
 							<button
 								type="button"
-								className="btn-primary"
+								className="btn btn-primary"
 								disabled={!bindAgentId}
 								onClick={handleBind}
 							>
@@ -770,62 +655,45 @@ export default function KnowledgeBases() {
 
 			{bindAgentForKb && (
 				<div
+					className="modal-backdrop"
 					data-testid="kb-bind-agent-modal"
-					style={{
-						position: "fixed",
-						inset: 0,
-						zIndex: 9999,
-						background: "rgba(0, 0, 0, 0.5)",
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "center",
-					}}
 					onClick={closeBindAgentModal}
 				>
 					<div
-						className="liquid-glass-card"
+						className="card card-raised"
 						role="dialog"
 						aria-modal="true"
-						style={{
-							padding: "var(--space-6)",
-							maxWidth: "440px",
-							width: "100%",
-							margin: "var(--space-4)",
-						}}
+						style={{ maxWidth: "440px", width: "100%", minWidth: 0 }}
 						onClick={(event) => event.stopPropagation()}
 					>
-						<h3
-							style={{
-								fontSize: "var(--text-lg)",
-								fontWeight: 600,
-								marginBottom: "var(--space-2)",
-								color: "var(--color-text-primary)",
-							}}
-						>
+						<h3 className="card-title" style={{ marginBottom: "var(--space-2)" }}>
 							{t("knowledgeBases.bindAgentTitle")}
 						</h3>
 						<p
-							style={{
-								fontSize: "var(--text-sm)",
-								color: "var(--color-text-secondary)",
-								marginBottom: "var(--space-4)",
-							}}
+							className="page-subtitle"
+							style={{ marginBottom: "var(--space-4)" }}
 						>
 							{t("knowledgeBases.bindAgentDescription")}
 						</p>
-						<select
-							aria-label={t("knowledgeBases.bindKbLabel")}
-							value={bindKbId}
-							onChange={(event) => setBindKbId(event.target.value)}
-							style={{ width: "100%" }}
-						>
-							<option value="">{t("knowledgeBases.bindKbPlaceholder")}</option>
-							{bindableKbs.map((kb) => (
-								<option key={kb.id} value={kb.id}>
-									{kb.name}
-								</option>
-							))}
-						</select>
+						<label className="field" style={{ display: "block" }}>
+							<span className="field-label">
+								{t("knowledgeBases.bindKbLabel")}
+							</span>
+							<select
+								className="select"
+								aria-label={t("knowledgeBases.bindKbLabel")}
+								value={bindKbId}
+								onChange={(event) => setBindKbId(event.target.value)}
+								style={{ width: "100%" }}
+							>
+								<option value="">{t("knowledgeBases.bindKbPlaceholder")}</option>
+								{bindableKbs.map((kb) => (
+									<option key={kb.id} value={kb.id}>
+										{kb.name}
+									</option>
+								))}
+							</select>
+						</label>
 						<div
 							style={{
 								display: "flex",
@@ -836,14 +704,14 @@ export default function KnowledgeBases() {
 						>
 							<button
 								type="button"
-								className="btn-secondary"
+								className="btn btn-secondary"
 								onClick={closeBindAgentModal}
 							>
 								{t("buttons.cancel")}
 							</button>
 							<button
 								type="button"
-								className="btn-primary"
+								className="btn btn-primary"
 								disabled={!bindKbId}
 								onClick={handleBindAgentToKb}
 							>

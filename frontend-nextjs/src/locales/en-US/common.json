@@ -6,6 +6,9 @@
     "dark": "Dark Mode",
     "system": "System"
   },
+  "home": {
+    "title": "Home"
+  },
   "buttons": {
     "login": "Login",
     "logout": "Logout",
@@ -16,7 +19,6 @@
     "edit": "Edit",
     "confirm": "Confirm",
     "submit": "Submit",
-    "refresh": "Refresh",
     "search": "Search",
     "add": "Add",
     "export": "Export",
@@ -60,6 +62,8 @@
     "loadingTimeout": "Loading timeout, please refresh"
   },
   "navigation": {
+    "home": "Home",
+    "mainNav": "Main navigation",
     "dashboard": "Console",
     "playground": "Playground",
     "knowledge": "Knowledge Base",
@@ -73,8 +77,7 @@
     "agentSettings": "Agent Settings",
     "accountSettings": "Account Settings",
     "administrator": "Administrator",
-    "agents": "Agents",
-    "users": "Users"
+    "agents": "Agents"
   },
   "errors": {
     "required": "This field is required",
@@ -145,6 +148,15 @@
     "createTitle": "Create agent",
     "create": "Create agent",
     "empty": "No agents yet. Create one to start.",
+    "emptyHint": "An agent is one channel with its own prompt and knowledge base. Create the first one to start answering.",
+    "columns": {
+      "name": "Agent",
+      "meta": "Description / knowledge base",
+      "knowledgeBase": "Knowledge base",
+      "updated": "Updated",
+      "status": "Status",
+      "actions": "Actions"
+    },
     "open": "Open",
     "openCurrent": "Open current agent",
     "current": "Current",
@@ -166,7 +178,15 @@
     "kbOnboardingDescription": "Configure embeddings to let your agent answer from your data. You can finish this later from Knowledge settings.",
     "kbOnboardingSkip": "Skip for now",
     "kbOnboardingContinue": "Initialize Knowledge Base",
-    "panelNoKnowledgeBase": "No knowledge base bound"
+    "panelNoKnowledgeBase": "No knowledge base bound",
+    "kbColumn": "Knowledge base",
+    "kbBindExisting": "Bind an existing knowledge base",
+    "kbCreateNew": "Create a new knowledge base",
+    "kbNoneAvailable": "No unbound active knowledge base available. Create one under Knowledge Bases.",
+    "rowActions": "Actions for {{name}}",
+    "deactivateConfirm": "Deactivate \"{{name}}\"? It will be deleted automatically after the purge window.",
+    "updatedAt": "Updated {{date}}",
+    "statusInactive": "Inactive"
   },
   "placeholders": {
     "enterMessage": "Enter message...",
@@ -674,42 +694,11 @@
   "citations": {
     "references": "References"
   },
-  "users": {
-    "title": "User Management",
-    "addAdmin": "Add Admin",
-    "email": "Email",
-    "name": "Name",
-    "password": "Password",
-    "role": "Role",
-    "create": "Create",
-    "adminList": "Admin List",
-    "id": "ID",
-    "status": "Status",
-    "actions": "Actions",
-    "save": "Save",
-    "cancel": "Cancel",
-    "edit": "Edit",
-    "delete": "Delete",
-    "statusEnabled": "Enabled",
-    "statusDisabled": "Disabled",
-    "newPasswordPlaceholder": "New password, leave empty to keep unchanged",
-    "roleLabels": {
-      "super_admin": "Super Admin",
-      "admin": "Admin",
-      "support": "Support",
-      "readonly": "Read Only"
-    },
-    "confirmDelete": "Are you sure you want to delete this admin account?",
-    "userCreated": "Admin created: {{email}}",
-    "userUpdated": "User updated",
-    "userDeleted": "User deleted",
-    "loadUsersFailed": "Failed to load users",
-    "createFailed": "Failed to create",
-    "saveFailed": "Failed to save",
-    "deleteFailed": "Failed to delete"
-  },
   "kb": {
     "title": "Knowledge Base Settings",
+    "bindPromptTitle": "No knowledge base bound",
+    "bindPromptDescription": "Bind a knowledge base to this agent so it can answer from your material.",
+    "bindPromptAction": "Bind a knowledge base",
     "setupTitle": "Initialize Knowledge Base",
     "setupDescription": "Configure the embedding model to enable knowledge base retrieval.",
     "provider": "Embedding Provider",
@@ -740,12 +729,16 @@
     "goToSetup": "Go to Setup",
     "batchSize": "Batch Size",
     "manageUrlsDesc": "Manage website knowledge sources, add and crawl web content",
-    "manageFilesDesc": "Upload and manage files, supports PDF, TXT, DOCX, XLSX and more"
+    "manageFilesDesc": "Upload and manage files, supports PDF, TXT, DOCX, XLSX and more",
+    "bannerMessage": "Knowledge base is not configured. File uploads will not be processed until KB setup is complete.",
+    "setupButton": "Set Up KB",
+    "guardOpenList": "Open knowledge bases"
   },
   "knowledgeBases": {
     "title": "Knowledge Bases",
     "subtitle": "Knowledge bases live independently of agents: create, reset, delete and bind them here.",
     "newKnowledgeBase": "New knowledge base",
+    "rowActions": "Actions for {{name}}",
     "retry": "Retry",
     "empty": "No knowledge bases yet",
     "emptyHint": "Create a knowledge base, then bind it to an agent.",
@@ -836,5 +829,9 @@
     "chunkOverlapInvalid": "Chunk overlap must be smaller than chunk size",
     "createSubmit": "Create",
     "resetSubmit": "Reset and reindex"
+  },
+  "dashboard": {
+    "userCount": "Users",
+    "sessionCount": "Sessions"
   }
 }

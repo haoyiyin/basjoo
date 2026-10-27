@@ -5,8 +5,8 @@ import { AuthLanguageSwitcher } from './components/AuthLanguageSwitcher';
 import { Login } from './views/Login';
 import { Register } from './views/Register';
 import AgentSelector from './views/AgentSelector';
-import AgentPanel from './views/AgentPanel';
 import Agents from './views/Agents';
+import Home from './views/Home';
 import Dashboard from './views/Dashboard';
 import KnowledgeBaseDetail from './views/KnowledgeBaseDetail';
 import KnowledgeBaseSetup from './views/KnowledgeBaseSetup';
@@ -15,7 +15,6 @@ import Playground from './views/Playground';
 import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
 import AccountSettings from './views/AccountSettings';
-import { AdminUsers } from './views/AdminUsers';
 import Chat from './views/Chat';
 
 /** Mirrors the former `app/(auth)/layout.tsx`. */
@@ -47,13 +46,14 @@ export function App() {
 
       <Route element={<DashboardLayout />}>
         <Route path="/agent-selector" element={<AgentSelector />} />
-        <Route path="/" element={<AgentPanel />} />
+        <Route path="/" element={<Home />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/:agentId/dashboard" element={<Dashboard />} />
         {/*
-         * Agent-scoped source routes are gone: they redirect to the bound
-         * knowledge base. `KnowledgeBaseSetup` is the redirect-only view that
-         * resolves `agent.kb_id` from `/api/v1/agent:kb-status`.
+         * `KnowledgeBaseSetup` resolves `agent.kb_id` from
+         * `/api/v1/agent:kb-status`. `/knowledge` renders the bind prompt when
+         * the agent has no KB; `/urls` and `/files` are legacy bookmarks and
+         * keep the plain redirect to the bound KB / bind sheet.
          */}
         <Route path="/agents/:agentId/files" element={<KnowledgeBaseSetup />} />
         <Route path="/agents/:agentId/urls" element={<KnowledgeBaseSetup />} />
@@ -61,20 +61,17 @@ export function App() {
         <Route path="/agents/:agentId/playground" element={<Playground />} />
         <Route path="/agents/:agentId/sessions" element={<Sessions />} />
         <Route path="/agents/:agentId/settings/agent" element={<AgentSettings />} />
-        <Route path="/agents/:agentId/users" element={<AdminUsers />} />
         <Route path="/chat/:sessionId" element={<Chat />} />
         <Route path="/settings/agent" element={<AgentSettings />} />
         <Route path="/settings/account" element={<AccountSettings />} />
 
         <Route path="/knowledge-bases" element={<KnowledgeBases />} />
         <Route path="/knowledge-bases/:kbId" element={<KnowledgeBaseDetail />} />
-        <Route path="/sessions" element={<Redirect to="/" />} />
         <Route path="/knowledge" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/files" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/qa" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/playground" element={<Redirect to="/" />} />
         <Route path="/urls" element={<Redirect to="/knowledge-bases" />} />
-        <Route path="/users" element={<Redirect to="/" />} />
       </Route>
     </Routes>
   );

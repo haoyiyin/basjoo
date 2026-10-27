@@ -391,6 +391,11 @@ export default function Playground() {
    * `.playground-shell` rule in index.css turns this same tree into a single
    * scrolling column with the settings pane stacked above the chat pane, so
    * the DOM order below is the mobile visual order.
+   *
+   * Restyle (§20): the shell keeps its inline desktop geometry verbatim
+   * (mobileLayout.test.tsx asserts 40% / 360px / 480px), while the chrome
+   * inside it is built from the design-system primitives — card headers,
+   * field/input groups, token-only colours (no literal hex).
    */
   return (
     <AdminLayout>
@@ -401,6 +406,8 @@ export default function Playground() {
           height: '100vh',
           display: 'flex',
           overflow: 'hidden',
+          padding: 0,
+          maxWidth: 'none',
         }}
       >
         <div
@@ -411,37 +418,44 @@ export default function Playground() {
             minWidth: '360px',
             maxWidth: '480px',
             borderRight: '1px solid var(--color-border)',
-            background: 'var(--color-bg-secondary)',
-            backdropFilter: 'blur(var(--glass-blur-surface))',
-            WebkitBackdropFilter: 'blur(var(--glass-blur-surface))',
+            background: 'var(--color-bg-panel)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
           }}
         >
-          <div style={{
-            padding: 'var(--space-4)',
-            borderBottom: '1px solid var(--color-border)',
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}>
-            <h2 style={{
-              fontSize: 'var(--text-lg)',
-              fontWeight: 600,
-              color: 'var(--color-text-primary)',
-            }}>
+          <header
+            className="card-header"
+            style={{
+              margin: 0,
+              padding: 'var(--space-4)',
+              borderBottom: '1px solid var(--color-border)',
+              flexShrink: 0,
+              gap: 'var(--space-3)',
+              minWidth: 0,
+            }}
+          >
+            <h2 className="card-title" style={{ minWidth: 0 }}>
               {t('navigation.aiSettings')}
             </h2>
             {/* 保存状态指示器 */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-2)',
-              fontSize: 'var(--text-sm)',
-              color: saveStatus === 'saving' ? 'var(--color-text-muted)' : saveStatus === 'saved' ? '#10B981' : saveStatus === 'error' ? '#ef4444' : 'var(--color-text-muted)',
-            }}>
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                fontSize: 'var(--text-sm)',
+                flexShrink: 0,
+                color:
+                  saveStatus === 'saved'
+                    ? 'var(--color-success)'
+                    : saveStatus === 'error'
+                      ? 'var(--color-error)'
+                      : 'var(--color-text-tertiary)',
+              }}
+            >
               {saveStatus === 'saving' && (
                 <>
                   <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} />
@@ -450,7 +464,7 @@ export default function Playground() {
               )}
               {saveStatus === 'saved' && (
                 <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   <span>{t('status.saved')}</span>
@@ -458,7 +472,7 @@ export default function Playground() {
               )}
               {saveStatus === 'error' && (
                 <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                     <circle cx="12" cy="12" r="10" />
                     <line x1="15" y1="9" x2="9" y2="15" />
                     <line x1="9" y1="9" x2="15" y2="15" />
@@ -467,8 +481,8 @@ export default function Playground() {
                 </>
               )}
             </div>
-          </div>
-          <div style={{ flex: 1, overflow: 'auto' }}>
+          </header>
+          <div style={{ flex: 1, overflow: 'auto', minWidth: 0 }}>
             <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
           </div>
         </div>
@@ -481,40 +495,37 @@ export default function Playground() {
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            minWidth: 0,
           }}
         >
-          <div style={{
-            padding: 'var(--space-4)',
-            borderBottom: '1px solid var(--color-border)',
-            background: 'var(--color-bg-secondary)',
-            flexShrink: 0,
-          }}>
-            <h2 style={{
-              fontSize: 'var(--text-lg)',
-              fontWeight: 600,
-              color: 'var(--color-text-primary)',
-            }}>
-              {t('playground.preview')}
-            </h2>
-            <p style={{
-              fontSize: 'var(--text-sm)',
-              color: 'var(--color-text-muted)',
-              marginTop: 'var(--space-2)',
-            }}>
-              {t('playground.testAiEffect')}
-            </p>
-          </div>
+          <header
+            className="card-header"
+            style={{
+              margin: 0,
+              padding: 'var(--space-4)',
+              borderBottom: '1px solid var(--color-border)',
+              background: 'var(--surface-bg)',
+              flexShrink: 0,
+              minWidth: 0,
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <h2 className="card-title">{t('playground.preview')}</h2>
+              <p className="page-subtitle">{t('playground.testAiEffect')}</p>
+            </div>
+          </header>
           {apiKeySet === false && (
             <div
               role="alert"
               style={{
-                padding: 'var(--space-3)',
                 margin: 'var(--space-4) var(--space-4) 0',
-                background: 'rgba(245, 158, 11, 0.1)',
-                border: '1px solid rgba(245, 158, 11, 0.3)',
+                padding: 'var(--space-3) var(--space-4)',
+                background: 'var(--color-warning-bg)',
+                border: '1px solid var(--color-warning)',
                 borderRadius: 'var(--radius-md)',
-                color: '#f59e0b',
+                color: 'var(--color-warning)',
                 fontSize: 'var(--text-sm)',
+                lineHeight: 'var(--leading-normal)',
               }}
             >
               {t('labels.pleaseConfigureApiKey')}

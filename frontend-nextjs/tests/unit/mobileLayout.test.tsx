@@ -499,7 +499,7 @@ const { default: KnowledgeBaseDetailView } = await import(
 );
 const { default: Agents } = await import("../../src/views/Agents");
 const { default: Dashboard } = await import("../../src/views/Dashboard");
-const { default: AgentPanel } = await import("../../src/views/AgentPanel");
+const { default: Home } = await import("../../src/views/Home");
 const { default: Playground } = await import("../../src/views/Playground");
 const { default: AdminLayout } = await import("../../src/components/AdminLayout");
 const { Login } = await import("../../src/views/Login");
@@ -524,10 +524,16 @@ describe("375px width: no horizontal overflow", () => {
 		assertNoInlineWidthOverflow(view as HTMLElement);
 		assertTapTargets(view as HTMLElement);
 
-		// The 7-column table is inside the horizontal scroll wrapper, and all
-		// pre-existing cells/actions stayed in the DOM.
-		const table = screen.getByRole("table");
-		expect(table.closest(".kb-table-scroll")).not.toBeNull();
+		// §16: the 7-column table is gone. The KB list is now the shared
+		// `list`/`list-row` primitive, same system as /agents.
+		const list = screen.getByTestId("kb-list");
+		expect(list.tagName).toBe("UL");
+		expect(list).toHaveClass("list");
+		const rows = within(list).getAllByRole("listitem");
+		expect(rows.length).toBeGreaterThan(0);
+		for (const row of rows) {
+			expect(row).toHaveClass("list-row");
+		}
 		expect(screen.getByTestId("kb-row-kb_1")).toBeInTheDocument();
 	});
 
@@ -592,20 +598,20 @@ describe("375px width: no horizontal overflow", () => {
 		assertTapTargets(view as HTMLElement);
 	});
 
-	it("AgentPanel", async () => {
+	it("Home", async () => {
 		const { container } = renderAt375(
 			<MemoryRouter initialEntries={["/"]}>
 				<Routes>
-					<Route path="/" element={<AgentPanel />} />
+					<Route path="/" element={<Home />} />
 				</Routes>
 			</MemoryRouter>,
 		);
 
-		await screen.findByTestId("agent-panel-page");
+		await screen.findByTestId("home-page");
 		const view = container.querySelector<HTMLElement>(
 			'[data-testid="viewport-375"]',
 		);
-		assertPageRootContract(view as HTMLElement, "agent-panel-page");
+		assertPageRootContract(view as HTMLElement, "home-page");
 		assertNoInlineWidthOverflow(view as HTMLElement);
 		assertTapTargets(view as HTMLElement);
 	});
