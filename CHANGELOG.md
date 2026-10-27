@@ -20,6 +20,7 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ### Changed
 
+- `scrapling-service` now renders pages with an in-process crawl4ai headless Chromium (`crawl4ai==0.9.5`) and feeds crawl4ai's markdown to the knowledge base instead of readability output. JS-only sites that used to return only their meta description (113-196 chars reported as `success=True`) now either produce real content or fail loudly, so an empty document no longer lands in the KB. The `curl_cffi` + `httpx` + `readability-lxml` path stays as the fallback when the browser cannot start, and the `POST /fetch` / `POST /discover` HTTP contract is unchanged. The container needs `shm_size: 512mb` and a 60 s healthcheck start period (≈700 MB idle, ≈1.2 GB at 4 concurrent pages); no memory limit is set, because a 1.5 GB cap made crawls fail silently.
 - SSRF protection for URL ingestion is now opt-in (`SSRF_PROTECTION_ENABLED`, default off): the resolved-IP rule broke every fetch on hosts whose resolver returns fake-ip/ULA addresses for public sites. Scheme, credential, empty-host, `localhost` and direct-IP-literal validation still always run; only the DNS-range lookup is gated. `scrapling-service` honours the same flag.
 - CORS policy tightened: missing `Origin` headers no longer receive wildcard CORS; `Origin: null` only allowed when `cors_allow_null_origin` is explicitly enabled.
 - Early-response CORS handling unified through a single shared helper (`apply_cors_headers` in `backend/middleware/rate_limit.py`).

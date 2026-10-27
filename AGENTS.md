@@ -8,7 +8,7 @@ Docker-oriented AI customer support platform:
 - FastAPI backend with workspace-scoped knowledge bases (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, quotas.
 - Vite SPA admin dashboard in `frontend-nextjs/` (React 18 + react-router 7; the directory name is a leftover from the former Next.js app).
 - Embeddable TypeScript widget in `widget/` (localStorage sessions, SSE, human takeover).
-- Supporting: Scrapling microservice, Qdrant (vector DB), Redis, nginx.
+- Supporting: crawl4ai fetcher service (headless Chromium), Qdrant (vector DB), Redis, nginx.
 - Persistence is **SQLite only** (`aiosqlite`). There is no PostgreSQL anywhere in the stack.
 - All LLM calls go to external providers; embeddings go through a per-KB provider (Jina / SiliconFlow / OpenAI-compatible custom).
 
@@ -16,7 +16,7 @@ Docker-oriented AI customer support platform:
 - `backend/` — FastAPI app, `services/` (logic), `api/` (thin routers), `models.py`, `tests/`.
 - `frontend-nextjs/` — Vite SPA: `src/App.tsx` (routes), `src/views/`, `src/components/`, `src/hooks/`, `src/services/api.ts`.
 - `widget/` — `src/BasjooWidget.tsx`, esbuild bundles, `example/`.
-- `scrapling-service/` — standalone stealth scraper (curl_cffi + readability).
+- `scrapling-service/` — standalone fetcher microservice: crawl4ai headless Chromium in-process, with the light curl_cffi/httpx + readability path as fallback.
 - `nginx/` — reverse proxy used only by the `prod` profile.
 - `docker-compose.yml` — dev/prod profiles.
 - `tests/e2e/` — Playwright specs (root-level, not inside the frontend).
@@ -50,7 +50,7 @@ Docker-oriented AI customer support platform:
 - **Structure**: Backend logic strictly in `backend/services/`; thin routers in `backend/api/`. Models in `backend/models.py`. Frontend views in `src/views/`, shared components in `src/components/`, hooks in `src/hooks/`. Widget self-contained in `widget/src/`.
 - **Style**: Python — 4 spaces, snake_case for modules/functions/tests. TypeScript/React — **tabs** (every file in `src/` uses tabs; there is no prettier/editorconfig, so the existing code is the style), PascalCase for components/views, `use*` hooks. Explicit TS types; no `any`.
 - **Commits**: Conventional (`feat:`, `fix:`, `docs:`), scoped, imperative. PRs require summary, test commands+output, UI screenshots, migration notes.
-- **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). SSRF is a switch (`SSRF_PROTECTION_ENABLED`, default **off** — a fake-ip/ULA proxy resolver makes the DNS-range rule reject every real site); enabling it turns on the private/link-local/metadata block. Scheme, credential, empty-host, `localhost` and direct-IP-literal checks always run, and `scrapling-service` mirrors the same split. Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
+- **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). SSRF is a switch (`SSRF_PROTECTION_ENABLED`, default **off** — a fake-ip/ULA proxy resolver makes the DNS-range rule reject every real site); enabling it turns on the private/link-local/metadata block. Scheme, credential, empty-host, `localhost` and direct-IP-literal checks always run, and `scrapling-service` mirrors the same split — it is the only SSRF gate on the crawl4ai path (browser in-process) and it validates both the URL and every redirect the light path follows. Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
 
 ## Architecture boundaries
 - `backend/main.py` owns the app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`, legacy `/api/tenants`), static asset routes (`/sdk.js`, `/basjoo-logo.png`, `/widget-demo`), and scheduler/Redis lifespan.
@@ -93,7 +93,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 
 ## Subsystem-specific
 ### Backend RAG / ingestion
-- URL pipeline: `POST /knowledge-bases/{kb_id}/urls:create` → `URLSource(kb_id=..., status=pending)` → `process_url_refetch(kb_id=..., ...)` through Scrapling → content stored → chunk/embed into **that KB** → `is_indexed`. Fetch failure writes `status=failed` + `last_error`; never leave a fetched-and-failed row as `pending` with `last_error IS NULL`.
+- URL pipeline: `POST /knowledge-bases/{kb_id}/urls:create` → `URLSource(kb_id=..., status=pending)` → `process_url_refetch(kb_id=..., ...)` through the fetcher service → content stored → chunk/embed into **that KB** → `is_indexed`. Fetch failure writes `status=failed` + `last_error`; never leave a fetched-and-failed row as `pending` with `last_error IS NULL`.
 - Scheduler: recurring refetch of stale `success` rows still requires an agent with `enable_auto_fetch` and a bound `kb_id`. Independent catch-all: every `URLSource` with `status=pending` and `last_fetch_at IS NULL` is fetched (this is what moves the example URL off pending). Do not auto-retry `failed`.
 - Example seed (`ensure_example_agent`): login/register only (not `database.py` startup). Two guards — workspace already has any agent, or a KB named `EXAMPLE_KB_NAME`. After commit, queue `process_url_refetch` via `asyncio.create_task`; do not block login.
 - Force rebuild vs incremental is controlled by the `force` param on `/knowledge-bases/{kb_id}/index:rebuild` (legacy `/index:rebuild?agent_id=` still aliases).

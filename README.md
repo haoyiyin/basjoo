@@ -18,11 +18,13 @@ Basjoo is an AI customer-support platform with three main parts:
 - a **Vite SPA admin/dashboard** in `frontend-nextjs/` (React + react-router 7)
 - an **embeddable chat widget** in `widget/` that talks to the backend over HTTP and SSE
 
-The stack also uses **SQLite** for application data, **Redis** for rate limiting, **Qdrant** for vector search and document indexing, a **Scrapling microservice** for web content fetching, and **nginx** for Docker-based reverse proxying.
+The stack also uses **SQLite** for application data, **Redis** for rate limiting, **Qdrant** for vector search and document indexing, a **crawl4ai-backed fetcher service** for web content fetching (headless Chromium), and **nginx** for Docker-based reverse proxying.
 
 ## System requirements
 
 Basjoo runs as a set of Docker containers. LLM inference is always delegated to an external API (OpenAI, DeepSeek, Anthropic, Gemini, Kimi, Qwen, Hunyuan, SiliconFlow, or any OpenAI-compatible endpoint). Embeddings can be delegated too, but the default deployment also ships a **self-hosted embedding container** (`local-embed`, CPU-only, ~1.2 GB resident) so a fresh install has a working knowledge base with no third-party key. **No GPU is required** either way.
+
+The fetcher service renders pages in a headless Chromium: measured ≈380 MB resident after the first page and ≈425 MB with 8 pages crawling at once (the browser is shared across requests, so concurrency adds little). Its image is ≈2.1 GB. The 4 GB RAM minimum below assumes the built-in embedding container is also running.
 
 | | Minimum | Recommended |
 |---|---|---|
@@ -63,7 +65,7 @@ The first registered admin becomes the workspace super administrator, who can cr
 - `backend/` — FastAPI app, data models, chat APIs, auth, ingestion, indexing, tests
 - `frontend-nextjs/` — active admin/dashboard UI
 - `widget/` — embeddable chat widget bundle
-- `scrapling-service/` — standalone microservice for web content fetching (curl_cffi + readability)
+- `scrapling-service/` — standalone fetcher microservice: crawl4ai headless Chromium with a curl_cffi + readability fallback
 - `nginx/` — Docker nginx config
 - Qdrant vector database service configuration
 - `docker-compose.yml` — dev/prod orchestration
@@ -140,7 +142,7 @@ The widget provides the visitor-facing chat window with persisted sessions, mult
 - SQLAlchemy async + SQLite (application data store)
 - Redis (rate limiting, caching)
 - Qdrant REST API (vector search, document ingestion, hybrid retrieval)
-- Scrapling microservice (curl_cffi + readability-lxml web content extraction)
+- crawl4ai-backed fetcher service (headless Chromium rendering, curl_cffi + readability-lxml fallback)
 - APScheduler
 - OpenAI-compatible provider layer (DeepSeek, Gemini via Google's OpenAI-compatible endpoint, Anthropic, xAI, OpenRouter, …)
 

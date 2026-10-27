@@ -6,3 +6,5 @@ curl_cffi>=0.7.0
 lxml>=5.0.0
 readability-lxml>=0.8.0
 beautifulsoup4>=4.12.0
+# In-process headless rendering for JS-only pages (measured version).
+crawl4ai==0.9.5
