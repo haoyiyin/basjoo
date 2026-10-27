@@ -1,19 +1,27 @@
 """
-Scrapling-based web scraping service.
-Uses curl_cffi for TLS-impersonated HTTP and readability-lxml for content extraction.
+Web fetching service.
+
+Pages are rendered by a shared in-process crawl4ai headless Chromium, so
+JavaScript-only sites produce real content instead of their meta description.
+The original curl_cffi / httpx + readability-lxml path is kept as a light
+fallback for hosts where the browser cannot start.
 """
 
+import asyncio
 import hashlib
+import inspect
 import ipaddress
 import logging
 import os
 import re
 import socket
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 from urllib.parse import urljoin, urlparse, urlsplit
 
 from bs4 import BeautifulSoup
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 import httpx
 from curl_cffi import requests as curl_requests
 from fastapi import FastAPI, HTTPException
@@ -23,7 +31,21 @@ from readability import Document
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Scrapling Service", version="1.0.0")
+# crawl4ai renders a real page: a JS-less one still yields only its meta
+# description (113-196 chars in the measured cases), which the old 10-char
+# check called a success and stored as an empty document. Rendered markdown for
+# a real page is thousands of chars, so anything below this is a page we failed
+# to render, not a short page.
+MIN_CRAWL_CONTENT_CHARS = 200
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    await _close_crawler()
+
+
+app = FastAPI(title="Scrapling Service", version="2.0.0", lifespan=_lifespan)
 
 # TLS-impersonated browser-like headers
 DEFAULT_HEADERS = {
@@ -125,12 +147,129 @@ def _fetch_following_safe_redirects(url: str, timeout: int, getter):
     raise ValueError("Too many redirects")
 
 
-def _fetch_with_fallback(url: str, timeout: int = 30):
+class FetchResult(tuple):
+    """`(html, status_code, final_url, content_type)` plus the crawl4ai extras.
+
+    A plain tuple keeps the `/discover` BFS contract (and the tests that patch
+    `_fetch_with_fallback` with a 4-tuple), while `/fetch` can still prefer the
+    markdown crawl4ai already produced.
+    """
+
+    def __new__(
+        cls, html, status_code, final_url, content_type, markdown=None, fetcher="crawl4ai"
+    ):
+        self = super().__new__(cls, (html, status_code, final_url, content_type))
+        self.markdown = markdown
+        self.fetcher = fetcher
+        return self
+
+
+class CrawlOutcome(NamedTuple):
+    html: str
+    markdown: Optional[str]
+    links: List[str]
+    status_code: int
+    final_url: str
+    content_type: str
+
+
+# One browser for the whole process; `arun` is concurrent-safe and launching
+# Chromium per request would cost seconds and hundreds of MB each time.
+_crawler = None
+_crawler_lock = asyncio.Lock()
+
+
+async def _get_crawler():
+    global _crawler
+    if _crawler is not None:
+        return _crawler
+    async with _crawler_lock:
+        if _crawler is None:
+            crawler = AsyncWebCrawler(config=BrowserConfig(headless=True, verbose=False))
+            await crawler.start()
+            _crawler = crawler
+    return _crawler
+
+
+async def _close_crawler() -> None:
+    global _crawler
+    if _crawler is None:
+        return
+    crawler, _crawler = _crawler, None
     try:
-        return _fetch_following_safe_redirects(url, timeout, _curl_get)
+        await crawler.close()
+    except Exception as e:
+        logger.warning(f"crawl4ai close failed: {e}")
+
+
+async def _crawl(url: str, timeout: int) -> CrawlOutcome:
+    """Render `url` with crawl4ai. Raises on any failure so the caller can fall back."""
+    _validate_fetch_url_safe(url)
+    crawler = await _get_crawler()
+    run_config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        page_timeout=int(timeout * 1000),
+    )
+    # page_timeout bounds one navigation; this outer guard also covers a browser
+    # that never answers at all (and Chromium's first launch).
+    result = await asyncio.wait_for(
+        crawler.arun(url=url, config=run_config), timeout=timeout + 10
+    )
+    if not result.success and not result.html:
+        raise RuntimeError(result.error_message or "crawl4ai returned no page")
+
+    markdown = None
+    md = result.markdown
+    if md is not None:
+        markdown = (
+            (getattr(md, "fit_markdown", None) or "").strip()
+            or (getattr(md, "raw_markdown", None) or "").strip()
+            or None
+        )
+
+    headers = result.response_headers or {}
+    content_type = (
+        headers.get("content-type")
+        or headers.get("Content-Type")
+        or "text/html"
+    )
+    internal = (result.links or {}).get("internal") or []
+    return CrawlOutcome(
+        html=result.html or "",
+        markdown=markdown,
+        links=[link["href"] for link in internal if link.get("href")],
+        status_code=int(result.status_code or 0),
+        final_url=result.redirected_url or result.url or url,
+        content_type=content_type,
+    )
+
+
+async def _fetch_with_fallback(url: str, timeout: int = 30) -> FetchResult:
+    try:
+        outcome = await _crawl(url, timeout)
+        return FetchResult(
+            outcome.html,
+            outcome.status_code,
+            outcome.final_url,
+            outcome.content_type,
+            markdown=outcome.markdown,
+            fetcher="crawl4ai",
+        )
+    except Exception as e:
+        # Chromium missing, OOM, timeout: the light path must still work.
+        logger.warning(f"crawl4ai failed for {url}: {e}, falling back to curl_cffi/httpx")
+    try:
+        html, status_code, final_url, content_type = _fetch_following_safe_redirects(
+            url, timeout, _curl_get
+        )
     except Exception as e:
         logger.warning(f"curl_cffi failed for {url}: {e}, falling back to httpx")
-        return _fetch_following_safe_redirects(url, timeout, _httpx_get)
+        html, status_code, final_url, content_type = _fetch_following_safe_redirects(
+            url, timeout, _httpx_get
+        )
+    return FetchResult(
+        html, status_code, final_url, content_type, fetcher="scrapling"
+    )
 
 
 class FetchRequest(BaseModel):
@@ -321,9 +460,11 @@ async def fetch_url(request: FetchRequest):
     try:
         logger.info(f"Fetching URL: {request.url}")
 
-        html, status_code, final_url, content_type = _fetch_with_fallback(
-            request.url, request.timeout
-        )
+        fetched = await _fetch_with_fallback(request.url, request.timeout)
+        html, status_code, final_url, content_type = fetched
+        markdown = getattr(fetched, "markdown", None)
+        fetcher = getattr(fetched, "fetcher", "crawl4ai")
+        min_chars = MIN_CRAWL_CONTENT_CHARS if fetcher == "crawl4ai" else 10
 
         if status_code >= 400:
             return FetchResponse(
@@ -333,7 +474,7 @@ async def fetch_url(request: FetchRequest):
                 metadata={
                     "url": request.url,
                     "status_code": status_code,
-                    "fetcher": "scrapling",
+                    "fetcher": fetcher,
                 },
                 success=False,
                 error=f"HTTP {status_code}",
@@ -350,22 +491,34 @@ async def fetch_url(request: FetchRequest):
                 metadata={
                     "url": request.url,
                     "content_type": content_type,
-                    "fetcher": "scrapling",
+                    "fetcher": fetcher,
                 },
                 success=False,
                 error=f"Unsupported content type: {content_type}",
             )
 
-        title, content_text = _extract_content(html, request.url)
+        # crawl4ai's markdown is already de-chromed, so it skips readability and
+        # `_clean_template_content`; readability on the rendered HTML stays the
+        # fallback when markdown is missing or too short to trust.
+        if markdown and len(markdown.strip()) >= min_chars:
+            title = _resolve_title("", html, request.url)
+            content_text = markdown
+        else:
+            title, content_text = _extract_content(html, request.url)
 
-        if not content_text or len(content_text.strip()) < 10:
+        if not content_text or len(content_text.strip()) < min_chars:
             return FetchResponse(
                 title=title or "",
                 content="",
                 content_hash="",
-                metadata={"url": request.url, "fetcher": "scrapling"},
+                metadata={"url": request.url, "fetcher": fetcher},
                 success=False,
-                error="Extracted content is too short or empty",
+                error=(
+                    "Rendered page produced no readable content "
+                    "(JavaScript did not run or the page is a shell)"
+                    if fetcher == "crawl4ai"
+                    else "Extracted content is too short or empty"
+                ),
             )
 
         content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
@@ -377,7 +530,7 @@ async def fetch_url(request: FetchRequest):
             "content_type": content_type,
             "content_length": len(html),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "fetcher": "scrapling",
+            "fetcher": fetcher,
         }
 
         logger.info(f"Successfully fetched {request.url}: {len(content_text)} chars")
@@ -412,7 +565,7 @@ async def fetch_url(request: FetchRequest):
             title="",
             content="",
             content_hash="",
-            metadata={"url": request.url, "fetcher": "scrapling", "raw_error": error_str},
+            metadata={"url": request.url, "fetcher": "crawl4ai", "raw_error": error_str},
             success=False,
             error=friendly_error,
         )
@@ -500,7 +653,12 @@ async def discover_links(request: DiscoverRequest):
             logger.debug(f"Fetching {current_url} at depth {current_depth}")
 
             try:
-                html, status_code, _, _ = _fetch_with_fallback(current_url, 30)
+                # Kept synchronous-callable tolerant: the BFS tests replace
+                # `_fetch_with_fallback` with a plain 4-tuple function.
+                fetched = _fetch_with_fallback(current_url, 30)
+                if inspect.isawaitable(fetched):
+                    fetched = await fetched
+                html, status_code, _, _ = fetched
 
                 if status_code >= 400:
                     logger.warning(f"HTTP {status_code} for {current_url}")

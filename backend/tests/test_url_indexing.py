@@ -1502,6 +1502,13 @@ def _install_scrapling_import_shims() -> None:
                     if not href or el.get("href")
                 ]
 
+            # Attributes `_resolve_title` probes on the real BeautifulSoup.
+            h1 = None
+            title = None
+
+            def get_text(self, separator="\n", strip=False):
+                return self._root.text_content()
+
         bs4_module = types.ModuleType("bs4")
         bs4_module.BeautifulSoup = BeautifulSoup
         sys.modules["bs4"] = bs4_module
@@ -1529,6 +1536,15 @@ def _install_scrapling_import_shims() -> None:
         curl_cffi_mock.requests = curl_cffi_requests_mock
         sys.modules["curl_cffi"] = curl_cffi_mock
         sys.modules["curl_cffi.requests"] = curl_cffi_requests_mock
+
+    # `crawl4ai` launches a real browser; every crawl is patched in these tests.
+    if "crawl4ai" not in sys.modules:
+        crawl4ai_module = types.ModuleType("crawl4ai")
+        crawl4ai_module.AsyncWebCrawler = MagicMock()
+        crawl4ai_module.BrowserConfig = MagicMock()
+        crawl4ai_module.CrawlerRunConfig = MagicMock()
+        crawl4ai_module.CacheMode = MagicMock()
+        sys.modules["crawl4ai"] = crawl4ai_module
 
 
 def _import_scrapling_module():
@@ -1845,3 +1861,49 @@ async def test_scrapling_discover_avoids_cycles():
 
         # Should complete without infinite loop
         assert len(urls) >= 3, f"Should discover at least 3 unique URLs. Got: {urls}"
+
+@pytest.mark.asyncio
+async def test_scrapling_fetch_rejects_meta_description_only_page():
+    """A render that yields only the meta description must fail, not "succeed".
+
+    This is the defect crawl4ai replaced: on a JS-only page the old engine
+    returned the 113-char meta description with `success=True`, so an empty
+    document landed in the knowledge base. The crawl4ai path must report the
+    short render as an error instead.
+    """
+    from fastapi.testclient import TestClient
+
+    scrapling_main = _import_scrapling_module()
+
+    # Same shape and length as the measured false success (113 chars).
+    meta_only = (
+        "Vercel is the platform for frontend developers, providing the speed and "
+        "reliability innovators need to build at the moment of inspiration."
+    )
+    assert len(meta_only) > 10, "old 10-char check would have passed this"
+    assert (
+        len(meta_only) < scrapling_main.MIN_CRAWL_CONTENT_CHARS
+    ), "fixture must be below the rendered-content floor"
+
+    outcome = scrapling_main.CrawlOutcome(
+        html=meta_only,
+        markdown=meta_only,
+        links=[],
+        status_code=200,
+        final_url="https://vercel.com/blog",
+        content_type="text/html",
+    )
+
+    client = TestClient(scrapling_main.app)
+    with patch.object(scrapling_main, "_crawl", new=AsyncMock(return_value=outcome)):
+        response = client.post(
+            "/fetch", json={"url": "https://vercel.com/blog", "timeout": 30}
+        )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["success"] is False, (
+        f"meta-description-only render must not be a success: {data}"
+    )
+    assert data["content"] == ""
+    assert data["error"], "a short render must surface an error"

@@ -21,12 +21,14 @@ Basjoo 是一个面向 AI 客服场景的平台，主要由三部分组成：
 - **SQLite**：应用数据持久化
 - **Redis**：限流、缓存相关能力
 - **Qdrant**：向量检索与文档索引（自研多租户 KB）
-- **Scrapling 微服务**：网页内容抓取（curl_cffi + readability-lxml）
+- **crawl4ai 抓取服务**：网页内容抓取（无头 Chromium 渲染，curl_cffi + readability-lxml 兜底）
 - **nginx**：Docker 部署下的反向代理
 
 ## 系统要求
 
 Basjoo 以 Docker 容器方式运行。LLM 推理始终走外部 API（OpenAI、DeepSeek、Anthropic、Gemini、Kimi、通义、混元、SiliconFlow 或任意 OpenAI 兼容接口）。Embedding 也可以走外部 API，但默认部署同时自带一个**本地嵌入容器**（`local-embed`，纯 CPU，常驻约 1.2 GB），因此全新安装无需任何第三方密钥就能拥有可用的知识库。两种方式都**无需 GPU**。
+
+抓取服务用无头 Chromium 渲染页面：实测首次抓取后常驻约 380 MB，8 个页面同时抓取时约 425 MB（浏览器进程全局共享，并发几乎不额外占内存）。镜像约 2.1 GB。下表中的 4 GB 内存下限已包含自带的嵌入容器。
 
 | | 最低配置 | 推荐配置 |
 |---|---|---|
@@ -63,7 +65,7 @@ sudo sh install-deploy.sh
 - `backend/` — FastAPI 应用、数据模型、聊天 API、认证、数据导入、索引、测试
 - `frontend-nextjs/` — 当前正在使用的管理后台 UI
 - `widget/` — 可嵌入聊天组件的构建产物来源
-- `scrapling-service/` — 独立的网页抓取微服务（curl_cffi + readability-lxml）
+- `scrapling-service/` — 独立的抓取微服务：crawl4ai 无头 Chromium，保留 curl_cffi + readability 兜底
 - `nginx/` — Docker nginx 配置
 - `docker-compose.yml` — 开发/生产风格环境编排入口
 
@@ -139,7 +141,7 @@ Widget 提供访客侧聊天入口，支持会话持久化、多语言文案、�
 - SQLAlchemy async + SQLite
 - Redis（限流、缓存）
 - Qdrant REST API（向量检索、文档摄入、混合检索）
-- Scrapling 微服务（curl_cffi + readability-lxml 网页内容提取）
+- crawl4ai 抓取服务（无头 Chromium 渲染，curl_cffi + readability-lxml 兜底）
 - APScheduler
 - OpenAI 兼容接口层（DeepSeek、Gemini（经 Google OpenAI 兼容端点）、Anthropic、xAI、OpenRouter 等）
 

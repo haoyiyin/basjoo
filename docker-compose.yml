@@ -107,9 +107,12 @@ services:
       dockerfile: Dockerfile
     container_name: basjoo-scrapling
     restart: unless-stopped
+    # Chromium needs far more than the default 64 MB /dev/shm.
+    shm_size: 512mb
     environment:
       # Same switch as the backend (see services/url_safety.py). Off by default.
       - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
+      - CRAWL4AI_NO_CLOUD_NOTICE=1
     networks:
       - basjoo-network
     healthcheck:
@@ -117,7 +120,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      # The first browser launch is slow; no mem_limit on purpose (a 1.5 GB cap
+      # made crawls fail silently).
+      start_period: 60s
     profiles: ["prod", "dev"]
 
   # ============================================
