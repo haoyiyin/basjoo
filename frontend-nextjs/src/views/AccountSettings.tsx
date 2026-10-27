@@ -8,9 +8,9 @@ import { API_BASE_URL } from '../lib/env';
 import { parseErrorResponse } from '../services/api';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
-const LANGUAGES: Array<{ code: 'zh-CN' | 'en-US'; labelKey: string }> = [
-  { code: 'zh-CN', labelKey: 'settings.account.languageZh' },
-  { code: 'en-US', labelKey: 'settings.account.languageEn' },
+const LANGUAGES: Array<{ code: 'zh-CN' | 'en-US'; short: string; labelKey: string }> = [
+  { code: 'zh-CN', short: 'ZH', labelKey: 'settings.account.languageZh' },
+  { code: 'en-US', short: 'EN', labelKey: 'settings.account.languageEn' },
 ];
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -122,9 +122,11 @@ export default function AccountSettings() {
                   className={active ? 'btn btn-primary' : 'btn btn-secondary'}
                   onClick={() => handleLanguageChange(lang.code)}
                   aria-pressed={active}
+                  aria-label={t(lang.labelKey)}
+                  title={t(lang.labelKey)}
                   style={{ flex: 1 }}
                 >
-                  {t(lang.labelKey)}
+                  {lang.short}
                 </button>
               );
             })}

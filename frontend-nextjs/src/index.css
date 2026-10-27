@@ -874,6 +874,24 @@ a.btn-danger:hover {
   box-shadow: inset 0 1px 2px var(--color-shadow-sm);
 }
 
+/* A filled icon control (send) keeps the accent fill: `.btn-icon` only supplies
+ * the 32px square geometry, not the transparent resting surface. */
+.btn.btn-primary.btn-icon {
+  color: var(--color-text-inverse);
+  background: var(--color-accent-primary);
+}
+
+.btn.btn-primary.btn-icon:hover:not(:disabled) {
+  color: var(--color-text-inverse);
+  background: var(--color-accent-secondary);
+  box-shadow: var(--highlight-inset), var(--shadow-md);
+}
+
+.btn.btn-primary.btn-icon:disabled {
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-tertiary);
+}
+
 /* =============================================================================
  * 8. App shell + page scaffold
  * ============================================================================= */
@@ -1074,6 +1092,31 @@ a.btn-danger:hover {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-6);
+}
+
+/* A stat that navigates: same box, but the whole card is the hit area. Hover
+ * only lifts the border and surface — the number stays put, because moving a
+ * figure under the pointer reads as a layout bug rather than feedback. */
+a.stat-link {
+  text-decoration: none;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+a.stat-link:hover {
+  background: var(--surface-bg-hover, var(--color-bg-secondary));
+  border-color: var(--color-border-strong, var(--color-border));
+  text-decoration: none;
+}
+
+/* A badge in a stat's value slot: the 2xl number type would stretch the pill
+ * past the card, so it takes the label scale instead. */
+.stat-value-badge {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  font-size: var(--text-sm);
 }
 
 /* =============================================================================
@@ -2107,29 +2150,169 @@ tbody tr:hover td {
   background: var(--app-bg);
 }
 
+/* Auth language switcher (R4): two abbreviations, top-right of the card. */
+.auth-lang-switcher {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.auth-lang-btn {
+  padding: 4px 12px;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.auth-lang-btn:hover:not([data-active="true"]) {
+  color: var(--fg-strong);
+  background: var(--surface-hover);
+}
+
+.auth-lang-btn[data-active="true"] {
+  font-weight: 600;
+  color: var(--color-text-inverse);
+  background: var(--color-accent-primary);
+  border-color: var(--color-accent-primary);
+}
+
+/* -----------------------------------------------------------------------------
+ * Playground (R2): one route, two tabs, one mounted pane.
+ * The header owns the tab strip; each panel owns its own scroll.
+ * -------------------------------------------------------------------------- */
 .playground-shell {
   display: flex;
+  flex-direction: column;
   width: 100%;
   min-width: 0;
+  min-height: 0;
   flex: 1;
   overflow: hidden;
 }
 
-.playground-pane-settings {
+.playground-header {
+  align-items: center;
   flex-shrink: 0;
-  width: 360px;
-  min-width: 320px;
-  overflow-y: auto;
-  background: var(--color-bg-panel);
-  border-right: 1px solid var(--color-border);
+}
+
+.playground-heading {
+  min-width: 0;
+}
+
+.playground-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-sunken-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  flex-shrink: 0;
+}
+
+.playground-tab {
+  min-height: 32px;
+  padding: 0 var(--space-4);
+  font-family: var(--font-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.playground-tab:hover {
+  color: var(--fg-strong);
+  background: var(--surface-hover);
+}
+
+.playground-tab[aria-selected="true"] {
+  color: var(--fg-strong);
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.playground-tab:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.playground-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .playground-pane-chat {
-  flex: 1;
+  overflow: hidden;
+}
+
+.playground-pane-settings {
+  overflow-y: auto;
+}
+
+/* The settings form reads as a column, not as a 40% side rail. */
+.playground-settings-column {
+  width: 100%;
+  max-width: 760px;
   min-width: 0;
+  margin: 0 auto;
+  padding-bottom: var(--space-6);
+}
+
+.playground-settings-header {
+  margin: 0;
+  padding: 0 0 var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.playground-status {
   display: flex;
-  flex-direction: column;
-  background: var(--app-bg);
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.playground-status[data-state="saved"] {
+  color: var(--color-success);
+}
+
+.playground-status[data-state="error"] {
+  color: var(--color-error);
+}
+
+.playground-status-spinner {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+.playground-warning {
+  margin: var(--space-4) var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 
 .url-panel,
@@ -2777,10 +2960,9 @@ tbody tr:hover td {
   }
 
   /* ------------------------------------------------------------------
-   * Playground (#15): one DOM, two panes, settings first. Desktop keeps the
-   * 40% / min-width 360px side-by-side shape (inline styles); at mobile width
-   * the shell turns into a single scrolling column with the settings pane
-   * stacked ABOVE the chat pane.
+   * Playground (R2): one route, two tabs, one mounted pane. At mobile width
+   * the shell is a single scrolling column and the tab strip spans the header
+   * width; there is no side-by-side settings rail any more.
    * ------------------------------------------------------------------ */
   .playground-shell {
     flex-direction: column;
@@ -2790,22 +2972,28 @@ tbody tr:hover td {
     min-height: calc(100vh - 60px);
   }
 
-  .playground-pane-settings {
-    width: auto !important;
-    min-width: 0 !important;
-    max-width: none !important;
-    flex: none !important;
-    height: auto !important;
-    overflow: visible !important;
-    border-right: none;
-    border-bottom: 1px solid var(--color-border);
+  .playground-header {
+    align-items: flex-start;
   }
 
+  .playground-tabs {
+    width: 100%;
+  }
+
+  .playground-tab {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .playground-pane-settings,
   .playground-pane-chat {
-    flex: 1 1 auto !important;
-    min-height: 60vh;
-    min-width: 0 !important;
-    overflow: visible !important;
+    flex: none;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .playground-settings-column {
+    max-width: none;
   }
 
   /* ------------------------------------------------------------------
@@ -3050,5 +3238,18 @@ tbody tr:hover td {
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
   color: var(--fg-strong);
+  overflow-wrap: anywhere;
+}
+
+/* An id plus its copy affordance: the id wraps, the button never does. */
+.identity-id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-id > .mono {
+  min-width: 0;
   overflow-wrap: anywhere;
 }

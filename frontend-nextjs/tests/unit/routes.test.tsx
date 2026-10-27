@@ -170,7 +170,7 @@ describe("route table", () => {
 	// REAL Home (the module mock is disabled for this import only) so the actual
 	// markup contract can be asserted: one page, one heading, no old dashboard.
 
-	it("/ renders exactly one heading and nothing from the old dashboard", async () => {
+	it("/ renders one heading plus the workspace overview", async () => {
 		// Bypass the module mock: this contract is about the REAL view markup.
 		const { default: HomeReal } =
 			await vi.importActual<{ default: ComponentType }>(
@@ -191,21 +191,24 @@ describe("route table", () => {
 		// the title is the `home.title` string and nothing is hard-coded.
 		expect(title.textContent).toBe("home.title");
 
-		// Nothing from the removed dashboard / agent panel survives here, and the
-		// only test id the page carries is its own root (no dashboard leftovers).
+		// Nothing from the removed dashboard / agent panel survives here.
 		expect(screen.queryByTestId("dashboard-page")).toBeNull();
 		expect(screen.queryByTestId("dashboard-stats")).toBeNull();
 		expect(screen.queryByTestId("dashboard-status")).toBeNull();
 		expect(screen.queryByTestId("agent-panel-page")).toBeNull();
-		expect(container.querySelectorAll("[data-testid]")).toHaveLength(1);
 		expect(screen.getByTestId("home-page")).toBeInTheDocument();
 
+		// The overview is a signpost: two linked figures plus API status, and it
+		// renders placeholders (never fabricated numbers) until the API answers.
+		const overview = screen.getByTestId("home-overview");
+		expect(overview.querySelectorAll("a")).toHaveLength(2);
+		expect(screen.getByTestId("home-api-status")).toBeInTheDocument();
+		expect(overview.querySelectorAll(".stat-value")).toHaveLength(3);
+
 		// The page root is the admin page surface (same contract as every other
-		// view, so the 375px suite can assert it), with no placeholder content.
+		// view, so the 375px suite can assert it).
 		expect(container.querySelector(".admin-page")).not.toBeNull();
 		expect(container.querySelector(".page-header")).not.toBeNull();
-		// Title-only page: no subtitle, no placeholder copy, no stats.
-		expect(container.textContent).toBe("home.title");
 	});
 
 	it("renders / as the Home marker and never the agent panel", () => {

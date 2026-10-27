@@ -8,6 +8,7 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { Icon } from "./Icon";
 
 /**
  * Row overflow menu.
@@ -201,22 +202,13 @@ export default function RowMenu({
 				className="btn btn-icon"
 				data-testid={triggerTestId}
 				aria-label={triggerLabel}
+				title={triggerLabel}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				style={triggerStyle}
 				onClick={() => onOpenChange(!open)}
 			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 16 16"
-					fill="currentColor"
-					aria-hidden="true"
-				>
-					<circle cx="8" cy="3" r="1.4" />
-					<circle cx="8" cy="8" r="1.4" />
-					<circle cx="8" cy="13" r="1.4" />
-				</svg>
+				<Icon name="more" size={16} />
 			</button>
 			{open &&
 				createPortal(

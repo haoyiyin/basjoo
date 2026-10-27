@@ -23,10 +23,13 @@ Failure policy — this runs inside the login and registration request paths:
   container must never turn into a failed login,
 * everything is written in a single session and committed once; any error rolls
   back and is logged,
-* the guards are "this workspace already has any agent" (soft-deleted included)
-  and "this workspace already has a KB named ``EXAMPLE_KB_NAME``", so a partial
-  failure is retried on the next login (self-healing) and a successful seed never
-  runs twice.
+* completion is recorded on ``workspaces.example_seed_state`` (``pending`` →
+  ``seeded``), never re-derived from "does an agent exist". While the state is
+  ``pending`` every login retries, which is what makes a failed embedding probe
+  self-healing; ``seeded`` and ``declined`` never retry,
+* the remaining guard is "this workspace already has a KB named
+  ``EXAMPLE_KB_NAME``", so the example can appear next to a user-created agent.
+  Deleting the example agent or its KB flips the state to ``declined``.
 """
 
 import asyncio
@@ -34,12 +37,12 @@ import logging
 import uuid
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import database
 from config import settings
-from models import Agent, KnowledgeBase, URLSource, normalize_url
+from models import Agent, KnowledgeBase, URLSource, Workspace, normalize_url
 from services.document_parser import DocumentParser
 from services.kb_service import KbService
 from services.qdrant_service import QdrantKbService
@@ -49,6 +52,11 @@ logger = logging.getLogger(__name__)
 EXAMPLE_AGENT_NAME = "Basjoo 助手"
 EXAMPLE_KB_NAME = "Basjoo 项目知识库"
 EXAMPLE_URL = "https://github.com/haoyiyin/basjoo"
+
+# ``workspaces.example_seed_state`` values.
+SEED_PENDING = "pending"
+SEED_SEEDED = "seeded"
+SEED_DECLINED = "declined"
 
 # One short string is enough to measure the vector width of the local provider.
 PROBE_TEXT = "basjoo-example-seed-probe"
@@ -77,24 +85,13 @@ EXAMPLE_SYSTEM_PROMPT = (
     "- 用与提问者相同的语言回答，简洁清楚。"
 )
 
-async def _workspace_has_agent(session: AsyncSession, workspace_id: int) -> bool:
-    """Idempotency guard: ANY agent row counts, soft-deleted ones included.
-
-    A deleted example agent means "the operator already had their one example and
-    removed it"; recreating it on the next login would be hostile, so `deleted_at`
-    is deliberately not filtered here.
-    """
-    agent_id = await session.scalar(
-        select(Agent.id).where(Agent.workspace_id == workspace_id).limit(1)
-    )
-    return agent_id is not None
-
 async def _workspace_has_example_kb(session: AsyncSession, workspace_id: int) -> bool:
-    """Second idempotency guard: one KB named ``EXAMPLE_KB_NAME`` per workspace.
+    """Idempotency guard: one KB named ``EXAMPLE_KB_NAME`` per workspace.
 
-    Covers the case where the KB commit succeeded but the agent write did not (or
-    an operator rebound/deleted the agent): the next login must not mint a second
-    example KB in the same workspace.
+    Deliberately NOT "has any agent": the example must be able to appear next to
+    an agent the user created themselves, which is the reported bug. Covers the
+    case where the KB commit succeeded but the agent write did not (or an
+    operator rebound/deleted the agent).
     """
     kb_id = await session.scalar(
         select(KnowledgeBase.id)
@@ -105,6 +102,25 @@ async def _workspace_has_example_kb(session: AsyncSession, workspace_id: int) ->
         .limit(1)
     )
     return kb_id is not None
+
+def _embeddings_url(base_url: Optional[str]) -> str:
+    """The exact endpoint ``DocumentParser.embed_texts`` will POST to."""
+    return (base_url or "https://api.openai.com/v1").rstrip("/") + "/embeddings"
+
+async def _set_seed_state(
+    session: AsyncSession, workspace_id: int, state: str
+) -> None:
+    """Record the seed state (no commit — the caller owns the transaction).
+
+    Written as an UPDATE, not an ORM attribute change: ``KbService`` closes the
+    caller's session when it exits its own block, so a ``Workspace`` instance
+    loaded before the KB write is detached and its mutation would be dropped.
+    """
+    await session.execute(
+        update(Workspace)
+        .where(Workspace.id == workspace_id)
+        .values(example_seed_state=state)
+    )
 
 async def _probe_local_dimension() -> Optional[int]:
     """Measure the local provider's vector width, or None when it is unreachable.
@@ -121,8 +137,11 @@ async def _probe_local_dimension() -> Optional[int]:
             timeout=3.0,
         )
     except Exception as exc:
+        embedded_url = _embeddings_url(settings.local_embedding_base_url)
         logger.warning(
-            "Local embedding provider unavailable (%s: %s); example seed skipped for now",
+            "Local embedding provider unavailable at %s (%s: %s); "
+            "example seed stays pending and retries on the next login",
+            embedded_url,
             type(exc).__name__,
             exc,
         )
@@ -136,8 +155,8 @@ async def _probe_local_dimension() -> Optional[int]:
 async def _discard_orphan_kb(kb_id: str) -> None:
     """Best-effort cleanup when the KB was committed but the agent was not.
 
-    The agent guard is still unsatisfied, so without this the retry would hit the
-    KB guard on a half-seeded KB with no agent and leave it orphaned for good.
+    The example-KB guard would otherwise be satisfied by a half-seeded KB with no
+    agent, and the state could be recorded as ``seeded`` on the retry.
     """
     try:
         async with database.AsyncSessionLocal() as session:
@@ -224,10 +243,9 @@ async def _queue_example_fetch(kb_id: str, url_id: int) -> None:
 async def ensure_example_agent(workspace_id: Optional[int]) -> None:
     """Create the example KB + agent + pending URL source for one workspace.
 
-    Idempotent (at most one example per workspace, and only ever when the
-    workspace has no agent at all) and exception-safe (it must never break the
-    request that calls it). The first fetch is queued as a detached task after the
-    commit, so login is never blocked on the network.
+    Idempotent (at most one example per workspace) and exception-safe (it must
+    never break the request that calls it). The first fetch is queued as a
+    detached task after the commit, so login is never blocked on the network.
     """
     if not workspace_id:
         return
@@ -235,19 +253,31 @@ async def ensure_example_agent(workspace_id: Optional[int]) -> None:
     created_kb_id: Optional[str] = None
     try:
         async with database.AsyncSessionLocal() as session:
-            if await _workspace_has_agent(session, workspace_id):
+            state = await session.scalar(
+                select(Workspace.example_seed_state).where(
+                    Workspace.id == workspace_id
+                )
+            )
+            if state is None:
+                return
+            if state != SEED_PENDING:
+                # `seeded` and `declined` are terminal: never re-derive the seed
+                # from "does this workspace own an agent".
                 return
 
             if await _workspace_has_example_kb(session, workspace_id):
                 logger.info(
-                    "Workspace %s already owns a %s; example seed skipped",
+                    "Workspace %s already owns a %s; example seed recorded as done",
                     workspace_id,
                     EXAMPLE_KB_NAME,
                 )
+                await _set_seed_state(session, workspace_id, SEED_SEEDED)
+                await session.commit()
                 return
 
             dimension = await _probe_local_dimension()
             if dimension is None:
+                # State stays `pending`: the next login retries.
                 return
 
             kb = await KbService(session=session).create_knowledge_base(
@@ -282,6 +312,7 @@ async def ensure_example_agent(workspace_id: Optional[int]) -> None:
                 status="pending",
             )
             session.add(url_source)
+            await _set_seed_state(session, workspace_id, SEED_SEEDED)
             await session.commit()
             url_id = url_source.id
 
@@ -308,3 +339,33 @@ async def ensure_example_agent(workspace_id: Optional[int]) -> None:
     # itself exception-safe.
     if created_kb_id and url_id is not None:
         await _queue_example_fetch(created_kb_id, url_id)
+
+# ---- delete hooks -----------------------------------------------------------
+# Deleting the example (agent or KB) is a decision by the operator, not a
+# transient failure: record `declined` so no later login re-seeds it. Both
+# helpers mutate the caller's session and never commit — the flag lands or rolls
+# back with the delete itself.
+
+async def is_example_agent(session: AsyncSession, agent: Agent) -> bool:
+    """True when *agent* is the built-in example, by name or by its bound KB.
+
+    The name catches an example whose KB was already unbound; the KB lookup
+    catches one the operator renamed.
+    """
+    if agent.name == EXAMPLE_AGENT_NAME:
+        return True
+    kb_id = getattr(agent, "kb_id", None)
+    if not kb_id:
+        return False
+    kb_name = await session.scalar(
+        select(KnowledgeBase.name).where(KnowledgeBase.id == kb_id)
+    )
+    return kb_name == EXAMPLE_KB_NAME
+
+async def mark_example_seed_declined(
+    session: AsyncSession, workspace_id: Optional[int]
+) -> None:
+    """Set ``example_seed_state='declined'`` for one workspace (no commit)."""
+    if not workspace_id:
+        return
+    await _set_seed_state(session, workspace_id, SEED_DECLINED)

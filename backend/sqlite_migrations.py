@@ -79,6 +79,10 @@ def run_sqlite_migrations(database_url: str) -> None:
         # ── agents: drop the retired agent_type / channel_mode columns ─────
         _drop_retired_agent_columns(cursor)
 
+        # ── workspaces: built-in example seed lifecycle ────────────────────
+        if _table_exists(cursor, "workspaces"):
+            _migrate_workspaces(cursor)
+
         # ── knowledge bases (workspace scope + KB-owned embedding config) ──
         _migrate_knowledge_bases(cursor)
 
@@ -322,6 +326,25 @@ def _table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
 
 
 # ---- agents migration -------------------------------------------------------
+
+def _migrate_workspaces(cursor: sqlite3.Cursor) -> None:
+    """Add the example-seed lifecycle column (``pending`` | ``seeded`` | ``declined``).
+
+    Existing installations get ``pending``, so the seed retries on the next login
+    instead of being permanently suppressed by the old "has any agent" guard.
+    """
+    added = _ensure_columns(
+        cursor,
+        "workspaces",
+        [("example_seed_state", "VARCHAR(20) NOT NULL DEFAULT 'pending'")],
+    )
+    cursor.execute(
+        "UPDATE workspaces SET example_seed_state = 'pending' "
+        "WHERE example_seed_state IS NULL OR example_seed_state = ''"
+    )
+    if added or cursor.rowcount:
+        print(f"✓ Added workspaces.example_seed_state ({added} column, {cursor.rowcount} backfilled)")
+
 
 
 def _migrate_agents(cursor: sqlite3.Cursor):

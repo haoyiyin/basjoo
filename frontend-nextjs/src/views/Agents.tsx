@@ -5,6 +5,7 @@ import { Link, useNavigate } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
 import RowMenu, { isRowControl } from "../components/RowMenu";
+import { Icon } from "../components/Icon";
 import type { KbFormValues } from "../components/KbFormModal";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -438,21 +439,11 @@ export default function Agents() {
 							className="btn btn-icon"
 							data-testid="agent-create-open"
 							aria-label={t("agents.createTitle")}
+							title={t("agents.createTitle")}
 							style={iconButtonStyle}
 							onClick={openCreateSheet}
 						>
-							<svg
-								width="16"
-								height="16"
-								viewBox="0 0 16 16"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="1.75"
-								strokeLinecap="round"
-								aria-hidden="true"
-							>
-								<path d="M8 3v10M3 8h10" />
-							</svg>
+							<Icon name="plus" size={16} />
 						</button>
 					</div>
 				</header>
@@ -688,21 +679,11 @@ export default function Agents() {
 								type="button"
 								className="btn btn-icon"
 								aria-label={t("knowledgeBases.actions.close")}
+								title={t("knowledgeBases.actions.close")}
 								style={iconButtonStyle}
 								onClick={closeCreateSheet}
 							>
-								<svg
-									width="16"
-									height="16"
-									viewBox="0 0 16 16"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="1.75"
-									strokeLinecap="round"
-									aria-hidden="true"
-								>
-									<path d="M4 4l8 8M12 4l-8 8" />
-								</svg>
+								<Icon name="close" size={16} />
 							</button>
 						</div>
 						<div className="sheet-body">
@@ -976,14 +957,16 @@ export default function Agents() {
 									>
 										<button
 											type="button"
-											className="btn-secondary"
+											className="btn btn-secondary btn-icon"
+											aria-label={t("buttons.back")}
+											title={t("buttons.back")}
 											disabled={chooserBusy}
 											onClick={() => {
 												setChooserError(null);
 												setChooserView("choose");
 											}}
 										>
-											{t("buttons.back")}
+											<Icon name="back" size={16} />
 										</button>
 										<button
 											type="button"

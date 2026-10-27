@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { KeyboardEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api'
 import type { Agent as ApiAgent, ChatRequest, Source, StreamDoneMeta, UsageInfo } from '../services/api';
 import AdminLayout from '../components/AdminLayout';
@@ -16,16 +17,26 @@ interface ChatParamOverrides {
   max_tokens: number;
 }
 
+type PlaygroundTab = 'settings' | 'chat';
+
+/* Tab order is DOM order (设置 before 测试); the default tab is 测试 because
+ * testing is the frequent action. */
+const TAB_ORDER: PlaygroundTab[] = ['settings', 'chat'];
+
 export default function Playground() {
   const { t, i18n } = useTranslation('common');
   const { agentId: routeAgentId } = useParams<{ agentId?: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: PlaygroundTab =
+    searchParams.get('tab') === 'settings' ? 'settings' : 'chat';
+  const settingsTabRef = useRef<HTMLButtonElement>(null);
+  const chatTabRef = useRef<HTMLButtonElement>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [agent, setAgent] = useState<ChatPanelAgent | null>(null);
   const [messages, setMessages] = useState<ChatPanelMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
-  const [showSaved, setShowSaved] = useState(false);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   // null = agent not loaded yet. `false` means the backend reports no LLM key,
   // which blocks the SSE stream and the send control (issue #19).
@@ -346,18 +357,15 @@ export default function Playground() {
     }
 
     setSaveStatus('saved');
-    setShowSaved(true);
     if (savedTimerRef.current) {
       clearTimeout(savedTimerRef.current);
     }
     savedTimerRef.current = setTimeout(() => {
-      setShowSaved(false);
       setSaveStatus('idle');
     }, 2000);
   }, []);
 
   const handleSettingsSaveError = useCallback(() => {
-    setShowSaved(false);
     setSaveStatus('error');
     if (savedTimerRef.current) {
       clearTimeout(savedTimerRef.current);
@@ -374,6 +382,30 @@ export default function Playground() {
     }
   }, []);
 
+  const selectTab = useCallback((next: PlaygroundTab) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleTabKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const index = TAB_ORDER.indexOf(tab);
+    let next: PlaygroundTab | null = null;
+    if (event.key === 'ArrowRight') {
+      next = TAB_ORDER[(index + 1) % TAB_ORDER.length];
+    } else if (event.key === 'ArrowLeft') {
+      next = TAB_ORDER[(index - 1 + TAB_ORDER.length) % TAB_ORDER.length];
+    } else if (event.key === 'Home') {
+      next = TAB_ORDER[0];
+    } else if (event.key === 'End') {
+      next = TAB_ORDER[TAB_ORDER.length - 1];
+    }
+    if (!next) return;
+    event.preventDefault();
+    selectTab(next);
+    (next === 'settings' ? settingsTabRef : chatTabRef).current?.focus();
+  }, [tab, selectTab]);
+
   useEffect(() => {
     return () => {
       streamAbortControllerRef.current?.abort();
@@ -386,163 +418,109 @@ export default function Playground() {
   }, []);
 
   /*
-   * One markup for every viewport. The desktop shape (settings column at 40% /
-   * min-width 360px next to the chat column) is inline; at <=768px the
-   * `.playground-shell` rule in index.css turns this same tree into a single
-   * scrolling column with the settings pane stacked above the chat pane, so
-   * the DOM order below is the mobile visual order.
-   *
-   * Restyle (§20): the shell keeps its inline desktop geometry verbatim
-   * (mobileLayout.test.tsx asserts 40% / 360px / 480px), while the chrome
-   * inside it is built from the design-system primitives — card headers,
-   * field/input groups, token-only colours (no literal hex).
+   * One route, two tabs, one pane mounted at a time (spec R2). The tab lives in
+   * `?tab=settings|chat` so a reload or a shared link keeps the last view; the
+   * chat tab is the default because testing is the frequent action.
    */
   return (
     <AdminLayout>
-      <div
-        data-testid="playground-shell"
-        className="admin-page playground-shell"
-        style={{
-          height: '100vh',
-          display: 'flex',
-          overflow: 'hidden',
-          padding: 0,
-          maxWidth: 'none',
-        }}
-      >
-        <div
-          data-testid="playground-pane-settings"
-          className="playground-pane-settings"
-          style={{
-            width: '40%',
-            minWidth: '360px',
-            maxWidth: '480px',
-            borderRight: '1px solid var(--color-border)',
-            background: 'var(--color-bg-panel)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <header
-            className="card-header"
-            style={{
-              margin: 0,
-              padding: 'var(--space-4)',
-              borderBottom: '1px solid var(--color-border)',
-              flexShrink: 0,
-              gap: 'var(--space-3)',
-              minWidth: 0,
-            }}
-          >
-            <h2 className="card-title" style={{ minWidth: 0 }}>
-              {t('navigation.aiSettings')}
-            </h2>
-            {/* 保存状态指示器 */}
-            <div
-              role="status"
-              aria-live="polite"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-2)',
-                fontSize: 'var(--text-sm)',
-                flexShrink: 0,
-                color:
-                  saveStatus === 'saved'
-                    ? 'var(--color-success)'
-                    : saveStatus === 'error'
-                      ? 'var(--color-error)'
-                      : 'var(--color-text-tertiary)',
-              }}
-            >
-              {saveStatus === 'saving' && (
-                <>
-                  <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} />
-                  <span>{t('status.saving')}</span>
-                </>
-              )}
-              {saveStatus === 'saved' && (
-                <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <span>{t('status.saved')}</span>
-                </>
-              )}
-              {saveStatus === 'error' && (
-                <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="15" y1="9" x2="9" y2="15" />
-                    <line x1="9" y1="9" x2="15" y2="15" />
-                  </svg>
-                  <span>{t('status.error')}</span>
-                </>
-              )}
-            </div>
-          </header>
-          <div style={{ flex: 1, overflow: 'auto', minWidth: 0 }}>
-            <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
+      <div data-testid="playground-shell" className="admin-page playground-shell">
+        <header className="page-header playground-header">
+          <div className="playground-heading">
+            <h1 className="page-title">{t('navigation.playground')}</h1>
+            <p className="page-subtitle">{t('playground.testAiEffect')}</p>
           </div>
-        </div>
-
-        <div
-          data-testid="playground-pane-chat"
-          className="playground-pane-chat"
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            minWidth: 0,
-          }}
-        >
-          <header
-            className="card-header"
-            style={{
-              margin: 0,
-              padding: 'var(--space-4)',
-              borderBottom: '1px solid var(--color-border)',
-              background: 'var(--surface-bg)',
-              flexShrink: 0,
-              minWidth: 0,
-            }}
+          <div
+            className="playground-tabs"
+            role="tablist"
+            aria-label={t('navigation.playground')}
+            onKeyDown={handleTabKeyDown}
           >
-            <div style={{ minWidth: 0 }}>
-              <h2 className="card-title">{t('playground.preview')}</h2>
-              <p className="page-subtitle">{t('playground.testAiEffect')}</p>
-            </div>
-          </header>
-          {apiKeySet === false && (
-            <div
-              role="alert"
-              style={{
-                margin: 'var(--space-4) var(--space-4) 0',
-                padding: 'var(--space-3) var(--space-4)',
-                background: 'var(--color-warning-bg)',
-                border: '1px solid var(--color-warning)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--color-warning)',
-                fontSize: 'var(--text-sm)',
-                lineHeight: 'var(--leading-normal)',
-              }}
+            <button
+              ref={settingsTabRef}
+              type="button"
+              role="tab"
+              id="playground-tab-settings"
+              className="playground-tab"
+              aria-selected={tab === 'settings'}
+              aria-controls="playground-panel-settings"
+              tabIndex={tab === 'settings' ? 0 : -1}
+              onClick={() => selectTab('settings')}
             >
-              {t('labels.pleaseConfigureApiKey')}
+              {t('playground.tabSettings')}
+            </button>
+            <button
+              ref={chatTabRef}
+              type="button"
+              role="tab"
+              id="playground-tab-chat"
+              className="playground-tab"
+              aria-selected={tab === 'chat'}
+              aria-controls="playground-panel-chat"
+              tabIndex={tab === 'chat' ? 0 : -1}
+              onClick={() => selectTab('chat')}
+            >
+              {t('playground.tabChat')}
+            </button>
+          </div>
+        </header>
+
+        {tab === 'chat' ? (
+          <section
+            data-testid="playground-pane-chat"
+            id="playground-panel-chat"
+            className="playground-panel playground-pane-chat"
+            role="tabpanel"
+            aria-labelledby="playground-tab-chat"
+          >
+            {apiKeySet === false && (
+              <div role="alert" className="playground-warning">
+                {t('labels.pleaseConfigureApiKey')}
+              </div>
+            )}
+            <ChatPanel
+              messages={messages}
+              input={input}
+              isLoading={isLoading}
+              isSettingsSaving={isSettingsSaving}
+              agent={agent}
+              sendDisabled={apiKeySet !== true}
+              onInputChange={handleInputChange}
+              onSendMessage={handleSendMessage}
+              onClearChat={handleClearChat}
+            />
+          </section>
+        ) : (
+          <section
+            data-testid="playground-pane-settings"
+            id="playground-panel-settings"
+            className="playground-panel playground-pane-settings"
+            role="tabpanel"
+            aria-labelledby="playground-tab-settings"
+          >
+            <div className="playground-settings-column">
+              <div className="card-header playground-settings-header">
+                <h2 className="card-title">{t('navigation.aiSettings')}</h2>
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="playground-status"
+                  data-state={saveStatus}
+                >
+                  {saveStatus === 'saving' && (
+                    <>
+                      <div className="spinner playground-status-spinner" />
+                      <span>{t('status.saving')}</span>
+                    </>
+                  )}
+                  {saveStatus === 'saved' && <span>{t('status.saved')}</span>}
+                  {saveStatus === 'error' && <span>{t('status.error')}</span>}
+                </div>
+              </div>
+              <AISettingsForm agentId={agentId || undefined} compact onSave={handleSettingsSave} onSaveError={handleSettingsSaveError} onChatParamsChange={setChatParams} onSaveBusyChange={handleSaveBusyChange} />
             </div>
-          )}
-          <ChatPanel
-            messages={messages}
-            input={input}
-            isLoading={isLoading}
-            isSettingsSaving={isSettingsSaving}
-            agent={agent}
-            sendDisabled={apiKeySet !== true}
-            onInputChange={handleInputChange}
-            onSendMessage={handleSendMessage}
-            onClearChat={handleClearChat}
-          />
-        </div>
+          </section>
+        )}
       </div>
     </AdminLayout>
   );

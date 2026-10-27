@@ -6,6 +6,7 @@ import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
 import type { Agent, URLSource } from '../services/api';
 import HelpTooltip from '../components/HelpTooltip';
+import { Icon } from '../components/Icon';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
 interface KbIndexState {
@@ -490,6 +491,7 @@ export default function URLManagement() {
           type="button"
           className="btn btn-icon"
           aria-label={`${t('knowledgeBases.columns.actions')} ${url.url}`}
+          title={`${t('knowledgeBases.columns.actions')} ${url.url}`}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
           disabled={busy}
@@ -500,17 +502,7 @@ export default function URLManagement() {
           {busy ? (
             <div className="spinner" style={{ width: '14px', height: '14px' }} />
           ) : (
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <circle cx="8" cy="3" r="1.4" />
-              <circle cx="8" cy="8" r="1.4" />
-              <circle cx="8" cy="13" r="1.4" />
-            </svg>
+            <Icon name="more" size={16} />
           )}
         </button>
         {menuOpen && (
@@ -790,18 +782,17 @@ export default function URLManagement() {
             </button>
             <button
               type="button"
-              className="btn btn-ghost"
+              className="btn btn-icon"
+              aria-label={t('labels.urlManagement.refetchAll')}
+              title={t('labels.urlManagement.refetchAll')}
               onClick={handleRefetch}
               disabled={refetching}
               style={{ marginLeft: 'auto' }}
             >
               {refetching ? (
-                <>
-                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                  {t('labels.urlManagement.refetching')}
-                </>
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
               ) : (
-                t('labels.urlManagement.refetchAll')
+                <Icon name="refresh" size={16} />
               )}
             </button>
           </div>

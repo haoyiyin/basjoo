@@ -1150,3 +1150,40 @@ def test_migration_completes_a_half_migrated_url_sources_table():
         }
     finally:
         os.unlink(db_path)
+
+# ---- workspaces.example_seed_state (round 4, R1) ----------------------------
+
+OLD_WORKSPACES_DDL = """
+CREATE TABLE workspaces (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT 'Default Workspace',
+    owner_email TEXT UNIQUE NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+def test_migration_defaults_example_seed_state_to_pending():
+    """An existing install must be retried, not permanently suppressed."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.executescript(OLD_WORKSPACES_DDL)
+        conn.execute(
+            "INSERT INTO workspaces (name, owner_email) VALUES ('W', 'w@example.com')"
+        )
+        conn.commit()
+        conn.close()
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+        run_sqlite_migrations(f"sqlite:///{db_path}")  # idempotent
+
+        conn = sqlite3.connect(db_path)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(workspaces)")}
+        rows = conn.execute("SELECT example_seed_state FROM workspaces").fetchall()
+        conn.close()
+
+        assert "example_seed_state" in columns
+        assert rows == [("pending",)], rows
+    finally:
+        os.unlink(db_path)

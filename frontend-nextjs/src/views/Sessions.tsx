@@ -6,6 +6,7 @@ import { useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
 import HelpTooltip from '../components/HelpTooltip'
+import { Icon } from '../components/Icon'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useIsMobile } from '../hooks/useMediaQuery'
 import { WS_BASE_URL } from '../lib/env'
@@ -479,20 +480,11 @@ export default function Sessions() {
                         type="button"
                         className="btn btn-icon"
                         aria-label={t('buttons.back')}
+                        title={t('buttons.back')}
                         style={iconButtonStyle}
                         onClick={() => setSelectedSession(null)}
                       >
-                        <svg
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          aria-hidden="true"
-                        >
-                          <path d="M19 12H5M12 19l-7-7 7-7" />
-                        </svg>
+                        <Icon name="back" size={20} />
                       </button>
                     )}
                     <div style={{ minWidth: 0 }}>
@@ -568,21 +560,11 @@ export default function Sessions() {
                         type="button"
                         className="btn btn-icon"
                         aria-label={t('knowledgeBases.actions.close')}
+                        title={t('knowledgeBases.actions.close')}
                         style={iconButtonStyle}
                         onClick={() => setSelectedSession(null)}
                       >
-                        <svg
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          aria-hidden="true"
-                        >
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
+                        <Icon name="close" size={20} />
                       </button>
                     )}
                   </div>

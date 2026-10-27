@@ -52,6 +52,12 @@ class Workspace(Base):
     owner_email = Column(String(255), unique=True, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Built-in example content lifecycle: pending | seeded | declined
+    # (see services/example_seed.py). Not derived from "does an agent exist".
+    example_seed_state = Column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
+
     # 关系
     agents = relationship(
         "Agent", back_populates="workspace", cascade="all, delete-orphan"

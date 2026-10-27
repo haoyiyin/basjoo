@@ -7,7 +7,11 @@
     "system": "System"
   },
   "home": {
-    "title": "Home"
+    "title": "Home",
+    "overview": "Workspace overview",
+    "agentsCount": "Agents",
+    "knowledgeCount": "Knowledge bases",
+    "apiStatus": "API"
   },
   "buttons": {
     "login": "Login",
@@ -612,6 +616,8 @@
   },
   "playground": {
     "testAiEffect": "Test your AI Agent conversation",
+    "tabSettings": "Settings",
+    "tabChat": "Test",
     "preview": "Preview",
     "confirmRebuild": "Are you sure you want to rebuild the index? This may take some time.",
     "rebuildStarted": "Index rebuild started",

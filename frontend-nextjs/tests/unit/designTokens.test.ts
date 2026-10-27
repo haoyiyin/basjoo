@@ -1113,20 +1113,14 @@ describe("design tokens: the mobile layout contract (spec §12 d)", () => {
     }
   });
 
-  it("stacks the playground at mobile width and never in the desktop block", () => {
+  it("stacks the playground tabs at mobile width and never in the desktop block", () => {
     const shell = mobileDecl(".playground-shell", "flex-direction");
     expect(shell).toContain("column");
     expect(mobileDecl(".playground-shell", "overflow-x")).toContain("hidden");
 
-    const settings = mobile.map((rule) =>
-      rule.selectors.includes(".playground-pane-settings")
-        ? rule.declarations.replace(/\s+/g, " ")
-        : "",
-    );
-    const settingsText = settings.join(" ");
-    expect(settingsText).toMatch(/min-width:\s*0\s*!important/);
-    expect(settingsText).toMatch(/width:\s*auto\s*!important/);
-    expect(settingsText).toMatch(/border-right:\s*none/);
+    // The tab strip spans the header at 375px and each tab is a 44px target.
+    expect(mobileDecl(".playground-tabs", "width")).toContain("100%");
+    expect(mobileDecl(".playground-tab", "min-height")).toContain("44px");
 
     const desktopAt = CSS.indexOf(DESKTOP_PRELUDE);
     expect(desktopAt, `${DESKTOP_PRELUDE} must exist`).toBeGreaterThan(0);

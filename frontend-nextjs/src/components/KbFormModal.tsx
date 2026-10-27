@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../services/api";
 import type { EmbeddingProvider, KnowledgeBaseDetail } from "../services/api";
+import { Icon } from "./Icon";
 
 /** Default embedding model for each provider, used to prefill the form. */
 export const PROVIDER_DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
@@ -232,20 +233,10 @@ export default function KbFormModal({
 						type="button"
 						className="btn btn-icon"
 						aria-label={t("knowledgeBases.actions.close")}
+						title={t("knowledgeBases.actions.close")}
 						onClick={onClose}
 					>
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 16 16"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="1.75"
-							strokeLinecap="round"
-							aria-hidden="true"
-						>
-							<path d="M4 4l8 8M12 4l-8 8" />
-						</svg>
+						<Icon name="close" size={16} />
 					</button>
 				</div>
 

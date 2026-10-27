@@ -302,6 +302,17 @@ class KbService:
             if upload_dir.exists():
                 shutil.rmtree(upload_dir, ignore_errors=True)
 
+            # Deleting the built-in example KB is a decision: record `declined` in
+            # the same transaction (and before the row is gone) so a later login
+            # does not mint it again. The KB owns its seed state, not the agent.
+            from services.example_seed import (
+                EXAMPLE_KB_NAME,
+                mark_example_seed_declined,
+            )
+
+            if kb.name == EXAMPLE_KB_NAME:
+                await mark_example_seed_declined(session, workspace_id)
+
             await session.delete(kb)
             await session.commit()
 

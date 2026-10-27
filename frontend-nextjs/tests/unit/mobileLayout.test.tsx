@@ -15,9 +15,8 @@
  *          OR the element matches a selector from the mobile media block
  *             whose declaration sets `min-height` >= 44px.
  *     (Plain prose links are excluded — see `isTapTarget`.)
- *  4. The Playground renders ONE markup: settings pane before the chat pane in
- *     DOM order inside `.playground-shell`, which the media block turns into a
- *     column.
+ *  4. The Playground renders one route with two tabs (R2): only the selected
+ *     pane is mounted, and the mobile block makes the tab strip full width.
  *  5. The hamburger is inside `.mobile-header`, >= 44px, and opens the drawer.
  *
  * The CSS assertions read the real file with `fs` so the contract cannot rot
@@ -438,7 +437,7 @@ function assertPageRootContract(view: HTMLElement, testId: string) {
 /* --------------------------------------------------- CSS contract probes */
 
 describe("mobile CSS contract (src/index.css)", () => {
-	it("declares the playground stacking rules inside the mobile media block", () => {
+	it("declares the playground tab rules inside the mobile media block", () => {
 		const shell = rulesFor(".playground-shell");
 		expect(shell.length).toBeGreaterThan(0);
 		expect(
@@ -448,12 +447,17 @@ describe("mobile CSS contract (src/index.css)", () => {
 			shell.some((rule) => /overflow-x:\s*hidden/.test(rule.declarations)),
 		).toBe(true);
 
-		const settings = rulesFor(".playground-pane-settings");
-		expect(settings.length).toBeGreaterThan(0);
-		const settingsDecls = settings.map((rule) => rule.declarations).join(" ");
-		expect(settingsDecls).toMatch(/min-width:\s*0\s*!important/);
-		expect(settingsDecls).toMatch(/width:\s*auto\s*!important/);
-		expect(settingsDecls).toMatch(/border-right:\s*none/);
+		const tabs = rulesFor(".playground-tabs");
+		expect(tabs.length).toBeGreaterThan(0);
+		expect(tabs.map((rule) => rule.declarations).join(" ")).toMatch(
+			/width:\s*100%/,
+		);
+
+		const tab = rulesFor(".playground-tab");
+		expect(tab.length).toBeGreaterThan(0);
+		expect(tab.map((rule) => rule.declarations).join(" ")).toMatch(
+			/min-height:\s*44px/,
+		);
 	});
 
 	it("keeps the stacked rules out of the desktop media block", () => {
@@ -673,10 +677,10 @@ describe("375px width: no horizontal overflow", () => {
 	});
 });
 
-/* ------------------------------------------------------ playground stacking */
+/* ------------------------------------------------------ playground tabs */
 
-describe("Playground stacks settings above chat at mobile width", () => {
-	it("renders one markup with the settings pane before the chat pane", async () => {
+describe("Playground tabs at mobile width", () => {
+	it("mounts only the chat pane by default", async () => {
 		renderAt375(
 			<MemoryRouter initialEntries={["/agents/agt_1/playground"]}>
 				<Routes>
@@ -689,24 +693,32 @@ describe("Playground stacks settings above chat at mobile width", () => {
 		expect(shell).toHaveClass("playground-shell");
 		expect(shell).toHaveClass("admin-page");
 
-		const settingsPane = screen.getByTestId("playground-pane-settings");
 		const chatPane = screen.getByTestId("playground-pane-chat");
-		expect(settingsPane).toHaveClass("playground-pane-settings");
 		expect(chatPane).toHaveClass("playground-pane-chat");
-
-		// DOM order == visual order once the shell is a column.
-		const relation = settingsPane.compareDocumentPosition(chatPane);
-		expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(relation & Node.DOCUMENT_POSITION_PRECEDING).toBeFalsy();
-
-		// Both panes are direct children of the shell, so `flex-direction: column`
-		// actually stacks them.
-		expect(settingsPane.parentElement).toBe(shell);
 		expect(chatPane.parentElement).toBe(shell);
-
-		// The chat pane is still fully rendered (not a single-pane tab branch).
 		expect(screen.getByTestId("chat-message-input")).toBeInTheDocument();
+		expect(screen.queryByTestId("ai-settings-form")).not.toBeInTheDocument();
+
+		// The tab strip is the single page-level control and is keyboard driven.
+		expect(screen.getByRole("tablist")).toBeInTheDocument();
+		expect(screen.getByRole("tab", { selected: true })).toHaveTextContent(
+			"playground.tabChat",
+		);
+	});
+
+	it("mounts the settings pane when ?tab=settings is on the URL", async () => {
+		renderAt375(
+			<MemoryRouter initialEntries={["/agents/agt_1/playground?tab=settings"]}>
+				<Routes>
+					<Route path="/agents/:agentId/playground" element={<Playground />} />
+				</Routes>
+			</MemoryRouter>,
+		);
+
+		const settingsPane = await screen.findByTestId("playground-pane-settings");
+		expect(settingsPane).toHaveClass("playground-pane-settings");
 		expect(screen.getByTestId("ai-settings-form")).toBeInTheDocument();
+		expect(screen.queryByTestId("chat-message-input")).not.toBeInTheDocument();
 	});
 
 	it("keeps the no-API-key banner and the disabled send control", async () => {
@@ -730,9 +742,9 @@ describe("Playground stacks settings above chat at mobile width", () => {
 		).toBeDisabled();
 	});
 
-	it("keeps the desktop shape inline (40% / min-width 360px) for >= 1025px", async () => {
+	it("caps the settings column in CSS instead of an inline side-rail width", async () => {
 		renderAt375(
-			<MemoryRouter initialEntries={["/agents/agt_1/playground"]}>
+			<MemoryRouter initialEntries={["/agents/agt_1/playground?tab=settings"]}>
 				<Routes>
 					<Route path="/agents/:agentId/playground" element={<Playground />} />
 				</Routes>
@@ -740,10 +752,11 @@ describe("Playground stacks settings above chat at mobile width", () => {
 		);
 
 		const settingsPane = await screen.findByTestId("playground-pane-settings");
-		// Desktop layout is unchanged; CSS overrides it with !important at <=768px.
-		expect(settingsPane.style.width).toBe("40%");
-		expect(settingsPane.style.minWidth).toBe("360px");
-		expect(settingsPane.style.maxWidth).toBe("480px");
+		expect(settingsPane.style.width).toBe("");
+		expect(settingsPane.style.minWidth).toBe("");
+
+		// The readable column max-width lives in index.css, not in the markup.
+		expect(CSS).toMatch(/\.playground-settings-column\s*\{[^}]*max-width:\s*760px/);
 	});
 });
 

@@ -4,8 +4,12 @@ Hermetic on purpose: no TEI container, no Qdrant, no Redis. The embedding probe 
 the Qdrant collection call are monkeypatched, so what is under test is the seed's own
 contract:
 
-* exactly one example agent per workspace, ever (idempotency — agents AND a KB
-  named ``EXAMPLE_KB_NAME`` are both guards),
+* exactly one example agent per workspace, ever — but the guard is the example KB
+  (`EXAMPLE_KB_NAME`), not "any agent", so the example can appear beside an agent
+  the user created themselves;
+* completion is recorded on `workspaces.example_seed_state`: `pending` retries on
+  every login (a failed probe keeps it pending), `seeded`/`declined` never retry,
+  and removing the example agent or its KB marks `declined`;
 * the agent is bound to a `local`-provider KB whose dimension is the MEASURED width,
 * one pending URLSource with the project home page, written with `kb_id=` and a
   fetch QUEUED through `asyncio.create_task` using the frozen keyword-only
@@ -210,6 +214,40 @@ async def _counts(workspace_id: int) -> dict[str, int]:
         urls = await session.scalar(select(func.count(URLSource.id)))
     return {"agents": agents or 0, "kbs": kbs or 0, "url_sources": urls or 0}
 
+async def _seed_state(workspace_id: int) -> str:
+    async with database.AsyncSessionLocal() as session:
+        workspace = await session.get(Workspace, workspace_id)
+        return workspace.example_seed_state
+
+async def _insert_kb(workspace_id: int, name: str) -> str:
+    """Insert a KB row directly (no Qdrant round-trip) for delete-path tests."""
+    kb_id = str(uuid.uuid4())
+    async with database.AsyncSessionLocal() as session:
+        session.add(
+            KnowledgeBase(
+                id=kb_id,
+                workspace_id=workspace_id,
+                name=name,
+                embedding_provider="local",
+                embedding_model="test-embedding-model",
+                embedding_base_url="http://local-embed:80/v1",
+                embedding_api_key=None,
+                embedding_batch_size=4,
+                embedding_dimension=MEASURED_DIMENSION,
+                qdrant_collection=f"kb_{kb_id.replace('-', '')[:12]}",
+                chunk_size=512,
+                chunk_overlap=64,
+                status="active",
+            )
+        )
+        await session.commit()
+    return kb_id
+
+async def _workspace_id_of(agent_id: str) -> int:
+    async with database.AsyncSessionLocal() as session:
+        agent = await session.get(Agent, agent_id)
+        return agent.workspace_id
+
 @pytest.mark.asyncio
 async def test_seed_creates_one_example_agent_bound_to_a_local_kb(
     clean_workspace, monkeypatch, queued_fetches
@@ -319,16 +357,34 @@ async def test_ensure_example_agent_is_idempotent(clean_workspace, monkeypatch):
     counts = await _counts(clean_workspace)
     assert counts == {"agents": 1, "kbs": 1, "url_sources": 1}, counts
 
-    # The second call short-circuits on the agent guard — it does not even probe.
+    # The second call short-circuits on the recorded state — it does not even probe.
+    assert await _seed_state(clean_workspace) == "seeded"
     assert len(probe_calls) == 1, probe_calls
 
 @pytest.mark.asyncio
-async def test_seed_respects_a_soft_deleted_agent(clean_workspace, monkeypatch):
-    """A removed example must not come back on the next login."""
+async def test_seed_appears_next_to_a_user_created_agent(
+    clean_workspace, monkeypatch
+):
+    """R1 gate 2: an existing agent must not suppress the example.
+
+    The reported case: registration probe failed, the user created agent `Gh`,
+    and the example could then never appear. A soft-deleted user agent counts too:
+    the guard is the example KB, nothing else.
+    """
     patch_local_embeddings(monkeypatch)
     patch_qdrant(monkeypatch)
 
     async with database.AsyncSessionLocal() as session:
+        session.add(
+            Agent(
+                workspace_id=clean_workspace,
+                name="Gh",
+                system_prompt="user-created agent",
+                model="",
+                api_key="",
+                api_base="",
+            )
+        )
         session.add(
             Agent(
                 workspace_id=clean_workspace,
@@ -346,7 +402,42 @@ async def test_seed_respects_a_soft_deleted_agent(clean_workspace, monkeypatch):
     await ensure_example_agent(clean_workspace)
 
     counts = await _counts(clean_workspace)
-    assert counts == {"agents": 1, "kbs": 0, "url_sources": 0}, counts
+    assert counts == {"agents": 3, "kbs": 1, "url_sources": 1}, counts
+    assert await _seed_state(clean_workspace) == "seeded"
+
+@pytest.mark.asyncio
+async def test_declined_workspace_never_seeds(clean_workspace, monkeypatch):
+    """The operator removed the example: no probe, no rows, ever."""
+    probe_calls = patch_local_embeddings(monkeypatch)
+    patch_qdrant(monkeypatch)
+
+    async with database.AsyncSessionLocal() as session:
+        workspace = await session.get(Workspace, clean_workspace)
+        workspace.example_seed_state = "declined"
+        await session.commit()
+
+    await ensure_example_agent(clean_workspace)
+
+    counts = await _counts(clean_workspace)
+    assert counts == {"agents": 0, "kbs": 0, "url_sources": 0}, counts
+    assert probe_calls == [], "declined must not even probe the provider"
+    assert await _seed_state(clean_workspace) == "declined"
+
+@pytest.mark.asyncio
+async def test_existing_example_kb_is_recorded_as_seeded(
+    clean_workspace, monkeypatch
+):
+    """A half-seeded workspace converges to `seeded` instead of minting a second KB."""
+    probe_calls = patch_local_embeddings(monkeypatch)
+    patch_qdrant(monkeypatch)
+    await _insert_kb(clean_workspace, EXAMPLE_KB_NAME)
+
+    await ensure_example_agent(clean_workspace)
+
+    counts = await _counts(clean_workspace)
+    assert counts == {"agents": 0, "kbs": 1, "url_sources": 0}, counts
+    assert await _seed_state(clean_workspace) == "seeded"
+    assert probe_calls == []
 
 @pytest.mark.asyncio
 async def test_unreachable_embedding_provider_never_raises(clean_workspace, monkeypatch):
@@ -358,6 +449,8 @@ async def test_unreachable_embedding_provider_never_raises(clean_workspace, monk
 
     counts = await _counts(clean_workspace)
     assert counts == {"agents": 0, "kbs": 0, "url_sources": 0}, counts
+    # A failed probe is transient: the state stays pending so the next login retries.
+    assert await _seed_state(clean_workspace) == "pending"
 
 @pytest.mark.asyncio
 async def test_empty_probe_result_skips_the_seed(clean_workspace, monkeypatch):
@@ -381,6 +474,7 @@ async def test_vector_store_failure_leaves_no_half_seeded_workspace(
 
     counts = await _counts(clean_workspace)
     assert counts == {"agents": 0, "kbs": 0, "url_sources": 0}, counts
+    assert await _seed_state(clean_workspace) == "pending"
 
 @pytest.mark.asyncio
 async def test_seed_without_workspace_is_a_noop(monkeypatch):
@@ -391,3 +485,59 @@ async def test_seed_without_workspace_is_a_noop(monkeypatch):
     await ensure_example_agent(0)
 
     assert probe_calls == []
+
+# ── Delete paths must record `declined` ──────────────────────────────────────
+#
+# Re-seeding against someone who removed the example is worse than no seed, so
+# every delete path that can remove it flips the workspace state to `declined`:
+# the agent soft delete (DELETE /api/v1/agents/{id}), the KB delete
+# (KbService.delete_knowledge_base, reached from DELETE /api/v1/knowledge-bases/{id}),
+# and the agent purge (which drops the whole workspace, so no state is left behind).
+
+@pytest.mark.asyncio
+async def test_deleting_the_example_agent_marks_the_seed_declined(
+    client, default_agent_id, monkeypatch
+):
+    patch_qdrant(monkeypatch)
+    workspace_id = await _workspace_id_of(default_agent_id)
+    kb_id = await _insert_kb(workspace_id, EXAMPLE_KB_NAME)
+
+    created = await client.post(
+        "/api/v1/agents", json={"name": EXAMPLE_AGENT_NAME, "description": "example"}
+    )
+    assert created.status_code == 201, created.text
+    agent_id = created.json()["id"]
+    bound = await client.put(
+        f"/api/v1/agents/{agent_id}/knowledge-base", json={"kb_id": kb_id}
+    )
+    assert bound.status_code == 200, bound.text
+
+    deleted = await client.delete(f"/api/v1/agents/{agent_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["success"] is True
+
+    assert await _seed_state(workspace_id) == "declined"
+
+@pytest.mark.asyncio
+async def test_deleting_the_example_kb_marks_the_seed_declined(
+    client, default_agent_id, monkeypatch
+):
+    patch_qdrant(monkeypatch)
+    workspace_id = await _workspace_id_of(default_agent_id)
+    kb_id = await _insert_kb(workspace_id, EXAMPLE_KB_NAME)
+
+    deleted = await client.delete(f"/api/v1/knowledge-bases/{kb_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] is True
+
+    assert await _seed_state(workspace_id) == "declined"
+
+@pytest.mark.asyncio
+async def test_deleting_a_non_example_agent_leaves_the_seed_pending(
+    client, default_agent_id
+):
+    """Only the example is a decision; an ordinary delete must not decline."""
+    workspace_id = await _workspace_id_of(default_agent_id)
+    deleted = await client.delete(f"/api/v1/agents/{default_agent_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert await _seed_state(workspace_id) == "pending"

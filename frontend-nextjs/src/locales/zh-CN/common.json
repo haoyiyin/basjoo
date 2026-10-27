@@ -7,7 +7,11 @@
     "system": "跟随系统"
   },
   "home": {
-    "title": "首页"
+    "title": "首页",
+    "overview": "工作区概览",
+    "agentsCount": "智能体",
+    "knowledgeCount": "知识库",
+    "apiStatus": "API"
   },
   "buttons": {
     "login": "登录",
@@ -612,6 +616,8 @@
   },
   "playground": {
     "testAiEffect": "测试您的 AI Agent 对话效果",
+    "tabSettings": "设置",
+    "tabChat": "测试",
     "preview": "对话预览",
     "confirmRebuild": "确定要重建索引吗？这可能需要一些时间。",
     "rebuildStarted": "索引重建已启动",

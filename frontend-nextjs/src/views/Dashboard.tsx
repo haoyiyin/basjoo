@@ -2,6 +2,7 @@
 
 import { useNavigate, useParams } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
+import { Icon } from "../components/Icon";
 import { useState, useEffect, useRef } from "react";
 import { api } from "../services/api";
 import { useTranslation } from "react-i18next";
@@ -155,39 +156,21 @@ export default function Dashboard() {
 						<dt className="identity-label">{t("labels.agentId")}</dt>
 						<dd className="identity-value">
 							{agentId ? (
-								<button
-									type="button"
-									className="mono"
-									onClick={handleCopyAgentId}
-									style={{
-										display: "flex",
-										alignItems: "center",
-										gap: "var(--space-2)",
-										minHeight: 44,
-										padding: "0 var(--space-3)",
-										borderRadius: "var(--radius-sm)",
-										border: "1px solid var(--color-border)",
-										background: "transparent",
-										color: agentIdCopied
-											? "var(--color-success)"
-											: "var(--fg-strong)",
-										fontSize: "var(--text-xs)",
-										cursor: "pointer",
-										textAlign: "left",
-										maxWidth: "100%",
-									}}
-									title={agentIdCopied ? t("status.success") : t("buttons.copy")}
-								>
-									<span>
-										{agentIdCopied ? t("status.success") : t("buttons.copy")}
-									</span>
-									<span
-										data-testid="dashboard-agent-id"
-										style={{ overflowWrap: "anywhere" }}
-									>
+								<span className="identity-id">
+									<span className="mono" data-testid="dashboard-agent-id">
 										{agentId}
 									</span>
-								</button>
+									<button
+										type="button"
+										className="btn btn-icon"
+										data-testid="dashboard-agent-id-copy"
+										onClick={handleCopyAgentId}
+										aria-label={t("buttons.copy")}
+										title={agentIdCopied ? t("status.success") : t("buttons.copy")}
+									>
+										<Icon name={agentIdCopied ? "check" : "copy"} size={16} />
+									</button>
+								</span>
 							) : (
 								NO_VALUE
 							)}

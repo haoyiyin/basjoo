@@ -1756,6 +1756,14 @@ async def deactivate_agent(
     agent = await require_workspace_super_for_agent(
         db, agent_id, current_user, include_deleted=True
     )
+    # Deleting the built-in example is a decision, not a transient failure: record
+    # `declined` in this same transaction so no later login re-seeds it. Safe on a
+    # repeat delete — the state is already terminal. `kb_id` must be read before
+    # the soft delete clears it, which is why this sits ahead of the branches.
+    from services.example_seed import is_example_agent, mark_example_seed_declined
+
+    if await is_example_agent(db, agent):
+        await mark_example_seed_declined(db, agent.workspace_id)
     if getattr(agent, "deleted_at", None):
         # Already deleted (or deleted before this release). Still drop any stale
         # binding: `agents.kb_id` is UNIQUE, so a leftover value would make the

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from 'react-i18next'
+import { Icon } from '../components/Icon'
 
 interface Message {
   id: number
@@ -190,22 +191,13 @@ export default function Chat() {
         <div style={{ minWidth: 0 }}>
           <button
             type="button"
-            className="btn btn-ghost"
+            className="btn btn-icon"
+            aria-label={t('buttons.back')}
+            title={t('buttons.back')}
             onClick={() => navigate('/sessions')}
-            style={{ marginBottom: 'var(--space-2)', paddingLeft: 0 }}
+            style={{ marginBottom: 'var(--space-2)' }}
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              aria-hidden="true"
-            >
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-            {t('buttons.back')}
+            <Icon name="back" size={16} />
           </button>
           <h1 className="page-title">
             {t('settings.sessionWithId', { id: sessionId })}

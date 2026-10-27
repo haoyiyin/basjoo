@@ -6,6 +6,7 @@ import { useParams } from "react-router-dom";
 import { api } from "../services/api";
 import type { FileItem } from "../services/api";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import { Icon } from "../components/Icon";
 
 /**
  * File source panel for one knowledge base.
@@ -543,6 +544,7 @@ export default function FileUploadManagement() {
 															type="button"
 															className="btn btn-icon"
 															aria-label={`${t("knowledgeBases.columns.actions")} ${file.filename}`}
+															title={`${t("knowledgeBases.columns.actions")} ${file.filename}`}
 															aria-haspopup="menu"
 															aria-expanded={menuOpen}
 															disabled={busy}
@@ -558,17 +560,7 @@ export default function FileUploadManagement() {
 																	style={{ width: "14px", height: "14px" }}
 																/>
 															) : (
-																<svg
-																	width="16"
-																	height="16"
-																	viewBox="0 0 16 16"
-																	fill="currentColor"
-																	aria-hidden="true"
-																>
-																	<circle cx="8" cy="3" r="1.4" />
-																	<circle cx="8" cy="8" r="1.4" />
-																	<circle cx="8" cy="13" r="1.4" />
-																</svg>
+																<Icon name="more" size={16} />
 															)}
 														</button>
 														{menuOpen && (

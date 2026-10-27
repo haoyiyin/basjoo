@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import { Icon } from './Icon';
 
 interface HelpTooltipProps {
   title: string;
@@ -234,6 +235,8 @@ export default function HelpTooltip({
     lg: { width: '32px', minWidth: '32px', height: '32px', minHeight: '32px', fontSize: 'var(--text-base)' },
   };
 
+  const iconSize = { xs: 12, sm: 14, md: 16, lg: 18 }[size];
+
   const iconButtonStyle = isMobile
     ? { minWidth: 44, minHeight: 44 }
     : undefined;
@@ -393,6 +396,7 @@ export default function HelpTooltip({
         type="button"
         className="btn btn-icon"
         aria-label={title}
+        title={title}
         aria-haspopup="true"
         aria-expanded={isVisible}
         onClick={() => {
@@ -435,7 +439,7 @@ export default function HelpTooltip({
           transition: 'color var(--transition-fast)',
         }}
       >
-        ?
+        <Icon name="help" size={iconSize} />
       </button>
 
       {mounted && createPortal(tooltipContent, document.body)}

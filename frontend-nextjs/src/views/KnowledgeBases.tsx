@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
 import RowMenu, { isRowControl } from "../components/RowMenu";
+import { Icon } from "../components/Icon";
 import type { KbFormValues } from "../components/KbFormModal";
 import { useAuth } from "../context/AuthContext";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -318,23 +319,13 @@ export default function KnowledgeBases() {
 								className="btn btn-icon"
 								data-testid="kb-create-open"
 								aria-label={t("knowledgeBases.newKnowledgeBase")}
+								title={t("knowledgeBases.newKnowledgeBase")}
 								onClick={() => {
 									setActionError(null);
 									setCreateOpen(true);
 								}}
 							>
-								<svg
-									width="16"
-									height="16"
-									viewBox="0 0 16 16"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="1.75"
-									strokeLinecap="round"
-									aria-hidden="true"
-								>
-									<path d="M8 3.5v9M3.5 8h9" />
-								</svg>
+								<Icon name="plus" size={16} />
 							</button>
 						)}
 					</div>

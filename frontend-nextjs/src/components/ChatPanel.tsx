@@ -6,6 +6,7 @@ import type { Source, UsageInfo } from "../services/api";
 import { formatAssistantMessageContent } from "../utils/citations";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { Icon } from "./Icon";
 
 export interface Message {
 	clientId?: number;
@@ -643,6 +644,7 @@ function ChatPanel({
 							className="btn btn-icon"
 							onClick={() => onInputChange("")}
 							aria-label={t("buttons.clear")}
+							title={t("buttons.clear")}
 							style={{
 								position: "absolute",
 								right: "var(--space-2)",
@@ -654,18 +656,7 @@ function ChatPanel({
 								minHeight: "24px",
 							}}
 						>
-							<svg
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								aria-hidden="true"
-							>
-								<line x1="18" y1="6" x2="6" y2="18" />
-								<line x1="6" y1="6" x2="18" y2="18" />
-							</svg>
+							<Icon name="close" size={12} />
 						</button>
 					)}
 				</div>
@@ -677,40 +668,22 @@ function ChatPanel({
 					className="btn btn-icon"
 					style={iconButtonStyle}
 				>
-					<svg
-						width="18"
-						height="18"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2"
-						aria-hidden="true"
-					>
-						<polyline points="3 6 5 6 21 6" />
-						<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-					</svg>
+					<Icon name="trash" size={18} />
 				</button>
 				<button
 					type="button"
 					onClick={onSendMessage}
 					aria-label={t("buttons.send")}
+					title={t("buttons.send")}
 					disabled={sendBlocked}
-					className="btn btn-primary"
-					style={{ minWidth: "100px" }}
+					className="btn btn-primary btn-icon"
+					style={iconButtonStyle}
 				>
-					{isSettingsSaving ? t("status.saving") : t("buttons.send")}
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2"
-						aria-hidden="true"
-					>
-						<line x1="22" y1="2" x2="11" y2="13" />
-						<polygon points="22 2 15 22 11 13 2 9 22 2" />
-					</svg>
+					{isSettingsSaving ? (
+						<span className="spinner" />
+					) : (
+						<Icon name="send" size={16} />
+					)}
 				</button>
 			</div>
 
