@@ -158,7 +158,6 @@
       "actions": "Actions"
     },
     "open": "Open",
-    "openCurrent": "Open current agent",
     "current": "Current",
     "switch": "Switch",
     "deactivate": "Deactivate",
@@ -201,9 +200,7 @@
     "csvFormat": "Question,Answer\nHow to reset password?,Click forgot password button..."
   },
   "labels": {
-    "welcome": "Welcome back to {{agentName}} Console",
     "description": "Description",
-    "quickStart": "Quick Start",
     "systemStatus": "System Status",
     "urlKnowledgeSource": "Web Pages",
     "fileItems": "Files",
@@ -228,10 +225,7 @@
     "indexedFiles": "Indexed Files",
     "docBlocks": "Document Blocks",
     "indexStatus": "Index Status",
-    "testAiEffect": "Test AI conversation",
-    "manageFiles": "Upload and manage files for AI knowledge",
     "knowledgeDescription": "Manage AI knowledge sources including web pages and uploaded files",
-    "addWebKnowledge": "Add web knowledge base",
     "configModelParams": "Configure model parameters",
     "configAgentSettings": "Configure agent settings and embed code",
     "tips": "Tips",
@@ -355,6 +349,7 @@
     "embeddingApiBase": "Embedding API Base",
     "apiKey": "API Key",
     "configured": "Configured",
+    "notConfigured": "Not configured",
     "apiBase": "API Base URL",
     "modelName": "Model Name",
     "modelNameDesc": "Specify the LLM model to use, such as deepseek-chat, gpt-4, etc.",

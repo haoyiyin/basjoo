@@ -430,8 +430,10 @@ describe("Agents create sheet (§15)", () => {
 		//    declared inline or by a `min-height: 44px` rule in the mobile media
 		//    block of src/index.css (the same resolution mobileLayout.test.tsx
 		//    uses; jsdom cannot measure, so this is the promised contract).
+		// R4 removed the row's aria-pressed name button, so the page now holds
+		// the `+` and one overflow trigger per row. Keep the scan non-empty.
 		const buttons = Array.from(page.querySelectorAll<HTMLElement>("button"));
-		expect(buttons.length).toBeGreaterThan(2);
+		expect(buttons.length).toBeGreaterThan(1);
 		const short = buttons
 			.map((button) => ({
 				button,

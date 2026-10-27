@@ -1,9 +1,10 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
+import RowMenu, { isRowControl } from "../components/RowMenu";
 import type { KbFormValues } from "../components/KbFormModal";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -64,7 +65,6 @@ export default function Agents() {
 	const navigate = useNavigate();
 	const isMobile = useIsMobile();
 	const [agents, setAgents] = useState<Agent[]>([]);
-	const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -97,13 +97,6 @@ export default function Agents() {
 	const [chooserKbId, setChooserKbId] = useState("");
 	const [chooserBusy, setChooserBusy] = useState(false);
 	const [chooserError, setChooserError] = useState<string | null>(null);
-	const selectedAgent = useMemo(
-		() => agents.find((agent) => agent.id === selectedAgentId) || null,
-		[agents, selectedAgentId],
-	);
-	const selectedOpenableAgent = isOpenableAgent(selectedAgent)
-		? selectedAgent
-		: null;
 
 	const agentNameDisplayWidth = getAgentNameDisplayWidth(form.name.trim());
 	const isAgentNameValid =
@@ -116,16 +109,6 @@ export default function Agents() {
 		try {
 			const data = await api.listAgents();
 			setAgents(data.agents);
-			setSelectedAgentId((current) => {
-				if (current && data.agents.some((agent) => agent.id === current)) {
-					return current;
-				}
-				return (
-					data.agents.find((agent) => isOpenableAgent(agent))?.id ||
-					data.agents[0]?.id ||
-					null
-				);
-			});
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.networkError"));
 		} finally {
@@ -171,10 +154,6 @@ export default function Agents() {
 		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [createSheetOpen]);
 
-	const handleSelect = (agentId: string) => {
-		setSelectedAgentId(agentId);
-	};
-
 	const handleCreate = async (event: FormEvent) => {
 		event.preventDefault();
 		const name = form.name.trim();
@@ -195,7 +174,6 @@ export default function Agents() {
 				widget_title: name,
 			});
 			setAgents((prev) => [created, ...prev]);
-			setSelectedAgentId(created.id);
 			setForm({
 				name: "",
 				description: "",
@@ -239,7 +217,6 @@ export default function Agents() {
 			const restored = await api.restoreAgent(agent.id);
 			api.setSelectedAgentId(restored.id);
 			await loadAgents();
-			setSelectedAgentId(restored.id);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.networkError"));
 		} finally {
@@ -365,140 +342,81 @@ export default function Agents() {
 		: undefined;
 
 	const renderRowActions = (agent: Agent) => {
-		const menuOpen = openMenuAgentId === agent.id;
 		return (
-			<div
-				style={{
-					position: "relative",
-					display: "flex",
-					justifyContent: isMobile ? "flex-start" : "flex-end",
+			<RowMenu
+				label={t("agents.rowActions", { name: agent.name })}
+				triggerLabel={t("agents.rowActions", { name: agent.name })}
+				open={openMenuAgentId === agent.id}
+				onOpenChange={(next) => setOpenMenuAgentId(next ? agent.id : null)}
+				align={isMobile ? "start" : "end"}
+				triggerTestId={`agent-actions-${agent.id}`}
+				menuTestId={`agent-menu-${agent.id}`}
+				triggerStyle={{
+					...iconButtonStyle,
 					flexShrink: 0,
+					alignSelf: isMobile ? "flex-start" : "flex-end",
 				}}
 			>
-				<button
-					type="button"
-					className="btn btn-icon"
-					data-testid={`agent-actions-${agent.id}`}
-					aria-label={t("agents.rowActions", { name: agent.name })}
-					aria-haspopup="menu"
-					aria-expanded={menuOpen}
-					style={iconButtonStyle}
-					onClick={() =>
-						setOpenMenuAgentId((current) =>
-							current === agent.id ? null : agent.id,
-						)
-					}
-				>
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 16 16"
-						fill="currentColor"
-						aria-hidden="true"
+				{isOpenableAgent(agent) && (
+					<button
+						type="button"
+						role="menuitem"
+						className="row-menu-item"
+						onClick={() => navigate(`/agents/${agent.id}/dashboard`)}
 					>
-						<circle cx="8" cy="3" r="1.4" />
-						<circle cx="8" cy="8" r="1.4" />
-						<circle cx="8" cy="13" r="1.4" />
-					</svg>
-				</button>
-				{menuOpen && (
-					<div
-						role="menu"
-						data-testid={`agent-menu-${agent.id}`}
-						aria-label={t("agents.rowActions", { name: agent.name })}
-						style={{
-							position: "absolute",
-							top: "calc(100% + var(--space-1))",
-							right: isMobile ? "auto" : 0,
-							left: isMobile ? 0 : "auto",
-							zIndex: 20,
-							minWidth: 200,
-							display: "flex",
-							flexDirection: "column",
-							gap: "var(--space-1)",
-							padding: "var(--space-1)",
-							background: "var(--color-bg-elevated)",
-							border: "1px solid var(--color-border)",
-							borderRadius: "var(--radius-md)",
-							boxShadow: "var(--shadow-lg)",
+						{t("agents.open")}
+					</button>
+				)}
+				{isSuperAdmin && !agent.deleted_at && (
+					<button
+						type="button"
+						role="menuitem"
+						data-testid={`agent-kb-bind-${agent.id}`}
+						className="row-menu-item"
+						disabled={saving}
+						onClick={() => {
+							if (agent.kb_id) {
+								void handleUnbindAgentKb(agent);
+								return;
+							}
+							void openKbChooser(agent, "list");
 						}}
 					>
-						{isOpenableAgent(agent) && (
-							<button
-								type="button"
-								role="menuitem"
-								className="btn btn-ghost"
-								style={{ justifyContent: "flex-start" }}
-								onClick={() => {
-									setOpenMenuAgentId(null);
-									navigate(`/agents/${agent.id}/dashboard`);
-								}}
-							>
-								{t("agents.open")}
-							</button>
-						)}
-						{isSuperAdmin && !agent.deleted_at && (
-							<button
-								type="button"
-								role="menuitem"
-								data-testid={`agent-kb-bind-${agent.id}`}
-								className="btn btn-ghost"
-								style={{ justifyContent: "flex-start" }}
-								disabled={saving}
-								onClick={() => {
-									setOpenMenuAgentId(null);
-									if (agent.kb_id) {
-										void handleUnbindAgentKb(agent);
-										return;
-									}
-									void openKbChooser(agent, "list");
-								}}
-							>
-								{agent.kb_id
-									? t("knowledgeBases.actions.unbind")
-									: t("knowledgeBases.actions.bind")}
-							</button>
-						)}
-						{agent.deleted_at ? (
-							<button
-								type="button"
-								role="menuitem"
-								data-testid={`agent-restore-${agent.id}`}
-								className="btn btn-ghost"
-								style={{
-									justifyContent: "flex-start",
-									color: "var(--color-success)",
-								}}
-								disabled={saving}
-								onClick={() => {
-									setOpenMenuAgentId(null);
-									void handleRestore(agent);
-								}}
-							>
-								{t("agents.restore")}
-							</button>
-						) : (
-							<button
-								type="button"
-								role="menuitem"
-								data-testid={`agent-deactivate-${agent.id}`}
-								className="btn btn-ghost"
-								style={{
-									justifyContent: "flex-start",
-									color: "var(--color-error)",
-								}}
-								disabled={saving}
-								onClick={() => {
-									setOpenMenuAgentId(null);
-									handleRequestDeactivate(agent);
-								}}
-							>
-								{t("agents.deactivate")}
-							</button>
-						)}
-					</div>
+						{agent.kb_id
+							? t("knowledgeBases.actions.unbind")
+							: t("knowledgeBases.actions.bind")}
+					</button>
 				)}
-			</div>
+				{agent.deleted_at ? (
+					<button
+						type="button"
+						role="menuitem"
+						data-testid={`agent-restore-${agent.id}`}
+						className="row-menu-item"
+						style={{ color: "var(--color-success)" }}
+						disabled={saving}
+						onClick={() => {
+							void handleRestore(agent);
+						}}
+					>
+						{t("agents.restore")}
+					</button>
+				) : (
+					<button
+						type="button"
+						role="menuitem"
+						data-testid={`agent-deactivate-${agent.id}`}
+						className="row-menu-item"
+						style={{ color: "var(--color-error)" }}
+						disabled={saving}
+						onClick={() => {
+							handleRequestDeactivate(agent);
+						}}
+					>
+						{t("agents.deactivate")}
+					</button>
+				)}
+			</RowMenu>
 		);
 	};
 
@@ -514,19 +432,6 @@ export default function Agents() {
 						</p>
 					</div>
 					<div className="page-actions">
-						{selectedOpenableAgent && (
-							<button
-								type="button"
-								className="btn btn-secondary"
-								onClick={() =>
-									navigate(
-										`/agents/${selectedOpenableAgent.id}/dashboard`,
-									)
-								}
-							>
-								{t("agents.openCurrent")}
-							</button>
-						)}
 						<button
 							type="button"
 							ref={createTriggerRef}
@@ -624,7 +529,6 @@ export default function Agents() {
 						</div>
 						<ul className="list" data-testid="agents-list">
 						{agents.map((agent) => {
-							const isSelected = agent.id === selectedAgentId;
 							const updatedAt = formatAgentUpdatedAt(agent);
 							const purgeCountdown = agent.deleted_at
 								? formatPurgeCountdown(agent.purge_after, t) ||
@@ -633,48 +537,46 @@ export default function Agents() {
 							return (
 								<li
 									key={agent.id}
-									className={
-										isSelected
-											? "list-row list-grid list-grid--agents is-selected"
-											: "list-row list-grid list-grid--agents"
-									}
+									className="list-row list-grid list-grid--agents"
 									data-testid={`agent-row-${agent.id}`}
 									style={rowStyle}
+									onClick={(event) => {
+										// A soft-deleted agent restores or purges first: its row is inert.
+										if (agent.deleted_at || isRowControl(event.target)) return;
+										navigate(`/agents/${agent.id}/dashboard`);
+									}}
 								>
-									{/* Column 1 — name. The selection control IS this cell (so the
-									 * aria-pressed affordance covers the name and its description),
-									 * and the description stacks under the name inside it. */}
-									<button
-										type="button"
-										className="list-cell list-row-main"
-										aria-pressed={isSelected}
-										style={{
-											background: "transparent",
-											border: "none",
-											padding: 0,
-											textAlign: "left",
-											cursor: "pointer",
-											gap: "var(--space-1)",
-										}}
-										onClick={() => handleSelect(agent.id)}
-									>
+									{/* Column 1 — name. The name is the keyboard affordance (the row itself is
+									 * not focusable, so it gets no tabIndex); clicking elsewhere in the row
+									 * navigates too, guarded so the menu and the name keep their own click. */}
+									<div className="list-cell list-row-main">
 										<span className="list-row-name">
-											<span className="list-row-title list-row-affordance">
-												{agent.name}
-											</span>
-											<svg
-												className="list-row-chevron"
-												viewBox="0 0 16 16"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="1.75"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-												aria-hidden="true"
-												data-testid={`agent-chevron-${agent.id}`}
-											>
-												<path d="M6 3.5 10.5 8 6 12.5" />
-											</svg>
+											{agent.deleted_at ? (
+												<span className="list-row-title">{agent.name}</span>
+											) : (
+												<Link
+													className="list-row-title list-row-affordance"
+													to={`/agents/${agent.id}/dashboard`}
+													data-testid={`agent-name-${agent.id}`}
+												>
+													{agent.name}
+												</Link>
+											)}
+											{!agent.deleted_at && (
+												<svg
+													className="list-row-chevron"
+													viewBox="0 0 16 16"
+													fill="none"
+													stroke="currentColor"
+													strokeWidth="1.75"
+													strokeLinecap="round"
+													strokeLinejoin="round"
+													aria-hidden="true"
+													data-testid={`agent-chevron-${agent.id}`}
+												>
+													<path d="M6 3.5 10.5 8 6 12.5" />
+												</svg>
+											)}
 										</span>
 										<span className="list-row-description">
 											{agent.description || t("agents.noDescription")}
@@ -683,8 +585,7 @@ export default function Agents() {
 											<span
 												style={{
 													fontSize: "var(--text-xs)",
-													fontWeight:
-														"var(--weight-semibold)",
+													fontWeight: "var(--weight-semibold)",
 													lineHeight: "var(--leading-snug)",
 													color: "var(--color-error)",
 													wordBreak: "break-word",
@@ -695,7 +596,7 @@ export default function Agents() {
 												})}
 											</span>
 										)}
-									</button>
+									</div>
 									{/* Column 2 — knowledge base. Its own cell, with its own header
 									 * label: the 知识库 text that used to repeat inside the row is gone
 									 * (R2). */}

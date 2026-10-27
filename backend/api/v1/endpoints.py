@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case, delete, or_
+from sqlalchemy import select, func, case, delete, distinct, or_
 from sqlalchemy.exc import IntegrityError, OperationalError
 from typing import Any, Dict, List, Literal, Optional
 import asyncio
@@ -211,6 +211,7 @@ def build_agent_config(
         "url_count": 0,
         "file_count": 0,
         "active_session_count": 0,
+        "visitor_count": 0,
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
@@ -270,11 +271,21 @@ async def build_agent_config_with_stats(agent: Agent, db: AsyncSession) -> dict:
             ChatSession.status != "closed",
         )
     )
+    # Distinct visitors, not sessions: a null/empty visitor id is an anonymous
+    # session and must not be counted as a person.
+    visitor_count = await db.scalar(
+        select(func.count(distinct(ChatSession.visitor_id))).where(
+            ChatSession.agent_id == agent.id,
+            ChatSession.visitor_id.isnot(None),
+            ChatSession.visitor_id != "",
+        )
+    )
     config.update(
         {
             "url_count": url_count,
             "file_count": file_count,
             "active_session_count": active_session_count or 0,
+            "visitor_count": visitor_count or 0,
         }
     )
     return config

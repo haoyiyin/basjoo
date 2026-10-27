@@ -89,6 +89,10 @@
   --radius-lg: 14px;
   --radius-xl: 14px; /* kept as the legacy alias of the largest content radius */
   --radius-full: 9999px;
+  /* Control surfaces sit one step tighter than the content radius: a 10px
+   * radius on a 32px control reads bubbly, an 8px one reads like a control.
+   * Consumed by `.btn` and `.btn-icon`. */
+  --radius-control: 8px;
 
   /* Motion — functional, 120–200ms, ease-out */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -124,12 +128,21 @@
   --elevation-2: 0 2px 4px var(--color-shadow), 0 0 0 1px var(--color-border);
   --elevation-3: 0 12px 32px var(--color-shadow), 0 0 0 1px var(--color-border);
 
+  /* The lit top edge of a filled control. Consumed by `.btn-primary` and
+   * `.btn-danger-filled`: a 1px white inset hairline is what makes an accent
+   * fill read as a raised surface, which is why primary needs no gradient. */
+  --highlight-inset: inset 0 1px 0 hsl(0 0% 100% / 0.16);
+
   /* Semantic aliases (single source of truth for the whole file) */
   --app-bg: var(--color-bg-primary);
   --surface-bg: var(--color-bg-secondary);
   --surface-raised-bg: var(--color-bg-elevated);
   --surface-sunken-bg: var(--color-bg-tertiary);
   --surface-hover: var(--color-surface-hover);
+  /* The accent tint, one alias so the two places that paint "selected" cannot
+   * drift. Consumed by ::selection and the selected `.list-row`. It is an
+   * alias of the themed token, never a literal, so it flips with the theme. */
+  --color-accent-subtle: var(--color-surface-selected);
   --border-soft: var(--color-border);
   --fg-strong: var(--color-text-primary);
   --fg-default: var(--color-text-secondary);
@@ -327,6 +340,8 @@ html {
   -webkit-text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Native controls (checkbox, radio, progress, range) take the accent. */
+  accent-color: var(--color-accent-primary);
 }
 
 body {
@@ -397,6 +412,8 @@ p {
 a {
   color: var(--color-accent-primary);
   text-decoration: none;
+  /* An underline that sits off the descenders instead of through them. */
+  text-underline-offset: 2px;
   transition: color var(--transition-fast);
 }
 
@@ -438,9 +455,11 @@ pre {
   border-radius: var(--radius-md);
 }
 
+/* Selection is a tint, not a highlighter: the page keeps its ink colour and
+ * only the surface changes, so selected prose stays as legible as unselected. */
 ::selection {
-  color: var(--color-text-inverse);
-  background: var(--color-accent-primary);
+  color: var(--fg-strong);
+  background: var(--color-accent-subtle);
 }
 
 /* =============================================================================
@@ -698,28 +717,42 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 36px;
-  padding: var(--space-2) var(--space-4);
+  /* 32px is the control height; the mobile media block keeps its 44px floor
+   * for every button inside `.admin-page`. */
+  min-height: 32px;
+  padding: 0 var(--space-3);
   font-family: var(--font-text);
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
   line-height: 1;
+  letter-spacing: -0.006em;
   color: var(--fg-strong);
   background: var(--surface-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
+  /* A control is a surface, not an outline: the resting shadow is what stops
+   * the button reading as a grey rectangle drawn on the page. */
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: background var(--transition-fast),
-    border-color var(--transition-fast), color var(--transition-fast);
+    border-color var(--transition-fast), color var(--transition-fast),
+    box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .btn:hover {
   background: var(--surface-hover);
   border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-md);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: none;
 }
 
 .btn:disabled {
   opacity: 0.45;
+  box-shadow: none;
   cursor: not-allowed;
 }
 
@@ -730,14 +763,16 @@ a.btn-primary {
   color: var(--color-text-inverse);
   background: var(--color-accent-primary);
   border-color: transparent;
+  box-shadow: var(--highlight-inset), var(--shadow-sm);
 }
 
 .btn-primary:hover,
-button.btn-primary:hover:not(:disabled),
+button.btn-primary:hover:not(:disabled):not(:active),
 a.btn-primary:hover {
   color: var(--color-text-inverse);
   background: var(--color-accent-secondary);
   border-color: transparent;
+  box-shadow: var(--highlight-inset), var(--shadow-md);
 }
 
 .btn-primary:disabled,
@@ -747,21 +782,24 @@ button.btn-primary:disabled {
   border-color: var(--color-border);
 }
 
-/* Secondary: outlined */
+/* Secondary: outlined. Transparent fill, so it carries no shadow of its own
+ * (a shadow under a transparent box reads as a stray grey line). */
 .btn-secondary,
 button.btn-secondary,
 a.btn-secondary {
   color: var(--fg-strong);
   background: transparent;
   border: 1px solid var(--color-border);
+  box-shadow: none;
 }
 
 .btn-secondary:hover,
-button.btn-secondary:hover:not(:disabled),
+button.btn-secondary:hover:not(:disabled):not(:active),
 a.btn-secondary:hover {
   color: var(--fg-strong);
   background: var(--surface-hover);
   border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Ghost / tertiary: label only */
@@ -771,6 +809,7 @@ a.btn-ghost {
   color: var(--fg-default);
   background: transparent;
   border-color: transparent;
+  box-shadow: none;
 }
 
 .btn-ghost:hover,
@@ -779,6 +818,7 @@ a.btn-ghost:hover {
   color: var(--fg-strong);
   background: var(--surface-hover);
   border-color: transparent;
+  box-shadow: none;
 }
 
 /* Danger: text + border, never a filled red block */
@@ -788,6 +828,7 @@ a.btn-danger {
   color: var(--color-error);
   background: transparent;
   border-color: var(--color-border);
+  box-shadow: none;
 }
 
 .btn-danger:hover,
@@ -796,6 +837,7 @@ a.btn-danger:hover {
   color: var(--color-error);
   background: var(--color-error-bg);
   border-color: var(--color-error);
+  box-shadow: none;
 }
 
 /* Destructive confirmation is a single explicit step up */
@@ -803,24 +845,33 @@ a.btn-danger:hover {
   color: var(--color-text-inverse);
   background: var(--color-error);
   border-color: transparent;
+  box-shadow: var(--highlight-inset), var(--shadow-sm);
 }
 
-/* Icon-only button: still a 36px hit target, label required in markup */
+/* Icon-only button: a 32px square on desktop (the mobile block keeps the 44px
+ * floor). It carries no shadow at rest — a shadowed 32px glyph reads as a card,
+ * not as a control — and gains one only under the pointer. */
 .btn-icon {
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  min-height: 36px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
   color: var(--fg-default);
   background: transparent;
   border-color: transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
+  box-shadow: none;
 }
 
-.btn-icon:hover {
+.btn-icon:hover:not(:disabled) {
   color: var(--fg-strong);
   background: var(--surface-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-icon:active:not(:disabled) {
+  box-shadow: inset 0 1px 2px var(--color-shadow-sm);
 }
 
 /* =============================================================================
@@ -864,7 +915,9 @@ a.btn-danger:hover {
 
 .page-title {
   font-family: var(--font-display);
-  font-size: var(--text-2xl);
+  /* One step above the legacy 22px title: the page title is the top of the
+   * ramp, and at 22px it competed with the 17px panel headings. */
+  font-size: var(--text-3xl);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
   letter-spacing: -0.02em;
@@ -881,7 +934,15 @@ a.btn-danger:hover {
 .page-subtitle {
   margin-top: var(--space-2);
   font-size: var(--text-base);
-  line-height: var(--leading-snug);
+  /* 1.5, not 1.4: a two-line subtitle is read as prose, and the tighter leading
+   * of a single-line title made a paragraph under it look cramped. */
+  line-height: var(--leading-normal);
+  /* ~62 characters: the measure a reader can follow without losing the line
+   * return. The subtitle wraps instead of running the full page width. */
+  max-width: 62ch;
+  /* Deliberately --color-text-secondary, NOT --fg-dim: the subtitle must stay
+   * one hierarchy step above row metadata/description (--color-text-tertiary).
+   * tests/unit/designTokens.test.ts (polish R4) asserts the two greys differ. */
   color: var(--color-text-secondary);
 }
 
@@ -901,13 +962,13 @@ a.btn-danger:hover {
 }
 
 /* Inside the header the action row aligns with the title's optical centre. The
- * header used to be flex-end, which sat the actions on the meta line; it is now
- * flex-start, and a 36px control on the 22px / 1.25 title line (27.5px box) is
- * pulled up by one grid step (4px) so its centre meets the title's centre
- * instead of hanging 4px low. */
+ * header is flex-start, so the row starts on the title's top edge; a 32px
+ * control on the 28px / 1.25 title line (35px box) is then pushed down 2px so
+ * the two centres coincide. The old -4px pull was tuned for a 22px title and a
+ * 36px button, and no longer centres anything. */
 .page-header > .page-actions {
   align-self: flex-start;
-  margin-top: calc(-1 * var(--space-1));
+  margin-top: 2px;
 }
 
 /* Back-link row above a page header (detail views). */
@@ -1060,20 +1121,28 @@ a.btn-danger:hover {
   min-height: 44px;
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border-subtle);
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .list-row:last-child {
   border-bottom: none;
 }
 
-.list-row:hover {
+/* Hover and keyboard focus paint the same row, not just the name: the whole row
+ * is the target, so the whole row has to answer the pointer. */
+.list-row:hover,
+.list-row:focus-within {
   background: var(--surface-hover);
 }
 
+/* Selected is a tint plus a 1px inset ring, never a solid fill: the row keeps
+ * its own surface (and the state text on it keeps its contrast) and only gains
+ * the accent edge. */
 .list-row[aria-selected='true'],
 .list-row.is-selected {
-  background: var(--color-surface-selected);
+  background: var(--color-accent-subtle);
+  box-shadow: inset 0 0 0 1px var(--color-accent-primary);
 }
 
 .list-row-main {
@@ -1153,6 +1222,7 @@ a.btn-danger:hover {
 
 .list-row:hover .list-row-title,
 .list-row:hover .list-row-affordance,
+.list-row:focus-within .list-row-title,
 .list-row:focus-within .list-row-affordance {
   color: var(--color-accent-primary);
 }
@@ -1275,6 +1345,73 @@ a.btn-danger:hover {
 
 .list-cell:last-child {
   justify-self: end;
+}
+
+/* Both data lists are click targets: the row navigates the same way its name
+ * does. Scoped to `.list-grid` so the plain rows (skeletons, sessions) that
+ * merely share `.list-row` keep a default cursor. */
+.list-row.list-grid {
+  cursor: pointer;
+}
+
+/* =============================================================================
+ * 10b. Row menu — a portalled panel, so the list clip cannot eat it
+ * =============================================================================
+ * `.list` and `.list-frame` keep `overflow: hidden` (it holds the row hairlines
+ * inside the rounded corner), so the row menu is rendered into `document.body`
+ * with `position: fixed` by RowMenu.tsx. It therefore needs its own surface:
+ * radius, shadow and z-index sit one step above the page chrome. */
+.row-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  text-align: left;
+  color: var(--fg-default);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.row-menu-item:hover {
+  background: var(--surface-hover);
+}
+
+.row-menu-item:disabled {
+  color: var(--fg-dim);
+  cursor: not-allowed;
+}
+
+.row-menu-item:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-menu-item {
+    transition: none;
+  }
 }
 
 /* =============================================================================
@@ -1876,7 +2013,10 @@ tbody tr:hover td {
   max-width: var(--page-max-width);
   min-width: 0;
   margin: 0 auto;
-  padding: var(--space-6) var(--page-gutter);
+  /* Less air above the header block than below it (the header owns 16px of
+   * padding-bottom plus its 24px margin), so the title reads as attached to the
+   * page it opens instead of floating in the middle of the gutter. */
+  padding: var(--space-5) var(--page-gutter) var(--space-6);
   background: transparent;
 }
 
@@ -2397,7 +2537,8 @@ tbody tr:hover td {
     animation: none;
   }
 
-  button:active:not(:disabled) {
+  button:active:not(:disabled),
+  .btn:active:not(:disabled) {
     transform: none;
   }
 }
@@ -2595,6 +2736,13 @@ tbody tr:hover td {
   .mobile-main a.btn-danger,
   .hamburger-btn {
     min-height: 44px;
+  }
+
+  /* The icon button is a 32px square on desktop; at mobile the floor applies to
+   * both axes, or a 32px-wide glyph is the one target under 44px. */
+  .btn-icon {
+    width: 44px;
+    min-width: 44px;
   }
 
   /* `min-height` is ignored on inline boxes; links-as-buttons are inline-flex
@@ -2799,6 +2947,14 @@ tbody tr:hover td {
     max-height: 92vh;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
+
+  /* Identity list: a 140px label column leaves no room for the value at 375px,
+   * so the label stacks above its value and the hairline still separates rows. */
+  .identity-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+    align-items: start;
+  }
 }
 
 /* Tablet (769px - 1024px) */
@@ -2853,4 +3009,46 @@ tbody tr:hover td {
   .no-print {
     display: none !important;
   }
+}
+
+/* =============================================================================
+ * 19. Identity list — label/value pairs on a hairline
+ *
+ * The agent dashboard reports facts, so it renders them as a definition list
+ * instead of one card per fact: a fixed label column keeps every value on a
+ * shared left edge, and the hairline (not a container border) separates rows.
+ * Collapses to label-above-value at 375px.
+ * ============================================================================= */
+.identity-list {
+  margin: 0;
+  padding: 0;
+}
+
+.identity-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.identity-row:last-child {
+  border-bottom: 0;
+}
+
+.identity-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-snug);
+  color: var(--fg-dim);
+}
+
+.identity-value {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  color: var(--fg-strong);
+  overflow-wrap: anywhere;
 }

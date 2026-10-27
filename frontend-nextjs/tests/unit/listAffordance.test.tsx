@@ -8,10 +8,10 @@
  *      <ul class="list"> (so it never becomes a third listitem at 375px) and
  *      disappears with the list;
  *   2. both empty states teach: title + one-line description + create action;
- *   3. the NAME is the affordance, not the row: the KB name stays a link with
- *      a chevron, the agent name stays inside its aria-pressed selection
- *      button with a chevron, and neither row becomes an anchor or a
- *      row-level click target;
+ *   3. the NAME is the affordance and the ROW is the way in (R4): the KB name
+ *      stays a link with a chevron, the agent name is now a link too, and a
+ *      click anywhere else in either row navigates to that row's page —
+ *      except on a soft-deleted agent's row and on any control inside a row;
  *   4. a state badge carries a 6px dot on `::before`, and the pulse RING moved
  *      to `::after` so the two pseudo-elements never collide.
  *
@@ -142,6 +142,14 @@ const inactiveAgent: Agent = {
 	id: "agt_inactive",
 	name: "Inactive Agent",
 	is_active: false,
+};
+
+const deletedAgent: Agent = {
+	...inactiveAgent,
+	id: "agt_deleted",
+	name: "Deleted Agent",
+	deleted_at: "2026-06-01T00:00:00Z",
+	purge_after: "2026-06-08T00:00:00Z",
 };
 
 /* ------------------------------------------------------------------ render */
@@ -435,8 +443,8 @@ describe("spec §4 — the empty state teaches", () => {
 
 /* ----------------------------- 3. the name is the affordance, not the row */
 
-describe("spec §4 — the name carries the affordance", () => {
-	it("KB: the name links to /knowledge-bases/:kbId with the affordance class and a chevron, and the row itself is not a link or a click target", async () => {
+describe("spec §4 + R4 — the name is the affordance and the row is the way in", () => {
+	it("KB: the name links to /knowledge-bases/:kbId with the affordance class and a chevron", async () => {
 		renderKnowledgeBases([boundKb, unboundKb]);
 
 		await waitFor(() =>
@@ -461,22 +469,31 @@ describe("spec §4 — the name carries the affordance", () => {
 			(name.closest(".list-row-main") as HTMLElement).contains(chevron),
 		).toBe(true);
 
-		// No giant row link: the row is an <li>, and the only anchor in it is the
-		// name. A row-level click must not navigate.
+		// The row is never one giant link and never a button: it stays an <li>
+		// with the name as its only anchor, and no role / tabIndex of its own.
 		const row = screen.getByTestId("kb-row-kb_bound");
 		expect(row.tagName).toBe("LI");
 		expect(row.querySelectorAll("a")).toHaveLength(1);
+		expect(row).not.toHaveAttribute("role");
+		expect(row).not.toHaveAttribute("tabindex");
+	});
+
+	it("KB: clicking elsewhere in the row navigates to that KB (R4)", async () => {
+		renderKnowledgeBases([boundKb, unboundKb]);
+
+		await waitFor(() =>
+			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
+		);
 
 		expect(screen.getByTestId("location")).toHaveTextContent(
 			"/knowledge-bases",
 		);
-		fireEvent.click(row);
-		expect(screen.getByTestId("location")).toHaveTextContent(
-			"/knowledge-bases",
+
+		const row = screen.getByTestId("kb-row-kb_bound");
+		fireEvent.click(
+			row.querySelector(".list-row-description") as Element,
 		);
 
-		// ...but the name still does.
-		fireEvent.click(name);
 		await waitFor(() =>
 			expect(screen.getByTestId("location")).toHaveTextContent(
 				"/knowledge-bases/kb_bound",
@@ -484,73 +501,107 @@ describe("spec §4 — the name carries the affordance", () => {
 		);
 	});
 
-	it("Agents: the selection control stays an aria-pressed button holding the affordance name and a chevron, and the row is not an anchor", async () => {
+	it("KB: a click that lands on the menu trigger belongs to the trigger, not the row", async () => {
+		renderKnowledgeBases([boundKb, unboundKb]);
+
+		await waitFor(() =>
+			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
+		);
+
+		fireEvent.click(screen.getByTestId("kb-actions-kb_bound"));
+
+		// The menu opened, and the row did NOT navigate underneath it.
+		expect(screen.getByTestId("kb-menu-kb_bound")).toBeInTheDocument();
+		expect(screen.getByTestId("location")).toHaveTextContent(
+			"/knowledge-bases",
+		);
+	});
+
+	it("Agents: the name is a real link to /agents/:id/dashboard with the affordance class and a chevron", async () => {
 		renderAgents([activeAgent, inactiveAgent]);
 
 		await waitFor(() =>
 			expect(screen.getByTestId("agent-row-agt_active")).toBeInTheDocument(),
 		);
 
-		const row = screen.getByTestId("agent-row-agt_active");
-		expect(row.tagName).toBe("LI");
-		expect(row.querySelectorAll("a")).toHaveLength(0);
-
-		const control = row.querySelector(".list-row-main");
-		expect(control).not.toBeNull();
-		expect((control as HTMLElement).tagName).toBe("BUTTON");
-		// The first row is the auto-selected agent.
-		expect(control).toHaveAttribute("aria-pressed", "true");
-
-		const name = (control as HTMLElement).querySelector(".list-row-title");
-		expect(name).not.toBeNull();
+		const name = screen.getByTestId("agent-name-agt_active");
+		expect(name.tagName).toBe("A");
+		expect(name).toHaveAttribute("href", "/agents/agt_active/dashboard");
+		expect(name).toHaveClass("list-row-title");
 		expect(name).toHaveClass("list-row-affordance");
 		expect(name).toHaveTextContent("Active Agent");
 
-		const chevron = (control as HTMLElement).querySelector(".list-row-chevron");
+		const cluster = name.closest(".list-row-name");
+		expect(cluster).not.toBeNull();
+		const chevron = (cluster as HTMLElement).querySelector(".list-row-chevron");
 		expect(chevron).not.toBeNull();
 		expect(chevron).toHaveAttribute("aria-hidden", "true");
 		expect(chevron).toHaveAttribute("stroke", "currentColor");
-
-		// The KB meta is now its OWN column cell (R1), no longer nested inside the
-		// selection control: the control carries the name (+ chevron) and the
-		// description under it, and the knowledge-base value lives one column to
-		// the right. Both still belong to the same row.
-		expect(control?.querySelector(`[data-testid="agent-kb-agt_active"]`)).toBe(
-			null,
-		);
+		expect(screen.getByTestId("agent-chevron-agt_active")).toBe(chevron);
 		expect(
-			within(row).getByTestId("agent-kb-agt_active"),
-		).toHaveTextContent("Bound KB");
+			(name.closest(".list-row-main") as HTMLElement).contains(chevron),
+		).toBe(true);
 
-		// Selecting still goes through the button; clicking the row body does not.
-		const other = screen.getByTestId("agent-row-agt_inactive").querySelector(
-			".list-row-main",
-		);
-		expect(other).toHaveAttribute("aria-pressed", "false");
-		fireEvent.click(other as Element);
+		// The row is not focusable (the name is the tab stop) and it carries no
+		// selection state any more: R4 removed `is-selected` and `aria-pressed`.
+		const row = screen.getByTestId("agent-row-agt_active");
+		expect(row.tagName).toBe("LI");
+		expect(row).not.toHaveAttribute("tabindex");
+		expect(row).not.toHaveAttribute("role");
+		expect(row).not.toHaveClass("is-selected");
+		expect(row.querySelector("[aria-pressed]")).toBeNull();
+	});
+
+	it("Agents: clicking elsewhere in the row navigates to that agent's dashboard", async () => {
+		renderAgents([activeAgent, inactiveAgent]);
+
 		await waitFor(() =>
-			expect(other).toHaveAttribute("aria-pressed", "true"),
+			expect(screen.getByTestId("agent-row-agt_active")).toBeInTheDocument(),
 		);
-		expect(
-			screen
-				.getByTestId("agent-row-agt_active")
-				.querySelector(".list-row-main"),
-		).toHaveAttribute("aria-pressed", "false");
+
+		expect(screen.getByTestId("location")).toHaveTextContent("/agents");
+
+		const row = screen.getByTestId("agent-row-agt_active");
+		fireEvent.click(
+			row.querySelector(".list-row-description") as Element,
+		);
+
+		await waitFor(() =>
+			expect(screen.getByTestId("location")).toHaveTextContent(
+				"/agents/agt_active/dashboard",
+			),
+		);
+	});
+
+	it("Agents: a soft-deleted agent's row never navigates", async () => {
+		renderAgents([activeAgent, deletedAgent]);
+
+		await waitFor(() =>
+			expect(screen.getByTestId("agent-row-agt_deleted")).toBeInTheDocument(),
+		);
+
+		const row = screen.getByTestId("agent-row-agt_deleted");
+		// The inert row carries neither a link nor a chevron: it restores first.
+		expect(row.querySelectorAll("a")).toHaveLength(0);
+		expect(row.querySelector(".list-row-chevron")).toBeNull();
+
+		fireEvent.click(row);
+		expect(screen.getByTestId("location")).toHaveTextContent("/agents");
+	});
+
+	it("Agents: a click that lands on the menu trigger belongs to the trigger, not the row", async () => {
+		renderAgents([activeAgent, inactiveAgent]);
+
+		await waitFor(() =>
+			expect(screen.getByTestId("agent-row-agt_active")).toBeInTheDocument(),
+		);
+
+		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
+
+		expect(screen.getByTestId("agent-menu-agt_active")).toBeInTheDocument();
+		expect(screen.getByTestId("location")).toHaveTextContent("/agents");
 	});
 });
-
-/* =============================================================================
- * Polish rework R1 + R2 + R5 — the header row is a real column grid, the row's
- * meta line no longer repeats the columns, and the kebab is a labelled
- * `btn-icon`.
- *
- * jsdom has no layout engine, so "the header sits above its value" cannot be
- * measured in pixels. What CAN be pinned — and what actually broke — is that
- * the header and the data row share one column contract: the same number of
- * cells, in the same order, and each header cell occupying the same column
- * index as the data cell that carries the matching `data-testid`. That is the
- * structural property a flex row with two merged clusters does not have.
- * ============================================================================= */
 
 /**
  * The direct children of a grid container, in DOM order. jsdom applies no UA
@@ -788,10 +839,12 @@ describe("polish R5 — the row menu is a labelled icon button", () => {
 			"knowledgeBases.rowActions",
 		);
 
-		// The `btn-icon` primitive is a real 36px square in the stylesheet.
+		// The `btn-icon` primitive is a real 32px square in the stylesheet
+		// (R6: the 36px control height is gone; the mobile media block keeps
+		// the 44px tap floor).
 		const icon = declarationsForSelector(".btn-icon").join(" ");
-		expect(icon).toMatch(/min-width: 36px/);
-		expect(icon).toMatch(/min-height: 36px/);
+		expect(icon).toMatch(/min-width: 32px/);
+		expect(icon).toMatch(/min-height: 32px/);
 	});
 
 	it("Agents rows: every kebab carries the btn-icon class and an i18n aria-label", async () => {

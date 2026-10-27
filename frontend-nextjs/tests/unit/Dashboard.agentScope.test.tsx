@@ -1,7 +1,7 @@
 // @ts-nocheck
 // @vitest-environment jsdom
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import Dashboard from "../../src/views/Dashboard";
@@ -33,7 +33,7 @@ vi.mock("../../src/services/api", () => ({
 	},
 }));
 
-// `t` must be stable: Dashboard renders it inside memoised callbacks.
+// `t` must be stable: Dashboard renders it inside callbacks.
 const stableT = (key: string, options?: Record<string, unknown>) => {
 	if (key === "labels.welcome")
 		return `欢迎回到 ${options?.agentName} 控制台`;
@@ -68,8 +68,8 @@ beforeEach(() => {
 	} as any);
 });
 
-describe("Dashboard agent scoped navigation", () => {
-	it("uses the current agent name in the welcome copy", async () => {
+describe("Dashboard agent scope", () => {
+	it("drops the greeting but still names the active agent", async () => {
 		const router = createMemoryRouter(
 			[{ path: "/agents/:agentId/dashboard", element: <Dashboard /> }],
 			{ initialEntries: ["/agents/agt_1/dashboard"] },
@@ -77,12 +77,17 @@ describe("Dashboard agent scoped navigation", () => {
 
 		render(<RouterProvider router={router} />);
 
-		await waitFor(() => {
-			expect(screen.getByText("欢迎回到 官网客服 控制台")).toBeInTheDocument();
-		});
+		// The greeting line is gone for good: no `labels.welcome` render at all.
+		await screen.findByTestId("dashboard-identity");
+		expect(screen.queryByText(/欢迎回到/)).toBeNull();
+		expect(screen.queryByText(/labels\.welcome/)).toBeNull();
+
+		// The agent name still identifies whose dashboard this is.
+		const identity = screen.getByTestId("dashboard-identity");
+		expect(within(identity).getByText("官网客服")).toBeInTheDocument();
 	});
 
-	it("routes quick start actions inside the active agent workspace", async () => {
+	it("offers no quick-start shortcuts to leave the agent workspace", async () => {
 		const router = createMemoryRouter(
 			[
 				{ path: "/agents/:agentId/dashboard", element: <Dashboard /> },
@@ -90,62 +95,28 @@ describe("Dashboard agent scoped navigation", () => {
 					path: "/agents/:agentId/playground",
 					element: <div>Scoped Playground</div>,
 				},
-			],
-			{ initialEntries: ["/agents/agt_1/dashboard"] },
-		);
-
-		render(<RouterProvider router={router} />);
-
-		fireEvent.click(await screen.findByText("navigation.playground"));
-
-		await waitFor(() => {
-			expect(router.state.location.pathname).toBe("/agents/agt_1/playground");
-		});
-	});
-
-	it("sends source quick actions to the bound knowledge base, not /files and /urls", async () => {
-		const router = createMemoryRouter(
-			[
-				{ path: "/agents/:agentId/dashboard", element: <Dashboard /> },
 				{
 					path: "/knowledge-bases/:kbId",
 					element: <div>KB Detail Page</div>,
 				},
-			],
-			{ initialEntries: ["/agents/agt_1/dashboard"] },
-		);
-
-		render(<RouterProvider router={router} />);
-
-		fireEvent.click(await screen.findByText("navigation.fileManagement"));
-
-		await waitFor(() => {
-			expect(router.state.location.pathname).toBe("/knowledge-bases/kb_bound");
-		});
-	});
-
-	it("sends file-source quick actions to the bind prompt when the agent has no KB", async () => {
-		mockedApi.getAgent.mockResolvedValue({
-			id: "agt_1",
-			name: "官网客服",
-			kb_id: null,
-		} as any);
-
-		const router = createMemoryRouter(
-			[
-				{ path: "/agents/:agentId/dashboard", element: <Dashboard /> },
 				{ path: "/knowledge-bases", element: <div>KB List Page</div> },
 			],
 			{ initialEntries: ["/agents/agt_1/dashboard"] },
 		);
 
-		render(<RouterProvider router={router} />);
+		const { container } = render(<RouterProvider router={router} />);
 
-		fireEvent.click(await screen.findByText("navigation.urlKnowledge"));
+		await screen.findByTestId("dashboard-identity");
 
-		await waitFor(() => {
-			expect(router.state.location.pathname).toBe("/knowledge-bases");
-			expect(router.state.location.search).toBe("?bindAgent=agt_1");
-		});
+		for (const shortcut of [
+			"navigation.playground",
+			"navigation.fileManagement",
+			"navigation.urlKnowledge",
+		]) {
+			expect(screen.queryByText(shortcut)).toBeNull();
+		}
+		// No link or shortcut button leaves the page: only the copy control does.
+		expect(container.querySelectorAll("a")).toHaveLength(0);
+		expect(router.state.location.pathname).toBe("/agents/agt_1/dashboard");
 	});
 });

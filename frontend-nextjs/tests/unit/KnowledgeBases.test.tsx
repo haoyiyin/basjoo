@@ -237,7 +237,7 @@ describe("KnowledgeBases view", () => {
 		const freeRow = screen.getByTestId("kb-row-kb_free");
 		await openRowMenu(freeRow);
 		await userEvent.click(
-			within(freeRow).getByRole("menuitem", {
+			within(screen.getByTestId("kb-menu-kb_free")).getByRole("menuitem", {
 				name: "knowledgeBases.actions.bind",
 			}),
 		);
@@ -278,7 +278,7 @@ describe("KnowledgeBases view", () => {
 		const boundRow = screen.getByTestId("kb-row-kb_bound");
 		await openRowMenu(boundRow);
 		expect(
-			within(boundRow).queryByRole("menuitem", {
+			within(screen.getByTestId("kb-menu-kb_bound")).queryByRole("menuitem", {
 				name: "knowledgeBases.actions.unbind",
 			}),
 		).not.toBeInTheDocument();
@@ -327,7 +327,7 @@ describe("KnowledgeBases view", () => {
 		const boundRow = screen.getByTestId("kb-row-kb_bound");
 		await openRowMenu(boundRow);
 		await userEvent.click(
-			within(boundRow).getByRole("menuitem", {
+			within(screen.getByTestId("kb-menu-kb_bound")).getByRole("menuitem", {
 				name: "knowledgeBases.actions.delete",
 			}),
 		);

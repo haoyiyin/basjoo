@@ -1462,3 +1462,35 @@ describe("polish R4 — page subtitle and row metadata are two distinct greys", 
     }
   });
 });
+
+/* =============================================================================
+ * Craft wave B (lane CRAFT) — spec R6, the interactive layer.
+ *
+ * The selection surface moved from a solid accent fill to the accent tint
+ * (`--color-accent-subtle`, one alias of `--color-surface-selected`), because a
+ * solid fill repainted the ink colour of the text under it. That means the pair
+ * `text-primary on accent-subtle` is now the pair that has to be legible, in
+ * both themes, so it is pinned here rather than left to the eye.
+ * ============================================================================= */
+describe("craft R6 — the accent tint is a legible selection surface", () => {
+  it("::selection paints the tint under the page's own ink, and the pair clears 4.5:1", () => {
+    const selection = RULES.find((rule) =>
+      rule.selectors.includes("::selection"),
+    );
+    expect(selection, "::selection must be styled").not.toEqual(undefined);
+    const decls = declarationMap((selection as CssRule).declarations);
+    expect(String(decls.get("background"))).toBe("var(--color-accent-subtle)");
+    expect(String(decls.get("color"))).toBe("var(--fg-strong)");
+
+    for (const theme of THEMES) {
+      expect(
+        resolveToken(theme, "--color-accent-subtle"),
+        "--color-accent-subtle is an alias of the themed accent tint",
+      ).toBe(resolveToken(theme, "--color-surface-selected"));
+      expect(
+        ratio(theme, "--color-text-primary", "--color-surface-selected"),
+        `selected text on the accent tint (${theme})`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

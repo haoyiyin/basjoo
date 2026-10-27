@@ -326,11 +326,12 @@ describe("Agents lifecycle actions", () => {
 		await screen.findByText("Active Agent");
 		await screen.findByText("Deleted Agent");
 
-		// §15 moved row actions into an overflow menu: the header keeps exactly one
-		// "open current agent" action and the row-level open lives in the menu.
+		// R4 made the row itself the way in, so the header no longer keeps an
+		// "open current agent" shortcut at all: the row name (a link) and the
+		// whole row navigate, and the row-level open also lives in the menu.
 		expect(
-			screen.getAllByRole("button", { name: "agents.openCurrent" }),
-		).toHaveLength(1);
+			screen.queryByRole("button", { name: "agents.openCurrent" }),
+		).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByTestId("agent-actions-agt_active"));
 		expect(

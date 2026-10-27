@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import AdminLayout from "../components/AdminLayout";
 import KbFormModal from "../components/KbFormModal";
+import RowMenu, { isRowControl } from "../components/RowMenu";
 import type { KbFormValues } from "../components/KbFormModal";
 import { useAuth } from "../context/AuthContext";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -44,6 +45,7 @@ const providerLabelKey: Record<EmbeddingProvider, string> = {
  */
 export default function KnowledgeBases() {
 	const { t } = useTranslation("common");
+	const navigate = useNavigate();
 	const { admin } = useAuth();
 	const isMobile = useIsMobile();
 	const isSuperAdmin = admin?.role === "super_admin";
@@ -243,113 +245,60 @@ export default function KnowledgeBases() {
 	const renderRowActions = (kb: KnowledgeBaseDetail) => {
 		if (!isSuperAdmin) return null;
 		const busy = busyId === kb.id;
-		const menuOpen = openMenuKbId === kb.id;
 		return (
-			<div
-				style={{
-					position: "relative",
-					display: "flex",
-					justifyContent: isMobile ? "flex-start" : "flex-end",
+			<RowMenu
+				label={t("knowledgeBases.rowActions", { name: kb.name })}
+				triggerLabel={t("knowledgeBases.rowActions", { name: kb.name })}
+				open={openMenuKbId === kb.id}
+				onOpenChange={(next) => setOpenMenuKbId(next ? kb.id : null)}
+				align={isMobile ? "start" : "end"}
+				triggerTestId={`kb-actions-${kb.id}`}
+				menuTestId={`kb-menu-${kb.id}`}
+				triggerStyle={{
+					...iconButtonStyle,
 					flexShrink: 0,
+					alignSelf: isMobile ? "flex-start" : "flex-end",
 				}}
 			>
-				<button
-					type="button"
-					className="btn btn-icon"
-					data-testid={`kb-actions-${kb.id}`}
-					aria-label={t("knowledgeBases.rowActions", { name: kb.name })}
-					aria-haspopup="menu"
-					aria-expanded={menuOpen}
-					style={iconButtonStyle}
-					onClick={() =>
-						setOpenMenuKbId((current) =>
-							current === kb.id ? null : kb.id,
-						)
-					}
-				>
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 16 16"
-						fill="currentColor"
-						aria-hidden="true"
-					>
-						<circle cx="8" cy="3" r="1.4" />
-						<circle cx="8" cy="8" r="1.4" />
-						<circle cx="8" cy="13" r="1.4" />
-					</svg>
-				</button>
-				{menuOpen && (
-					<div
-						role="menu"
-						data-testid={`kb-menu-${kb.id}`}
-						aria-label={t("knowledgeBases.rowActions", { name: kb.name })}
-						style={{
-							position: "absolute",
-							top: "calc(100% + var(--space-1))",
-							right: isMobile ? "auto" : 0,
-							left: isMobile ? 0 : "auto",
-							zIndex: 20,
-							minWidth: 200,
-							display: "flex",
-							flexDirection: "column",
-							gap: "var(--space-1)",
-							padding: "var(--space-1)",
-							background: "var(--color-bg-elevated)",
-							border: "1px solid var(--color-border)",
-							borderRadius: "var(--radius-md)",
-							boxShadow: "var(--shadow-lg)",
+				{!kb.bound_agent && (
+					<button
+						type="button"
+						role="menuitem"
+						className="row-menu-item"
+						disabled={busy}
+						onClick={() => {
+							void openBindModal(kb);
 						}}
 					>
-						{!kb.bound_agent && (
-							<button
-								type="button"
-								role="menuitem"
-								className="btn btn-ghost"
-								style={{ justifyContent: "flex-start" }}
-								disabled={busy}
-								onClick={() => {
-									setOpenMenuKbId(null);
-									void openBindModal(kb);
-								}}
-							>
-								{t("knowledgeBases.actions.bind")}
-							</button>
-						)}
-						<button
-							type="button"
-							role="menuitem"
-							className="btn btn-ghost"
-							style={{ justifyContent: "flex-start" }}
-							disabled={busy}
-							onClick={() => {
-								setOpenMenuKbId(null);
-								setActionError(null);
-								setResetTarget(kb);
-							}}
-						>
-							{t("knowledgeBases.actions.reset")}
-						</button>
-						<button
-							type="button"
-							role="menuitem"
-							data-testid={`kb-delete-${kb.id}`}
-							className="btn btn-ghost"
-							style={{
-								justifyContent: "flex-start",
-								color: "var(--color-error)",
-							}}
-							disabled={busy}
-							onClick={() => {
-								setOpenMenuKbId(null);
-								void handleDelete(kb);
-							}}
-						>
-							{t("knowledgeBases.actions.delete")}
-						</button>
-					</div>
+						{t("knowledgeBases.actions.bind")}
+					</button>
 				)}
-			</div>
+				<button
+					type="button"
+					role="menuitem"
+					className="row-menu-item"
+					disabled={busy}
+					onClick={() => {
+						setActionError(null);
+						setResetTarget(kb);
+					}}
+				>
+					{t("knowledgeBases.actions.reset")}
+				</button>
+				<button
+					type="button"
+					role="menuitem"
+					data-testid={`kb-delete-${kb.id}`}
+					className="row-menu-item"
+					style={{ color: "var(--color-error)" }}
+					disabled={busy}
+					onClick={() => {
+						void handleDelete(kb);
+					}}
+				>
+					{t("knowledgeBases.actions.delete")}
+				</button>
+			</RowMenu>
 		);
 	};
 
@@ -492,6 +441,12 @@ export default function KnowledgeBases() {
 								className="list-row list-grid list-grid--kb"
 								data-testid={`kb-row-${kb.id}`}
 								style={rowStyle}
+								onClick={(event) => {
+									// The whole row is a way in; the menu trigger and the name keep
+									// their own click (the name is the keyboard tab stop).
+									if (isRowControl(event.target)) return;
+									navigate(`/knowledge-bases/${kb.id}`);
+								}}
 							>
 								{/* Column 1 — name. The NAME is the affordance, not the row: the link
 								 * (with its chevron) is the only navigation target, so the row can

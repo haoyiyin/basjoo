@@ -158,7 +158,6 @@
       "actions": "操作"
     },
     "open": "打开",
-    "openCurrent": "打开当前智能体",
     "current": "当前",
     "switch": "切换",
     "deactivate": "停用",
@@ -201,9 +200,7 @@
     "csvFormat": "问题,答案\n如何重置密码?,点击忘记密码按钮..."
   },
   "labels": {
-    "welcome": "欢迎回到 {{agentName}} 控制台",
     "description": "描述",
-    "quickStart": "快速开始",
     "systemStatus": "系统状态",
     "urlKnowledgeSource": "网页数量",
     "fileItems": "文件",
@@ -228,10 +225,7 @@
     "indexedFiles": "已索引文件",
     "docBlocks": "文档块",
     "indexStatus": "索引状态",
-    "testAiEffect": "测试 AI 对话效果",
-    "manageFiles": "上传和管理文件作为AI知识来源",
     "knowledgeDescription": "管理AI的知识来源，包括网页和上传的文件",
-    "addWebKnowledge": "添加网页知识库",
     "configModelParams": "配置模型参数",
     "configAgentSettings": "配置智能体设置和嵌入代码",
     "tips": "使用提示",
@@ -355,6 +349,7 @@
     "embeddingApiBase": "Embedding API Base",
     "apiKey": "API 密钥",
     "configured": "已配置",
+    "notConfigured": "未配置",
     "apiBase": "API 基础地址",
     "modelName": "模型名称",
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
