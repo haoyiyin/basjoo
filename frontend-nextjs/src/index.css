@@ -1347,6 +1347,13 @@ a.stat-link:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* Mobile-only field label. The desktop column header already names a value, so
+ * the inline label stays out of the desktop layout entirely; the mobile block
+ * turns it on when the row becomes a card. */
+.list-cell-label {
+  display: none;
+}
+
 /* Desktop column-label row. It sits on the SAME grid template as the rows
  * beneath (`.list-grid` + the flavour class), so each label's column index is
  * the column index of the value it names. It shares `.list-frame` with the
@@ -2852,8 +2859,13 @@ tbody tr:hover td {
   .mobile-main {
     margin-top: 60px;
     margin-left: 0 !important;
+    min-height: 0 !important;
     padding: var(--space-4) !important;
+    /* The document is the only vertical scroller at 375px. `clip` keeps the
+     * horizontal guard without turning <main> into a scroll container (hidden
+     * + visible would compute to auto and swallow the gesture). */
     overflow-x: hidden;
+    overflow-y: clip !important;
   }
 
   /* ------------------------------------------------------------------
@@ -2966,10 +2978,13 @@ tbody tr:hover td {
    * ------------------------------------------------------------------ */
   .playground-shell {
     flex-direction: column;
+    /* Let <main>/the document scroll: no second scroll container, and no
+     * viewport-height floor that makes the box taller than its content while
+     * still being unable to move. */
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: clip;
     height: auto !important;
-    min-height: calc(100vh - 60px);
+    min-height: 0;
   }
 
   .playground-header {
@@ -3077,6 +3092,129 @@ tbody tr:hover td {
    * instead of the line widening past its cell. */
   .list-cell > .list-row-description {
     min-width: 0;
+  }
+
+  /* ------------------------------------------------------------------
+   * R2: a mobile row reads as a card, not one field per line.
+   *   agents: name/status/menu · description · KB + updated
+   *   KB:     name/status/menu · embedding · counts + bound agent
+   * The desktop column templates above stay untouched; these rules only
+   * override the single-column mobile fallback.
+   * ------------------------------------------------------------------ */
+  .list-grid--agents {
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+    grid-template-areas:
+      "name status actions"
+      "desc desc desc"
+      "kb updated updated";
+    align-items: start;
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+  }
+
+  .list-grid--kb {
+    grid-template-columns: minmax(0, 1fr) auto auto auto !important;
+    grid-template-areas:
+      "name name status actions"
+      "desc desc desc desc"
+      "docs chunks bound bound";
+    align-items: start;
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+  }
+
+  /* `display: contents` promotes the name cluster and the description to grid
+   * items so the first line can hold the name, the status pill and the menu. */
+  .list-grid--agents .list-row-main,
+  .list-grid--kb .list-row-main {
+    display: contents;
+  }
+
+  .list-grid--agents .list-row-name,
+  .list-grid--kb .list-row-name {
+    grid-area: name;
+  }
+
+  .list-grid--agents .list-row-description,
+  .list-grid--kb .list-row-description {
+    grid-area: desc;
+  }
+
+  /* The agent description gets two lines, then an ellipsis. */
+  .list-grid--agents .list-row-description {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+
+  /* The KB description is the embedding model: one line, ellipsis. */
+  .list-grid--kb .list-row-description {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .list-cell--kb {
+    grid-area: kb;
+  }
+
+  .list-cell--updated {
+    grid-area: updated;
+  }
+
+  .list-cell--documents {
+    grid-area: docs;
+  }
+
+  .list-cell--chunks {
+    grid-area: chunks;
+  }
+
+  .list-cell--bound-agent {
+    grid-area: bound;
+  }
+
+  .list-cell--status {
+    grid-area: status;
+    align-self: start;
+  }
+
+  /* The ⋮ is the LAST item on the first line, pushed to the row's right edge
+   * and kept inside the row padding. Never a stacked cell at x=32. */
+  .list-cell--actions {
+    grid-area: actions;
+    justify-self: end;
+    align-self: start;
+    margin-left: auto;
+  }
+
+  .list-cell--actions .btn-icon {
+    margin-left: auto;
+  }
+
+  /* A label and its value read as one phrase and wrap together. */
+  .list-grid--agents .list-cell,
+  .list-grid--kb .list-cell {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1);
+  }
+
+  .list-cell-label {
+    display: inline;
+    color: var(--fg-dim);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+  }
+
+  /* A soft-deleted agent's purge note spans the full row, under its facts. */
+  .list-row-note {
+    grid-column: 1 / -1;
   }
 
   .show-mobile {
@@ -3250,6 +3388,21 @@ tbody tr:hover td {
 }
 
 .identity-id > .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A fact plus one or two actions (the KB row): the actions wrap as a group and
+ * never widen the identity value past the page gutter. */
+.identity-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-actions a {
   min-width: 0;
   overflow-wrap: anywhere;
 }

@@ -115,8 +115,11 @@ describe("Dashboard agent scope", () => {
 		]) {
 			expect(screen.queryByText(shortcut)).toBeNull();
 		}
-		// No link or shortcut button leaves the page: only the copy control does.
-		expect(container.querySelectorAll("a")).toHaveLength(0);
+		// The only link is the bound knowledge base's name (R3): no playground,
+		// file or URL shortcut came back.
+		const links = Array.from(container.querySelectorAll("a"));
+		expect(links).toHaveLength(1);
+		expect(links[0].getAttribute("href")).toBe("/knowledge-bases/kb_bound");
 		expect(router.state.location.pathname).toBe("/agents/agt_1/dashboard");
 	});
 });

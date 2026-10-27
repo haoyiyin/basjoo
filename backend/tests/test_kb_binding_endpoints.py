@@ -89,6 +89,20 @@ async def test_bind_sets_agent_kb_id(client, default_agent_id, unbound_kb_id):
 
 
 @pytest.mark.asyncio
+async def test_unbound_agent_payload_reports_null_kb_name(client, default_agent_id):
+    """The agent payload carries the KB name; unbound means kb_id and kb_name are null."""
+    unbind = await client.put(
+        f"/api/v1/agents/{default_agent_id}/knowledge-base", json={"kb_id": None}
+    )
+    assert unbind.status_code == 200, unbind.text
+
+    response = await client.get(f"/api/v1/agent?agent_id={default_agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["kb_id"] is None
+    assert data["kb_name"] is None
+
+@pytest.mark.asyncio
 async def test_bind_kb_already_bound_to_other_agent_conflicts(
     client, default_agent_id, bound_kb_id
 ):

@@ -330,7 +330,7 @@ describe("Agents create sheet (§15)", () => {
 		expect(mockedApi.createAgent.mock.calls[0][0].name).toBe("客服助手一二");
 	});
 
-	it("keeps every row action in the overflow menu: open, bind, deactivate, restore", async () => {
+	it("keeps every row action in the overflow menu: open, deactivate, restore", async () => {
 		renderAgents([activeAgent, deletedAgent]);
 		await screen.findByText("Active Agent");
 		await screen.findByText("Deleted Agent");
@@ -349,11 +349,12 @@ describe("Agents create sheet (§15)", () => {
 		expect(
 			within(activeMenu).getByRole("menuitem", { name: "agents.open" }),
 		).toBeInTheDocument();
+		// R3: knowledge-base binding is no longer a blind row-menu toggle.
 		expect(
-			within(activeMenu).getByRole("menuitem", {
-				name: "knowledgeBases.actions.bind",
+			within(activeMenu).queryByRole("menuitem", {
+				name: /knowledgeBases\.actions\.(bind|unbind)/,
 			}),
-		).toBeInTheDocument();
+		).not.toBeInTheDocument();
 		expect(
 			within(activeMenu).getByRole("menuitem", { name: "agents.deactivate" }),
 		).toBeInTheDocument();

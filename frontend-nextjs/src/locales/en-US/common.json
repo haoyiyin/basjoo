@@ -833,6 +833,11 @@
   },
   "dashboard": {
     "userCount": "Users",
-    "sessionCount": "Sessions"
+    "sessionCount": "Sessions",
+    "boundKnowledgeBase": "Bound knowledge base",
+    "unboundKnowledgeBase": "No knowledge base bound",
+    "changeKnowledgeBase": "Change",
+    "bindExisting": "Bind existing",
+    "createKnowledgeBase": "Create new knowledge base"
   }
 }

@@ -283,7 +283,10 @@ export default function Sessions() {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          minHeight: '100vh',
+          // R1: at mobile width the document scrolls; a 100vh flex column here
+          // would constrain the list/messages panes and give them their own
+          // scrollbars. Desktop keeps the viewport-height workspace.
+          minHeight: isMobile ? 'auto' : '100vh',
           paddingBottom: 0,
         }}
       >

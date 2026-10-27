@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom";
@@ -145,9 +145,9 @@ beforeEach(() => {
 });
 
 /**
- * §15 moved the per-row actions (bind/unbind, open, delete/restore) into an
- * overflow menu, so the raw `agent-kb-bind-*` control is only in the DOM once
- * that row's menu is open. The binding behaviour itself is unchanged.
+ * R3: the blind bind/unbind toggle is gone from the row menu. Binding now
+ * happens on the agent dashboard, which shows the current KB and opens the
+ * shared chooser; the row keeps its name/status/facts and the non-KB actions.
  */
 function openRowMenu(agentId: string) {
 	fireEvent.click(screen.getByTestId(`agent-actions-${agentId}`));
@@ -167,101 +167,43 @@ describe("Agents knowledge-base column", () => {
 		);
 	});
 
-	it("renders Unbind for a bound agent and Bind for an unbound one", async () => {
+	it("no longer offers bind or unbind in the row menu", async () => {
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
-		openRowMenu("agt_bound");
-		expect(screen.getByTestId("agent-kb-bind-agt_bound")).toHaveTextContent(
-			"knowledgeBases.actions.unbind",
-		);
-		openRowMenu("agt_free");
-		expect(screen.getByTestId("agent-kb-bind-agt_free")).toHaveTextContent(
-			"knowledgeBases.actions.bind",
-		);
+		const boundMenu = openRowMenu("agt_bound");
+		expect(
+			within(boundMenu).queryByTestId("agent-kb-bind-agt_bound"),
+		).not.toBeInTheDocument();
+		expect(
+			within(boundMenu).queryByRole("menuitem", {
+				name: /knowledgeBases\.actions\.(bind|unbind)/,
+			}),
+		).not.toBeInTheDocument();
+
+		const freeMenu = openRowMenu("agt_free");
+		expect(
+			within(freeMenu).queryByRole("menuitem", {
+				name: /knowledgeBases\.actions\.(bind|unbind)/,
+			}),
+		).not.toBeInTheDocument();
+		// The non-KB actions stay.
+		expect(
+			within(freeMenu).getByRole("menuitem", { name: "agents.open" }),
+		).toBeInTheDocument();
+		expect(
+			within(freeMenu).getByRole("menuitem", { name: "agents.deactivate" }),
+		).toBeInTheDocument();
 	});
 
-	it("hides the bind/unbind controls from a non super_admin", async () => {
+	it("keeps the knowledge-base column readable for a non super_admin", async () => {
 		authState.role = "admin";
 		renderAgents();
 
 		await screen.findByText("Bound Agent");
-		openRowMenu("agt_bound");
-		openRowMenu("agt_free");
-		expect(
-			screen.queryByTestId("agent-kb-bind-agt_bound"),
-		).not.toBeInTheDocument();
-		expect(
-			screen.queryByTestId("agent-kb-bind-agt_free"),
-		).not.toBeInTheDocument();
-		// The column itself stays readable for everyone.
 		expect(screen.getByTestId("agent-kb-name-agt_bound")).toHaveTextContent(
 			"Product Docs",
 		);
-	});
-
-	it("binds an existing knowledge base to an unbound agent through the chooser", async () => {
-		renderAgents();
-
-		await screen.findByText("Free Agent");
-		openRowMenu("agt_free");
-		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_free"));
-
-		const modal = await screen.findByTestId("kb-onboarding-modal");
-		fireEvent.click(
-			screen.getByRole("button", { name: "agents.kbBindExisting" }),
-		);
-		fireEvent.change(screen.getByTestId("kb-chooser-select"), {
-			target: { value: "kb_free" },
-		});
-		fireEvent.click(screen.getByTestId("kb-chooser-bind-submit"));
-
-		await waitFor(() => {
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_free",
-				"kb_free",
-			);
-		});
-		// The list-binding flow stays on the list (no navigation to a dashboard).
-		await waitFor(() => {
-			expect(
-				screen.queryByTestId("kb-onboarding-modal"),
-			).not.toBeInTheDocument();
-		});
-		expect(mockedApi.listAgents).toHaveBeenCalledTimes(2);
-	});
-
-	it("unbinds a bound agent after confirmation, calling the API with null", async () => {
-		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-		renderAgents();
-
-		await screen.findByText("Bound Agent");
-		openRowMenu("agt_bound");
-		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_bound"));
-
-		await waitFor(() => {
-			expect(confirmSpy).toHaveBeenCalledTimes(1);
-			expect(mockedApi.bindAgentKnowledgeBase).toHaveBeenCalledWith(
-				"agt_bound",
-				null,
-			);
-		});
-		confirmSpy.mockRestore();
-	});
-
-	it("does not call the API when unbind is not confirmed", async () => {
-		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-		renderAgents();
-
-		await screen.findByText("Bound Agent");
-		openRowMenu("agt_bound");
-		fireEvent.click(screen.getByTestId("agent-kb-bind-agt_bound"));
-
-		await waitFor(() => {
-			expect(confirmSpy).toHaveBeenCalledTimes(1);
-		});
-		expect(mockedApi.bindAgentKnowledgeBase).not.toHaveBeenCalled();
-		confirmSpy.mockRestore();
 	});
 });
 

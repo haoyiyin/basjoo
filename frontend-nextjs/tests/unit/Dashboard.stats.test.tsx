@@ -181,8 +181,15 @@ describe("Dashboard statistics", () => {
 		]) {
 			expect(screen.queryByText(shortcut)).toBeNull();
 		}
-		// The only button left is the agent-id copy control.
-		expect(screen.getAllByRole("button")).toHaveLength(1);
+		// The buttons are the agent-id copy control plus the KB row's change
+		// action (R3); no quick-start shortcut came back.
+		expect(
+			screen.getByTestId("dashboard-agent-id-copy"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByTestId("dashboard-kb-change"),
+		).toBeInTheDocument();
+		expect(screen.getAllByRole("button")).toHaveLength(2);
 	});
 
 	it("renders no knowledge-base parameter labels", async () => {

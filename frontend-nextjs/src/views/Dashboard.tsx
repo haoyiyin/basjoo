@@ -1,7 +1,8 @@
 "use client";
 
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import AdminLayout from "../components/AdminLayout";
+import KbBindSheet from "../components/KbBindSheet";
 import { Icon } from "../components/Icon";
 import { useState, useEffect, useRef } from "react";
 import { api } from "../services/api";
@@ -39,6 +40,9 @@ export default function Dashboard() {
 	);
 	const [visitorCount, setVisitorCount] = useState<number | null>(null);
 	const [agentIdCopied, setAgentIdCopied] = useState(false);
+	const [kbId, setKbId] = useState<string | null>(null);
+	const [kbName, setKbName] = useState<string | null>(null);
+	const [bindOpen, setBindOpen] = useState(false);
 
 	useEffect(() => {
 		loadData();
@@ -53,6 +57,8 @@ export default function Dashboard() {
 			const agent = await api.getAgent(routeAgentId);
 			setAgentId(agent.id);
 			setAgentName(agent.name);
+			setKbId(agent.kb_id ?? null);
+			setKbName(agent.kb_name ?? null);
 			setApiKeySet(agent.api_key_set === true);
 			setActiveSessionCount(
 				typeof agent.active_session_count === "number"
@@ -176,6 +182,53 @@ export default function Dashboard() {
 							)}
 						</dd>
 					</div>
+					{/* R3: the knowledge base is part of the agent's identity, with the
+					 * name as a link to its source page and one action to change it. */}
+					<div className="identity-row" data-testid="dashboard-kb-row">
+						<dt className="identity-label">
+							{kbId
+								? t("dashboard.boundKnowledgeBase")
+								: t("dashboard.unboundKnowledgeBase")}
+						</dt>
+						<dd className="identity-value">
+							{kbId ? (
+								<span className="identity-actions">
+									<Link
+										to={`/knowledge-bases/${kbId}`}
+										data-testid="dashboard-kb-link"
+									>
+										{kbName || kbId}
+									</Link>
+									<button
+										type="button"
+										className="btn btn-secondary"
+										data-testid="dashboard-kb-change"
+										onClick={() => setBindOpen(true)}
+									>
+										{t("dashboard.changeKnowledgeBase")}
+									</button>
+								</span>
+							) : (
+								<span className="identity-actions">
+									<button
+										type="button"
+										className="btn btn-secondary"
+										data-testid="dashboard-kb-bind"
+										onClick={() => setBindOpen(true)}
+									>
+										{t("dashboard.bindExisting")}
+									</button>
+									<Link
+										className="btn btn-primary"
+										to={`/knowledge-bases?bindAgent=${routeAgentId ?? ""}`}
+										data-testid="dashboard-kb-create"
+									>
+										{t("dashboard.createKnowledgeBase")}
+									</Link>
+								</span>
+							)}
+						</dd>
+					</div>
 				</dl>
 
 				{quota && (
@@ -192,6 +245,17 @@ export default function Dashboard() {
 					</p>
 				)}
 			</div>
+
+			{bindOpen && routeAgentId && (
+				<KbBindSheet
+					agentId={routeAgentId}
+					onClose={() => setBindOpen(false)}
+					onBound={() => {
+						setBindOpen(false);
+						void loadData();
+					}}
+				/>
+			)}
 		</AdminLayout>
 	);
 }

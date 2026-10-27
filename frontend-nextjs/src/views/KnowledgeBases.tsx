@@ -467,6 +467,9 @@ export default function KnowledgeBases() {
 										</svg>
 									</span>
 									<span className="list-row-description">
+										<span className="list-cell-label">
+											{t("knowledgeBases.columns.embedding")}
+										</span>
 										{t(providerLabelKey[kb.embedding_provider])} ·{" "}
 										{kb.embedding_model}
 									</span>
@@ -474,25 +477,34 @@ export default function KnowledgeBases() {
 								{/* Column 2 — documents. The value only: the column header names it,
 								 * so repeating 文档 here would duplicate the header (R2). */}
 								<div
-									className="list-cell"
+									className="list-cell list-cell--documents"
 									data-testid={`kb-documents-${kb.id}`}
 								>
+									<span className="list-cell-label">
+										{t("knowledgeBases.columns.documents")}
+									</span>
 									<span className="list-cell-value">
 										{kb.ready_document_count}/{kb.document_count}
 									</span>
 								</div>
 								{/* Column 3 — chunks. */}
 								<div
-									className="list-cell"
+									className="list-cell list-cell--chunks"
 									data-testid={`kb-chunks-${kb.id}`}
 								>
+									<span className="list-cell-label">
+										{t("knowledgeBases.columns.chunks")}
+									</span>
 									<span className="list-cell-value">{kb.total_chunks}</span>
 								</div>
 								{/* Column 4 — bound agent. */}
 								<div
-									className="list-cell"
+									className="list-cell list-cell--bound-agent"
 									data-testid={`kb-bound-agent-${kb.id}`}
 								>
+									<span className="list-cell-label">
+										{t("knowledgeBases.columns.boundAgent")}
+									</span>
 									<span
 										style={{
 											color: kb.bound_agent
@@ -507,7 +519,7 @@ export default function KnowledgeBases() {
 								</div>
 								{/* Column 5 — status. */}
 								<div
-									className="list-cell"
+									className="list-cell list-cell--status"
 									data-testid={`kb-status-${kb.id}`}
 								>
 									<span className={statusBadgeClass[kb.status]}>
@@ -516,7 +528,7 @@ export default function KnowledgeBases() {
 								</div>
 								{/* Column 6 — actions. */}
 								<div
-									className="list-cell"
+									className="list-cell list-cell--actions"
 									data-testid={`kb-actions-cell-${kb.id}`}
 								>
 									{renderRowActions(kb)}

@@ -93,6 +93,7 @@ vi.mock("../../src/services/api", () => ({
 		streamChat: vi.fn(),
 		testAIApi: vi.fn(),
 		getDefaultAgent: vi.fn(),
+		checkHealth: vi.fn(),
 	},
 }));
 
@@ -329,6 +330,7 @@ beforeEach(() => {
 		status: "ready",
 	});
 	mockedApi.streamChat.mockResolvedValue(undefined);
+	mockedApi.checkHealth.mockResolvedValue({ status: "healthy" } as never);
 	// jsdom has no layout: ChatPanel scrolls its message list on every update.
 	Element.prototype.scrollIntoView = vi.fn();
 });
@@ -484,6 +486,55 @@ describe("mobile CSS contract (src/index.css)", () => {
 		);
 		expect(tapTargetRule).toBeDefined();
 		expect(tapTargetRule?.declarations).toMatch(/min-height:\s*44px/);
+	});
+
+	it("keeps the document as the only vertical scroller at 375px", () => {
+		// R1: <main> must not be a scroll container on mobile. `overflow-y: clip`
+		// keeps the horizontal guard without computing to `auto` (hidden + visible
+		// becomes auto, which is exactly the bug: a 1px scrollable box that eats
+		// the touch gesture).
+		const main = rulesFor(".mobile-main").map((r) => r.declarations).join(" ");
+		expect(main).toMatch(/overflow-y:\s*clip/);
+		expect(main).toMatch(/min-height:\s*0/);
+
+		// The playground shell and both panes let the page scroll: no nested
+		// scroll box, no viewport-height floor taller than its content.
+		const shell = rulesFor(".playground-shell");
+		expect(shell.length).toBeGreaterThan(0);
+		const shellDecls = shell.map((r) => r.declarations).join(" ");
+		expect(shellDecls).toMatch(/overflow-y:\s*clip/);
+		expect(shellDecls).not.toMatch(/overflow-y:\s*auto/);
+		expect(shellDecls).not.toMatch(/min-height:\s*calc\(100vh/);
+
+		for (const pane of [
+			".playground-pane-settings",
+			".playground-pane-chat",
+		]) {
+			const decls = rulesFor(pane).map((r) => r.declarations).join(" ");
+			expect(decls).toMatch(/overflow:\s*visible/);
+		}
+	});
+
+	it("declares the R2 mobile row grid for both lists", () => {
+		const agents = rulesFor(".list-grid--agents")
+			.map((r) => r.declarations)
+			.join(" ");
+		expect(agents).toMatch(/grid-template-areas/);
+		expect(agents).toMatch(/"name status actions"/);
+		expect(agents).toMatch(/"desc desc desc"/);
+		expect(agents).toMatch(/"kb updated updated"/);
+
+		const kb = rulesFor(".list-grid--kb").map((r) => r.declarations).join(" ");
+		expect(kb).toMatch(/"name name status actions"/);
+		expect(kb).toMatch(/"docs chunks bound bound"/);
+
+		// The menu trigger is the trailing control of line 1, never x=32.
+		const actions = rulesFor(".list-cell--actions")
+			.map((r) => r.declarations)
+			.join(" ");
+		expect(actions).toMatch(/grid-area:\s*actions/);
+		expect(actions).toMatch(/justify-self:\s*end/);
+		expect(actions).toMatch(/margin-left:\s*auto/);
 	});
 
 	it("declares the KB table scroll wrapper and the mobile-main overflow guard", () => {
