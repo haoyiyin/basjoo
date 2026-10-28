@@ -116,9 +116,6 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   themes) and `tests/unit/mobileLayout.test.tsx` (375px: no overflow, ≥44px targets, the mobile
   media-block rules and the ≥1025px ordering). A new class or a token change must keep both green —
   that is the cheapest way to avoid a silent visual regression.
-- Layout rules when adding a view: root `admin-page`, one `page-header` with a single `page-title`,
-  actions in `page-actions`, machine strings (ids, model names, counts, quotas) in `mono`. No glass
-  surface, no gradient backdrop, no `fontWeight` outside 400/500/600, no literal colour in a `.tsx`.
 - **Light is the appearance the product actually ships in** (`ThemeProvider` sets `data-theme`;
   light is the default resolve). Check a colour change in light first, dark second.
 - **The shell's direction ("C") is warm and single-accent.** The palette is the logo's own yellow
