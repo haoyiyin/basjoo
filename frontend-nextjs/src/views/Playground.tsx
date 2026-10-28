@@ -536,7 +536,12 @@ export default function Playground() {
                 </h2>
               </div>
             )}
-            {apiKeySet === false && (
+            {/* On the narrow (tabbed) layout the settings pane is not mounted,
+             * so the chat tab is the only place the missing-key warning can
+             * appear — keep it there. On the desktop two-pane layout the
+             * settings rail already shows it, and a second verbatim copy with
+             * no icon read as a different message saying the same thing. */}
+            {isNarrow && apiKeySet === false && (
               <div role="alert" className="playground-warning">
                 {t('labels.pleaseConfigureApiKey')}
               </div>

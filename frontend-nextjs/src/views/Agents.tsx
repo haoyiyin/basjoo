@@ -388,7 +388,7 @@ export default function Agents() {
 						<button
 							type="button"
 							ref={createTriggerRef}
-							className="btn btn-icon"
+							className="btn btn-primary"
 							data-testid="agent-create-open"
 							aria-label={t("agents.createTitle")}
 							title={t("agents.createTitle")}
@@ -396,6 +396,7 @@ export default function Agents() {
 							onClick={openCreateSheet}
 						>
 							<Icon name="plus" size={16} />
+							{t("agents.createTitle")}
 						</button>
 					</div>
 				</header>
@@ -584,7 +585,7 @@ export default function Agents() {
 														void handleUnbind(agent);
 													}}
 												>
-													<Icon name="close" size={16} />
+													<Icon name="unlink" size={16} />
 												</button>
 											)}
 										</span>

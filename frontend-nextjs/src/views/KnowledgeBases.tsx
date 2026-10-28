@@ -337,7 +337,7 @@ export default function KnowledgeBases() {
 							<button
 								type="button"
 								ref={createTriggerRef}
-								className="btn btn-icon"
+								className="btn btn-primary"
 								data-testid="kb-create-open"
 								aria-label={t("knowledgeBases.newKnowledgeBase")}
 								title={t("knowledgeBases.newKnowledgeBase")}
@@ -347,6 +347,7 @@ export default function KnowledgeBases() {
 								}}
 							>
 								<Icon name="plus" size={16} />
+								{t("knowledgeBases.newKnowledgeBase")}
 							</button>
 						)}
 					</div>
@@ -430,10 +431,10 @@ export default function KnowledgeBases() {
 							<span className="list-header-cell">
 								{t("knowledgeBases.columns.name")}
 							</span>
-							<span className="list-header-cell">
+							<span className="list-header-cell is-numeric">
 								{t("knowledgeBases.columns.documents")}
 							</span>
-							<span className="list-header-cell">
+							<span className="list-header-cell is-numeric">
 								{t("knowledgeBases.columns.chunks")}
 							</span>
 							<span className="list-header-cell">
@@ -498,7 +499,7 @@ export default function KnowledgeBases() {
 								{/* Column 2 — documents. The value only: the column header names it,
 								 * so repeating 文档 here would duplicate the header (R2). */}
 								<div
-									className="list-cell list-cell--documents"
+									className="list-cell list-cell--documents is-numeric"
 									data-testid={`kb-documents-${kb.id}`}
 								>
 									<span className="list-cell-label">
@@ -510,7 +511,7 @@ export default function KnowledgeBases() {
 								</div>
 								{/* Column 3 — chunks. */}
 								<div
-									className="list-cell list-cell--chunks"
+									className="list-cell list-cell--chunks is-numeric"
 									data-testid={`kb-chunks-${kb.id}`}
 								>
 									<span className="list-cell-label">
@@ -563,7 +564,7 @@ export default function KnowledgeBases() {
 													void handleUnbindAgent(kb);
 												}}
 											>
-												<Icon name="close" size={16} />
+												<Icon name="unlink" size={16} />
 											</button>
 										)}
 									</span>

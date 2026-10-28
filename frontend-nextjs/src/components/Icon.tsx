@@ -16,6 +16,7 @@ export const ICON_NAMES = [
 	"sessions",
 	"plus",
 	"close",
+	"unlink",
 	"trash",
 	"back",
 	"refresh",
@@ -91,6 +92,16 @@ const ICON_PATHS: Record<IconName, ReactElement> = {
 		<>
 			<path d="M18 6 6 18" />
 			<path d="m6 6 12 12" />
+		</>
+	),
+	unlink: (
+		<>
+			<path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+			<path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+			<path d="M8 2v3" />
+			<path d="M2 8h3" />
+			<path d="M16 22v-3" />
+			<path d="M22 16h-3" />
 		</>
 	),
 	trash: (

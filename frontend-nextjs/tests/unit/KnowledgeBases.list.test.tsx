@@ -341,24 +341,29 @@ describe("KnowledgeBases list (§16 row contract)", () => {
 			expect(row.querySelector(".list-row-main")).not.toBeNull();
 		}
 	});
-	it("puts creation behind a labelled `+` in page-actions, not a labelled page button", async () => {
+	it("puts creation in page-actions as the page's primary action", async () => {
 		renderView();
 
 		await waitFor(() =>
 			expect(screen.getByTestId("kb-row-kb_bound")).toBeInTheDocument(),
 		);
 
-		// Same create affordance as the agents list: an icon button in
-		// `page-actions` whose accessible name is the create action.
+		// The create affordance is the page's primary action: a filled accent
+		// button in `page-actions` that names itself. An unlabelled `+` icon
+		// button made the only action on the page the weakest thing on it.
 		const trigger = screen.getByTestId("kb-create-open");
 		expect(trigger.tagName).toBe("BUTTON");
-		expect(trigger).toHaveClass("btn-icon");
+		expect(trigger).toHaveClass("btn-primary");
 		expect(trigger).toHaveAttribute(
 			"aria-label",
 			"knowledgeBases.newKnowledgeBase",
 		);
 		expect(trigger.closest(".page-actions")).not.toBeNull();
 		expect(trigger.querySelector("svg")).not.toBeNull();
+		// The label rides in the button, so the action is readable at a glance.
+		expect(trigger.textContent).toContain(
+			"knowledgeBases.newKnowledgeBase",
+		);
 		// Nothing inline: no name field until the sheet opens.
 		expect(document.querySelector("input")).toBeNull();
 

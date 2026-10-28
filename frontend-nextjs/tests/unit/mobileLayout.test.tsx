@@ -490,12 +490,17 @@ describe("mobile CSS contract (src/index.css)", () => {
 				.map((rule) => rule.declarations)
 				.join(" ");
 
-		expect(declarationsFor(".playground-shell")).toMatch(/flex-direction:\s*row/);
-		// 40%/480px settings rail with a 320px floor: the chat pane only reaches
-		// its own >= 320px width once the shell has 1025px to spend.
+		// The shell is a two-track grid, not a flex row: only a grid row can
+		// shrink below its content height (`minmax(0, 1fr)`), which is what
+		// keeps the chat composer inside the viewport instead of below it.
+		const shellDecls = declarationsFor(".playground-shell");
+		expect(shellDecls).toMatch(/display:\s*grid/);
+		expect(shellDecls).toMatch(/grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)/);
+		// The settings rail is the first track: 320px floor, 480px ceiling.
+		expect(shellDecls).toMatch(/grid-template-columns:\s*minmax\(320px,\s*480px\)/);
 		const rail = declarationsFor(".playground-pane-settings");
-		expect(rail).toMatch(/min-width:\s*320px/);
-		expect(rail).toMatch(/max-width:\s*480px/);
+		expect(rail).toMatch(/min-height:\s*0/);
+		expect(rail).toMatch(/overflow-y:\s*auto/);
 		expect(declarationsFor(".playground-pane-chat")).toMatch(/flex:\s*1 1 0/);
 
 		// 769-1024px stays the tabbed, single-column layout (one pane mounted,

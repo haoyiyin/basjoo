@@ -79,9 +79,16 @@ describe("Playground API key gate (#19)", () => {
 
 		renderPlayground();
 
+		// Desktop two-pane layout: the settings rail owns the missing-key alert,
+		// so the chat pane must NOT repeat it. (The narrow, tabbed layout mounts
+		// only the chat pane and does show it there — covered by
+		// mobileLayout.test.tsx "keeps the no-API-key banner".)
+		await waitFor(() =>
+			expect(mockedApi.getAgent).toHaveBeenCalled(),
+		);
 		expect(
-			await screen.findByText("labels.pleaseConfigureApiKey"),
-		).toBeInTheDocument();
+			screen.queryByText("labels.pleaseConfigureApiKey"),
+		).not.toBeInTheDocument();
 
 		const input = screen.getByTestId("chat-message-input");
 		fireEvent.change(input, { target: { value: "hello there" } });
