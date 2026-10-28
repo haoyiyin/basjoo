@@ -8,7 +8,7 @@ Docker-oriented AI customer support platform:
 - FastAPI backend with workspace-scoped knowledge bases (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, quotas.
 - Vite SPA admin dashboard in `frontend-nextjs/` (React 18 + react-router 7; the directory name is a leftover from the former Next.js app).
 - Embeddable TypeScript widget in `widget/` (localStorage sessions, SSE, human takeover).
-- Supporting: crawl4ai fetcher service (headless Chromium), Qdrant (vector DB), Redis, nginx.
+- Supporting: crawl4ai fetcher service (headless Chromium — container `basjoo-crawler`), Qdrant (vector DB), Redis, nginx.
 - Persistence is **SQLite only** (`aiosqlite`). There is no PostgreSQL anywhere in the stack.
 - All LLM calls go to external providers; embeddings go through a per-KB provider (Jina / SiliconFlow / OpenAI-compatible custom).
 
@@ -16,7 +16,7 @@ Docker-oriented AI customer support platform:
 - `backend/` — FastAPI app, `services/` (logic), `api/` (thin routers), `models.py`, `tests/`.
 - `frontend-nextjs/` — Vite SPA: `src/App.tsx` (routes), `src/views/`, `src/components/`, `src/hooks/`, `src/services/api.ts`.
 - `widget/` — `src/BasjooWidget.tsx`, esbuild bundles, `example/`.
-- `scrapling-service/` — standalone fetcher microservice: crawl4ai headless Chromium in-process, with the light curl_cffi/httpx + readability path as fallback.
+- `scrapling-service/` — crawler microservice (container `basjoo-crawler`): crawl4ai headless Chromium in-process, with the light curl_cffi/httpx + readability path as fallback. The directory and `SCRAPLING_SERVICE_URL` keep the old `scrapling` name — deployment-coupled, do not rename.
 - `nginx/` — reverse proxy used only by the `prod` profile.
 - `docker-compose.yml` — dev/prod profiles.
 - `tests/e2e/` — Playwright specs (root-level, not inside the frontend).
@@ -50,7 +50,7 @@ Docker-oriented AI customer support platform:
 - **Structure**: Backend logic strictly in `backend/services/`; thin routers in `backend/api/`. Models in `backend/models.py`. Frontend views in `src/views/`, shared components in `src/components/`, hooks in `src/hooks/`. Widget self-contained in `widget/src/`.
 - **Style**: Python — 4 spaces, snake_case for modules/functions/tests. TypeScript/React — **tabs** (every file in `src/` uses tabs; there is no prettier/editorconfig, so the existing code is the style), PascalCase for components/views, `use*` hooks. Explicit TS types; no `any`.
 - **Commits**: Conventional (`feat:`, `fix:`, `docs:`), scoped, imperative. PRs require summary, test commands+output, UI screenshots, migration notes.
-- **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). SSRF is a switch (`SSRF_PROTECTION_ENABLED`, default **off** — a fake-ip/ULA proxy resolver makes the DNS-range rule reject every real site); enabling it turns on the private/link-local/metadata block. Scheme, credential, empty-host, `localhost` and direct-IP-literal checks always run, and `scrapling-service` mirrors the same split — it is the only SSRF gate on the crawl4ai path (browser in-process) and it validates both the URL and every redirect the light path follows. Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
+- **Security**: Route all URLs through `backend/services/url_safety.py` (SSRF + DNS cache). SSRF is a switch (`SSRF_PROTECTION_ENABLED`, default **off** — a fake-ip/ULA proxy resolver makes the DNS-range rule reject every real site); enabling it turns on the private/link-local/metadata block. Scheme, credential, empty-host, `localhost` and direct-IP-literal checks always run, and `scrapling-service` (container `basjoo-crawler`) mirrors the same split — it is the only SSRF gate on the crawl4ai path (browser in-process) and it validates both the URL and every redirect the light path follows. Widget origin whitelists enforced. Handle CORS/rate-limit via shared middleware helpers.
 
 ## Architecture boundaries
 - `backend/main.py` owns the app factory, middleware (CORS, i18n, rate-limit, body-size), router mounting (`/api/admin`, `/api/v1`, legacy `/api/tenants`), static asset routes (`/sdk.js`, `/basjoo-logo.png`, `/widget-demo`), and scheduler/Redis lifespan.
@@ -121,6 +121,24 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   surface, no gradient backdrop, no `fontWeight` outside 400/500/600, no literal colour in a `.tsx`.
 - **Light is the appearance the product actually ships in** (`ThemeProvider` sets `data-theme`;
   light is the default resolve). Check a colour change in light first, dark second.
+- **The shell's direction ("C") is warm and single-accent.** The palette is the logo's own yellow
+  (`#F9CA02` / `hsl(48 96% 49%)`) as the ONLY saturated colour in the shell, on a warm near-black
+  ground (`hsl(30 …)`, not the old blue-grey `hsl(220 …)`); light theme keeps the same warm ground
+  and deepens the accent to `hsl(38 92% 26%)` so it clears 4.5:1 as link text. State colours keep
+  their own hues (green / orange / red / blue) because they carry meaning, and warning is pushed to
+  22° so it can never be mistaken for the brand yellow. Changing a hue means re-running the contrast
+  suite — the numbers are asserted by WCAG math, not judged by eye.
+- **One signature mark: the accent rail.** "You are here / this is the one you picked" is always a
+  3px accent bar on the leading edge — `.list-row::before` on the current row, a sibling layer in
+  `AdminLayout` for the active nav item (the nav rows stack at `zIndex: 1`, so the rail must be a
+  sibling of the tint, not a child), and the `::after` underline on the active playground tab. Do
+  not introduce a second, different "active" treatment. Section headings carry the same accent as a
+  3px square via `.card-title::before`; that tick is the only other place the accent decorates.
+- Layout rules when adding a view: root `admin-page`, one `page-header` with a single `page-title`,
+  actions in `page-actions`, machine strings (ids, model names, counts, quotas) in `mono`. No glass
+  surface, no gradient backdrop, no `fontWeight` outside 400/500/600, no literal colour in a `.tsx`.
+  Numeric columns (counts, quotas) take `.is-numeric` — right-aligned with tabular figures — because
+  they are compared down the column, not read across the row.
 - **Nav is four entries, not six**: 首页 `/`, 智能体 `/agents`, 知识库 `/knowledge-bases`,
   账号设置 `/settings/account`. `/sessions` and `/users` are not routes and not nav — do not
   re-add them. `super_admin` sees those four at the root; inside an agent scope it sees
@@ -134,7 +152,9 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
 - The agent-dashboard KB row links to the KB source page and carries **no** rebind control (the `swap`
   icon was removed). Every icon-only control takes its accessible name from the locale files plus a
-  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 18).
+  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 19). The
+  two unbind controls (KB list + agent list) use `unlink` — a split-chain glyph meaning "break the
+  binding" — never `close` (a panel ×).
   Destructive **confirm** primaries keep their words.
 - **Rebinding is unbind-then-bind**: detach from either list (the unbind icon beside the bound KB name
   on `/agents`, or beside the bound agent name on `/knowledge-bases`), then use the dashboard's
@@ -159,20 +179,34 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   `updateAgent` on change (inputs debounced, switches immediate) and the card shows an inline
   save state (`playground-status` pattern) with "保存失败" on a failed write. Do not reintroduce a
   save control or an `alert()`.
-- Agent creation is a `+` icon button in `page-actions` opening a `sheet`, never an inline form.
-  Escape and backdrop click close it; focus returns to the `+`.
+- Agent creation is the page's primary action: a filled accent button carrying a `+` icon AND the
+  action label, in `page-actions`, opening a `sheet` — never an inline form and never an unlabelled
+  `+` icon button (an icon-only trigger made the only action on the page its weakest element).
+  Escape and backdrop click close it; focus returns to the trigger.
 - The agent dashboard (`/agents/:id/dashboard`) shows API status, agent name, user count, session
   count and one status region. It must not render knowledge-base parameters (index size, URL/file
-  counts, chunk counts) — those belong to the KB page.
+  counts, chunk counts) — those belong to the KB page. Its lower block is a titled section
+  (`card-title`, "智能体信息") and the quota is a row of that same label/value list, not a
+  floating line under it.
 - Playground: if `!agent.api_key_set`, do not open the SSE stream; disable send; keep the
   configure-key banner. Two layouts driven by the same 1025px boundary: from 1025px both panes are
-  mounted side by side (settings left as a 40%/480px rail, chat right, each its own scroll, plain
-  `region`s labelled by their heading) and the tab strip is hidden; at ≤1024px the tab strip is the
-  only layout and exactly one pane is mounted (`?tab=settings|chat`, `role=tabpanel`, roving
-  tabindex). CSS owns the switch (`@media (max-width: 1024px)` / `(min-width: 1025px)` in
-  `index.css`), and `Playground.tsx` must mirror it with its own `useMediaQuery('(max-width: 1024px)')`
-  — not `useIsMobile`, which is the 768px admin-shell contract. The rail needs the whole 1025px:
-  below it 320px + a sidebar leaves the chat pane under 320px wide and its input 54px.
+  mounted side by side (settings left in the first grid track, 320px floor / 480px ceiling, chat
+  right, each its own scroll, plain `region`s labelled by their heading) and the tab strip is
+  hidden; at ≤1024px the tab strip is the only layout and exactly one pane is mounted
+  (`?tab=settings|chat`, `role=tabpanel`, roving tabindex). CSS owns the switch
+  (`@media (max-width: 1024px)` / `(min-width: 1025px)` in `index.css`), and `Playground.tsx` must
+  mirror it with its own `useMediaQuery('(max-width: 1024px)')` — not `useIsMobile`, which is the
+  768px admin-shell contract. The rail needs the whole 1025px: below it 320px + a sidebar leaves
+  the chat pane under 320px wide and its input 54px.
+- The desktop playground shell is a two-track **grid** (`grid-template-rows: auto minmax(0, 1fr)`),
+  not a flex row, and `.playground-shell` is pinned to `100dvh` minus its padding. A wrapped flex
+  line cannot shrink below its items' content height, so the settings form's 841px set the row
+  height and pushed the chat composer ~300px below the fold. Both panes need `min-height: 0`;
+  the settings pane owns `overflow-y: auto`. Regression check: at any viewport height the composer
+  must be inside the first screen with no page scroll.
+- The configure-key banner appears ONCE per layout: the settings rail shows it on desktop (the pane
+  that owns the field), the chat tab shows it at ≤1024px (the only pane mounted then). Never both
+  on desktop.
 - Chat is transparent: `ChatPanel`'s messages node paints no background, so the page surface shows
   through. Bubbles, the composer, the meta chips and the empty-state icon tile keep their own fills.
 - Page chrome is transparent everywhere: `.admin-page` is the shared surface and no route adds a
@@ -229,4 +263,4 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 
 **This is living documentation. Update when patterns change.**
 
-Last updated: 2026-10-28 (agent lifecycle pause/delete split with paused agents keeping KB ownership; row-click navigation and the 停用/启用/删除 row menu; unbind icons on both list views; dashboard rebind icon removed; auto-fetch persists per control; transparent page chrome on KB pages and the playground chat; two-column playground at ≥1025px)
+Last updated: 2026-10-28 (UI direction C: warm single-accent shell keyed to the logo's yellow, the accent-rail signature mark across nav/rows/tabs, page-header hairline removed, cards at the content radius, filled labelled primary actions, numeric columns right-aligned; playground two-column rebuilt as a viewport-pinned grid so the composer stays on screen, and the configure-key banner appears once per layout; `unlink` glyph replaces × on both unbind controls; crawler container renamed `basjoo-crawler`)

@@ -130,7 +130,13 @@ export default function Dashboard() {
 					</div>
 				</div>
 
-				{/* Status and identity: a definition list, not a card per fact. */}
+				{/* Status and identity: a definition list, not a card per fact. The
+				 * heading carries the same accent tick as every other section on
+				 * the shell, so the dashboard's lower half is a titled section
+				 * rather than an unlabelled block under two cards. */}
+				<h2 className="card-title" data-testid="dashboard-identity-title">
+					{t("dashboard.agentInfo")}
+				</h2>
 				<dl className="identity-list" data-testid="dashboard-identity">
 					<div className="identity-row">
 						<dt className="identity-label">{t("labels.apiStatus")}</dt>
@@ -222,21 +228,25 @@ export default function Dashboard() {
 							)}
 						</dd>
 					</div>
-				</dl>
 
+				{/* Quota joins the identity list as a real row: it is the same kind
+				 * of label/value fact, so it sits in the same grid instead of
+				 * floating under it as an unlabelled mono line. */}
 				{quota && (
-					<p
-						className="mono"
-						data-testid="dashboard-quota"
-						style={{
-							margin: "var(--space-4) 0 0",
-							fontSize: "var(--text-sm)",
-							color: "var(--fg-dim)",
-						}}
-					>
-						{`${t("labels.quotaInfo")}: ${quota.used_messages_today} / ${quota.max_messages_per_day} ${t("labels.messagesPerDay")}`}
-					</p>
+					<div className="identity-row" data-testid="dashboard-quota-row">
+						<dt className="identity-label">{t("labels.quotaInfo")}</dt>
+						<dd className="identity-value">
+							<span
+								className="mono"
+								data-testid="dashboard-quota"
+								style={{ fontVariantNumeric: "tabular-nums" }}
+							>
+								{`${quota.used_messages_today} / ${quota.max_messages_per_day} ${t("labels.messagesPerDay")}`}
+							</span>
+						</dd>
+					</div>
 				)}
+				</dl>
 			</div>
 
 			{bindOpen && routeAgentId && (

@@ -153,6 +153,10 @@
 
 /* =============================================================================
  * 2a. Colour tokens — DARK (default theme)
+ *     Direction C: warm near-black ground, the logo's yellow (#F9CA02, hsl 48
+ *     96% 49%) as the single accent. Every hue in the ramp is the accent's own
+ *     48° pulled toward neutral, so the greys read as warm shell rather than as
+ *     the category's blue-grey default.
  *     Contrast floors verified by tests/unit/designTokens.test.ts:
  *     text primary >= 12:1, secondary >= 7:1, tertiary/muted >= 4.5:1,
  *     borders >= 3:1 against every adjacent surface.
@@ -162,85 +166,97 @@
   color-scheme: dark;
 
   /* Surfaces (solid; the 3-step elevation scale) */
-  --color-bg-primary: hsl(220, 16%, 7%);
-  --color-bg-secondary: hsl(220, 15%, 10%);
-  --color-bg-tertiary: hsl(220, 13%, 14%);
-  --color-bg-elevated: hsl(220, 14%, 12%);
-  --color-bg-panel: hsl(220, 15%, 10%);
-  --color-bg-glass: hsl(220, 14%, 12%);
-  --color-bg-sunken: hsl(220, 18%, 6%);
-  --color-bg-overlay: hsl(220, 20%, 4%);
-  --color-surface-hover: hsl(220, 13%, 17%);
-  --color-surface-selected: hsl(205, 32%, 16%);
+  --color-bg-primary: hsl(30, 8%, 6%);
+  --color-bg-secondary: hsl(30, 7%, 9.5%);
+  --color-bg-tertiary: hsl(30, 6%, 13%);
+  --color-bg-elevated: hsl(30, 8%, 12.5%);
+  --color-bg-panel: hsl(30, 7%, 10%);
+  --color-bg-glass: hsl(30, 8%, 12.5%);
+  --color-bg-sunken: hsl(30, 10%, 4%);
+  --color-bg-overlay: hsl(30, 14%, 3%);
+  --color-surface-hover: hsl(30, 7%, 16%);
+  /* Selected: a warm tint of the accent's own hue, not a blue wash. */
+  --color-surface-selected: hsl(48, 45%, 13%);
 
   /* Text */
-  --color-text-primary: hsl(220, 25%, 96%);
-  --color-text-secondary: hsl(220, 14%, 74%);
-  --color-text-tertiary: hsl(220, 10%, 62%);
-  --color-text-muted: hsl(220, 10%, 62%);
-  --color-text-inverse: hsl(220, 30%, 8%);
+  --color-text-primary: hsl(40, 20%, 96%);
+  --color-text-secondary: hsl(40, 10%, 76%);
+  --color-text-tertiary: hsl(40, 8%, 63%);
+  --color-text-muted: hsl(40, 8%, 63%);
+  /* Ink that sits ON the accent. Warm near-black, not blue-black: on a yellow
+   * fill the neutral-220 ink picked up a green cast. */
+  --color-text-inverse: hsl(40, 30%, 8%);
 
-  /* Accent — primary actions and current selection only */
-  --color-accent-primary: hsl(205, 95%, 58%);
-  --color-accent-secondary: hsl(205, 70%, 74%);
-  --color-accent-bg: hsl(205, 32%, 16%);
-  --color-accent-glow: hsl(205, 95%, 58%, 0.35);
+  /* Accent — the logo's yellow, and the only saturated colour in the shell.
+   * Primary actions and current selection only. */
+  --color-accent-primary: hsl(48, 96%, 49%);
+  --color-accent-secondary: hsl(48, 90%, 72%);
+  --color-accent-bg: hsl(48, 45%, 13%);
+  --color-accent-glow: hsl(48, 96%, 49%, 0.35);
   --color-accent-gradient: linear-gradient(
     180deg,
-    hsl(205, 95%, 62%) 0%,
-    hsl(205, 95%, 54%) 100%
+    hsl(48, 96%, 53%) 0%,
+    hsl(48, 96%, 46%) 100%
   );
-  --color-primary: hsl(205, 95%, 58%);
+  --color-primary: hsl(48, 96%, 49%);
 
-  /* States (opaque tints so state text never relies on alpha) */
-  --color-success: hsl(150, 62%, 55%);
-  --color-warning: hsl(38, 92%, 60%);
-  --color-error: hsl(350, 82%, 68%);
-  --color-info: hsl(205, 82%, 64%);
-  --color-success-bg: hsl(180, 22%, 14%);
-  --color-warning-bg: hsl(38, 24%, 15%);
-  --color-error-bg: hsl(350, 22%, 15%);
-  --color-info-bg: hsl(215, 24%, 15%);
+  /* States (opaque tints so state text never relies on alpha).
+   * Warning is pushed to 22° (orange) so it cannot be mistaken for the 48°
+   * accent: on this shell a yellow warning badge would read as a brand chip. */
+  --color-success: hsl(150, 55%, 52%);
+  --color-warning: hsl(22, 88%, 58%);
+  --color-error: hsl(352, 80%, 68%);
+  --color-info: hsl(200, 80%, 62%);
+  --color-success-bg: hsl(150, 20%, 13%);
+  --color-warning-bg: hsl(22, 25%, 14%);
+  --color-error-bg: hsl(352, 22%, 15%);
+  --color-info-bg: hsl(200, 24%, 14%);
 
   /* Borders */
-  --color-border: hsl(220, 10%, 46%);
-  --color-border-hover: hsl(205, 40%, 56%);
-  --color-border-focus: hsl(205, 95%, 58%);
-  --color-border-glass: hsl(220, 10%, 46%);
+  --color-border: hsl(35, 12%, 46%);
+  --color-border-hover: hsl(35, 14%, 56%);
+  --color-border-focus: hsl(48, 96%, 49%);
+  --color-border-glass: hsl(35, 12%, 46%);
   /* Divider tint inside a surface group (list rows, table rows). One step
    * softer than --color-border, but it still clears 3:1 on every surface so a
    * divider is never invisible. */
-  --color-border-subtle: hsl(220, 10%, 45%);
+  --color-border-subtle: hsl(35, 12%, 45%);
 
-  /* Shadows */
-  --color-shadow: hsl(220, 40%, 2%, 0.5);
-  --color-shadow-sm: hsl(220, 40%, 2%, 0.35);
-  --shadow-sm: 0 1px 2px hsl(220, 40%, 2%, 0.28);
-  --shadow-md: 0 2px 6px hsl(220, 40%, 2%, 0.32),
-    0 8px 20px -12px hsl(220, 40%, 2%, 0.4);
-  --shadow-lg: 0 12px 32px -16px hsl(220, 40%, 2%, 0.55),
-    0 2px 8px hsl(220, 40%, 2%, 0.3);
-  --shadow-xl: 0 24px 64px -24px hsl(220, 40%, 2%, 0.6);
-  --shadow-glow: 0 0 0 1px hsl(205, 95%, 58%, 0.25);
-  --shadow-glow-lg: 0 0 0 2px hsl(205, 95%, 58%, 0.2);
-  --shadow-inner-glow: inset 0 1px 0 hsl(220, 30%, 100%, 0.04);
+  /* Shadows — warm-tinted, never neutral black: a blue-black shadow under a
+   * warm surface reads as dirt. */
+  --color-shadow: hsl(30, 40%, 2%, 0.5);
+  --color-shadow-sm: hsl(30, 40%, 2%, 0.35);
+  --shadow-sm: 0 1px 2px hsl(30, 40%, 2%, 0.28);
+  --shadow-md: 0 2px 6px hsl(30, 40%, 2%, 0.32),
+    0 8px 20px -12px hsl(30, 40%, 2%, 0.4);
+  --shadow-lg: 0 12px 32px -16px hsl(30, 40%, 2%, 0.55),
+    0 2px 8px hsl(30, 40%, 2%, 0.3);
+  --shadow-xl: 0 24px 64px -24px hsl(30, 40%, 2%, 0.6);
+  --shadow-glow: 0 0 0 1px hsl(48, 96%, 49%, 0.25);
+  --shadow-glow-lg: 0 0 0 2px hsl(48, 96%, 49%, 0.2);
+  --shadow-inner-glow: inset 0 1px 0 hsl(30, 30%, 100%, 0.04);
 
   /* Elevation pair — soft, wide, low-opacity shadows that read as depth on a
    * dark surface (a 1px grey ring alone is not elevation). Dark needs more
-   * opacity than light because a shadow on a 7% surface has less headroom. */
-  --elevation-resting: 0 1px 2px hsl(220, 40%, 2%, 0.55),
-    0 6px 16px -6px hsl(220, 40%, 2%, 0.6);
-  --elevation-raised: 0 2px 6px hsl(220, 40%, 2%, 0.6),
-    0 18px 40px -16px hsl(220, 40%, 2%, 0.75);
+   * opacity than light because a shadow on a 6% surface has less headroom. */
+  --elevation-resting: 0 1px 2px hsl(30, 40%, 2%, 0.55),
+    0 6px 16px -6px hsl(30, 40%, 2%, 0.6);
+  --elevation-raised: 0 2px 6px hsl(30, 40%, 2%, 0.6),
+    0 18px 40px -16px hsl(30, 40%, 2%, 0.75);
 
-  /* Sidebar material (floating layer: blur is allowed here) */
-  --sidebar-bg: hsl(220, 16%, 9%);
-  --sidebar-user-bg: hsl(220, 13%, 14%);
-  --sidebar-border: hsl(220, 10%, 46%);
+  /* Sidebar material (floating layer: blur is allowed here). One step deeper
+   * than the page so the rail reads as a distinct band, and the accent rail
+   * marker on the active row has a ground to sit on. */
+  --sidebar-bg: hsl(30, 9%, 8%);
+  --sidebar-user-bg: hsl(30, 7%, 13%);
+  --sidebar-border: hsl(35, 12%, 46%);
 }
 
 /* =============================================================================
  * 2b. Colour tokens — LIGHT theme
+ *     Same warm ground and the same single accent, deepened to 26% so the
+ *     yellow still clears 4.5:1 as link/label text on a 99% surface (the raw
+ *     #F9CA02 does not — it is a fill colour on dark, not an ink on light).
  * ============================================================================= */
 :root[data-theme='light'] {
   color-scheme: light;
@@ -248,79 +264,82 @@
   /* Surfaces — a real three-level ramp: page (dimmed) < surface (card/list)
    * < raised (popover/sheet). The page is deliberately deeper than the card so
    * the value step is visible even before the hairline border lands. */
-  --color-bg-primary: hsl(210, 20%, 93%);
-  --color-bg-secondary: hsl(210, 25%, 98%);
-  --color-bg-tertiary: hsl(215, 18%, 91%);
-  --color-bg-elevated: hsl(0, 0%, 100%);
-  --color-bg-panel: hsl(0, 0%, 100%);
-  --color-bg-glass: hsl(0, 0%, 100%);
-  --color-bg-sunken: hsl(215, 20%, 89%);
-  --color-bg-overlay: hsl(210, 16%, 97%);
-  --color-surface-hover: hsl(215, 18%, 92%);
-  --color-surface-selected: hsl(208, 80%, 95%);
+  --color-bg-primary: hsl(40, 20%, 93%);
+  --color-bg-secondary: hsl(40, 30%, 97.5%);
+  --color-bg-tertiary: hsl(40, 15%, 90%);
+  /* Raised must sit one visible step above the card surface (the test pins
+   * >= 1.04:1 between surface and raised). A 99% card against a 100% sheet is
+   * the same pixel to the eye, so the card takes the step down instead. */
+  --color-bg-elevated: hsl(40, 25%, 100%);
+  --color-bg-panel: hsl(40, 25%, 100%);
+  --color-bg-glass: hsl(40, 25%, 100%);
+  --color-bg-sunken: hsl(40, 18%, 88%);
+  --color-bg-overlay: hsl(40, 22%, 97%);
+  --color-surface-hover: hsl(40, 18%, 91%);
+  --color-surface-selected: hsl(45, 80%, 92%);
 
   /* Text */
-  --color-text-primary: hsl(220, 30%, 12%);
-  --color-text-secondary: hsl(220, 16%, 32%);
-  --color-text-tertiary: hsl(220, 12%, 42%);
-  --color-text-muted: hsl(220, 12%, 42%);
+  --color-text-primary: hsl(30, 25%, 11%);
+  --color-text-secondary: hsl(30, 14%, 30%);
+  --color-text-tertiary: hsl(30, 10%, 40%);
+  --color-text-muted: hsl(30, 10%, 40%);
   --color-text-inverse: hsl(0, 0%, 100%);
 
   /* Accent */
-  --color-accent-primary: hsl(212, 90%, 42%);
-  --color-accent-secondary: hsl(212, 70%, 30%);
-  --color-accent-bg: hsl(208, 80%, 95%);
-  --color-accent-glow: hsl(212, 90%, 42%, 0.3);
+  --color-accent-primary: hsl(38, 92%, 26%);
+  --color-accent-secondary: hsl(38, 70%, 38%);
+  --color-accent-bg: hsl(45, 80%, 92%);
+  --color-accent-glow: hsl(38, 92%, 26%, 0.3);
   --color-accent-gradient: linear-gradient(
     180deg,
-    hsl(212, 90%, 46%) 0%,
-    hsl(212, 90%, 40%) 100%
+    hsl(38, 92%, 30%) 0%,
+    hsl(38, 92%, 24%) 100%
   );
-  --color-primary: hsl(212, 90%, 42%);
+  --color-primary: hsl(38, 92%, 26%);
 
   /* States */
   --color-success: hsl(154, 85%, 24%);
-  --color-warning: hsl(30, 90%, 28%);
+  --color-warning: hsl(22, 90%, 30%);
   --color-error: hsl(348, 78%, 38%);
-  --color-info: hsl(212, 85%, 32%);
+  --color-info: hsl(205, 85%, 30%);
   --color-success-bg: hsl(152, 60%, 94%);
-  --color-warning-bg: hsl(42, 80%, 92%);
+  --color-warning-bg: hsl(32, 80%, 93%);
   --color-error-bg: hsl(348, 80%, 95%);
-  --color-info-bg: hsl(210, 80%, 94%);
+  --color-info-bg: hsl(205, 70%, 94%);
 
   /* Borders */
-  --color-border: hsl(220, 12%, 52%);
-  --color-border-hover: hsl(215, 20%, 40%);
-  --color-border-focus: hsl(212, 90%, 42%);
-  --color-border-glass: hsl(220, 12%, 52%);
+  --color-border: hsl(35, 12%, 46%);
+  --color-border-hover: hsl(35, 14%, 36%);
+  --color-border-focus: hsl(38, 92%, 26%);
+  --color-border-glass: hsl(35, 12%, 46%);
   /* See the dark theme: one step softer than --color-border, still >= 3:1.
-   * 52% (not 54%) keeps it above 3:1 on the deeper light bg-tertiary. */
-  --color-border-subtle: hsl(220, 12%, 52%);
+   * 45% (not 48%) keeps it above 3:1 on the deeper light bg-tertiary. */
+  --color-border-subtle: hsl(35, 12%, 45%);
 
   /* Shadows */
-  --color-shadow: hsl(220, 30%, 20%, 0.18);
-  --color-shadow-sm: hsl(220, 30%, 20%, 0.12);
-  --shadow-sm: 0 1px 2px hsl(220, 30%, 20%, 0.12);
-  --shadow-md: 0 2px 6px hsl(220, 30%, 20%, 0.14),
-    0 8px 20px -12px hsl(220, 30%, 20%, 0.18);
-  --shadow-lg: 0 12px 32px -16px hsl(220, 30%, 20%, 0.24),
-    0 2px 8px hsl(220, 30%, 20%, 0.12);
-  --shadow-xl: 0 24px 64px -24px hsl(220, 30%, 20%, 0.28);
-  --shadow-glow: 0 0 0 1px hsl(212, 90%, 42%, 0.2);
-  --shadow-glow-lg: 0 0 0 2px hsl(212, 90%, 42%, 0.16);
-  --shadow-inner-glow: inset 0 1px 0 hsl(220, 30%, 100%, 0.6);
+  --color-shadow: hsl(30, 30%, 20%, 0.18);
+  --color-shadow-sm: hsl(30, 30%, 20%, 0.12);
+  --shadow-sm: 0 1px 2px hsl(30, 30%, 20%, 0.12);
+  --shadow-md: 0 2px 6px hsl(30, 30%, 20%, 0.14),
+    0 8px 20px -12px hsl(30, 30%, 20%, 0.18);
+  --shadow-lg: 0 12px 32px -16px hsl(30, 30%, 20%, 0.24),
+    0 2px 8px hsl(30, 30%, 20%, 0.12);
+  --shadow-xl: 0 24px 64px -24px hsl(30, 30%, 20%, 0.28);
+  --shadow-glow: 0 0 0 1px hsl(38, 92%, 26%, 0.2);
+  --shadow-glow-lg: 0 0 0 2px hsl(38, 92%, 26%, 0.16);
+  --shadow-inner-glow: inset 0 1px 0 hsl(30, 30%, 100%, 0.6);
 
   /* Elevation pair — the depth cue in a light UI. Wide, soft, low-opacity so a
    * card lifts off the dimmed page instead of being outlined by a grey line. */
-  --elevation-resting: 0 1px 2px hsl(220, 30%, 20%, 0.08),
-    0 4px 12px -4px hsl(220, 30%, 20%, 0.1);
-  --elevation-raised: 0 2px 6px hsl(220, 30%, 20%, 0.1),
-    0 12px 32px -12px hsl(220, 30%, 20%, 0.18);
+  --elevation-resting: 0 1px 2px hsl(30, 30%, 20%, 0.08),
+    0 4px 12px -4px hsl(30, 30%, 20%, 0.1);
+  --elevation-raised: 0 2px 6px hsl(30, 30%, 20%, 0.1),
+    0 12px 32px -12px hsl(30, 30%, 20%, 0.18);
 
   /* Sidebar */
-  --sidebar-bg: hsl(210, 20%, 99%);
-  --sidebar-user-bg: hsl(215, 18%, 94%);
-  --sidebar-border: hsl(220, 12%, 52%);
+  --sidebar-bg: hsl(40, 22%, 97%);
+  --sidebar-user-bg: hsl(40, 15%, 92%);
+  --sidebar-border: hsl(35, 12%, 46%);
 }
 
 /* =============================================================================
@@ -460,6 +479,15 @@ pre {
 ::selection {
   color: var(--fg-strong);
   background: var(--color-accent-subtle);
+}
+
+/* The caret belongs to the palette. A 1px accent bar in a text field is the
+ * cheapest signal that the shell was built rather than assembled from defaults,
+ * and it costs one declaration. */
+input,
+textarea,
+[contenteditable='true'] {
+  caret-color: var(--color-accent-primary);
 }
 
 /* =============================================================================
@@ -926,9 +954,12 @@ a.btn-danger:hover {
   justify-content: space-between;
   gap: var(--space-4);
   flex-wrap: wrap;
-  margin-bottom: var(--space-6);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--color-border);
+  /* No hairline under the header. On this shell a full-width rule read as the
+   * top border of a table and flattened every page into the same stack; the
+   * separation now comes from the gap below the title block. */
+  margin-bottom: var(--space-8);
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .page-title {
@@ -1011,6 +1042,11 @@ a.btn-danger:hover {
 
 /* =============================================================================
  * 9. Card + stat (solid surface + 1px border + shadow)
+ *    Direction C: a card is a flat plate on the warm ground, not a floating
+ *    panel. Radius 10 (the content step), a 1px hairline, and only the resting
+ *    elevation — the raised pair is reserved for sheets and popovers. Cards
+ *    never nest: a section inside a card uses a heading and spacing, not a
+ *    second plate.
  * ============================================================================= */
 .card {
   display: block;
@@ -1018,7 +1054,7 @@ a.btn-danger:hover {
   padding: var(--space-6);
   background: var(--surface-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   box-shadow: var(--elevation-resting);
 }
 
@@ -1034,12 +1070,30 @@ a.btn-danger:hover {
   margin-bottom: var(--space-4);
 }
 
+/* The card heading is the section step, and it carries the accent tick: a 3px
+ * square of the shell accent sits to its left, so every titled section on every
+ * page carries the same mark. This is the one repeating signature of the shell
+ * — a left border of 1px or more on a card is banned, a small accent square
+ * attached to the heading is not. */
 .card-title {
+  position: relative;
+  padding-left: var(--space-3);
   font-size: var(--text-lg);
   font-weight: var(--weight-medium);
   line-height: var(--leading-snug);
   letter-spacing: -0.01em;
   color: var(--fg-strong);
+}
+
+.card-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.32em;
+  width: 3px;
+  height: 0.92em;
+  border-radius: 1px;
+  background: var(--color-accent-primary);
 }
 
 .card-body {
@@ -1132,7 +1186,7 @@ a.stat-link:hover {
   min-width: 0;
   background: var(--surface-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -1153,16 +1207,20 @@ a.stat-link:hover {
   list-style: none;
   background: var(--surface-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
+/* A row is a band, not a table line: the hairline sits between rows and the
+ * row's own surface answers the pointer. The left edge is reserved for the
+ * accent marker (below), so the row carries 3px of padding it never loses. */
 .list-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  min-height: 44px;
-  padding: var(--space-3) var(--space-4);
+  min-height: 52px;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--color-border-subtle);
   transition: background var(--transition-fast),
     box-shadow var(--transition-fast);
@@ -1179,13 +1237,35 @@ a.stat-link:hover {
   background: var(--surface-hover);
 }
 
-/* Selected is a tint plus a 1px inset ring, never a solid fill: the row keeps
- * its own surface (and the state text on it keeps its contrast) and only gains
- * the accent edge. */
+/* THE SIGNATURE MOVE. The current row is marked by an accent rail on its left
+ * edge: a 3px bar that grows from the row's centre line out to its full height.
+ * It is the same mark the active nav row and the active tab carry, so "this is
+ * the one you are on / this is the one you picked" reads identically everywhere
+ * in the product. Selected is a tint plus the rail — never a solid fill, so the
+ * row's own text keeps its contrast. `transform-origin` + `scaleY` is what makes
+ * the bar grow rather than appear, and it is the ONE authored motion in the
+ * shell (no entrance animations anywhere else). */
+.list-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--color-accent-primary);
+  transform: scaleY(0);
+  transform-origin: center;
+  transition: transform var(--transition-base);
+}
+
 .list-row[aria-selected='true'],
 .list-row.is-selected {
   background: var(--color-accent-subtle);
-  box-shadow: inset 0 0 0 1px var(--color-accent-primary);
+}
+
+.list-row[aria-selected='true']::before,
+.list-row.is-selected::before {
+  transform: scaleY(1);
 }
 
 .list-row-main {
@@ -1364,12 +1444,12 @@ a.stat-link:hover {
   grid-template-columns: var(--list-columns);
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-5);
   border-bottom: 1px solid var(--color-border);
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--fg-dim);
 }
@@ -1382,6 +1462,16 @@ a.stat-link:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--fg-dim);
+}
+
+/* Numeric columns are compared down the column, not read across the row, so
+ * they align on the right and carry tabular figures — the digits then sit in
+ * one ladder instead of drifting with each value's width. */
+.list-header-cell.is-numeric,
+.list-cell.is-numeric {
+  justify-self: end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The trailing actions track holds a 36px icon button. Its header label is
@@ -2063,15 +2153,15 @@ tbody tr:hover td {
   max-width: var(--page-max-width);
   min-width: 0;
   margin: 0 auto;
-  /* Less air above the header block than below it (the header owns 16px of
-   * padding-bottom plus its 24px margin), so the title reads as attached to the
-   * page it opens instead of floating in the middle of the gutter. */
-  padding: var(--space-5) var(--page-gutter) var(--space-6);
+  /* Less air above the header block than below it (the header owns its own
+   * 32px margin), so the title reads as attached to the page it opens instead
+   * of floating in the middle of the gutter. */
+  padding: var(--space-6) var(--page-gutter) var(--space-8);
   background: transparent;
 }
 
 .admin-page > .page-header {
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-8);
 }
 
 .admin-main {
@@ -2197,14 +2287,35 @@ tbody tr:hover td {
  * 1025px up both panes side by side (see the `min-width: 1025px` block below).
  * The header owns the tab strip; each panel owns its own scroll.
  * -------------------------------------------------------------------------- */
+/* The playground is the one page that must fit the viewport: its chat pane owns
+ * an internal scroll, and its composer is pinned to the pane's bottom edge. With
+ * only `min-height: 100vh` on the shell the page can grow past the viewport
+ * (a tall settings rail is enough), which pushes the composer below the fold —
+ * the input then needs a page scroll to reach, and the chat's own scroll and the
+ * page scroll fight each other. Pinning the shell to the viewport height is what
+ * makes `flex: 1` on the pane resolve to "the space that is actually left".
+ * `100dvh` with a `100vh` fallback: mobile browsers shrink `dvh` when their
+ * chrome is showing, so the composer never hides behind the URL bar. */
 .playground-shell {
   display: flex;
   flex-direction: column;
   width: 100%;
   min-width: 0;
+  /* The page padding is part of this box, so the viewport height minus the
+   * vertical padding is what the panes can actually fill. box-sizing keeps the
+   * calc honest (the app sets border-box globally). */
+  height: calc(100vh - 2 * var(--space-6));
+  max-height: calc(100vh - 2 * var(--space-6));
   min-height: 0;
-  flex: 1;
+  flex: 1 1 auto;
   overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  .playground-shell {
+    height: calc(100dvh - 2 * var(--space-6));
+    max-height: calc(100dvh - 2 * var(--space-6));
+  }
 }
 
 .playground-header {
@@ -2227,7 +2338,12 @@ tbody tr:hover td {
   flex-shrink: 0;
 }
 
+/* The active tab carries the same accent rail the current list row and the
+ * current nav row carry — a 2px underline along the tab's bottom edge, so
+ * "you are here" is one mark across the whole shell. The tab is a ghost button
+ * otherwise: no fill, no shadow, so the rail is the only signal. */
 .playground-tab {
+  position: relative;
   min-height: 32px;
   padding: 0 var(--space-4);
   font-family: var(--font-text);
@@ -2240,6 +2356,20 @@ tbody tr:hover td {
   cursor: pointer;
 }
 
+.playground-tab::after {
+  content: '';
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-accent-primary);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform var(--transition-base);
+}
+
 .playground-tab:hover {
   color: var(--fg-strong);
   background: var(--surface-hover);
@@ -2247,8 +2377,12 @@ tbody tr:hover td {
 
 .playground-tab[aria-selected="true"] {
   color: var(--fg-strong);
-  background: var(--surface-bg);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+.playground-tab[aria-selected="true"]::after {
+  transform: scaleX(1);
 }
 
 .playground-tab:focus-visible {
@@ -3166,6 +3300,19 @@ tbody tr:hover td {
     gap: var(--space-1);
   }
 
+  /* The KB name is one token: it must ellipsize, never break to a second line
+   * with a single orphaned character (`产品手册知识` / `库`). `min-width: 0` lets
+   * the flex item shrink below its text width so the ellipsis can act; without
+   * it the nowrap text pushes the column wider and the pair collides with the
+   * date beside it. Descendant, not child: the name sits inside the cell's
+   * inline-flex wrapper next to the unbind button. */
+  .list-grid--agents .list-cell--kb span[data-testid^='agent-kb-name-'] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .list-cell-label {
     display: inline;
     color: var(--fg-dim);
@@ -3314,25 +3461,38 @@ tbody tr:hover td {
  * block above). The shell wraps, so the header keeps the full first row
  * without an extra DOM wrapper. */
 @media (min-width: 1025px) {
+  /* Grid, not flex: the pane row must be able to shrink BELOW its content
+   * height, which a wrapped flex line cannot do (a line's cross size never
+   * goes under its items' content contribution). `minmax(0, 1fr)` is the one
+   * track sizing that both fills the shell and permits the shrink — that is
+   * what keeps the chat composer on screen instead of 300px below it. */
   .playground-shell {
-    flex-direction: row;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(320px, 480px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    align-content: stretch;
     align-items: stretch;
   }
 
   .playground-header {
-    flex: 0 0 100%;
+    grid-column: 1 / -1;
   }
 
   .playground-pane-settings {
-    flex: 0 0 auto;
-    width: 40%;
-    max-width: 480px;
-    min-width: 320px;
+    /* `min-height: 0` is what lets the item shrink below its content height.
+     * Without it the settings form (841px of fields) sets the row height, both
+     * panes grow to it, and the chat composer falls below the fold. */
+    flex: 1 1 0;
+    min-height: 0;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    overflow-y: auto;
   }
 
   .playground-pane-chat {
     flex: 1 1 0;
+    min-height: 0;
     min-width: 0;
   }
 

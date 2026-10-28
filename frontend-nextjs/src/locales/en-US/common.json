@@ -842,6 +842,7 @@
     "boundKnowledgeBase": "Bound knowledge base",
     "unboundKnowledgeBase": "No knowledge base bound",
     "bindExisting": "Bind existing",
-    "createKnowledgeBase": "Create new knowledge base"
+    "createKnowledgeBase": "Create new knowledge base",
+    "agentInfo": "Agent details"
   }
 }

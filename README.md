@@ -65,7 +65,7 @@ The first registered admin becomes the workspace super administrator, who can cr
 - `backend/` — FastAPI app, data models, chat APIs, auth, ingestion, indexing, tests
 - `frontend-nextjs/` — active admin/dashboard UI
 - `widget/` — embeddable chat widget bundle
-- `scrapling-service/` — standalone fetcher microservice: crawl4ai headless Chromium with a curl_cffi + readability fallback
+- `scrapling-service/` — crawler microservice (crawl4ai headless Chromium with a curl_cffi + readability fallback); its container is `basjoo-crawler`
 - `nginx/` — Docker nginx config
 - Qdrant vector database service configuration
 - `docker-compose.yml` — dev/prod orchestration
@@ -142,7 +142,7 @@ The widget provides the visitor-facing chat window with persisted sessions, mult
 - SQLAlchemy async + SQLite (application data store)
 - Redis (rate limiting, caching)
 - Qdrant REST API (vector search, document ingestion, hybrid retrieval)
-- crawl4ai-backed fetcher service (headless Chromium rendering, curl_cffi + readability-lxml fallback)
+- crawl4ai-backed fetcher service (headless Chromium rendering, curl_cffi + readability-lxml fallback), container `basjoo-crawler`
 - APScheduler
 - OpenAI-compatible provider layer (DeepSeek, Gemini via Google's OpenAI-compatible endpoint, Anthropic, xAI, OpenRouter, …)
 

@@ -312,25 +312,57 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 				>
 					{/* Active-item marker (accent tint behind the current row) */}
 					{indicatorStyle.height > 0 && (
-						<div
-							aria-hidden="true"
+				<div
+					aria-hidden="true"
+					style={{
+						position: "absolute",
+						left: 0,
+						right: 0,
+						top: `${indicatorStyle.top}px`,
+						height: `${indicatorStyle.height}px`,
+						background: "var(--color-surface-selected)",
+						borderRadius: "var(--radius-md)",
+						transition:
+							"top var(--transition-base), height var(--transition-base)",
+						pointerEvents: "none",
+						zIndex: 0,
+					}}
+				/>
+				)}
+
+				{/* The accent rail — the same "you are here" mark the selected list
+				 * row and the active tab carry. It is a SIBLING of the tint above,
+				 * not a child: the nav rows stack at zIndex 1, so anything inside
+				 * the zIndex 0 tint would paint underneath them and disappear. */}
+				{indicatorStyle.height > 0 && (
+					<div
+						aria-hidden="true"
+						style={{
+							position: "absolute",
+							left: 0,
+							top: `${indicatorStyle.top}px`,
+							height: `${indicatorStyle.height}px`,
+							width: 3,
+							display: "flex",
+							alignItems: "center",
+							pointerEvents: "none",
+							zIndex: 2,
+							transition: "top var(--transition-base)",
+						}}
+					>
+						<span
 							style={{
-								position: "absolute",
-								left: 0,
-								right: 0,
-								top: `${indicatorStyle.top}px`,
-								height: `${indicatorStyle.height}px`,
-								background: "var(--color-surface-selected)",
-								borderRadius: "var(--radius-md)",
-								transition:
-									"top var(--transition-base), height var(--transition-base)",
-								pointerEvents: "none",
-								zIndex: 0,
+								width: 3,
+								height: "62%",
+								maxHeight: 22,
+								borderRadius: 2,
+								background: "var(--color-accent-primary)",
 							}}
 						/>
-					)}
+					</div>
+				)}
 
-					<ul
+				<ul
 						className="list"
 						style={{
 							background: "transparent",

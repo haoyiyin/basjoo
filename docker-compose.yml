@@ -101,11 +101,13 @@ services:
       retries: 20
       start_period: 120s
 
+  # Fetcher microservice — runs crawl4ai (AsyncWebCrawler, headless Chromium).
+  # Directory/env names still say `scrapling` (deployment-coupled); the container is `basjoo-crawler`.
   scrapling-service:
     build:
       context: ./scrapling-service
       dockerfile: Dockerfile
-    container_name: basjoo-scrapling
+    container_name: basjoo-crawler
     restart: unless-stopped
     # Chromium needs far more than the default 64 MB /dev/shm.
     shm_size: 512mb

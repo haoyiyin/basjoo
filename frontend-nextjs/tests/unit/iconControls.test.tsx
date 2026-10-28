@@ -110,10 +110,42 @@ describe("Icon registry (R3)", () => {
 			expect(ICON_NAMES).toContain(name);
 		}
 		// Every registered glyph must have a consumer — an unused name is dead weight.
-		for (const name of ["save"]) {
+		for (const name of ["save", "unlink"]) {
 			expect(ICON_NAMES).toContain(name);
 		}
-		expect(ICON_NAMES).toHaveLength(18);
+		expect(ICON_NAMES).toHaveLength(19);
+	});
+});
+
+/**
+ * Breaking a binding is its own action: the unbind controls on /agents and
+ * /knowledge-bases carry the split-chain `unlink` glyph, never the panel `close` ×.
+ */
+describe("unbind controls use the unlink glyph", () => {
+	const UNBIND: Array<{ file: string; testid: string }> = [
+		{ file: "src/views/KnowledgeBases.tsx", testid: "kb-unbind-agent-" },
+		{ file: "src/views/Agents.tsx", testid: "agent-kb-unbind-" },
+	];
+
+	it("renders unlink — not close — on both unbind buttons", () => {
+		for (const { file, testid } of UNBIND) {
+			const source = readFileSync(file, "utf-8");
+			const tag = openingTags(source, "button").find((it) =>
+				it.includes(testid),
+			);
+			expect(tag, `${file}: unbind button carrying ${testid}`).toBeTruthy();
+			const after = tag ? source.slice(source.indexOf(tag) + tag.length) : "";
+			const glyph = /^\s*<Icon\s+name="([^"]+)"/.exec(after)?.[1];
+			expect(glyph, `${file}: unbind glyph`).toBe("unlink");
+		}
+	});
+
+	it("leaves the panel closes on the close glyph", () => {
+		for (const { file } of UNBIND) {
+			expect(readFileSync(file, "utf-8")).toContain(
+				'<Icon name="close" size={16} />',
+			);
+		}
 	});
 });
 
