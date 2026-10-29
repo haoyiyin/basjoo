@@ -93,6 +93,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
+# A slow first token must pause the stream, never cancel it: the watchdog is a
+# wait on an already-created `__anext__` task, so patching this only changes how
+# often the keepalive is emitted.
+STREAM_FIRST_TOKEN_TIMEOUT_SECONDS = 15.0
+STREAM_MAX_DURATION_SECONDS = 300.0
+
 # 预设人设提示词（仅在后端保存，前端不可见）
 PERSONA_PRESETS = {
     "general": """Role: You are an AI chatbot that helps users resolve their inquiries, questions, and requests. Your goal is always to provide high-quality, friendly, and efficient responses. Your responsibility is to carefully listen to users, understand their needs, and do your best to assist them or guide them to appropriate resources. If a question is not sufficiently clear, you should proactively ask clarifying questions. Be sure to maintain a positive and constructive tone at the end of your response.
@@ -697,6 +703,7 @@ async def get_or_create_chat_session(
     """Resolve the current active session or create a new one."""
     agent_id = agent.id
     session = None
+    visitor_mismatch = False
     if request.session_id:
         result = await db.execute(
             select(ChatSession)
@@ -708,6 +715,14 @@ async def get_or_create_chat_session(
             .order_by(ChatSession.created_at.desc(), ChatSession.id.desc())
         )
         session = result.scalars().first()
+        # A session that already belongs to another visitor is never adopted:
+        # session ids are enumerable per agent, so reusing one must not append
+        # to (or read) a stranger's transcript.
+        if session and session.visitor_id and session.visitor_id != (
+            request.visitor_id or ""
+        ):
+            visitor_mismatch = True
+            session = None
 
     if session:
         return session
@@ -738,6 +753,10 @@ async def get_or_create_chat_session(
     requested_session_id = (
         request.session_id or f"sess_{agent_id}_{uuid.uuid4().hex[:12]}"
     )
+    if visitor_mismatch:
+        # Reusing the foreign id would hit the active-session unique index and
+        # re-adopt the other visitor's row, so mint a fresh public id instead.
+        requested_session_id = f"sess_{agent_id}_{uuid.uuid4().hex[:12]}"
     session = ChatSession(
         agent_id=agent_id,
         session_id=requested_session_id,
@@ -841,21 +860,46 @@ async def prepare_chat_request(
             "quota_id": quota.id,
         }
 
-    if agent_rate_limit_per_minute > 0 and request.session_id and not admin_user:
+    if agent_rate_limit_per_minute > 0 and not admin_user:
         from datetime import timedelta
 
         one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
-        minute_count_result = await db.execute(
-            select(func.count(ChatMessage.id)).where(
-                ChatMessage.session_id == session.id,
-                ChatMessage.role == "user",
-                ChatMessage.created_at >= one_minute_ago,
+        messages_last_minute = 0
+        limit_key = f"Session {request.session_id}"
+        if request.session_id:
+            minute_count_result = await db.execute(
+                select(func.count(ChatMessage.id)).where(
+                    ChatMessage.session_id == session.id,
+                    ChatMessage.role == "user",
+                    ChatMessage.created_at >= one_minute_ago,
+                )
             )
-        )
-        messages_last_minute = minute_count_result.scalar() or 0
+            messages_last_minute = minute_count_result.scalar() or 0
+        else:
+            # Omitting session_id mints a new session per request, so the limit
+            # has to follow the visitor identity (visitor_id, else visitor_ip).
+            visitor_key = (request.visitor_id or "").strip()
+            identity_filter = None
+            if visitor_key:
+                identity_filter = ChatSession.visitor_id == visitor_key
+            elif session.visitor_ip:
+                identity_filter = ChatSession.visitor_ip == session.visitor_ip
+            if identity_filter is not None:
+                minute_count_result = await db.execute(
+                    select(func.count(ChatMessage.id))
+                    .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+                    .where(
+                        ChatSession.agent_id == agent_id,
+                        identity_filter,
+                        ChatMessage.role == "user",
+                        ChatMessage.created_at >= one_minute_ago,
+                    )
+                )
+                messages_last_minute = minute_count_result.scalar() or 0
+            limit_key = f"Visitor {visitor_key or session.visitor_ip or 'unknown'}"
 
         logger.info(
-            f"Session {request.session_id} has {messages_last_minute} messages in the last minute "
+            f"{limit_key} has {messages_last_minute} messages in the last minute "
             f"(limit: {agent_rate_limit_per_minute})"
         )
 
@@ -864,9 +908,7 @@ async def prepare_chat_request(
                 agent_restricted_reply,
                 "抱歉，当前服务受限，请稍后再试。",
             )
-            logger.info(
-                f"Session {request.session_id} exceeded rate limit, returning auto reply"
-            )
+            logger.info(f"{limit_key} exceeded rate limit, returning auto reply")
             return {
                 "mode": "rate_limited",
                 "reply": limit_reply,
@@ -1364,10 +1406,13 @@ async def chat_stream(
 
         reply_parts = []
         stream_start = time.monotonic()
-        max_stream_duration = 300.0
         content_started = False
         thinking_started = False
         first_token_logged = False
+        # The provider read lives in its own task so the watchdog can time out
+        # *waiting* without cancelling the stream (a cancelled `__anext__`
+        # silently truncates the reply to the restricted fallback).
+        pending_next = None
         try:
             stream_create_start = time.monotonic()
             stream_iter = llm.chat_completion(
@@ -1386,7 +1431,7 @@ async def chat_stream(
 
             while True:
                 elapsed = time.monotonic() - stream_start
-                if elapsed > max_stream_duration:
+                if elapsed > STREAM_MAX_DURATION_SECONDS:
                     logger.warning("Stream timeout after %.0fs", elapsed)
                     fallback = get_restricted_reply(
                         _restricted_reply, "抱歉，当前服务繁忙，请稍后再试。"
@@ -1403,19 +1448,26 @@ async def chat_stream(
                     )
                     return
 
-                try:
-                    chunk = await asyncio.wait_for(
-                        stream_iter.__anext__(), timeout=15.0
-                    )
-                except StopAsyncIteration:
-                    break
-                except asyncio.TimeoutError:
+                if pending_next is None:
+                    pending_next = asyncio.ensure_future(stream_iter.__anext__())
+                done, _pending = await asyncio.wait(
+                    {pending_next}, timeout=STREAM_FIRST_TOKEN_TIMEOUT_SECONDS
+                )
+                if not done:
+                    # Keepalive only: the same task is awaited again next round.
                     yield ": keepalive\n\n"
                     thinking_started = True
                     yield sse_event(
                         "thinking", {"elapsed": int(time.monotonic() - stream_start)}
                     )
                     continue
+
+                try:
+                    chunk = pending_next.result()
+                except StopAsyncIteration:
+                    pending_next = None
+                    break
+                pending_next = None
 
                 reply_parts.append(chunk)
                 if not content_started and chunk.strip():
@@ -1433,6 +1485,11 @@ async def chat_stream(
                         yield sse_event("thinking_done", {})
                 yield sse_event("content", {"content": chunk})
                 await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            # Client disconnect is the only path allowed to cancel the read.
+            if pending_next is not None and not pending_next.done():
+                pending_next.cancel()
+            raise
         except Exception:
             logger.exception("LLM streaming failed")
             # Graceful fallback: return agent's restricted reply instead of a technical error
@@ -1450,6 +1507,9 @@ async def chat_stream(
                 },
             )
             return
+        finally:
+            if pending_next is not None and not pending_next.done():
+                pending_next.cancel()
 
         reply = replace_source_placeholders("".join(reply_parts), sources)
         if not reply or not reply.strip():
@@ -1544,17 +1604,23 @@ async def get_chat_messages(
     request: Request,
     after_id: int = 0,
     role: Optional[str] = None,
+    visitor_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
     访客消息接口：
     - 不传 role：返回所有消息（用于历史恢复）
     - role=assistant：只返回 assistant 消息（用于轮询拉取管理员回复）
+    - visitor_id：会话所有者标识；缺失或不匹配一律 404（不确认会话是否存在）
     """
     # 使用业务 session_id 解析当前公共会话，再用内部 DB id 查询消息
     session = await resolve_public_chat_session(db, session_id)
 
     if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # 会话 id 按 agent 可枚举，因此只有其 visitor 能读回 transcript。
+    if session.visitor_id and session.visitor_id != (visitor_id or ""):
         raise HTTPException(status_code=404, detail="Session not found")
 
     # 已关闭的会话返回空数组，SDK 收到空数组会清除 sessionId 并开启新会话

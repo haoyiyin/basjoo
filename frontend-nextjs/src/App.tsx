@@ -16,6 +16,7 @@ import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
 import AccountSettings from './views/AccountSettings';
 import Chat from './views/Chat';
+import NotFound from './views/NotFound';
 
 /** Mirrors the former `app/(auth)/layout.tsx`. */
 function AuthLayout() {
@@ -72,6 +73,23 @@ export function App() {
         <Route path="/qa" element={<Redirect to="/knowledge-bases" />} />
         <Route path="/playground" element={<Redirect to="/" />} />
         <Route path="/urls" element={<Redirect to="/knowledge-bases" />} />
+        {/*
+         * Catch-all inside the authed shell. Without it an unknown path (a typo,
+         * a stale bookmark, `/agents/<id>/nope`) matched no route at all and the
+         * SPA rendered an empty page. It is the last entry of this group so every
+         * real route above still wins.
+         */}
+        <Route path="*" element={<NotFound />} />
+      </Route>
+
+      {/*
+       * Second catch-all for the signed-out surface: mounted *after* the
+       * dashboard group so the authed one is the first splat the router sees,
+       * and a logged-out unknown path still lands on a message rather than an
+       * empty page (RequireAuth sends it to /login first).
+       */}
+      <Route element={<AuthLayout />}>
+        <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
   );

@@ -68,9 +68,10 @@ test.describe('Admin Sessions Takeover', () => {
     });
     expect([200, 201]).toContain(sendRes.status());
 
-    // 7. Visitor (public client) polls for assistant messages
+    // 7. Visitor (public client) polls for assistant messages. The endpoint
+    //    requires the session's own visitor id, exactly like the widget does.
     const messagesRes = await request.get(
-      `${API_BASE}/api/v1/chat/messages?session_id=${sessionId}&role=assistant`,
+      `${API_BASE}/api/v1/chat/messages?session_id=${sessionId}&visitor_id=e2e-visitor&role=assistant`,
     );
     const messages = await messagesRes.json();
     expect(Array.isArray(messages)).toBe(true);
@@ -83,6 +84,9 @@ test.describe('Admin Sessions Takeover', () => {
   });
 
   test('sessions page shows visitor sessions after login', async ({ page, request }) => {
+    // A live provider's first token can take ~60 s; the stream endpoint keeps the
+    // socket alive, the blocking one trips the 30 s per-test timeout.
+    test.setTimeout(120_000);
     // 1. Create a visitor session via API first using shared helpers
     const token = await loginByApi(request);
     const authHeaders = { Authorization: `Bearer ${token}` };
@@ -96,9 +100,8 @@ test.describe('Admin Sessions Takeover', () => {
     });
 
     // Create a visitor chat session
-
     const sessionId = `e2e-ui-session-${Date.now()}`;
-    const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
+    const chatRes = await request.post(`${API_BASE}/api/v1/chat/stream`, {
       headers: { 'Content-Type': 'application/json' },
       data: { agent_id: agent.id, message: 'UI test session', session_id: sessionId },
     });

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -31,7 +31,7 @@ class TaskLock:
 
     def __init__(self):
         self._locks: Dict[str, asyncio.Lock] = {}
-        self._active_tasks: Dict[str, Dict[str, datetime]] = {}
+        self._active_tasks: Dict[str, Dict[str, Any]] = {}
         self._task_handles: Dict[str, Dict[str, asyncio.Task]] = {}
         self._pending_rebuild: Set[str] = set()
         self._cancelled_tasks: Dict[str, Set[str]] = {}
@@ -122,8 +122,12 @@ class TaskLock:
                         f"任务正在进行中: {blocking_tasks[0]}，请等待完成后再删除",
                     )
 
-            # 注册任务
-            active[task_id] = datetime.now(timezone.utc)
+            # 注册任务（形状是契约：kb_task_status 读 ``type``，
+            # ``get_active_tasks`` 的调用方按 task_id 取 keys()）
+            active[task_id] = {
+                "type": task_type.value,
+                "started_at": datetime.now(timezone.utc),
+            }
             logger.info(f"Task acquired: {task_id} for agent {agent_id}")
             return True, None
 
@@ -182,8 +186,11 @@ class TaskLock:
         """检查是否有待处理的索引重建"""
         return agent_id in self._pending_rebuild
 
-    def get_active_tasks(self, agent_id: str) -> Dict[str, datetime]:
-        """获取Agent的活动任务列表"""
+    def get_active_tasks(self, agent_id: str) -> Dict[str, Dict[str, Any]]:
+        """获取Agent的活动任务列表
+
+        Shape: ``{task_id: {"type": <TaskType.value>, "started_at": datetime}}``.
+        """
         return self._active_tasks.get(agent_id, {}).copy()
 
     def get_registered_task_ids(self, agent_id: str) -> Set[str]:

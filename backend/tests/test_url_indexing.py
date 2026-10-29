@@ -1100,8 +1100,10 @@ async def test_clear_all_urls_is_scoped_to_source_agent(
     response = await client.post(f"/api/v1/urls:clear_all?agent_id={default_agent_id}")
     assert response.status_code == 200
     data = response.json()
-    # Documents keep per-ingester provenance even on a shared KB.
-    assert data["deleted_count"] == 1, data
+    # Documents keep per-ingester provenance even on a shared KB — that is
+    # `deleted_doc_count`; `deleted_count` counts the URL rows cleared.
+    assert data["deleted_doc_count"] == 1, data
+    assert data["deleted_count"] == 2, data
     # URL rows, on the other hand, belong to the KB (URLSource has no agent column
     # any more), so clearing the KB clears all of its URL sources — agent A's and
     # agent B's alike. What must never leak across agents is the *documents*.

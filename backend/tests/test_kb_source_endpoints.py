@@ -17,6 +17,13 @@ from sqlalchemy import select
 import database
 from models import Agent, KbDocument, URLSource
 
+# Imported at collection time on purpose: `services.scheduler` binds
+# `from services.url_service import process_url_refetch` at import time, so if it
+# is first imported from inside `hermetic_sources` (the app factory pulls it in)
+# the scheduler keeps this module's stub for the whole session and
+# `tests/test_scheduler_fetch_indexing.py` silently indexes nothing.
+import services.scheduler  # noqa: E402,F401  isort:skip
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -220,6 +227,33 @@ async def test_kb_url_list_create_refetch_delete_roundtrip(client, bound_kb_id):
     assert await _url_rows(bound_kb_id) == []
 
 
+async def test_clear_all_counts_url_rows_not_derived_documents(client, bound_kb_id):
+    """B2: `deleted_count` means "items cleared on this surface" (URL rows).
+
+    A URL that was never indexed has no derived `KbDocument`, so reporting
+    `counters["docs"]` answered `deleted_count: 0` while the list visibly
+    emptied.
+    """
+    created = await client.post(
+        f"/api/v1/knowledge-bases/{bound_kb_id}/urls:create",
+        json={"urls": ["https://example.com/never-indexed"]},
+    )
+    assert created.status_code == 200, created.text
+    if created.json().get("job_id"):
+        await _release_lock(bound_kb_id, created.json()["job_id"])
+    assert len(await _url_rows(bound_kb_id)) == 1
+
+    cleared = await client.post(
+        f"/api/v1/knowledge-bases/{bound_kb_id}/urls:clear_all"
+    )
+
+    assert cleared.status_code == 200, cleared.text
+    body = cleared.json()
+    assert body["deleted_doc_count"] == 0, body
+    assert body["deleted_url_count"] == 1, body
+    assert body["deleted_count"] == 1, body
+    assert await _url_rows(bound_kb_id) == []
+
 async def test_kb_url_delete_rejects_a_url_from_another_kb(
     client, bound_kb_id, unbound_kb_id
 ):
@@ -329,6 +363,46 @@ async def test_kb_index_rebuild_and_status(client, bound_kb_id):
     assert status_body["kb_id"] == bound_kb_id
     assert status_body["status"] == "idle"
 
+
+async def test_kb_index_status_survives_a_running_task(
+    client, bound_kb_id, default_agent_id
+):
+    """B1: `index:status` polls while a task runs, so it must answer 200.
+
+    `acquire_task` used to store a bare `datetime`, and `kb_task_status` called
+    `task_info.get("type")` on it -> `AttributeError: 'datetime' object has no
+    attribute 'get'` -> 500 exactly during indexing.
+    """
+    from services.task_lock import TaskType, task_lock
+
+    job_id = f"rebuild_{bound_kb_id}_b1"
+    acquired, error = await task_lock.acquire_task(
+        bound_kb_id, TaskType.INDEX_REBUILD, job_id
+    )
+    assert acquired, error
+    try:
+        response = await client.get(
+            f"/api/v1/knowledge-bases/{bound_kb_id}/index:status"
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "rebuilding"
+        assert body["job_id"] == job_id
+
+        legacy = await client.get(
+            f"/api/v1/index:status?agent_id={default_agent_id}"
+        )
+        assert legacy.status_code == 200, legacy.text
+        assert legacy.json()["job_id"] == job_id
+
+        active = task_lock.get_active_tasks(bound_kb_id)
+        # The contract `kb_task_status` relies on.
+        assert active[job_id]["type"] == TaskType.INDEX_REBUILD.value
+        assert "started_at" in active[job_id]
+        # Legacy `.keys()` callers (api/v1/endpoints.py tasks:status) still work.
+        assert job_id in active.keys()
+    finally:
+        await task_lock.release_task(bound_kb_id, job_id)
 
 async def test_kb_sources_summary_counts_kb_rows(client, bound_kb_id):
     async with database.AsyncSessionLocal() as session:

@@ -75,43 +75,42 @@ test.describe("Knowledge Source Flow", () => {
 		// 3. Login via UI using shared helper
 		await adminLogin(page);
 
-		// 4. Navigate to agent files page
+		// 4. Navigate to agent files page — a legacy bookmark that redirects to the
+		//    bound KB's source-management page (`KnowledgeBaseSetup`).
 		const filesRoute = agentRoute(context.agentId, "files");
 		await page.goto(filesRoute);
 		await page.waitForLoadState("domcontentloaded", { timeout: 15_000 });
 
-		// 5. Assert URL is correct
-		await expect(page).toHaveURL(
-			new RegExp(`/agents/${context.agentId}/files`),
-		);
-
-		// 6. Assert page heading (File Upload / 文件上传) - use more specific locator to avoid sidebar h1
-		const headingLocator = page.locator("h1").filter({
-			hasText: /File Upload|文件上传/i,
+		// 5. Assert the redirect landed on the KB detail page with both panels
+		await expect(page).toHaveURL(/\/knowledge-bases\/[0-9a-f-]{36}/, {
+			timeout: 15_000,
 		});
-		await expect(headingLocator).toBeVisible({ timeout: 10_000 });
+		await expect(page.getByTestId("kb-file-panel")).toBeVisible({
+			timeout: 10_000,
+		});
 
-		// 7. Assert upload section heading (Upload Files / 上传文件)
+		// 6. Assert file section headings (网站管理 / 文件上传 panels)
 		const uploadSectionHeading = page.locator("h2").filter({
-			hasText: /Upload Files|上传文件/i,
+			hasText: /File Upload|文件上传/i,
 		});
 		await expect(uploadSectionHeading.first()).toBeVisible({ timeout: 10_000 });
 
-		// 8. Assert file list section heading (File List / 文件列表)
-		const fileListHeading = page.locator("h2").filter({
+		// 7. Assert file list section heading (File List / 文件列表) — an `h3`
+		//    card title inside the KB detail page.
+		const fileListHeading = page.locator("h3").filter({
 			hasText: /File List|文件列表/i,
 		});
 		await expect(fileListHeading.first()).toBeVisible({ timeout: 10_000 });
 
-		// 9. Assert dropzone text (drag and drop / 拖放文件)
+		// 8. Assert dropzone text (drag and drop / 拖放文件)
 		const dropzoneText = page.locator("p").filter({
 			hasText: /drag and drop|拖放文件/i,
 		});
 		await expect(dropzoneText.first()).toBeVisible({ timeout: 10_000 });
 
-		// 10. Assert supported formats hint (PDF, TXT, etc.)
+		// 9. Assert supported formats hint (PDF, TXT, etc.)
 		const formatsHint = page.locator("p").filter({
-			hasText: /PDF|TXT|JSON|CSV/i,
+			hasText: /PDF|TXT|MD|DOCX/i,
 		});
 		await expect(formatsHint.first()).toBeVisible({ timeout: 10_000 });
 	});
@@ -142,8 +141,11 @@ test.describe("Knowledge Source Flow", () => {
 		expect(status.kb_setup_completed).toBe(true);
 		expect(status.kb?.id).toBe(boundKbId);
 
-		// 3. Chat should succeed (uses mock LLM in test mode, but verifies flow)
-		const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
+		// 3. Chat should succeed. A live provider's first token can take ~60 s, so
+		//    use the stream endpoint (which keeps the socket alive) instead of the
+		//    blocking one, and allow the server's own 300 s stream cap.
+		test.setTimeout(300_000);
+		const chatRes = await request.post(`${API_BASE}/api/v1/chat/stream`, {
 			headers: { Authorization: `Bearer ${token}` },
 			data: {
 				agent_id: agent.id,
@@ -151,12 +153,17 @@ test.describe("Knowledge Source Flow", () => {
 			},
 		});
 		expect(chatRes.status()).toBe(200);
-		const chatData = (await chatRes.json()) as {
-			reply?: string;
-			session_id?: string;
-		};
-		// API returns 'reply' field per ChatResponse schema
-		expect(chatData.reply).toBeTruthy();
-		expect(chatData.session_id).toBeTruthy();
+		const sseBody = await chatRes.text();
+		expect(sseBody).toContain("event: done");
+		const doneLine = sseBody
+			.split("\n")
+			.find((line) => line.startsWith("data:") && line.includes("session_id"));
+		expect(doneLine, sseBody.slice(-400)).toBeTruthy();
+		// The reply text itself must not be the restricted fallback.
+		const contentText = sseBody
+			.split("\n\n")
+			.filter((block) => block.includes("event: content"))
+			.join("");
+		expect(contentText).not.toBe("");
 	});
 });

@@ -68,10 +68,14 @@ Docker-oriented AI customer support platform:
 
 ## Chat request flow (`POST /api/v1/chat/stream`)
 Two phases on purpose — never hold a DB connection while the LLM streams:
-1. Short-lived DB session: resolve agent → widget origin whitelist → daily quota → get/create `ChatSession` → if `taken_over`, persist the message and finish → per-session per-minute rate limit (returns `restricted_reply`) → **reject empty LLM key with HTTP 400 `detail="Agent has no LLM API key configured"` (SSE code `API_KEY_MISSING`; never set `use_mock_llm=True`)** → load history → KB retrieval → build messages. Session closes here.
+1. Short-lived DB session: resolve agent → widget origin whitelist → daily quota → get/create `ChatSession` → if `taken_over`, persist the message and finish → per-minute rate limit (returns `restricted_reply`; keyed on the session when `session_id` is sent, otherwise on the visitor identity — `visitor_id`, else `visitor_ip` — because omitting `session_id` mints a fresh session per request) → **reject empty LLM key with HTTP 400 `detail="Agent has no LLM API key configured"` (SSE code `API_KEY_MISSING`; never set `use_mock_llm=True`)** → load history → KB retrieval → build messages. Session closes here.
 2. No DB connection: emit `sources`, stream `content` deltas (plus `thinking_done` when the provider supports it), then `done` with `message_id`/`session_id`/`usage`/`taken_over`. LLM failure falls back to `agent.restricted_reply`. Hard cap 300s. `get_llm_service` returns `MockLLMService` **only** when `use_mock=True` (tests). Missing key + `use_mock=False` raises `ValueError("api_key required")`.
 
+**The provider read runs in its own task; the idle watchdog (`asyncio.wait`, never `asyncio.wait_for`) only emits `: keepalive` + `thinking` and then awaits the SAME task again.** `asyncio.wait_for` on timeout cancels the awaited `__anext__`, which ends the provider generator: the loop breaks with no content and the user silently gets the restricted fallback ~15s in. Constants `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_MAX_DURATION_SECONDS` are module-level so tests can patch them. Only a client disconnect (a `CancelledError`) may cancel the pending read.
+
 SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anything else is a bug — the widget parser ignores unknown events.
+
+**Session identity is enforced on the public surface.** `GET /api/v1/chat/messages` requires the owning `visitor_id` (missing or foreign answers `404 Session not found` — the same shape as an unknown session, so existence is never confirmed); `POST /chat/stream` never adopts a `session_id` whose `visitor_id` differs, it mints a fresh public id instead. Session ids are `sess_<agent>_<12 hex>` and the agent id is public in the embed, so they are enumerable: the widget/SDK must send `visitor_id` on the stream AND on both `chat/messages` calls. Admins use the token-protected `/api/v1/admin/sessions*` surface.
 
 ## When changing areas
 - **New LLM provider**: extend `backend/services/llm_service.py` (`provider_type` branch), update the `Agent` model/config, expose it in `src/components/AISettingsForm.tsx`.
@@ -85,9 +89,11 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 
 ## Testing and verification (mandatory before claiming done)
 - Frontend changes: always `cd frontend-nextjs && npm run build && npm run typecheck && npm run test` (Vitest, `maxWorkers: 1` — several tests mock globals, keep it serial).
-- Backend changes: `cd backend && pytest` for the affected tests (fixtures in `conftest.py`: `client`, `public_client`).
+- Backend changes: `cd backend && pytest` for the affected tests (fixtures in `conftest.py`: `client`, `public_client`). On a host without the project venv, run them in the dev image: `docker run --rm --network host -e REDIS_URL=… -e QDRANT_URL=… -v "$PWD":/repo -w /repo/backend --entrypoint python3 <backend-dev image> -m pytest -q`.
+- **i18n catalogs are compiled, not hand-edited**: `.mo` files are tracked and there is no `msgfmt` in the image or on the dev host. Edit the `.po`, then run `python3 backend/scripts/compile_mo.py` to regenerate every `locales/*/LC_MESSAGES/messages.mo`. `backend/tests/test_i18n_catalog.py` fails on a stale `.mo`, so a message edit that skips the compile shows up as a red test.
 - Docker changes: `docker compose --profile dev up --build`.
-- E2E or widget: the relevant `npm run test:e2e:*`.
+- E2E or widget: the relevant `npm run test:e2e:*`. **Specs must not call the blocking `POST /api/v1/chat` with a live provider**: a first token can take ~60 s and the 30 s per-test default kills the request. Use `POST /api/v1/chat/stream` and read the SSE body (see the specs' shared helper pattern); reserve the blocking call for a mocked provider.
+- Widget bundle: `npm run sync-widget` (builds `widget/` then copies `dist/basjoo-widget.min.js` to `backend/static/sdk.js`). The two files must stay byte-identical; never edit `sdk.js` by hand.
 - Major changes: request code review.
 - For bugs: reproduce first, then fix (systematic debugging). For features: plan before writing code.
 
@@ -99,6 +105,8 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - Force rebuild vs incremental is controlled by the `force` param on `/knowledge-bases/{kb_id}/index:rebuild` (legacy `/index:rebuild?agent_id=` still aliases).
 - File pipeline: `POST /knowledge-bases/{kb_id}/files:upload` writes bytes + a `KbDocument` (status `pending`) → `BackgroundTasks` → `DocumentParser` (pdfplumber / python-docx / openpyxl) → chunk → embedding → Qdrant upsert → status `ready`/`error`.
 - Limits: ≤5 files per request, 20 MB per file, extensions `txt md html pdf docx xlsx`.
+- **Upload filenames are sanitised before the row exists** (`sanitise_upload_filename` in `kb_document_processor.py`, called by `upload_kb_files`): control chars/NUL stripped, path separators neutralised, Windows device basenames (`CON`, `PRN`, `COM1`…) prefixed with `_`, whitespace collapsed, whole name capped at 200 chars keeping the extension. A name that reduces to nothing is rejected through the per-file `errors[]` channel, never stored unnamed. The DB row, the list API, the download name and the on-disk file must always agree — do not reintroduce a second sanitiser at the disk layer.
+- `urls:clear_all` returns `deleted_count` = the number of **URL rows** cleared (same meaning as `files:clear_all`'s document count), plus the `deleted_url_count` / `deleted_doc_count` / `deleted_chunk_count` / `deleted_qdrant_count` / `deleted_files_count` breakdown. Do not re-point `deleted_count` at `counters["docs"]`: a URL that never indexed reports 0 while the list visibly empties.
 - `/knowledge-bases/{kb_id}/files:list` reads `KbDocument` (excluding `url_*` rows); `/urls:list` reads `URLSource`.
 
 **KB endpoints are the live path:** lifecycle + sources both live on `/api/v1/knowledge-bases` (`kb_endpoints.py`). Agent-scoped `/api/v1` `files:*` / `urls:*` / `sources:summary` / `index:*` stay as one-release aliases that resolve the KB through `agents.kb_id` and 409 if unbound. `backend/api/v1/kb_document_endpoints.py` and the `/api/tenants/...` KB surface are gone — do not resurrect them.

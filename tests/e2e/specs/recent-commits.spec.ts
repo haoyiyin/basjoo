@@ -66,14 +66,8 @@ test.describe('Recent commit regressions', () => {
   test.beforeAll(async ({ request }) => {
     token = await loginByApi(request);
     agent = await getDefaultAgent(request, token);
-
-    // Reset KB configuration to allow embedding changes (avoids 409 conflict)
-    const resetRes = await request.post(
-      `${API_BASE}/api/v1/agent:kb-reset?agent_id=${agent.id}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    // Reset may return 200 (success) or 400 (nothing to reset) - both acceptable
-    expect([200, 400]).toContain(resetRes.status());
+    // `agent:kb-reset` is gone by design (the per-agent embedding routes were
+    // replaced by KB-scoped configuration), so there is nothing to reset here.
   });
 
   test('provider keys are saved, masked, switchable, and usable for embedding API tests', async ({ request }) => {

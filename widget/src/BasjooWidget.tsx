@@ -443,7 +443,7 @@ class BasjooWidget {
 
     try {
       const response = await fetch(
-        `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}`
+        `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&visitor_id=${encodeURIComponent(this.visitorId)}`
       );
       if (!response.ok) {
         throw new Error('Failed to load history');
@@ -1578,7 +1578,7 @@ class BasjooWidget {
 
     try {
       const response = await fetch(
-        `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&after_id=${this.lastMessageId}&role=assistant`
+        `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&visitor_id=${encodeURIComponent(this.visitorId)}&after_id=${this.lastMessageId}&role=assistant`
       );
       if (!response.ok) return;
 
