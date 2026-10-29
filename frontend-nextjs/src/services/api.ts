@@ -37,9 +37,11 @@ export interface StreamDoneMeta {
 }
 
 export interface Source {
-	type: "url" | "file";
+	/** `qa` marks a curated pair; it carries no url and no filename. */
+	type: "url" | "file" | "qa";
 	title?: string;
 	url?: string;
+	filename?: string;
 	snippet?: string;
 	question?: string;
 	id?: string;
@@ -73,6 +75,8 @@ export interface Agent {
 	description?: string;
 	avatar?: string | null;
 	system_prompt: string;
+	/** Operator-written facts that outrank retrieved chunks (#39). */
+	fixed_facts?: string | null;
 	model: string;
 	temperature: number;
 	max_tokens: number;
@@ -361,6 +365,107 @@ export interface AgentCreateInput {
 	persona_type?: string;
 	widget_title?: string;
 	welcome_message?: string;
+}
+
+/**
+ * Curated question/answer pair (#39). Stored on the KB and embedded into a
+ * dedicated collection, so a hit outranks an ordinary chunk without a reindex.
+ */
+export interface QaItem {
+	id: string;
+	kb_id: string;
+	question: string;
+	answer: string;
+	enabled: boolean;
+	hits: number;
+	last_hit_at?: string | null;
+	/** manual | revise | unanswered — how the pair got here. */
+	source: string;
+	source_message_id?: number | null;
+	created_at?: string | null;
+	updated_at?: string | null;
+}
+
+export interface QaItemListResponse {
+	items: QaItem[];
+	total: number;
+}
+
+export interface QaItemCreateInput {
+	question: string;
+	answer: string;
+}
+
+export interface QaItemUpdateInput {
+	question?: string;
+	answer?: string;
+	enabled?: boolean;
+}
+
+export interface QaImportPair {
+	question: string;
+	answer: string;
+}
+
+export interface QaImportResponse {
+	created: number;
+	skipped: number;
+}
+
+export interface ReviseAnswerResponse {
+	qa_item: QaItem;
+	/** True when an existing pair for the same question was corrected. */
+	replaced: boolean;
+}
+
+export interface QaFromMessageResponse {
+	qa_item: QaItem;
+}
+
+/**
+ * One ordered step of a procedure. `requires_action` names a channel capability
+ * (`link`, `form`, or anything else); a step whose action is unavailable skips
+ * the whole procedure, so the value must round-trip freely.
+ */
+export interface ProcedureStep {
+	text: string;
+	requires_action?: string | null;
+}
+
+export interface Procedure {
+	id: string;
+	agent_id: string;
+	name: string;
+	steps: ProcedureStep[];
+	enabled: boolean;
+	created_at?: string | null;
+	updated_at?: string | null;
+}
+
+export interface ProcedureListResponse {
+	items: Procedure[];
+	total: number;
+}
+
+export interface ProcedureCreateInput {
+	name: string;
+	steps: ProcedureStep[];
+	enabled?: boolean;
+}
+
+export interface ProcedureUpdateInput {
+	name?: string;
+	steps?: ProcedureStep[];
+	enabled?: boolean;
+}
+
+export interface FixedFactsResponse {
+	fixed_facts?: string | null;
+}
+
+export interface DeleteResult {
+	deleted: boolean;
+	id: string;
 }
 
 export async function parseErrorResponse(response: Response): Promise<string> {
@@ -1375,6 +1480,126 @@ class APIService {
 
 	async getAdminSessionMessages(sessionId: string): Promise<any[]> {
 		return this.request(`/api/v1/admin/sessions/${sessionId}/messages`);
+	}
+
+	// ---------------------------------------------------------------- Q&A (#39)
+
+	async listQaItems(
+		kbId: string,
+		skip = 0,
+		limit = 100,
+	): Promise<QaItemListResponse> {
+		return this.request<QaItemListResponse>(
+			`${this.kbBase(kbId)}/qa-items?skip=${skip}&limit=${limit}`,
+		);
+	}
+
+	async createQaItem(kbId: string, input: QaItemCreateInput): Promise<QaItem> {
+		return this.request<QaItem>(`${this.kbBase(kbId)}/qa-items`, {
+			method: "POST",
+			body: JSON.stringify(input),
+		});
+	}
+
+	async updateQaItem(
+		kbId: string,
+		qaId: string,
+		input: QaItemUpdateInput,
+	): Promise<QaItem> {
+		return this.request<QaItem>(
+			`${this.kbBase(kbId)}/qa-items/${encodeURIComponent(qaId)}`,
+			{ method: "PUT", body: JSON.stringify(input) },
+		);
+	}
+
+	async deleteQaItem(kbId: string, qaId: string): Promise<void> {
+		await this.request(
+			`${this.kbBase(kbId)}/qa-items/${encodeURIComponent(qaId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	async importQaItems(
+		kbId: string,
+		items: QaImportPair[],
+	): Promise<QaImportResponse> {
+		return this.request<QaImportResponse>(
+			`${this.kbBase(kbId)}/qa-items:import`,
+			{ method: "POST", body: JSON.stringify({ items }) },
+		);
+	}
+
+	/**
+	 * Correct the last assistant answer in a session; the correction becomes a
+	 * curated pair on the agent's KB and is effective on the next message.
+	 */
+	async reviseAnswer(
+		sessionId: string,
+		answer: string,
+	): Promise<ReviseAnswerResponse> {
+		return this.request<ReviseAnswerResponse>(
+			`/api/v1/admin/sessions/${encodeURIComponent(sessionId)}/revise-answer`,
+			{ method: "POST", body: JSON.stringify({ answer }) },
+		);
+	}
+
+	/** Add an assistant message's turn to the agent's KB as a curated pair. */
+	async addQaFromMessage(
+		messageId: number,
+	): Promise<QaFromMessageResponse> {
+		return this.request<QaFromMessageResponse>(
+			`/api/v1/admin/qa/from-message/${messageId}`,
+			{ method: "POST" },
+		);
+	}
+
+	// ---------------------------------------------------------- procedures (#39)
+
+	async listProcedures(agentId: string): Promise<ProcedureListResponse> {
+		return this.request<ProcedureListResponse>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures`,
+		);
+	}
+
+	async createProcedure(
+		agentId: string,
+		input: ProcedureCreateInput,
+	): Promise<Procedure> {
+		return this.request<Procedure>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures`,
+			{ method: "POST", body: JSON.stringify(input) },
+		);
+	}
+
+	async updateProcedure(
+		agentId: string,
+		procedureId: string,
+		input: ProcedureUpdateInput,
+	): Promise<Procedure> {
+		return this.request<Procedure>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures/${encodeURIComponent(procedureId)}`,
+			{ method: "PUT", body: JSON.stringify(input) },
+		);
+	}
+
+	async deleteProcedure(
+		agentId: string,
+		procedureId: string,
+	): Promise<DeleteResult> {
+		return this.request<DeleteResult>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures/${encodeURIComponent(procedureId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	async updateFixedFacts(
+		agentId: string,
+		fixedFacts: string | null,
+	): Promise<FixedFactsResponse> {
+		return this.request<FixedFactsResponse>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/fixed-facts`,
+			{ method: "PUT", body: JSON.stringify({ fixed_facts: fixedFacts }) },
+		);
 	}
 }
 

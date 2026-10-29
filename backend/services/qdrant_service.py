@@ -40,10 +40,22 @@ def get_embedding_dimension(model: str) -> int:
         return 1024
     return 1024  # safe default
 
+def _short_collection_suffix(kb_id: str) -> str:
+    """Shared suffix rule: first 12 hyphen-free characters of the KB id."""
+    return kb_id.replace("-", "")[:12] if "-" in kb_id else kb_id[:12]
+
 def get_kb_collection_name(kb_id: str) -> str:
     """生成知识库对应的 Qdrant collection 名称（kb_ + 前12位无连字符ID）。"""
-    short = kb_id.replace("-", "")[:12] if "-" in kb_id else kb_id[:12]
-    return f"kb_{short}"
+    return f"kb_{_short_collection_suffix(kb_id)}"
+
+def get_qa_collection_name(kb_id: str) -> str:
+    """The curated Q&A index lives in its own collection (``qa_<12 hex>``).
+
+    Same naming rule as the KB collection so a KB id maps to exactly one pair of
+    collections; the visitor phrasing is searched here on its own, never mixed
+    with the site's chunks (#39).
+    """
+    return f"qa_{_short_collection_suffix(kb_id)}"
 
 class QdrantKbService:
     def __init__(self):
@@ -60,7 +72,14 @@ class QdrantKbService:
         - 已存在且维度一致 → 幂等返回。
         - 已存在但维度不同 → 抛 ``RuntimeError``（调用方必须先 reset）。
         """
-        collection_name = get_kb_collection_name(kb_id)
+        return await self._ensure_named_collection(
+            get_kb_collection_name(kb_id), dimension
+        )
+
+    async def _ensure_named_collection(
+        self, collection_name: str, dimension: int
+    ) -> str:
+        """Idempotent create for one named collection, guarding the width."""
         dimension = int(dimension)
 
         existing_size = await self._existing_vector_size(collection_name)
@@ -140,6 +159,90 @@ class QdrantKbService:
         except Exception as e:
             logger.warning(f"Qdrant delete failed for doc {doc_id}: {e}")
             return 0
+
+    # ---- curated Q&A index (#39) ------------------------------------------
+
+    async def ensure_qa_collection(self, kb_id: str, dimension: int) -> str:
+        """Idempotently create the KB's Q&A collection at the measured width."""
+        return await self._ensure_named_collection(
+            get_qa_collection_name(kb_id), dimension
+        )
+
+    async def upsert_qa_point(
+        self, kb_id: str, qa_id: str, vector: list[float], payload: dict
+    ) -> None:
+        """Upsert the single point that represents one curated pair."""
+        await self.client.upsert(
+            collection_name=get_qa_collection_name(kb_id),
+            points=[PointStruct(id=qa_id, vector=vector, payload=payload)],
+        )
+
+    async def set_qa_payload(self, kb_id: str, qa_id: str, payload: dict) -> bool:
+        """Refresh a point's payload without re-embedding it.
+
+        The embedding only covers the question, so an edited answer must not pay
+        for another provider round trip; this writes the new payload in place.
+        Returns False when the point/collection is missing (the caller can then
+        fall back to a full sync).
+        """
+        try:
+            await self.client.set_payload(
+                collection_name=get_qa_collection_name(kb_id),
+                payload=payload,
+                points=[qa_id],
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Qdrant qa payload update failed for {qa_id}: {e}")
+            return False
+
+    async def delete_qa_point(self, kb_id: str, qa_id: str) -> bool:
+        """Delete one curated pair's point (best-effort, idempotent)."""
+        try:
+            await self.client.delete(
+                collection_name=get_qa_collection_name(kb_id),
+                points_selector=[qa_id],
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Qdrant qa delete failed for {qa_id}: {e}")
+            return False
+
+    async def search_qa(
+        self, kb_id: str, query_vector: list[float], top_k: int = 3
+    ) -> list[dict]:
+        """Search a KB's Q&A collection. Returns [{id, score, payload}] (may be [])."""
+        collection_name = get_qa_collection_name(kb_id)
+        qfilter = Filter(
+            must=[FieldCondition(key="kb_id", match=MatchValue(value=kb_id))]
+        )
+        try:
+            response = await self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=qfilter,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return [
+                {"id": h.id, "score": h.score, "payload": h.payload or {}}
+                for h in response.points
+            ]
+        except Exception as e:
+            # A KB with no curated pairs has no collection yet: that is not an
+            # error, just an empty index.
+            logger.info(f"Qdrant qa search skipped for kb={kb_id}: {e}")
+            return []
+
+    async def delete_qa_collection(self, kb_id: str) -> bool:
+        """Idempotent delete of the Q&A collection (KB cascade delete)."""
+        try:
+            await self.client.delete_collection(get_qa_collection_name(kb_id))
+            return True
+        except Exception as e:
+            logger.info(f"Qdrant qa collection delete skipped for kb={kb_id}: {e}")
+            return False
 
     async def delete_collection(self, kb_id: str) -> bool:
         """幂等 delete collection (for KB cascade delete)."""

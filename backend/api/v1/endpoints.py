@@ -84,6 +84,8 @@ from services.llm_service import get_llm_service
 from services.auth_service import AuthService
 from services.kb_retrieval_service import KbRetrievalService
 from services.kb_service import KbService
+from services.qa_service import QaService
+from services.procedure_service import resolve_active_procedure
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -208,6 +210,7 @@ def build_agent_config(
         "widget_color": agent.widget_color,
         "welcome_message": agent.welcome_message,
         "history_days": agent.history_days,
+        "fixed_facts": getattr(agent, "fixed_facts", None),
         "is_active": is_active,
         "deleted_at": deleted_at,
         "purge_after": getattr(agent, "purge_after", None),
@@ -517,6 +520,45 @@ async def check_quota(
 
     return quota
 
+
+def build_qa_prompt_block(qa_hits: List[Dict[str, Any]]) -> str:
+    """Format curated Q&A hits as the prompt's highest-priority layer (#39).
+
+    Empty when there are no hits, so the caller can concatenate unconditionally.
+    """
+    if not qa_hits:
+        return ""
+    lines = ["以下问答对与用户问题高度相关，请优先采用其中的答案："]
+    for index, hit in enumerate(qa_hits, 1):
+        question = str(hit.get("question") or "").strip()
+        answer = str(hit.get("answer") or "").strip()
+        if not question or not answer:
+            continue
+        lines.append(f"[问答{index}] 问：{question}\n答：{answer}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+# A fixed-facts block is capped so a wall of operator text cannot crowd out the
+# retrieved chunks it is supposed to sit above.
+MAX_FIXED_FACT_PASSAGES = 6
+FIXED_FACTS_HEADER = (
+    "以下是必须遵守的固定事实（优先级高于知识库资料；"
+    "其中出现的链接必须原样输出）："
+)
+
+def split_fixed_facts(raw: str) -> List[str]:
+    """Split operator text into at most six non-empty blank-line-separated passages."""
+    if not raw or not raw.strip():
+        return []
+    passages = [part.strip() for part in raw.split("\n\n")]
+    passages = [part for part in passages if part]
+    return passages[:MAX_FIXED_FACT_PASSAGES]
+
+def build_fixed_facts_block(raw: str) -> str:
+    """The fixed-facts prompt layer, or '' when the operator wrote nothing."""
+    passages = split_fixed_facts(raw)
+    if not passages:
+        return ""
+    return FIXED_FACTS_HEADER + "\n" + "\n\n".join(passages)
 
 def build_chat_sources(retrieval_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Build normalized source payloads for chat responses."""
@@ -955,7 +997,25 @@ async def prepare_chat_request(
         max_tokens,
     )
 
-    # KB retrieval (direct Qdrant pipeline, tenant-isolated)
+    # Q&A hits first (#39). The curated index is searched with the visitor's raw
+    # phrasing; a hit is stated as the preferred answer, above every other layer.
+    qa_hits: List[Dict[str, Any]] = []
+    if getattr(agent, "kb_id", None):
+        try:
+            qa_hits = await QaService().search(
+                str(agent.kb_id), request.message
+            )
+        except Exception as e:
+            # A broken Q&A index must never take chat down: log and move on.
+            logger.warning(f"Q&A search in chat skipped: {e}")
+            qa_hits = []
+
+    # Fixed facts are hoisted out of the `if agent.kb_id` branch on purpose: an
+    # agent with no KB bound still answers from them (#39).
+    fixed_facts_text = getattr(agent, "fixed_facts", None)
+    if not isinstance(fixed_facts_text, str):
+        fixed_facts_text = ""
+
     kb_context = ""
     kb_sources = []  # Track sources for SSE event
     if getattr(agent, "kb_id", None):
@@ -999,19 +1059,60 @@ async def prepare_chat_request(
         except Exception as e:
             logger.warning(f"KB retrieval in chat skipped: {e}")
 
+    # The widget already renders `type: "qa"`; the extra keys are what the
+    # Sources panel shows instead of a filename.
+    for hit in qa_hits:
+        kb_sources.append(
+            {
+                "type": "qa",
+                "title": hit.get("question", ""),
+                "question": hit.get("question", ""),
+                "url": "",
+                "filename": "",
+                "snippet": (hit.get("answer") or "")[:200],
+                "id": hit.get("qa_id"),
+            }
+        )
+
+    qa_block = build_qa_prompt_block(qa_hits)
+    facts_block = build_fixed_facts_block(fixed_facts_text)
+    procedure_block = await resolve_active_procedure(db, session, agent)
+
+    def _build_system_content() -> str:
+        """Prompt layers in their frozen order: Q&A → fixed facts → KB chunks."""
+        content = agent_system_prompt or "You are a helpful AI assistant."
+        if qa_block:
+            content += f"\n\n{qa_block}"
+        if facts_block:
+            content += f"\n\n{facts_block}"
+        if kb_context:
+            content += (
+                f"\n\n以下是相关背景资料：\n\n{kb_context}\n\n请基于以上资料回答用户问题。"
+                "\n\n引用说明：回答时请使用 [标题](#source-N) 格式引用来源，其中N为来源序号。"
+                "例如：根据 [Petking官网](#source-1)，我们的产品..."
+            )
+        elif not qa_block and not facts_block:
+            # Only when EVERY layer is empty: today's exact sentence.
+            content += (
+                "\n\n[No relevant information found in the knowledge base. "
+                "Please use a fallback response according to your role constraints.]"
+            )
+        if procedure_block:
+            content += f"\n\n{procedure_block}"
+        return content
+
     messages: List[Dict[str, str]] = []
-    system_content = agent_system_prompt or "You are a helpful AI assistant."
-    if kb_context:
-        system_content += (
-            f"\n\n以下是相关背景资料：\n\n{kb_context}\n\n请基于以上资料回答用户问题。"
-            "\n\n引用说明：回答时请使用 [标题](#source-N) 格式引用来源，其中N为来源序号。"
-            "例如：根据 [Petking官网](#source-1)，我们的产品..."
-        )
-    else:
-        system_content += (
-            "\n\n[No relevant information found in the knowledge base. "
-            "Please use a fallback response according to your role constraints.]"
-        )
+    system_content = _build_system_content()
+
+    # Serving a curated pair is a hit: count it so the Q&A list can show usage.
+    for hit in qa_hits:
+        qa_id = hit.get("qa_id")
+        if not qa_id:
+            continue
+        try:
+            await QaService().record_hit(qa_id, db)
+        except Exception as e:
+            logger.warning(f"Q&A hit counter update skipped for {qa_id}: {e}")
 
     messages.append({"role": "system", "content": system_content})
     if agent_enable_context and conversation_history:

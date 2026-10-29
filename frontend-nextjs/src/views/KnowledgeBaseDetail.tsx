@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import AdminLayout from "../components/AdminLayout";
+import QaManagement from "../components/QaManagement";
 import FileUploadManagement from "./FileUploadManagement";
 import URLManagement from "./URLManagement";
 import { api } from "../services/api";
@@ -141,6 +142,11 @@ export default function KnowledgeBaseDetail() {
 				<div className="kb-source-panels">
 					<URLManagement />
 					<FileUploadManagement />
+					{/*
+					 * Curated Q&A (#39) lives on the KB, not the agent: a pair is embedded
+					 * into the KB's own `qa_<hex>` collection and needs no reindex.
+					 */}
+					<QaManagement kbId={kbId} />
 				</div>
 			</div>
 		</AdminLayout>

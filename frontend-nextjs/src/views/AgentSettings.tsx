@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import AdminLayout from '../components/AdminLayout';
+import ProcedureEditor from '../components/ProcedureEditor';
 import { Icon } from '../components/Icon';
 import { api, type Agent } from '../services/api';
 import { API_BASE_URL } from '../lib/env';
@@ -49,6 +50,10 @@ export default function AgentSettings() {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [formData, setFormData] = useState<AgentSettingsFormData | null>(null);
   const [originsText, setOriginsText] = useState<string>('');
+  const [fixedFacts, setFixedFacts] = useState<string>('');
+  const [fixedFactsSaving, setFixedFactsSaving] = useState(false);
+  const [fixedFactsSaved, setFixedFactsSaved] = useState(false);
+  const [fixedFactsError, setFixedFactsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +78,7 @@ export default function AgentSettings() {
       const data = formDataFromAgent(loadedAgent);
       setFormData(data);
       setOriginsText(data.allowed_widget_origins.join('\n'));
+      setFixedFacts(loadedAgent.fixed_facts ?? '');
     } catch (err) {
       setError(t('errors.loadFailed'));
     } finally {
@@ -125,6 +131,30 @@ export default function AgentSettings() {
     if (!formData) return;
     setFormData({ ...formData, [field]: value });
     setValidationError(null);
+  };
+
+  /**
+   * Fixed facts are their own PUT (`/agents/{id}/fixed-facts`), not part of the
+   * agent PATCH: they are injected into every prompt ahead of the KB passages,
+   * so they get an explicit save instead of riding the general form.
+   */
+  const handleSaveFixedFacts = async () => {
+    if (!agent || fixedFactsSaving) return;
+    setFixedFactsSaving(true);
+    setFixedFactsError(null);
+    try {
+      const result = await api.updateFixedFacts(
+        agent.id,
+        fixedFacts.trim() ? fixedFacts : null,
+      );
+      setFixedFacts(result.fixed_facts ?? '');
+      setFixedFactsSaved(true);
+      setTimeout(() => setFixedFactsSaved(false), 2000);
+    } catch (err) {
+      setFixedFactsError(t('errors.saveFailed'));
+    } finally {
+      setFixedFactsSaving(false);
+    }
   };
 
   if (loading) {
@@ -363,6 +393,64 @@ export default function AgentSettings() {
             <p className="field-hint">{t('labels.restrictedReplyDesc')}</p>
           </div>
         </section>
+
+        {/* Fixed facts — injected ahead of every KB passage (#39) */}
+        <section className="card" data-testid="agent-fixed-facts-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('fixedFacts.title')}</h2>
+            <div className="page-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveFixedFacts}
+                disabled={fixedFactsSaving}
+                aria-busy={fixedFactsSaving}
+              >
+                {fixedFactsSaving ? (
+                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                ) : null}
+                {t('fixedFacts.save')}
+              </button>
+            </div>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('fixedFacts.description')}
+          </p>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="fixed_facts">
+              {t('fixedFacts.label')}
+            </label>
+            <textarea
+              id="fixed_facts"
+              className="input textarea"
+              value={fixedFacts}
+              onChange={(e) => {
+                setFixedFacts(e.target.value);
+                setFixedFactsSaved(false);
+                setFixedFactsError(null);
+              }}
+              rows={6}
+              placeholder={t('fixedFacts.placeholder')}
+            />
+            <p className="field-hint">{t('fixedFacts.hint')}</p>
+            <p className="field-hint">{t('fixedFacts.linkHint')}</p>
+            {fixedFactsError && (
+              <p role="alert" className="field-error">
+                {fixedFactsError}
+              </p>
+            )}
+            {fixedFactsSaved && (
+              <p role="status" aria-live="polite" className="field-hint">
+                {t('labels.settingsSaved')}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* Procedures — one step per turn (#39) */}
+        {agent && <ProcedureEditor agentId={agent.id} />}
 
         {/* Embed code */}
         <section className="card">

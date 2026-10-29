@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
@@ -767,8 +768,20 @@ class Procedure(Base):
     # [{"text": "...", "requires_action": "link" | "form" | null}]
     steps = Column(JSON, nullable=False, default=list)
     enabled = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Microsecond precision on purpose: "the first enabled procedure" is ordered
+    # by `created_at`, and SQLite's CURRENT_TIMESTAMP only resolves to the second,
+    # so two procedures written in the same second would tie. The server default
+    # still covers raw-SQL inserts (migrations, fixtures).
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=func.now(),
+    )
 
 
 class Lead(Base):

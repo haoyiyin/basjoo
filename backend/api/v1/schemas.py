@@ -470,6 +470,10 @@ class AgentConfig(BaseModel):
     kb_status: Optional[str] = Field(
         None, description="Status of the bound knowledge base (active/resetting/error)"
     )
+    fixed_facts: Optional[str] = Field(
+        None,
+        description="Operator-written facts injected on every message, above KB chunks (#39)",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -562,6 +566,9 @@ class AgentUpdateRequest(BaseModel):
     welcome_message: Optional[str] = Field(None, description="Widget welcome message")
     history_days: Optional[int] = Field(
         None, ge=1, le=365, description="Chat history retention days"
+    )
+    fixed_facts: Optional[str] = Field(
+        None, description="Operator-written facts injected above KB chunks (#39)"
     )
 
     @field_validator("allowed_widget_origins")
@@ -843,3 +850,153 @@ class SourcesSummaryResponse(BaseModel):
 
 # AgentConfig is declared after the KB schemas (KbBindResponse embeds it).
 KbBindResponse.model_rebuild()
+
+# ========== Curated Q&A + procedures (#39) ==========
+
+class QaItemPayload(BaseModel):
+    """One curated question/answer pair, as the admin API returns it."""
+
+    id: str
+    kb_id: str
+    question: str
+    answer: str
+    enabled: bool
+    hits: int
+    last_hit_at: Optional[datetime] = None
+    source: str
+    source_message_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class QaItemListResponse(BaseModel):
+    """`GET /knowledge-bases/{kb_id}/qa-items`."""
+
+    items: List[QaItemPayload] = Field(default_factory=list)
+    total: int = 0
+
+class QaItemCreateRequest(BaseModel):
+    """Create one pair. `question`/`answer` are required and non-blank."""
+
+    question: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class QaItemUpdateRequest(BaseModel):
+    """Partial update; only supplied fields are written."""
+
+    question: Optional[str] = Field(None, min_length=1)
+    answer: Optional[str] = Field(None, min_length=1)
+    enabled: Optional[bool] = None
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class QaImportPair(BaseModel):
+    """One row of a bulk import (CSV/paste box)."""
+
+    question: str = ""
+    answer: str = ""
+
+class QaImportRequest(BaseModel):
+    """`POST /knowledge-bases/{kb_id}/qa-items:import`."""
+
+    items: List[QaImportPair] = Field(default_factory=list)
+
+class QaImportResponse(BaseModel):
+    """Import result: duplicates and blank rows are skipped, never fatal."""
+
+    created: int = 0
+    skipped: int = 0
+
+class ReviseAnswerRequest(BaseModel):
+    """Operator-supplied correction for the session's last turn."""
+
+    answer: str = Field(..., min_length=1)
+
+    @field_validator("answer")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class ReviseAnswerResponse(BaseModel):
+    """`POST /admin/sessions/{session_id}/revise-answer`."""
+
+    qa_item: QaItemPayload
+    replaced: bool = False
+
+class QaFromMessageResponse(BaseModel):
+    """`POST /admin/qa/from-message/{message_id}` (#42 reuses it)."""
+
+    qa_item: QaItemPayload
+
+class ProcedureStep(BaseModel):
+    """One ordered step; `requires_action` names a channel capability.
+
+    Deliberately a free string, not a `Literal`: an operator can park a step that
+    needs `phone`, which no channel provides today. The runtime skips the whole
+    procedure rather than half-running it, and the value must survive a round
+    trip so that decision is visible instead of being rejected at write time.
+    """
+
+    text: str = Field(..., min_length=1)
+    requires_action: Optional[str] = None
+
+class ProcedurePayload(BaseModel):
+    """A procedure as stored and returned."""
+
+    id: str
+    agent_id: str
+    name: str
+    steps: List[ProcedureStep] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class ProcedureListResponse(BaseModel):
+    """`GET /agents/{agent_id}/procedures`."""
+
+    items: List[ProcedurePayload] = Field(default_factory=list)
+    total: int = 0
+
+class ProcedureCreateRequest(BaseModel):
+    """Create a procedure."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    steps: List[ProcedureStep] = Field(default_factory=list)
+    enabled: bool = True
+
+class ProcedureUpdateRequest(BaseModel):
+    """Partial procedure update."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    steps: Optional[List[ProcedureStep]] = None
+    enabled: Optional[bool] = None
+
+class FixedFactsResponse(BaseModel):
+    """`PUT /agents/{agent_id}/fixed-facts`."""
+
+    fixed_facts: Optional[str] = None
+
+class FixedFactsRequest(BaseModel):
+    """Operator-written facts that outrank retrieved chunks."""
+
+    fixed_facts: Optional[str] = None
