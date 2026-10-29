@@ -107,6 +107,9 @@ services:
     build:
       context: ./scrapling-service
       dockerfile: Dockerfile
+      args:
+        # Override when a proxy mangles deb.debian.org (see .env.example).
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-http://deb.debian.org}
     container_name: basjoo-crawler
     restart: unless-stopped
     # Chromium needs far more than the default 64 MB /dev/shm.
