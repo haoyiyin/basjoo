@@ -195,6 +195,7 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 | `SERVER_DOMAIN` | 未设置 | nginx 规范域名，其他 Host 直接 `444` |
 | `CORS_ALLOW_NULL_ORIGIN` | `false` | 接受 `Origin: null` 的沙箱 iframe |
 | `LOG_LEVEL` | `INFO` | |
+| `DEBIAN_MIRROR` | `http://deb.debian.org` | 后端与抓取镜像构建时的 apt 源；代理会破坏默认源时改它 |
 
 `SSRF_PROTECTION_ENABLED` 默认关闭：fake-ip / 分离解析的 DNS（sing-box、clash）会把普通公网站点解析进私有
 网段，开着会拒绝所有真实抓取。协议、内嵌凭据、空主机名、`localhost`、直接 IP 字面量这几种检查始终生效；

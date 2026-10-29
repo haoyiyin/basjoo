@@ -225,6 +225,7 @@ default.
 | `SERVER_DOMAIN` | unset | nginx canonical host; anything else gets `444` |
 | `CORS_ALLOW_NULL_ORIGIN` | `false` | accept `Origin: null` sandboxed iframes |
 | `LOG_LEVEL` | `INFO` | |
+| `DEBIAN_MIRROR` | `http://deb.debian.org` | build-time apt mirror for the backend and crawler images; change it when a proxy mangles the default |
 
 `SSRF_PROTECTION_ENABLED` is opt-in because a fake-ip / split-horizon resolver (sing-box, clash) maps public
 hosts into private ranges and would reject every fetch. Scheme, credential, empty-host, `localhost` and
