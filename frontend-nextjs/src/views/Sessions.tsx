@@ -20,11 +20,20 @@ interface Session {
   visitor_country?: string
   visitor_city?: string
   status: string
+  /** #43: who answers next. `taken_over` implies `human`. */
+  mode?: 'ai' | 'human'
+  human_replied_at?: string | null
   message_count: number
   created_at: string
   updated_at?: string
   last_message?: string
 }
+
+/** #43: every state the backend may store, including the legacy `closed`. */
+type SessionStatus = 'active' | 'taken_over' | 'resolved' | 'closed' | 'paused'
+
+/** The four explicit actions plus reopen (#43). */
+type SessionAction = 'reply' | 'takeover' | 'release' | 'resolve' | 'reopen'
 
 interface Message {
   id: number
@@ -63,11 +72,18 @@ export default function Sessions() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedSession, setSelectedSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [filter, setFilter] = useState<'all' | 'active' | 'taken_over' | 'closed'>('all')
+  const [filter, setFilter] = useState<
+    'all' | 'active' | 'taken_over' | 'resolved' | 'closed'
+  >('all')
   const [keyword, setKeyword] = useState('')
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(false)
   const [sendingMessage, setSendingMessage] = useState(false)
+  // #43: the Reply composer is a separate, explicit action from Take over.
+  const [replyOpen, setReplyOpen] = useState(false)
+  const [replyDraft, setReplyDraft] = useState('')
+  const [pendingAction, setPendingAction] = useState<SessionAction | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   // Issue item 4: correct one assistant answer and turn it into a curated pair.
   const [reviseOpen, setReviseOpen] = useState(false)
   const [reviseDraft, setReviseDraft] = useState('')
@@ -226,32 +242,95 @@ export default function Sessions() {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
-  const handleTakeover = async (sessionId: string) => {
-    try {
-      const response = await fetch(`/api/v1/admin/sessions/${sessionId}/takeover`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      })
+  /**
+   * #43: the four explicit actions. Reply never changes `status`; takeover mutes
+   * the bot; release hands it back; resolve marks the conversation handled and
+   * is deliberately distinct from the inactivity `closed`.
+   */
+  const runSessionAction = useCallback(
+    async (sessionId: string, action: SessionAction, message?: string) => {
+      setPendingAction(action)
+      setActionError(null)
+      try {
+        let response: Response
+        if (action === 'reply') {
+          response = await fetch(`/api/v1/admin/sessions/${sessionId}/reply`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ message }),
+          })
+        } else if (action === 'takeover') {
+          response = await fetch(`/api/v1/admin/sessions/${sessionId}/takeover`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        } else {
+          response = await fetch(`/api/v1/admin/sessions/${sessionId}/${action}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        }
 
-      if (!response.ok) {
-        console.error('Failed to takeover session:', response.statusText)
-        alert(t('errors.takeoverFailed'))
-        return
-      }
+        if (!response.ok) {
+          setActionError(t(`handoff.errors.${action}`))
+          return false
+        }
 
-      await fetchSessions()
-      if (selectedSession && selectedSession.id === sessionId) {
-        setSelectedSession({ ...selectedSession, status: 'taken_over' })
+        const body = await response.json()
+        // Every action route returns the session, so the row re-renders from the
+        // response instead of guessing the new state.
+        const updated = body?.session
+        if (updated) {
+          setSelectedSession((current) =>
+            current && current.id === sessionId
+              ? {
+                  ...current,
+                  status: updated.status ?? current.status,
+                  mode: updated.mode ?? current.mode,
+                  human_replied_at:
+                    updated.human_replied_at ?? current.human_replied_at,
+                }
+              : current,
+          )
+        }
+
+        await fetchSessions()
+        if (action === 'reply') {
+          await fetchMessages(sessionId)
+          setReplyDraft('')
+          setReplyOpen(false)
+        }
+        if (action === 'resolve' || action === 'reopen') {
+          setReplyOpen(false)
+        }
+        return true
+      } catch (err) {
+        console.error(`Failed to ${action} session:`, err)
+        setActionError(t(`handoff.errors.${action}`))
+        return false
+      } finally {
+        setPendingAction(null)
       }
-    } catch (error) {
-      console.error('Failed to takeover session:', error)
-      alert(t('errors.takeoverFailed'))
-    }
+    },
+    [fetchMessages, fetchSessions, t, token],
+  )
+
+  const handleTakeover = (sessionId: string) => {
+    void runSessionAction(sessionId, 'takeover')
   }
 
+  const handleReply = async () => {
+    if (!replyDraft.trim() || !selectedSession) return
+    await runSessionAction(selectedSession.id, 'reply', replyDraft)
+  }
+
+  /**
+   * The in-transcript composer keeps using `/admin/sessions/send` (its route and
+   * response shape are unchanged); #43 only removed the forced takeover.
+   */
   const handleSend = async () => {
     if (!inputValue.trim() || !selectedSession) return
 
@@ -277,6 +356,7 @@ export default function Sessions() {
 
       setInputValue('')
       await fetchMessages(selectedSession.id)
+      await fetchSessions()
     } catch (error) {
       console.error('Failed to send message:', error)
       alert(t('errors.sendFailed'))
@@ -390,11 +470,38 @@ export default function Sessions() {
     ? { minWidth: 44, minHeight: 44 }
     : undefined
 
-  const statusBadgeClass = (status: string) =>
-    `badge ${status === 'active' ? 'badge-success' : status === 'taken_over' ? 'badge-warning' : 'badge-info'}`
+  /**
+   * #43: `resolved` reads differently from a timeout `closed` — a distinct
+   * design-system badge variant, never a colour literal. Unknown/legacy values
+   * fall back to the neutral variant so an old row still renders.
+   */
+  const statusBadgeClass = (status: string): string => {
+    switch (status) {
+      case 'active':
+        return 'badge badge-success'
+      case 'taken_over':
+        return 'badge badge-warning'
+      case 'resolved':
+        return 'badge badge-info'
+      case 'closed':
+        return 'badge badge-neutral'
+      case 'paused':
+        return 'badge badge-neutral'
+      default:
+        return 'badge badge-neutral'
+    }
+  }
 
-  const statusLabel = (status: string) =>
-    t(`status.${status === 'taken_over' ? 'takenOver' : status === 'closed' ? 'ended' : status}`)
+  const statusLabel = (status: string): string => {
+    const key: Record<string, string> = {
+      active: 'status.active',
+      taken_over: 'status.takenOver',
+      resolved: 'status.resolved',
+      closed: 'status.ended',
+      paused: 'status.paused',
+    }
+    return t(key[status] ?? 'status.unknown')
+  }
 
   return (
     <AdminLayout>
@@ -431,7 +538,9 @@ export default function Sessions() {
             <p className="page-subtitle">{t('settings.chatCenterDesc')}</p>
           </div>
           <div className="page-actions" style={{ flexWrap: 'wrap' }}>
-            {(['all', 'active', 'taken_over', 'closed'] as const).map((status) => (
+            {(
+              ['all', 'active', 'taken_over', 'resolved', 'closed'] as const
+            ).map((status) => (
               <button
                 key={status}
                 type="button"
@@ -667,27 +776,75 @@ export default function Sessions() {
                       </div>
                     </div>
                   </div>
-                  <div className="page-actions">
-                    {selectedSession.status === 'active' && (
+                  <div className="page-actions" style={{ flexWrap: 'wrap' }}>
+                    {/* #43: four explicit actions. Reply answers one question
+                     * without muting the bot; takeover mutes it; release hands
+                     * it back; resolve closes the question (not the session
+                     * timeout). A resolved row offers Reopen instead. */}
+                    {selectedSession.status !== 'resolved' &&
+                      selectedSession.status !== 'closed' && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            data-testid="session-action-reply"
+                            disabled={pendingAction !== null}
+                            onClick={() => {
+                              setReplyOpen((open) => !open)
+                              setActionError(null)
+                            }}
+                          >
+                            {t('handoff.reply')}
+                          </button>
+                          {selectedSession.status === 'active' &&
+                            selectedSession.mode !== 'human' && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                data-testid="session-action-takeover"
+                                disabled={pendingAction !== null}
+                                onClick={() => handleTakeover(selectedSession.id)}
+                              >
+                                {t('handoff.takeover')}
+                              </button>
+                            )}
+                          {selectedSession.mode === 'human' && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              data-testid="session-action-release"
+                              disabled={pendingAction !== null}
+                              onClick={() =>
+                                void runSessionAction(selectedSession.id, 'release')
+                              }
+                            >
+                              {t('handoff.release')}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            data-testid="session-action-resolve"
+                            disabled={pendingAction !== null}
+                            onClick={() =>
+                              void runSessionAction(selectedSession.id, 'resolve')
+                            }
+                          >
+                            {t('handoff.resolve')}
+                          </button>
+                        </>
+                      )}
+                    {selectedSession.status === 'resolved' && (
                       <button
                         type="button"
-                        className="btn btn-secondary"
-                        onClick={() => handleTakeover(selectedSession.id)}
+                        className="btn btn-primary"
+                        data-testid="session-action-reopen"
+                        disabled={pendingAction !== null}
+                        onClick={() =>
+                          void runSessionAction(selectedSession.id, 'reopen')
+                        }
                       >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          aria-hidden="true"
-                        >
-                          <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                          <circle cx="8.5" cy="7" r="4" />
-                          <polyline points="17 11 19 13 23 9" />
-                        </svg>
-                        {!isMobile && t('labels.takeoverSession')}
+                        {t('handoff.reopen')}
                       </button>
                     )}
                     {!isMobile && (
@@ -925,7 +1082,78 @@ export default function Sessions() {
                   )}
                 </div>
 
-                {selectedSession.status === 'taken_over' && (
+                {/* #43: the Reply composer — answering one question without a
+                 * takeover. It posts `/reply`, which sets mode="human" and
+                 * leaves `status` alone. */}
+                {replyOpen &&
+                  selectedSession.status !== 'resolved' &&
+                  selectedSession.status !== 'closed' && (
+                    <div
+                      data-testid="session-reply-composer"
+                      style={{
+                        display: 'flex',
+                        gap: 'var(--space-2)',
+                        alignItems: 'stretch',
+                        flexWrap: isMobile ? 'wrap' : 'nowrap',
+                        padding: 'var(--space-3) var(--space-4)',
+                        borderTop: '1px solid var(--color-border)',
+                        background: 'var(--color-bg-panel)',
+                      }}
+                    >
+                      <input
+                        className="input"
+                        type="text"
+                        aria-label={t('handoff.replyPlaceholder')}
+                        value={replyDraft}
+                        onChange={(e) => setReplyDraft(e.target.value)}
+                        onKeyPress={(e) => {
+                          if (e.key === 'Enter') void handleReply()
+                        }}
+                        placeholder={t('handoff.replyPlaceholder')}
+                        disabled={pendingAction === 'reply'}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        data-testid="session-reply-send"
+                        onClick={() => void handleReply()}
+                        disabled={
+                          pendingAction === 'reply' || !replyDraft.trim()
+                        }
+                      >
+                        {pendingAction === 'reply' ? (
+                          <div className="spinner" />
+                        ) : (
+                          t('handoff.sendReply')
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => {
+                          setReplyOpen(false)
+                          setReplyDraft('')
+                        }}
+                      >
+                        {t('buttons.cancel')}
+                      </button>
+                    </div>
+                  )}
+
+                {actionError && (
+                  <p
+                    role="alert"
+                    className="field-error"
+                    data-testid="session-action-error"
+                    style={{ margin: 0, padding: 'var(--space-2) var(--space-4)' }}
+                  >
+                    {actionError}
+                  </p>
+                )}
+
+                {(selectedSession.status === 'taken_over' ||
+                  selectedSession.mode === 'human') && (
                   <div
                     style={{
                       display: 'flex',

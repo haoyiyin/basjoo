@@ -20,6 +20,16 @@ interface PublicWidgetConfig {
   welcome_message?: string | null;
   widget_color?: string | null;
   default_agent_id?: string | null;
+  /** #43: computed server-side from business_hours on every request. */
+  online?: boolean | null;
+  business_hours?: BusinessHoursConfig | null;
+  away_message?: string | null;
+}
+
+/** Contract C6 shape: day 0 = Monday, minutes from local midnight. */
+interface BusinessHoursConfig {
+  timezone?: string;
+  schedule?: Array<{ day: number; start: number; end: number }>;
 }
 
 interface ChatMessage {
@@ -42,6 +52,9 @@ interface StreamDoneMeta {
   message_id?: number | null;
   session_id?: string;
   taken_over?: boolean;
+  /** #43: who answers next. `taken_over` implies `human`. */
+  mode?: 'ai' | 'human';
+  no_answer_reason?: string | null;
 }
 
 interface StreamErrorPayload {
@@ -227,11 +240,21 @@ class BasjooWidget {
   private thinkingTimerId: number | null = null;
   private currentStreamContent = '';
   private currentStreamSources: Source[] = [];
+  // #43 handoff: the session's answer mode, the operator's away copy and the
+  // business-hours flag from `config:public`.
+  private sessionMode: 'ai' | 'human' = 'ai';
+  private isOnline = true;
+  private awayMessage = '';
+  private humanNoticeBar: HTMLElement | null = null;
+  private headerHumanButton: HTMLButtonElement | null = null;
+  private onlineCheckIntervalId: number | null = null;
   // Track imperative event listeners for cleanup
   private _buttonClickListener: (() => void) | null = null;
   private _closeBtnClickListener: (() => void) | null = null;
   private _sendBtnClickListener: (() => void) | null = null;
   private _inputKeypressListener: ((e: KeyboardEvent) => void) | null = null;
+  private _humanBtnClickListener: (() => void) | null = null;
+  private _continueAiClickListener: (() => void) | null = null;
 
   constructor(config: WidgetConfig) {
     const apiBase = this.detectApiBase(config.apiBase);
@@ -359,6 +382,10 @@ class BasjooWidget {
       if (!this.hasWelcomeMessageOverride) {
         this.config.welcomeMessage = data.welcome_message || '你好！有什么可以帮助您的吗？'
       }
+      // #43: the server decides `online` on every request; a config with no
+      // business hours answers `true`, which is today's behaviour.
+      this.isOnline = data.online !== false
+      this.awayMessage = (data.away_message || '').trim()
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
       console.warn('[Basjoo Widget] Failed to load public config, using defaults.', error)
@@ -397,6 +424,13 @@ class BasjooWidget {
 
     // 页面加载时立即启动标题闪烁提醒，吸引用户打开聊天窗口
     this.startTitleBlink();
+
+    // #43: `online` is computed server-side per request. The widget only reads
+    // `config:public` once, so a page left open across the closing time would
+    // otherwise keep an open composer forever. Re-reading the flag every minute
+    // is the cheaper correct design: the backend needs no scheduler job and no
+    // cache to keep in sync (see the report).
+    this.startOnlineWatcher();
 
     if (this.sessionId) {
       void this.loadHistory();
@@ -683,6 +717,98 @@ class BasjooWidget {
 
       .basjoo-close:hover {
         background: rgba(255,255,255,0.25);
+      }
+
+      .basjoo-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      /* #43: "Talk to a human" — a labelled affordance, not icon-only. */
+      .basjoo-human {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 32px;
+        padding: 0 12px;
+        border: 1px solid rgba(255,255,255,0.35);
+        background: rgba(255,255,255,0.15);
+        border-radius: 16px;
+        cursor: pointer;
+        color: white;
+        font-size: 13px;
+        font-weight: 500;
+        transition: background 0.2s;
+      }
+
+      .basjoo-human:hover {
+        background: rgba(255,255,255,0.28);
+      }
+
+      .basjoo-human[hidden] {
+        display: none;
+      }
+
+      .basjoo-human svg {
+        flex-shrink: 0;
+      }
+
+      /* #43: the human-mode notice bar sits above the transcript. */
+      .basjoo-notice {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 10px 16px;
+        background: ${isDark ? 'rgba(148, 163, 184, 0.16)' : '#f1f5f9'};
+        border-bottom: 1px solid ${borderColor};
+        color: ${textColor};
+        font-size: 13px;
+        line-height: 1.4;
+        flex-shrink: 0;
+      }
+
+      .basjoo-notice[hidden] {
+        display: none;
+      }
+
+      .basjoo-notice-text {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .basjoo-continue-ai {
+        min-height: 32px;
+        padding: 0 14px;
+        border: 1px solid ${this.config.themeColor};
+        background: transparent;
+        color: ${isDark ? textColor : this.adjustColor(this.config.themeColor, -30)};
+        border-radius: 16px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .basjoo-continue-ai:hover {
+        background: ${this.hexToRgba(this.config.themeColor, 0.12)};
+      }
+
+      /* #43: outside business hours the composer is replaced by this. */
+      .basjoo-away {
+        padding: 16px 20px 24px 20px;
+        border-top: 1px solid ${borderColor};
+        background: ${bgColor};
+        color: ${mutedColor};
+        font-size: 13px;
+        line-height: 1.5;
+        flex-shrink: 0;
+      }
+
+      .basjoo-input-area[hidden] {
+        display: none;
       }
 
       .basjoo-messages {
@@ -1085,6 +1211,7 @@ class BasjooWidget {
     const safeLogoUrl = this.config.logoUrl ? this.sanitizeUrlAttribute(this.config.logoUrl) : '';
     const safeTitle = this.escapeHtml(this.config.title);
     const safePlaceholder = this.escapeHtml(this.getText('inputPlaceholder'));
+    const safeHumanLabel = this.escapeHtml(this.getText('talkToHuman'));
 
     this.chatWindow.innerHTML = `
       <div class="basjoo-header">
@@ -1092,13 +1219,24 @@ class BasjooWidget {
           ${safeLogoUrl ? `<img src="${safeLogoUrl}" class="basjoo-header-logo" alt="">` : ''}
           <span>${safeTitle}</span>
         </div>
-        <button class="basjoo-close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+        <div class="basjoo-header-actions">
+          <button class="basjoo-human" type="button" aria-label="${safeHumanLabel}" title="${safeHumanLabel}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="8.5" cy="7" r="4"></circle>
+              <polyline points="17 11 19 13 23 9"></polyline>
+            </svg>
+            <span class="basjoo-human-label">${safeHumanLabel}</span>
+          </button>
+          <button class="basjoo-close" type="button" aria-label="${this.escapeHtml(this.getText('closeWindow'))}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
       </div>
+      <div class="basjoo-notice" hidden></div>
       <div class="basjoo-messages"></div>
       <div class="basjoo-input-area">
         <input type="text" class="basjoo-input" placeholder="${safePlaceholder}" maxlength="2000">
@@ -1139,7 +1277,225 @@ class BasjooWidget {
     };
     input.addEventListener('keypress', this._inputKeypressListener);
 
+    // #43: "Talk to a human" lives in the header. It is hidden outside business
+    // hours (no one is there to answer) and while the session is already in
+    // human mode.
+    this.headerHumanButton = this.chatWindow.querySelector(
+      '.basjoo-human'
+    ) as HTMLButtonElement | null;
+    this._humanBtnClickListener = () => {
+      void this.requestHumanHandoff();
+    };
+    this.headerHumanButton?.addEventListener('click', this._humanBtnClickListener);
+
     this.container!.appendChild(this.chatWindow);
+
+    this.applyBusinessHoursState();
+    this.renderModeNotice();
+  }
+
+  /**
+   * #43: re-read `online` every minute so a widget left open across the closing
+   * time flips within one minute instead of staying open until reload.
+   *
+   * Only the online/away fields are touched — the title, colour and welcome
+   * message the visitor already saw are never rewritten by a poll.
+   */
+  private startOnlineWatcher() {
+    if (this.onlineCheckIntervalId) return;
+
+    this.onlineCheckIntervalId = window.setInterval(() => {
+      void this.refreshOnlineState();
+    }, 60_000);
+  }
+
+  private stopOnlineWatcher() {
+    if (this.onlineCheckIntervalId) {
+      window.clearInterval(this.onlineCheckIntervalId);
+      this.onlineCheckIntervalId = null;
+    }
+  }
+
+  private async refreshOnlineState() {
+    if (!this.config.apiBase) return;
+
+    try {
+      const url = new URL(`${this.config.apiBase}/api/v1/config:public`);
+      if (this.config.agentId) {
+        url.searchParams.set('agent_id', this.config.agentId);
+      }
+      const response = await fetch(url.toString());
+      if (!response.ok) return;
+
+      const data = (await response.json()) as PublicWidgetConfig;
+      const nextOnline = data.online !== false;
+      const nextAway = (data.away_message || '').trim();
+      if (nextOnline === this.isOnline && nextAway === this.awayMessage) {
+        return;
+      }
+
+      this.isOnline = nextOnline;
+      this.awayMessage = nextAway;
+      this.applyBusinessHoursState();
+    } catch (error) {
+      // A transient failure must not close the composer the visitor is using.
+      console.warn('[Basjoo Widget] Could not refresh the business-hours state.', error);
+    }
+  }
+
+  /**
+   * #43: outside business hours the composer is replaced by the away message
+   * (falling back to a sensible default) and the human affordance is hidden.
+   */
+  private applyBusinessHoursState() {
+    if (!this.chatWindow) return;
+
+    const inputArea = this.chatWindow.querySelector('.basjoo-input-area') as HTMLElement | null;
+    const away = this.chatWindow.querySelector('.basjoo-away') as HTMLElement | null;
+
+    if (this.isOnline) {
+      if (inputArea) inputArea.hidden = false;
+      away?.remove();
+    } else {
+      if (inputArea) inputArea.hidden = true;
+      if (!away) {
+        const awayEl = document.createElement('div');
+        awayEl.className = 'basjoo-away';
+        awayEl.setAttribute('role', 'status');
+        awayEl.textContent = this.awayMessage || this.getText('awayDefault');
+        this.chatWindow.appendChild(awayEl);
+      } else {
+        away.textContent = this.awayMessage || this.getText('awayDefault');
+      }
+    }
+
+    if (this.headerHumanButton) {
+      this.headerHumanButton.hidden = !this.isOnline || this.sessionMode === 'human';
+    }
+  }
+
+  /**
+   * #43: the notice bar shown while a human is expected to answer, with the
+   * "Continue with AI" action that puts the session back into `ai` mode.
+   */
+  private renderModeNotice() {
+    if (!this.chatWindow) return;
+
+    const bar = this.chatWindow.querySelector('.basjoo-notice') as HTMLElement | null;
+    if (!bar) return;
+
+    if (this.sessionMode !== 'human') {
+      bar.hidden = true;
+      bar.textContent = '';
+      this.humanNoticeBar = null;
+      this._continueAiClickListener = null;
+      if (this.headerHumanButton) {
+        this.headerHumanButton.hidden = !this.isOnline;
+      }
+      return;
+    }
+
+    if (this.headerHumanButton) {
+      this.headerHumanButton.hidden = true;
+    }
+
+    if (this.humanNoticeBar === bar) {
+      return;
+    }
+
+    bar.textContent = '';
+    bar.hidden = false;
+
+    const label = document.createElement('span');
+    label.className = 'basjoo-notice-text';
+    label.textContent = this.getText('takenOverNotice');
+
+    const continueButton = document.createElement('button');
+    continueButton.type = 'button';
+    continueButton.className = 'basjoo-continue-ai';
+    continueButton.textContent = this.getText('continueWithAi');
+    this._continueAiClickListener = () => {
+      void this.releaseToAi();
+    };
+    continueButton.addEventListener('click', this._continueAiClickListener);
+
+    bar.appendChild(label);
+    bar.appendChild(continueButton);
+    this.humanNoticeBar = bar;
+  }
+
+  private setSessionMode(mode: 'ai' | 'human') {
+    this.sessionMode = mode;
+    this.applyBusinessHoursState();
+    this.renderModeNotice();
+  }
+
+  /**
+   * #43: ask for a human. Sets `mode="human"` server-side; `status` is
+   * untouched, so the operator can still release the visitor back to the bot.
+   */
+  private async requestHumanHandoff() {
+    if (!this.sessionId) {
+      this.showError(this.getText('humanNeedsSession'));
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.config.apiBase}/api/v1/chat/escalate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: this.config.agentId,
+          session_id: this.sessionId,
+          visitor_id: this.visitorId,
+          reason: this.getText('talkToHuman'),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      this.setSessionMode('human');
+      this.addMessage({
+        role: 'assistant',
+        content: this.getText('takenOverNotice'),
+        timestamp: new Date(),
+      });
+      this.startPolling();
+    } catch (error) {
+      console.error('[Basjoo Widget] Failed to request a human handoff:', error);
+      this.showError(this.getText('humanFailed'));
+    }
+  }
+
+  /**
+   * #43: "Continue with AI". The admin release route needs an operator token,
+   * so the widget calls the ownership-checked public counterpart.
+   */
+  private async releaseToAi() {
+    if (!this.sessionId) return;
+
+    try {
+      const response = await fetch(`${this.config.apiBase}/api/v1/chat/release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: this.config.agentId,
+          session_id: this.sessionId,
+          visitor_id: this.visitorId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      this.setSessionMode('ai');
+    } catch (error) {
+      console.error('[Basjoo Widget] Failed to release the session to AI:', error);
+      this.showError(this.getText('humanFailed'));
+    }
   }
 
   /**
@@ -1161,7 +1517,11 @@ class BasjooWidget {
     this.updateUnreadBadge();
     const input = this.chatWindow?.querySelector('.basjoo-input') as HTMLInputElement | null;
     setTimeout(() => {
-      input?.focus();
+      // #43: outside business hours the composer is hidden, so there is nothing
+      // to focus (focusing a hidden input throws in some browsers).
+      if (input && !input.closest('.basjoo-input-area[hidden]')) {
+        input.focus();
+      }
     }, 300);
   }
 
@@ -1182,7 +1542,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -1194,6 +1554,12 @@ class BasjooWidget {
       newMessage: { 'en-US': 'New message', 'zh-CN': '新消息' },
       thinking: { 'en-US': 'Thinking...', 'zh-CN': '思考中...' },
       references: { 'en-US': 'References', 'zh-CN': '参考来源' },
+      talkToHuman: { 'en-US': 'Talk to a human', 'zh-CN': '转人工' },
+      continueWithAi: { 'en-US': 'Continue with AI', 'zh-CN': '继续由 AI 回答' },
+      awayDefault: { 'en-US': 'We are away right now. Leave a message and we will get back to you.', 'zh-CN': '当前非服务时间，请留言，我们会尽快回复。' },
+      closeWindow: { 'en-US': 'Close', 'zh-CN': '关闭' },
+      humanNeedsSession: { 'en-US': 'Send a message first, then you can ask for a human.', 'zh-CN': '请先发送一条消息，然后再转人工。' },
+      humanFailed: { 'en-US': 'Could not reach a human agent. Please try again.', 'zh-CN': '转人工失败，请稍后重试。' },
     };
 
     const locale = this.getRequestLocale().toLowerCase()
@@ -1677,12 +2043,16 @@ class BasjooWidget {
           }
           if (donePayload.taken_over) {
             this.removeStreamingMessage();
+            this.setSessionMode('human');
             this.addMessage({
               role: 'assistant',
               content: this.getText('takenOverNotice'),
               timestamp: new Date(),
             });
           } else {
+            if (donePayload.mode === 'human') {
+              this.setSessionMode('human');
+            }
             this.finalizeStreamingMessage(this.currentStreamSources);
             if (!this.isOpen) {
               this.startTitleBlink();
@@ -1911,6 +2281,7 @@ class BasjooWidget {
     // 停止轮询和标题闪烁
     this.stopPolling();
     this.stopTitleBlink();
+    this.stopOnlineWatcher();
     this.hideThinkingIndicator();
     this.removeStreamingMessage();
 
@@ -1933,6 +2304,19 @@ class BasjooWidget {
     if (input && this._inputKeypressListener) {
       input.removeEventListener('keypress', this._inputKeypressListener);
     }
+
+    // #43 handoff affordances.
+    if (this.headerHumanButton && this._humanBtnClickListener) {
+      this.headerHumanButton.removeEventListener('click', this._humanBtnClickListener);
+    }
+    const continueButton = this.humanNoticeBar?.querySelector(
+      '.basjoo-continue-ai'
+    ) as HTMLButtonElement | null;
+    if (continueButton && this._continueAiClickListener) {
+      continueButton.removeEventListener('click', this._continueAiClickListener);
+    }
+    this.humanNoticeBar = null;
+    this.headerHumanButton = null;
 
     this.container?.remove();
     const styles = document.getElementById('basjoo-widget-styles');

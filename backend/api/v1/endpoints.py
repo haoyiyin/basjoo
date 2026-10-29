@@ -86,6 +86,18 @@ from services.kb_retrieval_service import KbRetrievalService
 from services.kb_service import KbService
 from services.qa_service import QaService
 from services.procedure_service import resolve_active_procedure
+from services.session_state import (
+    AFTER_HOURS,
+    answer_gate,
+    mark_human_replied,
+    session_mode,
+    set_mode,
+)
+from services.business_hours import (
+    away_message as business_hours_away_message,
+    config_payload as business_hours_config_payload,
+    is_online,
+)
 from services.answer_quality import (
     DEFAULT_EMPTY_ANSWER_REPLY,
     DEFAULT_RATE_LIMIT_REPLY,
@@ -220,6 +232,11 @@ def build_agent_config(
         "welcome_message": agent.welcome_message,
         "history_days": agent.history_days,
         "fixed_facts": getattr(agent, "fixed_facts", None),
+        # #43 conversation policy: the prompt block, the business-hours JSON and
+        # the away copy all round-trip through the agent payload.
+        "escalation_rules": getattr(agent, "escalation_rules", None),
+        "business_hours": business_hours_config_payload(agent),
+        "away_message": business_hours_away_message(agent),
         "is_active": is_active,
         "deleted_at": deleted_at,
         "purge_after": getattr(agent, "purge_after", None),
@@ -569,6 +586,21 @@ def build_fixed_facts_block(raw: str) -> str:
         return ""
     return FIXED_FACTS_HEADER + "\n" + "\n\n".join(passages)
 
+# `agent.escalation_rules` is plain-language operator copy appended to the system
+# prompt AFTER the procedures block (#43). It is a prompt, not a rule engine, so
+# it is passed through verbatim — only trimmed and length-capped.
+MAX_ESCALATION_RULES_CHARS = 2000
+ESCALATION_RULES_HEADER = "升级规则（当以下情形发生时，请主动建议转人工）："
+
+def build_escalation_rules_block(raw: Any) -> str:
+    """The escalation-rules prompt layer, or '' when the operator wrote nothing."""
+    if not isinstance(raw, str):
+        return ""
+    text = raw.strip()
+    if not text:
+        return ""
+    return ESCALATION_RULES_HEADER + "\n" + text[:MAX_ESCALATION_RULES_CHARS]
+
 def build_chat_sources(retrieval_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Build normalized source payloads for chat responses."""
     sources: List[Dict[str, Any]] = []
@@ -903,9 +935,23 @@ async def prepare_chat_request(
 
     session = await get_or_create_chat_session(agent, request, http_request, db)
 
-    if session.status == "taken_over":
+    # #43 / contract C3+C6: ONE gate decides whether the bot answers. `resolved`,
+    # `closed`, `paused`, `taken_over`, a plain `mode="human"` reply and a
+    # schedule that is closed right now all persist the visitor message and
+    # answer nothing. The reason travels as a machine token; the widget
+    # localizes it. Business hours live inside `answer_gate` so `/chat` and
+    # `/chat/stream` cannot drift about them.
+    mute_reason = answer_gate(session, agent)
+    if mute_reason is not None:
         return {
-            "mode": "taken_over",
+            "mode": "no_answer",
+            "no_answer_reason": mute_reason,
+            # The operator's away copy is visitor-visible but never persisted as
+            # an assistant turn: nobody said it, so the transcript must not
+            # attribute it to a person. Only the closed schedule has copy.
+            "away_message": business_hours_away_message(agent)
+            if mute_reason == AFTER_HOURS
+            else None,
             "session": session,
             "workspace_id": agent_workspace_id,
             "quota_id": quota.id,
@@ -1087,6 +1133,9 @@ async def prepare_chat_request(
     qa_block = build_qa_prompt_block(qa_hits)
     facts_block = build_fixed_facts_block(fixed_facts_text)
     procedure_block = await resolve_active_procedure(db, session, agent)
+    escalation_block = build_escalation_rules_block(
+        getattr(agent, "escalation_rules", None)
+    )
 
     def _build_system_content() -> str:
         """Prompt layers in their frozen order: Q&A → fixed facts → KB chunks."""
@@ -1109,6 +1158,9 @@ async def prepare_chat_request(
             )
         if procedure_block:
             content += f"\n\n{procedure_block}"
+        # #43: operator escalation copy is the LAST layer, after procedures.
+        if escalation_block:
+            content += f"\n\n{escalation_block}"
         return content
 
     messages: List[Dict[str, str]] = []
@@ -1184,13 +1236,38 @@ async def resolve_admin_chat_session(
     result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
     return result.scalar_one_or_none()
 
+def serialize_admin_session(session: ChatSession) -> Dict[str, Any]:
+    """The session object the #43 action endpoints return.
+
+    Carries both state axes (`status`, `mode`) plus `human_replied_at`, so the
+    console can re-render the row from the response instead of refetching.
+    """
+    return {
+        "id": session.id,
+        "session_id": session.session_id,
+        "visitor_id": session.visitor_id,
+        "status": session.status,
+        "mode": session_mode(session),
+        "human_replied_at": session.human_replied_at.isoformat()
+        if session.human_replied_at
+        else None,
+        "message_count": session.message_count or 0,
+        "created_at": session.created_at.isoformat() if session.created_at else None,
+        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+    }
+
 
 async def handle_taken_over_chat(
     session: ChatSession,
     request: ChatRequest,
     db: AsyncSession,
 ) -> None:
-    """Persist visitor messages for taken-over sessions and notify admins."""
+    """Persist visitor messages for sessions the bot must not answer (#43).
+
+    Covers every no-answer state, not just `taken_over`: a `mode="human"` reply,
+    a `resolved` row, a timeout `closed` row and a `paused` row all store the
+    message so the operator sees it, and produce no assistant turn.
+    """
     user_message = ChatMessage(
         session_id=session.id,
         role="user",
@@ -1355,15 +1432,27 @@ async def chat(
                 session_id=session.session_id,
             )
 
-        if chat_context["mode"] == "taken_over":
+        if chat_context["mode"] == "no_answer":
             await handle_taken_over_chat(session, request, prep_db)
             await prep_db.commit()
+            reason = chat_context.get("no_answer_reason")
+            # After hours the operator's away copy IS the visitor-visible reply;
+            # it is deliberately not stored as an assistant message (see
+            # `handle_taken_over_chat`). Every other mute reason has no copy: the
+            # widget renders its own notice from the token.
+            away = chat_context.get("away_message") or ""
             return ChatResponse(
-                reply="",
+                reply=away,
                 sources=[],
                 usage=None,
                 session_id=session.session_id,
-                taken_over=True,
+                # `taken_over` keeps meaning "a human is expected". A closed
+                # schedule is not a handoff, so it must not claim one.
+                taken_over=reason != AFTER_HOURS,
+                # `mode` is unchanged: the session is still `ai`, the clock is
+                # just outside the schedule.
+                mode=session_mode(session),
+                no_answer_reason=reason,
             )
 
         # Extract needed IDs before closing session
@@ -1488,21 +1577,37 @@ async def chat_stream(
                             "session_id": session.session_id,
                             "usage": None,
                             "taken_over": False,
+                            "mode": "ai",
                         },
                     )
                     return
 
-                if chat_context["mode"] == "taken_over":
+                if chat_context["mode"] == "no_answer":
+                    # Capture before the commit so the payload never depends on
+                    # post-commit attribute state.
+                    session_mode_value = session_mode(session)
+                    no_answer_token = chat_context.get("no_answer_reason")
+                    # After hours the operator's away copy is the visitor-visible
+                    # reply, so it goes out as a `content` event — but it is
+                    # never persisted as an assistant turn, because nobody said
+                    # it. Every other mute reason has no copy.
+                    away_copy = chat_context.get("away_message") or ""
                     await handle_taken_over_chat(session, request, prep_db)
                     await prep_db.commit()
                     yield sse_event("sources", {"sources": []})
+                    if away_copy:
+                        yield sse_event("content", {"content": away_copy})
                     yield sse_event(
                         "done",
                         {
                             "message_id": None,
                             "session_id": session.session_id,
                             "usage": None,
-                            "taken_over": True,
+                            # A closed schedule is not a handoff: `taken_over`
+                            # keeps meaning "a human is expected".
+                            "taken_over": no_answer_token != AFTER_HOURS,
+                            "mode": session_mode_value,
+                            "no_answer_reason": no_answer_token,
                         },
                     )
                     return
@@ -1586,6 +1691,7 @@ async def chat_stream(
                             "session_id": session_public_id,
                             "usage": None,
                             "taken_over": False,
+                            "mode": "ai",
                         },
                     )
                     return
@@ -1646,6 +1752,7 @@ async def chat_stream(
                     "session_id": session_public_id,
                     "usage": None,
                     "taken_over": False,
+                    "mode": "ai",
                 },
             )
             return
@@ -1710,6 +1817,7 @@ async def chat_stream(
                         "session_id": session_public_id,
                         "usage": usage,
                         "taken_over": False,
+                        "mode": "ai",
                     },
                 )
             except OperationalError as error:
@@ -1740,6 +1848,170 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/chat/escalate")
+async def escalate_chat(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Visitor-side escalation: ask for a human (#43).
+
+    Sets ``mode="human"`` (the bot stops answering, ``status`` is untouched),
+    records a ``system`` message so the transcript shows why, and — once #47's
+    webhook service exists — emits ``session.escalated``.
+
+    Ownership is enforced exactly like `GET /chat/messages`: a missing or
+    foreign ``visitor_id`` answers the same 404 as an unknown session, so this
+    route never confirms that someone else's session exists.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    agent_id = str(body.get("agent_id") or "").strip()
+    session_public_id = str(body.get("session_id") or "").strip()
+    visitor_id = str(body.get("visitor_id") or "").strip()
+    reason = str(body.get("reason") or "").strip()
+
+    if not agent_id or not session_public_id or not visitor_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing agent_id, session_id or visitor_id",
+        )
+
+    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = agent_result.scalar_one_or_none()
+    if not agent or getattr(agent, "deleted_at", None) or not agent.is_active:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = await resolve_public_chat_session(db, session_public_id)
+    if (
+        not session
+        or session.agent_id != agent.id
+        or not session.visitor_id
+        or session.visitor_id != visitor_id
+    ):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    enforce_widget_origin_whitelist(agent, request)
+
+    set_mode(session, "human")
+    escalation_text = f"escalated: {reason}" if reason else "escalated"
+    message = ChatMessage(
+        session_id=session.id,
+        role="system",
+        content=escalation_text,
+        sender_type="human",
+        sender_id=visitor_id,
+    )
+    db.add(message)
+    session.message_count = (session.message_count or 0) + 1
+    session.updated_at = func.now()
+    await db.commit()
+    await db.refresh(message)
+
+    logger.info(
+        "Visitor escalation agent_id=%s session_id=%s reason=%r",
+        agent.id,
+        session.session_id,
+        reason,
+    )
+
+    # TODO(#47): deliver a `session.escalated` webhook once
+    # `services/webhook_service.py` exists. Not built here on purpose — #43 must
+    # not invent a second delivery path.
+    try:
+        from services.websocket_service import manager
+
+        await manager.publish(
+            {
+                "type": "new_message",
+                "sessionId": session.id,
+                "sessionDbId": session.id,
+                "sessionPublicId": session.session_id,
+                "role": "system",
+                "content": escalation_text,
+                "event": "session.escalated",
+            }
+        )
+    except Exception as publish_error:
+        # A dead admin socket must never fail the visitor's escalation.
+        logger.warning("Escalation broadcast failed: %s", publish_error)
+
+    return {
+        "success": True,
+        "session_id": session.session_id,
+        "status": session.status,
+        "mode": session_mode(session),
+        "message_id": message.id,
+    }
+
+
+@router.post("/chat/release")
+async def release_chat_to_ai(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Visitor-side "continue with AI" (#43).
+
+    The widget's *Continue with AI* button cannot call
+    `/admin/sessions/{id}/release` — that route requires an operator token, and
+    an embedded widget has none. This is the public, ownership-checked
+    counterpart of `/chat/escalate`: it puts the session back into ``ai`` mode so
+    the bot resumes, and it is a no-op for ``status``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    agent_id = str(body.get("agent_id") or "").strip()
+    session_public_id = str(body.get("session_id") or "").strip()
+    visitor_id = str(body.get("visitor_id") or "").strip()
+
+    if not agent_id or not session_public_id or not visitor_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing agent_id, session_id or visitor_id",
+        )
+
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id))
+    ).scalar_one_or_none()
+    if not agent or getattr(agent, "deleted_at", None) or not agent.is_active:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = await resolve_public_chat_session(db, session_public_id)
+    if (
+        not session
+        or session.agent_id != agent.id
+        or not session.visitor_id
+        or session.visitor_id != visitor_id
+    ):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    enforce_widget_origin_whitelist(agent, request)
+
+    set_mode(session, "ai")
+    session.updated_at = func.now()
+    await db.commit()
+
+    logger.info(
+        "Visitor returned session %s to AI (agent %s)", session.session_id, agent.id
+    )
+
+    return {
+        "success": True,
+        "session_id": session.session_id,
+        "status": session.status,
+        "mode": session_mode(session),
+    }
 
 
 @router.get("/chat/messages")
@@ -2559,6 +2831,12 @@ async def get_public_config(
     result = await db.execute(query)
     agent = result.scalar_one_or_none()
 
+    # #43 / contract C2+C6: `online` is computed on EVERY request from the
+    # agent's business hours, so a cached widget cannot serve a stale state to a
+    # first-time visitor. The widget re-reads this endpoint on each page load;
+    # there is no long-lived cache in front of it, so a background job rewriting
+    # a cached value would be a second source of truth with no reader (see the
+    # report for the design choice).
     return {
         "api_base": f"{scheme}://{host}",
         "ws_base": f"wss://{host}" if scheme == "https" else f"ws://{host}",
@@ -2566,6 +2844,10 @@ async def get_public_config(
         "widget_title": agent.widget_title if agent else None,
         "widget_color": agent.widget_color if agent else None,
         "welcome_message": agent.welcome_message if agent else None,
+        # A config with no `business_hours` is always online: today's behaviour.
+        "online": is_online(agent) if agent else True,
+        "business_hours": business_hours_config_payload(agent) if agent else None,
+        "away_message": business_hours_away_message(agent) if agent else None,
     }
 
 
@@ -2682,6 +2964,8 @@ async def list_sessions(
                 visitor_country=session.visitor_country,
                 visitor_city=session.visitor_city,
                 status=session.status,
+                mode=session_mode(session),
+                human_replied_at=session.human_replied_at,
                 message_count=session.message_count,
                 created_at=session.created_at,
                 updated_at=session.updated_at,
@@ -2738,6 +3022,9 @@ async def takeover_session(
 ):
     """
     接管会话
+
+    #43: a takeover is the strong form of handoff — it mutes the bot *and*
+    records who is expected to answer (`mode="human"`).
     """
     session = await resolve_admin_chat_session(db, session_id)
 
@@ -2746,41 +3033,41 @@ async def takeover_session(
     await require_agent_for_admin(db, session.agent_id, current_user)
 
     session.status = "taken_over"
+    set_mode(session, "human")
+    session.updated_at = func.now()
     await db.commit()
+    await db.refresh(session)
 
-    return {"success": True}
+    return {"success": True, "session": serialize_admin_session(session)}
 
 
-@router.post("/admin/sessions/send")
-async def send_session_message(
-    request: Request,
-    current_user: AdminUser = Depends(require_chat_operator),
-    db: AsyncSession = Depends(get_db),
-):
+async def _load_operable_session(
+    db: AsyncSession, session_id: str, current_user: AdminUser
+) -> ChatSession:
+    """Resolve a session the current operator may act on.
+
+    A session from another workspace answers the *same* 404 as an unknown id, so
+    the endpoint never confirms that a foreign session exists.
     """
-    人工发送消息到会话
-    """
-    body = await request.json()
-    session_id = body.get("session_id")
-    content = body.get("content")
-
-    if not session_id or not content:
-        raise HTTPException(status_code=400, detail="Missing session_id or content")
-
     session = await resolve_admin_chat_session(db, session_id)
-
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    await require_agent_for_admin(db, session.agent_id, current_user)
+    try:
+        await require_agent_for_admin(db, session.agent_id, current_user)
+    except HTTPException as error:
+        if error.status_code in (403, 404, 410):
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        raise
+    return session
 
-    # 检查会话是否被接管，只有接管状态才能发送人工消息
-    if session.status != "taken_over":
-        raise HTTPException(
-            status_code=403,
-            detail="Session must be taken over before sending human messages",
-        )
 
-    # 添加人工消息
+async def _post_human_message(
+    db: AsyncSession,
+    session: ChatSession,
+    content: str,
+    current_user: AdminUser,
+) -> ChatMessage:
+    """Persist one operator message and stamp the first-reply time (#43)."""
     message = ChatMessage(
         session_id=session.id,
         role="assistant",
@@ -2790,11 +3077,18 @@ async def send_session_message(
     )
     db.add(message)
 
-    session.message_count += 1
+    session.message_count = (session.message_count or 0) + 1
     session.updated_at = func.now()
+    first_human_reply = mark_human_replied(session)
     await db.commit()
+    await db.refresh(message)
+    await db.refresh(session)
 
-    # Broadcast to admin WebSocket clients
+    if first_human_reply:
+        logger.info(
+            "First human reply on session %s by admin %s", session.id, current_user.id
+        )
+
     from services.websocket_service import manager
 
     await manager.publish(
@@ -2807,8 +3101,134 @@ async def send_session_message(
             "content": content,
         }
     )
+    return message
 
-    return {"success": True}
+
+@router.post("/admin/sessions/{session_id}/reply")
+async def reply_to_session(
+    session_id: str,
+    request: Request,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reply without taking over (#43).
+
+    Does **not** change ``status``. It sets ``mode="human"`` (and
+    ``human_replied_at`` on the first human message), so the bot stays silent
+    until the operator releases the session back to ``ai`` — that is what makes
+    "answer one question, then hand the visitor back" representable.
+    """
+    body = await request.json()
+    content = str(body.get("message") or body.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Missing message")
+
+    session = await _load_operable_session(db, session_id, current_user)
+
+    set_mode(session, "human")
+    message = await _post_human_message(db, session, content, current_user)
+
+    return {
+        "message_id": message.id,
+        "session": serialize_admin_session(session),
+    }
+
+
+@router.post("/admin/sessions/{session_id}/release")
+async def release_session_to_ai(
+    session_id: str,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hand the conversation back to the bot: ``mode="ai"``.
+
+    A taken-over session also returns to ``status="active"``, because the gate
+    needs both to be true. A terminal status (``resolved`` / ``closed`` /
+    ``paused``) is *not* resurrected here — that is what `reopen` is for.
+    """
+    session = await _load_operable_session(db, session_id, current_user)
+
+    set_mode(session, "ai")
+    if session.status == "taken_over":
+        session.status = "active"
+    session.updated_at = func.now()
+    await db.commit()
+    # `updated_at` was assigned a SQL expression, which SQLAlchemy expires
+    # after the flush; refresh so serializing it never triggers lazy IO outside
+    # the greenlet.
+    await db.refresh(session)
+
+    return {"session": serialize_admin_session(session)}
+
+
+@router.post("/admin/sessions/{session_id}/resolve")
+async def resolve_session(
+    session_id: str,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark the conversation handled. Distinct from a timeout ``closed``."""
+    session = await _load_operable_session(db, session_id, current_user)
+
+    session.status = "resolved"
+    session.updated_at = func.now()
+    await db.commit()
+    # `updated_at` was assigned a SQL expression, which SQLAlchemy expires
+    # after the flush; refresh so serializing it never triggers lazy IO outside
+    # the greenlet.
+    await db.refresh(session)
+
+    return {"session": serialize_admin_session(session)}
+
+
+@router.post("/admin/sessions/{session_id}/reopen")
+async def reopen_session(
+    session_id: str,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Undo a resolve: back to ``active`` + ``ai``."""
+    session = await _load_operable_session(db, session_id, current_user)
+
+    session.status = "active"
+    set_mode(session, "ai")
+    session.updated_at = func.now()
+    await db.commit()
+    # `updated_at` was assigned a SQL expression, which SQLAlchemy expires
+    # after the flush; refresh so serializing it never triggers lazy IO outside
+    # the greenlet.
+    await db.refresh(session)
+
+    return {"session": serialize_admin_session(session)}
+
+
+@router.post("/admin/sessions/send")
+async def send_session_message(
+    request: Request,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    人工发送消息到会话
+
+    #43: no longer requires a takeover — it delegates to the same write path as
+    `reply`, so an operator who only wants to answer one question is not forced
+    into one. The route and its ``{"success": True}`` response shape are
+    unchanged for existing callers.
+    """
+    body = await request.json()
+    session_id = body.get("session_id")
+    content = str(body.get("content") or body.get("message") or "").strip()
+
+    if not session_id or not content:
+        raise HTTPException(status_code=400, detail="Missing session_id or content")
+
+    session = await _load_operable_session(db, session_id, current_user)
+
+    set_mode(session, "human")
+    message = await _post_human_message(db, session, content, current_user)
+
+    return {"success": True, "message_id": message.id}
 
 
 # ========== Legacy agent-scoped source aliases ==========

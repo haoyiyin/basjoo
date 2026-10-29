@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import AdminLayout from '../components/AdminLayout';
 import ProcedureEditor from '../components/ProcedureEditor';
 import { Icon } from '../components/Icon';
-import { api, type Agent } from '../services/api';
+import { api, type Agent, type BusinessHoursPayload } from '../services/api';
 import { API_BASE_URL } from '../lib/env';
 import {
   validateAllowedWidgetOriginsText,
@@ -27,8 +27,104 @@ interface AgentSettingsFormData {
   restricted_reply: string;
 }
 
+/** Contract C6: `day` 0 = Monday, `start`/`end` are minutes from local midnight. */
+interface BusinessHoursRange {
+  day: number;
+  start: number;
+  end: number;
+}
+
+interface BusinessHoursConfig {
+  timezone: string;
+  schedule: BusinessHoursRange[];
+}
+
 const DEFAULT_WIDGET_COLOR = '#00aaff';
 const DEFAULT_HISTORY_DAYS = 30;
+
+/** 09:00–18:00, the shape most operators start from. */
+const DEFAULT_START_MINUTES = 9 * 60;
+const DEFAULT_END_MINUTES = 18 * 60;
+const MINUTES_PER_DAY = 24 * 60;
+
+function minutesToTimeInput(minutes: number): string {
+  const clamped = Math.max(0, Math.min(MINUTES_PER_DAY, Math.round(minutes)));
+  const hours = Math.floor(clamped / 60);
+  const mins = clamped % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+function timeInputToMinutes(value: string): number {
+  const [hours, minutes] = value.split(':');
+  const parsedHours = Number.parseInt(hours ?? '0', 10);
+  const parsedMinutes = Number.parseInt(minutes ?? '0', 10);
+  if (Number.isNaN(parsedHours) || Number.isNaN(parsedMinutes)) return 0;
+  return Math.max(0, Math.min(MINUTES_PER_DAY, parsedHours * 60 + parsedMinutes));
+}
+
+/** `Intl.supportedValuesOf('timeZone')` where available, a short fallback list otherwise. */
+const FALLBACK_TIMEZONES = [
+  'UTC',
+  'Asia/Shanghai',
+  'Asia/Hong_Kong',
+  'Asia/Tokyo',
+  'Asia/Singapore',
+  'Europe/London',
+  'Europe/Paris',
+  'America/New_York',
+  'America/Los_Angeles',
+  'Australia/Sydney',
+];
+
+function supportedTimezones(): string[] {
+  const intl = Intl as typeof Intl & {
+    supportedValuesOf?: (key: string) => string[];
+  };
+  if (typeof intl.supportedValuesOf === 'function') {
+    try {
+      const zones = intl.supportedValuesOf('timeZone');
+      if (Array.isArray(zones) && zones.length > 0) return zones;
+    } catch {
+      // Older engines throw on an unknown key; fall through to the list.
+    }
+  }
+  return FALLBACK_TIMEZONES;
+}
+
+/**
+ * Coerce whatever the backend stored into the editor's shape.
+ *
+ * An unparsable/absent config becomes `null` — "no hours configured", which the
+ * backend treats as always online — instead of an empty schedule that would read
+ * as "closed all week".
+ */
+function normalizeBusinessHours(
+  raw: BusinessHoursPayload | null | undefined,
+): BusinessHoursConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const timezone = typeof raw.timezone === 'string' ? raw.timezone : '';
+  if (!timezone) return null;
+
+  const rawSchedule = Array.isArray(raw.schedule) ? raw.schedule : [];
+  const schedule: BusinessHoursRange[] = [];
+  for (const entry of rawSchedule) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as Record<string, unknown>;
+    const day = Number(item.day);
+    const start = Number(item.start);
+    const end = Number(item.end);
+    if (!Number.isFinite(day) || !Number.isFinite(start) || !Number.isFinite(end)) {
+      continue;
+    }
+    schedule.push({
+      day: Math.max(0, Math.min(6, Math.trunc(day))),
+      start: Math.max(0, Math.min(MINUTES_PER_DAY, Math.trunc(start))),
+      end: Math.max(0, Math.min(MINUTES_PER_DAY, Math.trunc(end))),
+    });
+  }
+
+  return { timezone, schedule };
+}
 
 function formDataFromAgent(agent: Agent): AgentSettingsFormData {
   return {
@@ -54,6 +150,17 @@ export default function AgentSettings() {
   const [fixedFactsSaving, setFixedFactsSaving] = useState(false);
   const [fixedFactsSaved, setFixedFactsSaved] = useState(false);
   const [fixedFactsError, setFixedFactsError] = useState<string | null>(null);
+  // #43 conversation policy: a plain-language prompt block plus business hours.
+  const [escalationRules, setEscalationRules] = useState<string>('');
+  const [businessHours, setBusinessHours] = useState<BusinessHoursConfig | null>(null);
+  const [awayMessage, setAwayMessage] = useState<string>('');
+  const timezoneOptions = useMemo(() => supportedTimezones(), []);
+  // `businessHours.days` is an array in both locale files; i18next hands back
+  // the raw value with `returnObjects`.
+  const weekdayLabels = useMemo(() => {
+    const labels = t('businessHours.days', { returnObjects: true });
+    return Array.isArray(labels) ? (labels as string[]) : [];
+  }, [t]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +186,9 @@ export default function AgentSettings() {
       setFormData(data);
       setOriginsText(data.allowed_widget_origins.join('\n'));
       setFixedFacts(loadedAgent.fixed_facts ?? '');
+      setEscalationRules(loadedAgent.escalation_rules ?? '');
+      setBusinessHours(normalizeBusinessHours(loadedAgent.business_hours ?? null));
+      setAwayMessage(loadedAgent.away_message ?? '');
     } catch (err) {
       setError(t('errors.loadFailed'));
     } finally {
@@ -113,10 +223,16 @@ export default function AgentSettings() {
         allowed_widget_origins: normalizedOrigins,
         rate_limit_per_minute: typeof formData.rate_limit_per_minute === 'number' ? formData.rate_limit_per_minute : 20,
         restricted_reply: formData.restricted_reply ?? '',
+        escalation_rules: escalationRules.trim() ? escalationRules.trim() : null,
+        business_hours: businessHours,
+        away_message: awayMessage.trim() ? awayMessage.trim() : null,
       };
       const updatedAgent = await api.updateAgent(agent.id, updates);
       setAgent(updatedAgent);
       setFormData(formDataFromAgent(updatedAgent));
+      setEscalationRules(updatedAgent.escalation_rules ?? '');
+      setBusinessHours(normalizeBusinessHours(updatedAgent.business_hours ?? null));
+      setAwayMessage(updatedAgent.away_message ?? '');
       setOriginsText(normalizedOrigins.join('\n'));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -155,6 +271,58 @@ export default function AgentSettings() {
     } finally {
       setFixedFactsSaving(false);
     }
+  };
+
+  /**
+   * #43 business-hours editor. The config is `null` until the operator picks a
+   * timezone, which is what the backend reads as "always online".
+   */
+  const updateBusinessHours = (next: BusinessHoursConfig | null) => {
+    setBusinessHours(next);
+    setValidationError(null);
+  };
+
+  const handleTimezoneChange = (timezone: string) => {
+    if (!timezone) {
+      updateBusinessHours(null);
+      return;
+    }
+    updateBusinessHours({
+      timezone,
+      schedule: businessHours?.schedule ?? [],
+    });
+  };
+
+  const handleAddRange = () => {
+    if (!businessHours) return;
+    updateBusinessHours({
+      ...businessHours,
+      schedule: [
+        ...businessHours.schedule,
+        { day: 0, start: DEFAULT_START_MINUTES, end: DEFAULT_END_MINUTES },
+      ],
+    });
+  };
+
+  const handleUpdateRange = (
+    index: number,
+    patch: Partial<BusinessHoursRange>,
+  ) => {
+    if (!businessHours) return;
+    updateBusinessHours({
+      ...businessHours,
+      schedule: businessHours.schedule.map((range, position) =>
+        position === index ? { ...range, ...patch } : range,
+      ),
+    });
+  };
+
+  const handleRemoveRange = (index: number) => {
+    if (!businessHours) return;
+    updateBusinessHours({
+      ...businessHours,
+      schedule: businessHours.schedule.filter((_range, position) => position !== index),
+    });
   };
 
   if (loading) {
@@ -451,6 +619,176 @@ export default function AgentSettings() {
 
         {/* Procedures — one step per turn (#39) */}
         {agent && <ProcedureEditor agentId={agent.id} />}
+
+        {/* #43 conversation policy: escalation prompt + business hours */}
+        <section className="card" data-testid="agent-escalation-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('escalation.title')}</h2>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('escalation.description')}
+          </p>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="escalation_rules">
+              {t('escalation.label')}
+            </label>
+            <textarea
+              id="escalation_rules"
+              className="input textarea"
+              value={escalationRules}
+              onChange={(e) => setEscalationRules(e.target.value)}
+              rows={5}
+              maxLength={2000}
+              placeholder={t('escalation.placeholder')}
+            />
+            <p className="field-hint">{t('escalation.hint')}</p>
+            <p className="field-hint">
+              {escalationRules.length} / 2000
+            </p>
+          </div>
+        </section>
+
+        <section className="card" data-testid="agent-business-hours-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('businessHours.title')}</h2>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('businessHours.description')}
+          </p>
+
+          <div className="field">
+            <label className="field-label" htmlFor="business_hours_timezone">
+              {t('businessHours.timezone')}
+            </label>
+            <select
+              id="business_hours_timezone"
+              className="input"
+              value={businessHours?.timezone ?? ''}
+              onChange={(e) => handleTimezoneChange(e.target.value)}
+            >
+              <option value="">{t('businessHours.timezonePlaceholder')}</option>
+              {timezoneOptions.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <span className="field-label">{t('businessHours.schedule')}</span>
+            {!businessHours || businessHours.schedule.length === 0 ? (
+              <p className="field-hint" data-testid="business-hours-empty">
+                {t('businessHours.empty')}
+              </p>
+            ) : (
+              <ul
+                className="list"
+                data-testid="business-hours-ranges"
+                style={{ marginTop: 'var(--space-2)' }}
+              >
+                {businessHours.schedule.map((range, index) => (
+                  <li
+                    key={`${range.day}-${index}`}
+                    className="list-row"
+                    style={{
+                      display: 'flex',
+                      flexWrap: isMobile ? 'wrap' : 'nowrap',
+                      alignItems: 'center',
+                      gap: 'var(--space-2)',
+                    }}
+                  >
+                    <select
+                      className="input"
+                      aria-label={`${t('businessHours.day')} ${index + 1}`}
+                      value={range.day}
+                      onChange={(e) =>
+                        handleUpdateRange(index, {
+                          day: Number.parseInt(e.target.value, 10),
+                        })
+                      }
+                      style={{ width: isMobile ? '100%' : '130px' }}
+                    >
+                      {weekdayLabels.map((label, day) => (
+                        <option key={label} value={day}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      className="input"
+                      type="time"
+                      aria-label={`${t('businessHours.start')} ${index + 1}`}
+                      value={minutesToTimeInput(range.start)}
+                      onChange={(e) =>
+                        handleUpdateRange(index, {
+                          start: timeInputToMinutes(e.target.value),
+                        })
+                      }
+                      style={{ width: '120px' }}
+                    />
+
+                    <input
+                      className="input"
+                      type="time"
+                      aria-label={`${t('businessHours.end')} ${index + 1}`}
+                      value={minutesToTimeInput(range.end)}
+                      onChange={(e) =>
+                        handleUpdateRange(index, {
+                          end: timeInputToMinutes(e.target.value),
+                        })
+                      }
+                      style={{ width: '120px' }}
+                    />
+
+                    <button
+                      type="button"
+                      className="btn btn-icon"
+                      aria-label={t('businessHours.removeRange')}
+                      title={t('businessHours.removeRange')}
+                      style={{ minWidth: 44, minHeight: 44 }}
+                      onClick={() => handleRemoveRange(index)}
+                    >
+                      <Icon name="close" size={16} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="page-actions" style={{ marginTop: 'var(--space-3)' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="business-hours-add"
+                onClick={handleAddRange}
+                disabled={!businessHours}
+              >
+                {t('businessHours.addRange')}
+              </button>
+            </div>
+            <p className="field-hint">{t('businessHours.overnightHint')}</p>
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="away_message">
+              {t('businessHours.awayMessage')}
+            </label>
+            <textarea
+              id="away_message"
+              className="input textarea"
+              value={awayMessage}
+              onChange={(e) => setAwayMessage(e.target.value)}
+              rows={2}
+              placeholder={t('businessHours.awayMessagePlaceholder')}
+            />
+            <p className="field-hint">{t('businessHours.awayMessageHint')}</p>
+          </div>
+        </section>
 
         {/* Embed code */}
         <section className="card">

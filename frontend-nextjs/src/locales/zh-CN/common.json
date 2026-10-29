@@ -63,7 +63,10 @@
     "testing": "测试中...",
     "fetching": "抓取中",
     "successBadge": "成功",
-    "loadingTimeout": "加载超时，请刷新重试"
+    "loadingTimeout": "加载超时，请刷新重试",
+    "resolved": "已解决",
+    "paused": "已暂停",
+    "unknown": "未知"
   },
   "navigation": {
     "home": "首页",
@@ -976,5 +979,54 @@
     "errors": {
       "addFailed": "加入问答库失败"
     }
+  },
+  "handoff": {
+    "reply": "回复",
+    "replyPlaceholder": "回复访客，但不接管会话…",
+    "sendReply": "发送回复",
+    "takeover": "接管会话",
+    "release": "交还 AI",
+    "resolve": "标记已解决",
+    "reopen": "重新打开",
+    "errors": {
+      "reply": "回复发送失败，请稍后重试。",
+      "takeover": "接管失败，请稍后重试。",
+      "release": "交还 AI 失败，请稍后重试。",
+      "resolve": "标记已解决失败，请稍后重试。",
+      "reopen": "重新打开失败，请稍后重试。"
+    }
+  },
+  "escalation": {
+    "title": "升级规则",
+    "description": "用自然语言描述什么时候应该主动建议转人工。这段文字会追加在系统提示词的最后（流程之后），最多 2000 字。",
+    "label": "升级规则",
+    "placeholder": "如果用户明确要求人工、表达强烈不满或提到退款纠纷，请主动建议转人工。",
+    "hint": "留空则不注入任何内容。"
+  },
+  "businessHours": {
+    "title": "营业时间",
+    "description": "不在营业时间内时，组件会隐藏输入框并显示离开提示。没有配置时区即视为始终在线。",
+    "timezone": "时区",
+    "timezonePlaceholder": "选择时区",
+    "schedule": "每周时间段",
+    "day": "星期",
+    "start": "开始",
+    "end": "结束",
+    "addRange": "添加时间段",
+    "removeRange": "删除时间段",
+    "empty": "尚未配置时间段，当前始终在线。",
+    "overnightHint": "结束时间早于开始时间表示跨越午夜。",
+    "awayMessage": "离开提示语",
+    "awayMessagePlaceholder": "当前非服务时间，请留言，我们会尽快回复。",
+    "awayMessageHint": "留空时组件会显示默认文案。",
+    "days": [
+      "周一",
+      "周二",
+      "周三",
+      "周四",
+      "周五",
+      "周六",
+      "周日"
+    ]
   }
 }

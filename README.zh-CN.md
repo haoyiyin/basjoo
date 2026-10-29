@@ -161,6 +161,12 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 `thinking_done`、`done`、`error`。没配服务商密钥会明确返回 `400 API_KEY_MISSING`，绝不用 mock 蒙过去。
 会话 ID 可枚举，所以公开接口要求调用方带自己的 `visitor_id`，别人的会话一律 `404 Session not found`。
 
+机器人是否开口只由一道闸门决定：`services/session_state.answer_gate` 要求 `status="active"`、
+`mode="ai"`，**并且**智能体当前处于营业时间内。其余情况仍会把访客消息存库、但一句都不回，并通过
+`done.no_answer_reason` 说明原因（`taken_over`、`resolved`、`closed`、`paused`、`human` 或 `after_hours`）。
+`after_hours` 是唯一保持 `mode` 为 `ai` 的情况，同时把运营配置的 `away_message` 作为可见回复下发——
+它**不会**写进会话记录，避免历史记录假装是人写的。没配营业时间（或配置无法解析）的智能体永远在线。
+
 ### 组件
 
 `widget/src/BasjooWidget.tsx` 从 `<script src="…/sdk.js?agent_id=agt_…">` 自举（也接受 `agentId` 和
@@ -244,7 +250,11 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 - `POST /api/v1/knowledge-bases/{kb_id}/files:upload`、`POST …/index:rebuild`
 - `GET /api/v1/knowledge-bases/{kb_id}/sources:summary`、`…/index:status`
 - `POST /api/v1/chat/stream`、`GET /api/v1/chat/messages`
-- `GET /api/v1/admin/sessions`、`POST /api/v1/admin/sessions/{id}/takeover`、`POST /api/v1/admin/sessions/send`
+- `POST /api/v1/chat/escalate`、`POST /api/v1/chat/release` —— 访客侧的转人工
+- `GET /api/v1/admin/sessions`、`POST /api/v1/admin/sessions/send`
+- `POST /api/v1/admin/sessions/{id}/takeover|release|reply|resolve|reopen` —— `reopen` 是 `resolve` 的逆操作
+  （回到 `active`/`ai`）；它不在最初的转人工需求里，但会话中心会在已解决的行上渲染「重新打开」按钮，
+  因此保留该路由并在此列出，而不是留成未文档化的接口
 
 智能体维度的 `/api/v1/urls:*`、`/api/v1/files:*`、`/api/v1/index:*` 仍然能用，但都是保留一版的别名：它们
 通过 `agents.kb_id` 反查知识库，未绑定时返回 `409`。新接入请直接用知识库维度的路径。完整 schema 在
