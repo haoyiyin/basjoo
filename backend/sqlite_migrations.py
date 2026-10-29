@@ -126,7 +126,30 @@ def run_sqlite_migrations(database_url: str) -> None:
                     ("visitor_country", "TEXT"),
                     ("visitor_region", "TEXT"),
                     ("visitor_city", "TEXT"),
+                    # #43 — human handoff without takeover.
+                    ("mode", "VARCHAR(10) DEFAULT 'ai'"),
+                    ("human_replied_at", "DATETIME"),
+                    # #39 — one procedure step per turn.
+                    ("active_procedure_id", "VARCHAR(36)"),
+                    ("procedure_step", "INTEGER DEFAULT 0"),
+                    # #41 — lead capture + transcript idempotency.
+                    ("contact_email", "VARCHAR(255)"),
+                    ("contact_name", "VARCHAR(100)"),
+                    ("transcript_sent_at", "DATETIME"),
+                    # #45 — async classification.
+                    ("topic", "VARCHAR(100)"),
+                    ("sentiment", "VARCHAR(20)"),
+                    ("outcome", "VARCHAR(20)"),
+                    # #44 — spam-check sampling counts answered turns.
+                    ("ai_turn_count", "INTEGER DEFAULT 0"),
                 ],
+            )
+            # Existing rows: every session is AI-handled until a human replies.
+            cursor.execute(
+                "UPDATE chat_sessions SET mode = 'ai' WHERE mode IS NULL OR mode = ''"
+            )
+            cursor.execute(
+                "UPDATE chat_sessions SET ai_turn_count = 0 WHERE ai_turn_count IS NULL"
             )
 
         # ── chat_messages ──────────────────────────────────────────────────
@@ -137,6 +160,12 @@ def run_sqlite_migrations(database_url: str) -> None:
                 [
                     ("sender_type", "TEXT"),
                     ("sender_id", "TEXT"),
+                    # #42 — answer quality, no backfill: existing rows stay
+                    # confidence NULL / is_unanswered false.
+                    ("confidence", "FLOAT"),
+                    ("is_unanswered", "BOOLEAN DEFAULT 0"),
+                    # #41 — thumbs vote (-1/0/+1).
+                    ("rating", "INTEGER"),
                 ],
             )
 
@@ -306,6 +335,9 @@ def run_sqlite_migrations(database_url: str) -> None:
                             f"✓ Backfilled workspace_id for {cursor.rowcount} agent(s) with NULL workspace_id"
                         )
 
+        # ── new tables (#39, #41, #47) ──────────────────────────────────────
+        _create_feature_tables(cursor)
+
         conn.commit()
 
     except Exception:
@@ -316,6 +348,91 @@ def run_sqlite_migrations(database_url: str) -> None:
 
 
 # ---- helpers ----------------------------------------------------------------
+
+def _create_feature_tables(cursor: sqlite3.Cursor) -> None:
+    """Create tables added after the original schema (all idempotent).
+
+    ``Base.metadata.create_all`` builds these on a fresh install; an existing
+    database needs the DDL here, because create_all does not add tables to an
+    already-populated file. Column types mirror ``models.py`` exactly.
+    """
+    if _table_exists(cursor, "knowledge_bases"):
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS qa_items (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                kb_id VARCHAR(36) NOT NULL REFERENCES knowledge_bases(id),
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                hits INTEGER NOT NULL DEFAULT 0,
+                last_hit_at DATETIME,
+                source VARCHAR(20) NOT NULL DEFAULT 'manual',
+                source_message_id INTEGER,
+                embedding_hash VARCHAR(64),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME,
+                CONSTRAINT uq_qa_items_kb_question UNIQUE (kb_id, question)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_qa_items_kb_id ON qa_items(kb_id)"
+        )
+
+    if _table_exists(cursor, "agents"):
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS procedures (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+                name VARCHAR(200) NOT NULL,
+                steps TEXT NOT NULL DEFAULT '[]',
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_procedures_agent_id ON procedures(agent_id)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS leads (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+                workspace_id INTEGER REFERENCES workspaces(id),
+                session_id VARCHAR(50),
+                name VARCHAR(100),
+                email VARCHAR(255),
+                phone VARCHAR(50),
+                message TEXT,
+                source VARCHAR(20) NOT NULL DEFAULT 'offline-form',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS ix_leads_agent_id ON leads(agent_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS ix_leads_email ON leads(email)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_leads_session_id ON leads(session_id)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS webhooks (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+                url VARCHAR(1000) NOT NULL,
+                events TEXT NOT NULL DEFAULT '[]',
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhooks_agent_id ON webhooks(agent_id)"
+        )
 
 
 def _table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
@@ -391,12 +508,30 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("allowed_widget_origins", "TEXT"),
         ("persona_type", "VARCHAR(20) DEFAULT 'general'"),
         ("widget_title", "VARCHAR(100) DEFAULT 'AI 客服'"),
-        ("widget_color", "VARCHAR(20) DEFAULT '#06B6D4'"),
+        ("widget_color", "VARCHAR(20) DEFAULT '#F9CA02'"),
         (
             "welcome_message",
             "TEXT DEFAULT '您好！我是Basjoo助手，有什么可以帮您的吗？'",
         ),
         ("history_days", "INTEGER DEFAULT 30"),
+        # #40 — install surface.
+        ("excluded_paths", "TEXT"),
+        ("display_mode", "VARCHAR(20) DEFAULT 'bubble'"),
+        ("starters", "TEXT"),
+        ("widget_cards", "TEXT"),
+        ("traffic_percentage", "INTEGER DEFAULT 100"),
+        # #43 / #41 — conversation policy.
+        ("escalation_rules", "TEXT"),
+        ("business_hours", "TEXT"),
+        ("away_message", "TEXT"),
+        ("ai_disclosure", "TEXT"),
+        # #39 — answer control.
+        ("fixed_facts", "TEXT"),
+        # #44 — quota degradation.
+        ("fallback_model", "VARCHAR(100)"),
+        ("fallback_api_key", "VARCHAR(500)"),
+        # #46 — signed visitor identity.
+        ("identity_secret", "VARCHAR(500)"),
     ]
 
     # Handle the old column-name migration before we report existing columns
@@ -419,6 +554,28 @@ def _migrate_agents(cursor: sqlite3.Cursor):
     added = _ensure_columns(cursor, "agents", columns)
     if added:
         print(f"✓ Added {added} column(s) to agents")
+
+    # Rows created before the single-default-colour change carry one of the two
+    # old defaults ('#06B6D4' model default, '#00aaff' dashboard constant) —
+    # neither was ever an operator choice, so both move to the accent. A colour
+    # the operator actually picked is left alone.
+    cursor.execute(
+        "UPDATE agents SET widget_color = '#F9CA02' "
+        "WHERE LOWER(widget_color) IN ('#06b6d4', '#00aaff')"
+    )
+    if cursor.rowcount > 0:
+        print(f"✓ Normalised widget_color on {cursor.rowcount} agent(s)")
+
+    # display_mode / traffic_percentage must never be NULL for the widget's
+    # "is it installed" check.
+    cursor.execute(
+        "UPDATE agents SET display_mode = 'bubble' "
+        "WHERE display_mode IS NULL OR display_mode = ''"
+    )
+    cursor.execute(
+        "UPDATE agents SET traffic_percentage = 100 WHERE traffic_percentage IS NULL"
+    )
+
 
 
 def _backfill_agents(cursor: sqlite3.Cursor):

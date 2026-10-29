@@ -25,3 +25,12 @@ EXT_TO_MIME = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
+
+# --- Widget ---
+# The console accent, and therefore the default widget colour. One value, three
+# consumers that must agree (asserted by tests/test_widget_palette.py):
+#   backend/models.py:Agent.widget_color
+#   widget/src/theme.ts:ACCENT
+#   frontend-nextjs/src/views/AgentSettings.tsx:DEFAULT_WIDGET_COLOR
+# hsl(48 96% 49%) — frontend-nextjs/src/index.css --color-accent-primary.
+DEFAULT_WIDGET_COLOR = "#F9CA02"
