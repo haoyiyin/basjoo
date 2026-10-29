@@ -97,7 +97,7 @@ detect_platform() {
 
 	if [ -z "$APT_CMD" ]; then
 		# Unknown distro: only continue when the machine already has what we need.
-		if have_cmd docker && run_root docker compose version >/dev/null 2>&1; then
+		if have_cmd docker && compose_ok; then
 			log "Non-Debian system (${PRETTY_NAME:-${ID:-unknown}}) with Docker already installed — skipping package setup"
 			return 0
 		fi
@@ -164,8 +164,15 @@ download_file() {
 	fail "Neither curl nor wget is available for downloading required files."
 }
 
+# Both probes must test the same binary the deploy step will use (DOCKER_BIN),
+# otherwise a user-scoped Compose plugin looks "missing" under sudo and triggers a
+# pointless reinstall.
+compose_ok() {
+	$DOCKER_BIN compose version >/dev/null 2>&1
+}
+
 ensure_docker() {
-	if have_cmd docker && run_root docker compose version >/dev/null 2>&1; then
+	if have_cmd docker && compose_ok; then
 		log "Docker Engine and Docker Compose are already installed"
 	else
 		log "Installing Docker Engine and Docker Compose"
@@ -187,11 +194,11 @@ ensure_docker() {
 	# the daemon actually answers, not that a unit was enabled.
 	have_cmd docker || fail "Docker CLI is still unavailable after installation."
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
-		run_root docker info >/dev/null 2>&1 && break
+		$DOCKER_BIN info >/dev/null 2>&1 && break
 		sleep 2
 	done
-	run_root docker info >/dev/null 2>&1 || fail "Docker daemon is not reachable. Start it (e.g. 'sudo systemctl start docker') and re-run."
-	run_root docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is unavailable after installation."
+	$DOCKER_BIN info >/dev/null 2>&1 || fail "Docker daemon is not reachable. Start it (e.g. 'sudo systemctl start docker') and re-run."
+	compose_ok || fail "Docker Compose plugin is unavailable after installation."
 }
 
 ensure_repo_dir_ready() {
@@ -259,7 +266,7 @@ sync_repo() {
 }
 
 container_state() {
-	run_root docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true
+	$DOCKER_BIN inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true
 }
 
 wait_for_container() {
@@ -326,11 +333,11 @@ http_get() {
 
 show_failure_logs() {
 	log "Recent backend logs"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 backend-prod || true
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 backend-prod || true
 	log "Recent frontend logs"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 frontend-prod || true
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 frontend-prod || true
 	log "Recent nginx logs"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 nginx || true
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 nginx || true
 }
 
 verify_deployment() {
@@ -357,7 +364,7 @@ verify_deployment() {
 	}
 
 	log "Checking production stack status"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod ps
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod ps
 
 	server_domain=$(read_env_value SERVER_DOMAIN "$BASJOO_DIR/.env")
 	if [ -n "$server_domain" ]; then
