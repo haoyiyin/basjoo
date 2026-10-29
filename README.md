@@ -3,28 +3,138 @@
 [![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
+[![React](https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)](https://redis.io/)
-[![Qdrant](https://img.shields.io/badge/Qdrant-Vector_Search-blue)](https://qdrant.tech/)
-[![Scrapling](https://img.shields.io/badge/Scrapling-Web_Crawling-green)](https://github.com/D4Vinci/Scrapling)
+[![Qdrant](https://img.shields.io/badge/Qdrant-Vector_Search-DC244C)](https://qdrant.tech/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 English | [简体中文](README.zh-CN.md)
 
-Basjoo is an AI customer-support platform with three main parts:
+Basjoo is a self-hosted AI customer-support platform: it turns a website plus a set of documents into a
+support agent you can embed anywhere, and gives you an admin console to run it.
 
-- a **FastAPI backend** for agent configuration, chat, indexing, auth, and scheduling
-- a **Vite SPA admin/dashboard** in `frontend-nextjs/` (React + react-router 7)
-- an **embeddable chat widget** in `widget/` that talks to the backend over HTTP and SSE
+- **FastAPI backend** (`backend/`) — agents, knowledge bases, RAG retrieval, SSE chat, auth, quota, schedulers
+- **Vite SPA admin console** (`frontend-nextjs/` — the directory name is left over from the former Next.js app)
+- **Embeddable chat widget** (`widget/`) — one `<script>` tag, talks to the backend over HTTP + SSE
+- **Retrieval stack** — Qdrant for vectors, SQLite for application data, Redis for rate limiting, and a
+  crawl4ai fetcher container (`basjoo-crawler`) that renders pages in a headless browser
 
-The stack also uses **SQLite** for application data, **Redis** for rate limiting, **Qdrant** for vector search and document indexing, a **crawl4ai-backed fetcher service** for web content fetching (headless Chromium), and **nginx** for Docker-based reverse proxying.
+Everything runs under Docker Compose. No external SaaS is required: LLM inference is delegated to whichever
+provider you configure, and a fresh install ships a **local embedding container**, so the knowledge base
+works before you own any API key. **No GPU is needed.**
+
+## Features
+
+- **Knowledge bases are first-class.** A KB exists on its own — create, reset, delete and bind it
+  independently of any agent, and a KB can outlive every agent that used it. Sources (URLs, uploaded files)
+  belong to the KB, not to the agent.
+- **Two ingestion paths per KB.** Crawl one page, crawl a whole site (depth + page cap), or upload files
+  (`txt`, `md`, `html`, `pdf`, `docx`, `xlsx`; up to 5 files and 20 MB per file per request). Optional
+  auto-refetch keeps web sources fresh on a schedule.
+- **Per-KB embeddings.** `local` (bundled TEI container), `jina`, `siliconflow`, or any `custom`
+  OpenAI-compatible endpoint. The vector width is measured with a real embedding call when the KB is
+  created, so the collection and the provider can never silently disagree.
+- **Thirteen LLM providers** through one agent config: OpenAI-compatible, OpenAI native, Anthropic, Google
+  Gemini, xAI, DeepSeek, OpenRouter, z.ai, Volcengine, Moonshot, Alibaba Bailian, Tencent Cloud and
+  SiliconFlow.
+- **Streaming chat over SSE** with source citations, a first-token keepalive, per-visitor rate limits and a
+  configurable restricted reply when a provider fails.
+- **Human takeover.** Operators watch live sessions in the console and jump in; the widget polls for the
+  human reply and hands the conversation over.
+- **A widget that respects its host.** Per-agent origin whitelist, visitor/session persisted in
+  `localStorage`, locale-aware copy (English / Chinese), 90-second stream timeout with one retry.
+- **Bilingual admin UI** (English / 简体中文) on a warm, single-accent design system that holds up at 375 px.
+
+## Screenshots
+
+### Agents
+
+One table for every agent: its knowledge base, last update, status and actions.
+
+![Agents list](resource/screenshots/admin/en-US/agents.png)
+
+### Knowledge base
+
+Sources live on the KB: crawl controls, the URL list with fetch and index status, and the uploaded files
+with their parsed chunk counts.
+
+![Knowledge base detail](resource/screenshots/admin/en-US/knowledge-base.png)
+
+### Playground
+
+Provider, model and retrieval settings on the left; a live conversation on the right, through the same
+streaming path the widget uses.
+
+![Playground](resource/screenshots/admin/en-US/playground.png)
+
+### Sessions and human takeover
+
+Every visitor session with its transcript, plus a takeover control for the ones a bot should not finish
+alone.
+
+![Sessions center](resource/screenshots/admin/en-US/sessions.png)
+
+### Agent settings and embed code
+
+Widget title, colour, greeting, history retention, origin whitelist and per-minute limit — together with
+the embed snippet to paste into your site.
+
+![Agent settings](resource/screenshots/admin/en-US/agent-settings.png)
+
+### Embedded widget
+
+![Widget](resource/screenshots/widget/en-US/widget-window.png)
+
+## Quick start
+
+### One-command install (Ubuntu / Debian)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+
+The script installs Docker if it is missing, clones the repo, starts the **prod** profile, waits for the
+health checks and prints the console URL. From a local checkout, run `sudo sh install-deploy.sh` instead.
+
+The first account you register becomes the workspace super administrator.
+
+### Docker Compose by hand
+
+```bash
+git clone https://github.com/haoyiyin/basjoo.git
+cd basjoo
+cp .env.example .env        # optional — every value has a working default
+
+docker compose --profile prod up -d     # nginx on :80 (:443 when ./ssl holds a cert)
+# or, with hot reload:
+docker compose --profile dev up --watch # frontend :3000, backend :8000
+```
+
+Then open the console and register the first admin:
+
+- prod: `http://localhost/`
+- dev: `http://localhost:3000/`
+
+Add a provider key under **Playground → AI Settings** (or set `DEEPSEEK_API_KEY` for the default agent) and
+the bundled example agent becomes usable.
+
+### Default ports
+
+| Service | dev | prod |
+|---|---|---|
+| Admin console | `localhost:3000` | `localhost:80` (nginx) |
+| Backend API | `localhost:8000` | through nginx |
+| Qdrant | `127.0.0.1:6333` | internal only |
+| Redis | `127.0.0.1:6379` | internal only |
 
 ## System requirements
 
-Basjoo runs as a set of Docker containers. LLM inference is always delegated to an external API (OpenAI, DeepSeek, Anthropic, Gemini, Kimi, Qwen, Hunyuan, SiliconFlow, or any OpenAI-compatible endpoint). Embeddings can be delegated too, but the default deployment also ships a **self-hosted embedding container** (`local-embed`, CPU-only, ~1.2 GB resident) so a fresh install has a working knowledge base with no third-party key. **No GPU is required** either way.
-
-The fetcher service renders pages in a headless Chromium: measured ≈380 MB resident after the first page and ≈425 MB with 8 pages crawling at once (the browser is shared across requests, so concurrency adds little). Its image is ≈2.1 GB. The 4 GB RAM minimum below assumes the built-in embedding container is also running.
+LLM inference is always an external API call. Embeddings can be external too, but the default stack runs the
+bundled `local-embed` container (CPU only, ~1.2 GB resident). The fetcher container renders pages in a
+headless Chromium: ≈380 MB resident after the first page, ≈425 MB with 8 pages in flight (the browser is
+shared across requests, so concurrency adds little). Its image is ≈2.1 GB.
 
 | | Minimum | Recommended |
 |---|---|---|
@@ -32,457 +142,189 @@ The fetcher service renders pages in a headless Chromium: measured ≈380 MB res
 | RAM | 4 GB | 8 GB |
 | Disk | 25 GB | 50 GB |
 | OS | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
-| Docker | 20.10+ | latest |
+| Docker | 20.10+ with the Compose plugin | latest |
 
-The figures above already include the built-in embedding container. Its model
-(`ibm-granite/granite-embedding-97m-multilingual-r2`, ~400 MB) is downloaded once
-into the `local-embed-cache` volume on first start; the stack stays usable while
-that download runs, and the built-in example agent is created on the next login.
+The RAM figure already covers the embedding container. Its model
+(`ibm-granite/granite-embedding-97m-multilingual-r2`, ~400 MB) is downloaded once into the
+`local-embed-cache` volume; the stack stays usable during the download and the example agent is seeded on
+the next login. To use a hosted embedding API instead, create the KB with the `jina` / `siliconflow` /
+`custom` provider and stop the `local-embed` service.
 
-To run embeddings against a hosted API instead, create the knowledge base with the
-`jina` / `siliconflow` / `custom` provider and stop the `local-embed` service.
+## How it works
 
-## Automatic deployment
-
-For a blank Ubuntu or Debian server, run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+browser ──▶ widget / admin SPA
+                 │  HTTP + SSE
+                 ▼
+            nginx (prod) ──▶ FastAPI backend ──▶ Qdrant        (vectors, one collection per KB)
+                                  │        └──▶ SQLite        (agents, KBs, documents, sessions)
+                                  ├──────────▶ Redis         (rate limits)
+                                  ├──────────▶ basjoo-crawler (crawl4ai, headless Chromium)
+                                  ├──────────▶ local-embed   (TEI, CPU embeddings)
+                                  └──────────▶ LLM provider  (OpenAI-compatible HTTP)
 ```
 
-If you already have this repository checked out locally, you can also run:
+### Knowledge bases
 
-```bash
-sudo sh install-deploy.sh
-```
+`KnowledgeBase → KbDocument → KbChunk`, scoped by workspace. One Qdrant collection per KB (`kb_<12 hex>`,
+cosine distance), filtered by workspace only. Chunking defaults to 512 / 64 with embeddings upserted in
+batches of ≤100; retrieval takes `top_k × 2` candidates and post-filters by score. The effective similarity
+threshold is the request argument, else the agent's `similarity_threshold`, else the service default.
 
-After deployment completes, the script prints a prominent summary with the admin dashboard URL. On local desktop environments (with `DISPLAY` or `WAYLAND_DISPLAY` set), it may automatically open the URL in your browser. On headless servers, copy the printed link into a browser.
+Binding is the only link between an agent and a KB: `PUT /api/v1/agents/{agent_id}/knowledge-base`. Because
+`agents.kb_id` is `UNIQUE`, at most one agent reads a given KB, and deleting an agent only clears the
+pointer — the KB, its documents, chunks and URL sources survive.
 
-The first registered admin becomes the workspace super administrator, who can create and manage multiple isolated AI agents within the same workspace.
+### Chat
 
-## Repository structure
-
-- `backend/` — FastAPI app, data models, chat APIs, auth, ingestion, indexing, tests
-- `frontend-nextjs/` — active admin/dashboard UI
-- `widget/` — embeddable chat widget bundle
-- `scrapling-service/` — crawler microservice (crawl4ai headless Chromium with a curl_cffi + readability fallback); its container is `basjoo-crawler`
-- `nginx/` — Docker nginx config
-- Qdrant vector database service configuration
-- `docker-compose.yml` — dev/prod orchestration
-
-## Core features
-
-- Configurable AI agents with multiple provider settings
-- Independent Embedding API selection for knowledge retrieval: Jina or SiliconFlow
-- URL ingestion and file knowledge management
-- Self-KB retrieval (Qdrant-backed) and document indexing via KB pipeline
-- Streaming chat responses over Server-Sent Events
-- Embeddable website widget with session persistence
-- Widget copy auto-translation by visitor locale
-- Per-agent widget domain whitelist for public chat embeds
-- Offline agent fallback replies and admin-side error alerts
-- Admin authentication and dashboard management flows
-- Dockerized development and production-style deployment paths
-
-## Feature walkthrough
-
-### Admin dashboard overview
-
-The admin dashboard is the operational center for configuring agents, reviewing knowledge coverage, and accessing the major management modules.
-
-![English admin dashboard screenshot](resource/screenshots/admin/en-US/dashboard.png)
-
-### Playground and AI configuration
-
-The Playground lets admins test replies, inspect retrieval behavior, and adjust model/provider settings from the same workflow.
-
-![English playground screenshot](resource/screenshots/admin/en-US/playground.png)
-
-### Website knowledge management
-
-The Websites page handles URL ingestion, crawling, auto-fetch settings, and retraining/index-refresh workflows for web content.
-
-![English website management screenshot](resource/screenshots/admin/en-US/websites.png)
-
-### File knowledge management
-
-The File Upload page lets you drag-and-drop PDF, TXT, CSV, Markdown, DOCX and other files as knowledge sources for AI retrieval.
-
-![English file upload screenshot](resource/screenshots/admin/en-US/files.png)
-
-### User management
-
-Manage admin accounts with role-based access control — Super Admin, Admin, and Support roles.
-
-![English user management screenshot](resource/screenshots/admin/en-US/users.png)
-
-### Session operations
-
-The Sessions page shows live conversations, supports human takeover, and gives operators a single place to monitor visitor activity.
-
-![English sessions screenshot](resource/screenshots/admin/en-US/sessions.png)
-
-### Agent settings and widget appearance
-
-Agent Settings covers language/theme preferences, widget appearance, embed behavior, and other operational controls.
-
-![English agent settings screenshot](resource/screenshots/admin/en-US/system-settings.png)
-
-### Embedded widget experience
-
-The widget provides the visitor-facing chat window with persisted sessions, multilingual copy, streaming responses, and knowledge-assisted replies.
-
-![English widget screenshot](resource/screenshots/widget/en-US/widget-window.png)
-
-## Tech stack
-
-### Backend
-
-- FastAPI
-- SQLAlchemy async + SQLite (application data store)
-- Redis (rate limiting, caching)
-- Qdrant REST API (vector search, document ingestion, hybrid retrieval)
-- crawl4ai-backed fetcher service (headless Chromium rendering, curl_cffi + readability-lxml fallback), container `basjoo-crawler`
-- APScheduler
-- OpenAI-compatible provider layer (DeepSeek, Gemini via Google's OpenAI-compatible endpoint, Anthropic, xAI, OpenRouter, …)
-
-### Frontend
-
-- Vite 8
-- React 18 + react-router 7
-- TypeScript
-- i18next
+`POST /api/v1/chat/stream` runs in two phases on purpose: a short database phase (resolve agent → origin
+whitelist → quota → session → rate limit → load history → retrieve context), then a streaming phase that
+holds no database connection while the provider generates. The event names are `sources`, `content`,
+`thinking_done`, `done` and `error`. A missing provider key is an explicit `400 API_KEY_MISSING`, never a
+silent mock answer. Session ids are enumerable, so the public endpoints require the visitor's own
+`visitor_id` and answer `404 Session not found` for anyone else.
 
 ### Widget
 
-- TypeScript
-- esbuild
-- Browser-native fetch + SSE handling
+`widget/src/BasjooWidget.tsx` bootstraps from `<script src="…/sdk.js?agent_id=agt_…">` (it also accepts
+`agentId` and `api_base`), auto-detects the API base from its own script URL, fetches
+`/api/v1/config:public` for the title, colour and greeting, keeps the visitor and session in `localStorage`,
+streams from `/api/v1/chat/stream`, and polls `/api/v1/chat/messages` every 3 s while a human has taken over.
 
-## Manual deployment
-
-### Option 1: Docker Compose
-
-Development stack:
-
-```bash
-docker compose --profile dev up -d
+```html
+<script src="https://your-basjoo-host/sdk.js?agent_id=agt_xxxxxxxxxxxx" async></script>
 ```
 
-Production-style stack:
+## Configuration
+
+Settings come from environment variables or `.env` (`pydantic-settings`). Every value below has a working
+default.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///./data/basjoo.db` | application data (SQLite only — there is no PostgreSQL path) |
+| `REDIS_URL` | `redis://redis:6379/0` | rate limiting |
+| `QDRANT_URL` | `http://localhost:6333` | vector store |
+| `SECRET_KEY` / `SECRET_KEY_FILE` | generated → `/app/data/.secret_key` | JWT signing |
+| `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | generated → `/app/data/.encryption_key` | encrypts provider keys at rest |
+| `DEFAULT_AGENT_ID` | generated → `/app/data/.agent_id` | pins the default widget agent identity |
+| `ALLOWED_ORIGINS` | empty (dev profile sets `*`) | CORS allowlist; empty means no cross-origin caller |
+| `SSRF_PROTECTION_ENABLED` | `false` | block private/link-local resolutions of user-supplied URLs |
+| `LOCAL_EMBEDDING_BASE_URL` | `http://local-embed:80/v1` | endpoint used by `local` knowledge bases |
+| `LOCAL_EMBEDDING_MODEL` | `ibm-granite/granite-embedding-97m-multilingual-r2` | model served there |
+| `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST_SIZE` | `1000` / `200` | global limiter |
+| `REQUIRE_SECRET_KEY` | unset | when `true`, refuse to boot with a generated secret |
+| `SERVER_DOMAIN` | unset | nginx canonical host; anything else gets `444` |
+| `LOG_LEVEL` | `INFO` | |
+
+`SSRF_PROTECTION_ENABLED` is opt-in because a fake-ip / split-horizon resolver (sing-box, clash) maps public
+hosts into private ranges and would reject every fetch. Scheme, credential, empty-host, `localhost` and
+direct-IP-literal checks always run; the crawler service honours the same switch.
+
+`DEFAULT_AGENT_ID` only pins the id — it does not recreate a deleted agent row. Restore the database volume,
+or set `CREATE_DEFAULT_AGENT_ON_BOOTSTRAP=true` for one boot.
+
+## Development
 
 ```bash
-docker compose --profile prod up -d
+# backend
+cd backend && python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt && python3 main.py        # :8000, /health
+
+# admin console
+cd frontend-nextjs && npm install && npm run dev          # :3000, proxies /api to :8000
+
+# widget
+cd widget && npm install && npm run dev                   # bundle + example host
 ```
 
-Useful Docker commands:
+Verification before a PR:
 
 ```bash
-docker compose logs -f backend-dev frontend-dev nginx
-docker compose --profile dev up -d --build backend-dev frontend-dev
-bash scripts/prod_stability_check.sh
+cd frontend-nextjs && npm run build && npm run typecheck && npm run test   # vitest
+cd widget && npm run build && npm run test
+cd backend && pytest
+npm run sync-widget        # rebuild the widget, copy it to backend/static/sdk.js
+npm run test:e2e           # Playwright smoke suite against the dev profile
 ```
 
-Default dev ports:
+`npm run sync-widget` matters: `widget/dist/basjoo-widget.min.js` and `backend/static/sdk.js` must stay
+byte-identical, and `sdk.js` is never hand-edited.
 
-- Frontend: `http://localhost:3000`
-- Backend API: `http://localhost:8000`
-- Qdrant: `http://localhost:6333`
-- Redis: `127.0.0.1:6379`
+## API surface
 
-The dev frontend and backend ports are bound as `3000:3000` and `8000:8000`, so they are reachable from other devices that can access the host.
+The console talks to `/api/admin` (login, register, account, users) and `/api/v1`. The routes that matter
+most:
 
-### Option 2: Run services locally
+- `GET /health`, `GET /api/v1/config:public`
+- `GET|POST /api/v1/agents`, `POST /api/v1/agents/{id}:pause|:resume`, `DELETE /api/v1/agents/{id}`
+- `GET|PUT /api/v1/agent`, `GET /api/v1/agent:kb-status`
+- `GET|POST /api/v1/knowledge-bases`, `GET|PATCH|DELETE /api/v1/knowledge-bases/{kb_id}`
+- `PUT /api/v1/agents/{agent_id}/knowledge-base` — the only way to bind a KB
+- `POST /api/v1/knowledge-bases/{kb_id}/urls:create|:refetch|:discover|:crawl_site|:cancel`
+- `POST /api/v1/knowledge-bases/{kb_id}/files:upload`, `POST …/index:rebuild`
+- `GET /api/v1/knowledge-bases/{kb_id}/sources:summary`, `…/index:status`
+- `POST /api/v1/chat/stream`, `GET /api/v1/chat/messages`
+- `GET /api/v1/admin/sessions`, `POST /api/v1/admin/sessions/{id}/takeover`, `POST /api/v1/admin/sessions/send`
 
-#### Backend
-
-```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 main.py
-```
-
-Backend health check:
-
-```bash
-curl http://localhost:8000/health
-```
-
-#### Frontend
-
-```bash
-cd frontend-nextjs
-npm install
-npm run dev
-```
-
-#### Widget
-
-```bash
-cd widget
-npm install
-npm run dev
-```
-
-## Common development commands
-
-### Frontend (`frontend-nextjs/`)
-
-```bash
-npm install
-npm run dev
-npm run build        # tsc --noEmit && vite build
-npm run preview      # serve the production bundle locally
-npm run typecheck
-npm run test         # vitest
-```
-
-### Widget (`widget/`)
-
-```bash
-npm install
-npm run dev          # dev bundle + example server
-npm run build        # full build (typecheck + dev + prod bundles)
-npm run build:dev    # unminified ESM bundle (dist/basjoo-widget.js)
-npm run build:prod   # minified IIFE bundle (dist/basjoo-widget.min.js)
-npm run typecheck
-npm run test         # vitest
-```
-
-### Backend (`backend/`)
-
-```bash
-pip install -r requirements.txt
-python3 main.py
-pytest
-pytest tests/test_api.py
-pytest tests/test_api.py::test_name
-```
-
-### Root-level E2E tests
-
-```bash
-npm run test:e2e        # smoke tests (dev environment)
-npm run test:e2e:all    # all Playwright test projects
-npm run test:e2e:prod   # production-like E2E tests
-npm run test:e2e:widget # widget cross-origin embed tests
-npm run sync-widget     # sync widget bundle to backend
-```
-
-### Docker Compose watch mode (dev)
-
-```bash
-docker compose --profile dev up --watch
-```
-
-## Environment and configuration
-
-The backend reads settings from environment variables and `.env` via `pydantic-settings`.
-
-Important runtime settings used in the current codebase include:
-
-- `DATABASE_URL`
-- `REDIS_URL`
-- `QDRANT_URL`
-- `SECRET_KEY`
-- `SECRET_KEY_FILE`
-- `DEFAULT_AGENT_ID`
-- `JINA_API_KEY`
-- `DEEPSEEK_API_KEY`
-- `ALLOWED_ORIGINS`
-- `ALLOWED_METHODS`
-- `ALLOWED_HEADERS`
-- `RATE_LIMIT_PER_MINUTE`
-- `RATE_LIMIT_BURST_SIZE`
-- `LOG_LEVEL`
-- `SERVER_DOMAIN`
-- `ENCRYPTION_KEY` (optional; auto-generated and persisted if missing)
-- `ENCRYPTION_KEY_FILE` (default `/app/data/.encryption_key`)
-- `REQUIRE_SECRET_KEY` (set `true` in production to reject insecure secret keys)
-
-Notes:
-
-- If `SECRET_KEY` is missing or insecure, the backend generates one and persists it to `SECRET_KEY_FILE`.
-- `DEFAULT_AGENT_ID` can be used to restore or pin a known widget agent ID during migrations; see the deployment section below for the preservation workflow.
-- If `ENCRYPTION_KEY` is not set, the backend auto-generates a Fernet key and persists it to `ENCRYPTION_KEY_FILE`; stored provider API keys are encrypted with this key.
-- `cors_allow_null_origin` (boolean, default `false`) controls whether `Origin: null` (e.g., `file://` widget preview) receives wildcard CORS headers. Off by default for security.
-- `SERVER_DOMAIN` is consumed by the nginx service in the production compose profile to enforce a canonical host and block direct IP/other-host access.
-- The dev compose profile sets permissive CORS and local API URLs by default.
-- The production compose profile expects mounted persistent backend data under `/app/data`.
-
-## Architecture overview
-
-### Backend
-
-`backend/main.py` builds the FastAPI app and wires together:
-
-- auth routes under `/api/admin`
-- v1 APIs under `/api/v1` (chat, agent config, sessions, quotas, task status)
-- admin-only routers: `url_endpoints.py` (URL ingestion, crawling), `file_endpoints.py` (file upload), and `index_endpoints.py` (index rebuild jobs) are protected at the router level via `Depends(get_current_admin)`
-- public v1 routes: `/api/v1/chat`, `/api/v1/chat/stream`, `/api/v1/contexts`, `/api/v1/config:public`
-- CORS middleware with a shared `apply_cors_headers()` helper for early responses (rate limit 429, body size 413)
-- i18n middleware
-- rate limiting middleware
-- Redis and scheduler startup in non-test mode
-- static routes for widget assets like `/sdk.js`
-- a 10MB request body guard that returns JSON 413 errors before the request reaches downstream handlers
-
-The main backend domains are:
-
-- **Agent config**: provider/model/system-prompt/widget settings
-- **Knowledge sources**: URLs and uploaded files, with SSRF protection via `backend/services/url_safety.py`
-- **Indexing**: chunking content and storing in per-tenant Qdrant collections for data isolation
-- **Chat**: session creation, streaming replies, source citations, quota checks
-- **Admin auth**: dashboard login and registration
-- **Scheduling**: URL fetch scheduler, history cleanup, session auto-close (30-min inactivity timeout)
-
-The main persistent entities in `backend/models.py` are:
-
-- `Workspace`
-- `Agent`
-- `URLSource`
-- `KnowledgeFile`
-- `ChatSession`
-- `ChatMessage`
-- `WorkspaceQuota`
-- `IndexJob`
-- `AdminUser`
-
-### Retrieval and provider layer
-
-The retrieval/indexing pipeline spans:
-
-- `backend/api/v1/url_endpoints.py`
-- `backend/api/v1/index_endpoints.py`
-- `backend/services/kb_service.py`
-- `backend/services/qdrant_service.py`
-- `backend/services/scraper.py`
-- `backend/services/crawler.py`
-
-The LLM abstraction is in `backend/services/llm_service.py`. Provider selection is driven by `Agent.provider_type`. Every supported provider goes through the OpenAI-compatible client; OpenAI Native keeps its dedicated class, and Google (Gemini) uses Google's OpenAI-compatible endpoint at `generativelanguage.googleapis.com/v1beta/openai`.
-
-Embedding settings are independent from the chat model provider. Admins can choose Jina or SiliconFlow for knowledge-base indexing/retrieval in Playground; the Websites and File Upload pages only require the API key for the currently selected embedding provider. SiliconFlow can use a dedicated SiliconFlow Embedding API key, with legacy fallback to the main SiliconFlow AI key when the AI provider is also SiliconFlow.
-
-### Frontend
-
-The active UI is the Vite SPA in `frontend-nextjs/` (the directory name is a leftover from the former Next.js app).
-
-- the route table lives in `frontend-nextjs/src/App.tsx` (react-router 7)
-- most screen logic lives in `frontend-nextjs/src/views/`
-- shared components live in `frontend-nextjs/src/components/`
-- admin auth state is stored in `frontend-nextjs/src/context/AuthContext.tsx`
-- API calls and SSE parsing are centralized in `frontend-nextjs/src/services/api.ts`
-
-### Widget
-
-`widget/src/BasjooWidget.tsx` is a self-contained embeddable widget that:
-
-- auto-detects `apiBase` from the script source URL, infers from dev port 3000 → backend 8000, or falls back to `window.location.origin`
-- fetches `/api/v1/config:public` on init to resolve `default_agent_id`, widget title/color, and welcome message
-- stores visitor/session IDs in `localStorage`
-- streams chat replies from `/api/v1/chat/stream` via SSE with a 90-second read timeout and one automatic retry on network errors
-- polls `/api/v1/chat/messages?role=assistant` at 3-second intervals during human takeover scenarios
-- relies on server-side widget origin whitelist checks when configured
-
-The backend serves widget-related assets directly, including `/sdk.js`.
-
-### Security model
-
-- **SSRF protection** (`SSRF_PROTECTION_ENABLED`, default **off**): `backend/services/url_safety.py` validates all user-provided URLs. With the switch on it blocks hostnames that resolve into private/special-use space (loopback, RFC1918, link-local, cloud metadata), with DNS results cached in a 512-entry LRU. It is off by default because a fake-ip / ULA proxy resolver (sing-box, clash, split-horizon DNS) resolves ordinary public sites into private ranges, which makes the resolved-IP rule reject every real fetch; enable it on instances exposed to untrusted users. Scheme, embedded-credential, empty-host, `localhost` and direct-IP-literal checks always run, because they need no lookup and cannot misfire behind a proxy resolver.
-- **Widget origin whitelist**: Public chat routes enforce a per-agent origin whitelist configured in the admin dashboard. Admin users bypass the whitelist for testing.
-- **CORS policy**: Early responses (rate limit 429, body size 413) apply CORS headers through a shared helper in `backend/middleware/rate_limit.py`. `Origin: null` only receives wildcard CORS when `cors_allow_null_origin` is explicitly enabled. Requests without an `Origin` header do not receive CORS headers.
-- **Secret persistence**: `SECRET_KEY`, `DEFAULT_AGENT_ID`, and `ENCRYPTION_KEY` are auto-generated and persisted on first boot if not provided via environment variables, ensuring stable widget embed behavior and encrypted API key storage across redeployments.
-- **Task concurrency**: A shared `TaskLock` service prevents conflicting operations (e.g., rebuild blocks fetch, fetch blocks rebuild) on the same agent.
-
-## Testing
-
-Backend tests are under `backend/tests/`.
-
-Key testing behavior from `backend/tests/conftest.py`:
-
-- sets `BASJOO_TEST_MODE=1`
-- uses isolated SQLite databases under `backend/.pytest_dbs/`
-- monkeypatches LLM integrations for many tests
-- falls back between Docker hostnames and localhost for Redis where needed
-
-Run all tests:
-
-```bash
-cd backend
-pytest
-```
-
-Run a file:
-
-```bash
-pytest tests/test_api.py
-```
-
-Run a single test:
-
-```bash
-pytest tests/test_api.py::test_name
-```
+The agent-scoped `/api/v1/urls:*`, `/api/v1/files:*` and `/api/v1/index:*` routes still resolve, but they are
+one-release aliases that look the KB up through `agents.kb_id` and answer `409` when the agent is unbound.
+New integrations should use the KB-scoped paths. The full schema is served at `/openapi.json`.
 
 ## Deployment notes
 
-- `docker-compose.yml` is the main orchestration entrypoint.
-- `install-deploy.sh` is the one-command production installer/deployer for Ubuntu and Debian. It can auto-install Docker/Compose, clone the repo, and force-sync an existing clone to the chosen remote branch before deploying.
-- nginx is configured with `client_max_body_size 12m` so oversized requests can reach the backend and return JSON errors instead of nginx HTML errors.
-- Optional HTTPS is enabled only when readable certificate and key files exist in `./ssl`.
-- When certificates are present, nginx serves HTTPS on port 443 and redirects HTTP requests on port 80 to HTTPS automatically.
-- `SERVER_DOMAIN` can be set for the nginx service to enforce a canonical hostname. When set, nginx serves only that host, rejects direct IP or unexpected Host access with nginx 444, and keeps `/health` available for load balancer probes.
-- If `SERVER_DOMAIN` is not set, nginx keeps accepting requests by the incoming host as before.
-- Backend responses that bypass standard middleware should still apply CORS headers so embedded widget requests do not fail cross-origin.
-- The backend persists the default widget agent ID to `/app/data/.agent_id`. As long as the backend data volume is preserved, existing widget embed codes keep working after redeployments.
-- If you know an older widget agent ID that must keep working, set `DEFAULT_AGENT_ID=agt_xxxxxxxxxxxx` before first boot of the new deployment.
-- Avoid `docker compose down -v` or deleting the backend data volume unless you are intentionally rotating widget/embed identity.
-- The one-command installer only force-resets repository files; it does not delete Docker named volumes, so `/app/data` persistence remains intact across redeployments.
+- `install-deploy.sh` is the supported path on Ubuntu/Debian; `deploy.sh` is what it calls.
+  `docker-compose.yml` is the single Compose entrypoint, with `dev` and `prod` profiles and a pinned project
+  name so a second checkout does not create a second, empty set of volumes.
+- `nginx` listens on `:8080` inside the container (published as `:80`) and enables `:443` only when readable
+  `cert.pem` / `key.pem` exist under `./ssl`. `client_max_body_size` is 12 MB, so oversized uploads get a JSON
+  error instead of an nginx HTML page.
+- Persistent volumes: `backend-data` → `/app/data` (SQLite database, secret keys, uploaded KB files),
+  `qdrant-data`, `redis-data`, `local-embed-cache`. `docker compose down -v` deletes all four.
+- Existing embeds keep working as long as `backend-data` survives: the agent id is persisted in
+  `/app/data/.agent_id`, and `DEFAULT_AGENT_ID` pins a known id when you migrate hosts. Back up
+  `/app/data/basjoo.db` and `/app/data/.agent_id` before moving.
+- Registering a second admin requires the super-admin token (`POST /api/admin/users`); self-registration is
+  first-admin only, and the console has no user-management screen yet.
 
-### Preserving existing widget embeds across redeployments
+## Known limitations
 
-Recommended production workflow:
+- Single-node by design: SQLite, one backend process, in-process schedulers. There is no Postgres or
+  pgvector code path to switch on.
+- One agent per knowledge base (`agents.kb_id` is unique), so a KB is not shared between agents.
+- Roles (`super_admin`, `admin`, `support`) are enforced by the API; the console exposes account settings and
+  per-agent membership, not full admin CRUD.
+- Parsing covers `txt`, `md`, `html`, `pdf`, `docx`, `xlsx`. There is no OCR for scanned PDFs.
 
-1. Preserve the backend data volume mounted at `/app/data`.
-2. Redeploy with `docker compose --profile prod up -d --build`.
-3. If you are migrating to a new server and know the old widget `agentId`, set `DEFAULT_AGENT_ID` before starting the backend.
-4. Back up at least `/app/data/basjoo.db` and `/app/data/.agent_id`.
+## Project layout
 
-Example `.env` snippet for migration:
+| Path | What lives there |
+|---|---|
+| `backend/` | FastAPI app: `api/` routers, `services/` logic, `models.py`, `tests/` |
+| `frontend-nextjs/` | Vite SPA console (`src/views`, `src/components`, `src/index.css` design tokens) |
+| `widget/` | embeddable widget source, esbuild bundles, example host page |
+| `scrapling-service/` | crawler microservice (crawl4ai + `curl_cffi`/readability fallback), container `basjoo-crawler` |
+| `nginx/` | reverse proxy used by the `prod` profile |
+| `tests/e2e/` | Playwright specs (smoke, prod-like, widget cross-origin) |
+| `resource/screenshots/` | the images used by these READMEs |
 
-```bash
-SECRET_KEY=
-DEFAULT_AGENT_ID=agt_123456789abc
-```
+`AGENTS.md` documents the architecture contracts in depth (KB scoping, the SSE watchdog, the design tokens);
+read it before changing code in those areas.
 
-If the old data volume is lost and the old `agentId` is unknown, old widget embeds cannot be recovered automatically because the embed code references the previous agent ID directly.
+## License
 
-## API surface at a glance
+[MIT](LICENSE).
 
-Examples of backend endpoints present in the codebase:
+## Acknowledgements
 
-- `/health`
-- `/api/admin/login`
-- `/api/admin/register`
-- `/api/v1/chat`
-- `/api/v1/chat/stream`
-- `/api/v1/agent:default`
-- `/api/v1/urls:create`
-- `/api/v1/urls:list`
-- `/api/v1/urls:refetch`
-- `/api/v1/index:rebuild`
-- `/api/v1/index:status`
-
-## Acknowledgments
-
-Basjoo is built on top of these amazing open-source projects:
-
-- **[Qdrant](https://qdrant.tech/)** — High-performance vector similarity search engine. Powers Basjoo's self-developed multi-tenant knowledge base.
-- **[Scrapling](https://github.com/D4Vinci/Scrapling)** — Stealthy web scraping with TLS fingerprint impersonation (curl_cffi). Powers Basjoo's URL content extraction microservice.
-- **[FastAPI](https://github.com/tiangolo/fastapi)** — The web framework powering Basjoo's backend APIs.
-- **[Vite](https://vite.dev/)** — The build tool powering Basjoo's admin dashboard.
+- **[Qdrant](https://qdrant.tech/)** — vector search behind the per-KB collections.
+- **[crawl4ai](https://github.com/unclecode/crawl4ai)** — headless rendering in the fetcher service.
+- **[Scrapling](https://github.com/D4Vinci/Scrapling)** — the `curl_cffi` / readability fallback extractor
+  still shipped in `scrapling-service/`.
+- **[Text Embeddings Inference](https://github.com/huggingface/text-embeddings-inference)** — the bundled CPU
+  embedding server.
+- **[FastAPI](https://fastapi.tiangolo.com/)** and **[Vite](https://vite.dev/)** — backend and console
+  toolchains.
 
 ## Contributors
 
@@ -490,10 +332,6 @@ Basjoo is built on top of these amazing open-source projects:
   <img src="https://contrib.rocks/image?repo=haoyiyin/basjoo" />
 </a>
 
-## Star History
+## Star history
 
 [![Star History Chart](https://api.star-history.com/svg?repos=haoyiyin/basjoo&type=Date)](https://star-history.com/#haoyiyin/basjoo&Date)
-
-## Current status
-
-This README reflects the repository as it exists now. If you change deployment flows, provider support, or package scripts, update this file alongside the code.
