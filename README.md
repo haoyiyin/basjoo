@@ -15,6 +15,20 @@ English | [简体中文](README.zh-CN.md)
 Basjoo is a self-hosted AI customer-support platform: it turns a website plus a set of documents into a
 support agent you can embed anywhere, and gives you an admin console to run it.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+
+One command on a fresh **Ubuntu / Debian** host: installs Docker if missing, clones the repo, starts the
+`prod` profile, waits for the health checks and prints the console URL. The first account you register
+becomes the workspace super administrator. Already-cloned checkout? `sudo sh install-deploy.sh` in it.
+
+Other distributions work too — **if Docker Engine with the Compose plugin, `git` and `python3` are already
+installed**, the script skips package setup and deploys; otherwise it stops and tells you what to install.
+Prefer to drive Compose yourself? See [Docker Compose by hand](#docker-compose-by-hand).
+
 - **FastAPI backend** (`backend/`) — agents, knowledge bases, RAG retrieval, SSE chat, auth, quota, schedulers
 - **Vite SPA admin console** (`frontend-nextjs/` — the directory name is left over from the former Next.js app)
 - **Embeddable chat widget** (`widget/`) — one `<script>` tag, talks to the backend over HTTP + SSE
@@ -88,17 +102,6 @@ the embed snippet to paste into your site.
 ![Widget](resource/screenshots/widget/en-US/widget-window.png)
 
 ## Quick start
-
-### One-command install (Ubuntu / Debian)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
-```
-
-The script installs Docker if it is missing, clones the repo, starts the **prod** profile, waits for the
-health checks and prints the console URL. From a local checkout, run `sudo sh install-deploy.sh` instead.
-
-The first account you register becomes the workspace super administrator.
 
 ### Docker Compose by hand
 

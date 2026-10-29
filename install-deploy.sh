@@ -55,10 +55,17 @@ BASJOO_DIR=${BASJOO_DIR:-$DEFAULT_BASJOO_DIR}
 
 APT_CMD=
 APT_UPDATED=0
-DOCKER_BIN=docker
 
-if [ -n "$SUDO" ]; then
+# Prefer the plain `docker` binary when this user can already reach the daemon
+# (docker group, rootless, or root). Falling back to sudo unconditionally breaks
+# hosts where the Compose plugin is only installed for the invoking user
+# (~/.docker/cli-plugins), because sudo then sees a docker without compose.
+if docker info >/dev/null 2>&1; then
+	DOCKER_BIN=docker
+elif [ -n "$SUDO" ]; then
 	DOCKER_BIN='sudo docker'
+else
+	DOCKER_BIN=docker
 fi
 
 detect_platform() {

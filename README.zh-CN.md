@@ -14,6 +14,19 @@
 
 Basjoo 是一个可自托管的开源 AI 客服平台：把网站和一批文档变成一个可以嵌到任何页面的客服智能体，并配一套管理后台来运营它。
 
+## 安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+
+全新的 **Ubuntu / Debian** 机器上一条命令搞定：缺 Docker 就装、拉代码、起 `prod` profile、等健康检查
+通过、打印后台地址。注册的第一个账号就是工作区超级管理员。已经 clone 过？在仓库里跑
+`sudo sh install-deploy.sh`。
+
+**其他发行版也能用**——只要机器上已经有 Docker Engine（带 Compose 插件）、`git`、`python3`，脚本就跳过
+装包直接部署；缺东西时会停下并明确告诉你装什么。想自己用 Compose 起？看下面的「手动 Docker Compose」。
+
 - **FastAPI 后端**（`backend/`）——智能体、知识库、RAG 检索、SSE 流式聊天、认证、配额、定时任务
 - **Vite 单页管理后台**（`frontend-nextjs/`，目录名是上一代 Next.js 版本的遗留）
 - **可嵌入聊天组件**（`widget/`）——一个 `<script>` 标签，通过 HTTP + SSE 与后端通信
@@ -70,17 +83,6 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 ![组件](resource/screenshots/widget/zh-CN/widget-window.png)
 
 ## 快速开始
-
-### 一键安装（Ubuntu / Debian）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
-```
-
-脚本会自动装 Docker（缺失时）、拉仓库、启动 **prod** profile、等待健康检查通过，并打印后台地址。已经
-检出仓库的话，直接 `sudo sh install-deploy.sh` 即可。
-
-第一个注册的账号成为该工作区的超级管理员。
 
 ### 手动 Docker Compose
 
