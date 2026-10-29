@@ -105,8 +105,12 @@ test.describe("Playground Streaming Chat", () => {
 				.filter({ hasText: uniqueMessage }),
 		).toBeVisible({ timeout: 15_000 });
 
-		// Click clear button and accept the confirmation dialog
-		const clearButton = page.getByRole("button", { name: /^清空$|^clear$/i });
+		// Click clear button and accept the confirmation dialog. The label 清空 is
+		// shared with the input's inline clear icon and the settings pane's own
+		// button, so scope it to the chat pane.
+		const clearButton = page
+			.getByTestId("playground-pane-chat")
+			.getByRole("button", { name: /^清空$|^clear$/i });
 		await expect(clearButton).toBeVisible({ timeout: 5_000 });
 		page.once("dialog", async (dialog) => dialog.accept());
 		await clearButton.click();
@@ -224,6 +228,9 @@ test.describe("Playground KB Context Retrieval", () => {
 	});
 
 	test("chat endpoint returns success when agent has KB configured", async ({ request }) => {
+		// A live provider can take ~60 s for a first token; the stream endpoint
+		// keeps the connection alive with keepalives instead of one blocking call.
+		test.setTimeout(120_000);
 		// API-level test: verify chat endpoint accepts requests after KB setup
 		const token = await loginByApi(request);
 		const context = await resolveAgentContext(request);
@@ -233,7 +240,7 @@ test.describe("Playground KB Context Retrieval", () => {
 
 		// Chat request should succeed
 		const chatRes = await request.post(
-			`${API_BASE}/api/v1/chat`,
+			`${API_BASE}/api/v1/chat/stream`,
 			{
 				headers: { Authorization: `Bearer ${token}` },
 				data: {
@@ -243,8 +250,11 @@ test.describe("Playground KB Context Retrieval", () => {
 			},
 		);
 		expect(chatRes.status()).toBe(200);
-		const chatData = await chatRes.json() as { reply?: string; session_id?: string };
-		expect(chatData.reply).toBeTruthy();
-		expect(chatData.session_id).toBeTruthy();
+		const sseBody = await chatRes.text();
+		expect(sseBody).toContain("event: done");
+		const doneLine = sseBody
+			.split("\n")
+			.find((line) => line.startsWith("data:") && line.includes("session_id"));
+		expect(doneLine, sseBody.slice(-400)).toBeTruthy();
 	});
 });

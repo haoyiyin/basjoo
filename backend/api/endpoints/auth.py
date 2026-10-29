@@ -611,6 +611,7 @@ async def get_me(current_admin: AdminUser = Depends(get_current_admin)):
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_own_password(
     req: ChangePasswordRequest,
+    request: Request,
     current_admin: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -619,16 +620,27 @@ async def change_own_password(
     Independent of the admin-management `PATCH /users/{admin_id}` flow, which keeps
     its own rules (super-admin only, optional password).
     """
+    # The admin SPA always sends a browser Accept-Language, so a real UI gets a
+    # translated message. A request that declares no locale at all (plain API
+    # client) keeps the historical English text, which is also what the en_US
+    # msgids are.
+    declared_locale = get_locale_from_request(request) if (
+        request.query_params.get("locale") or request.headers.get("accept-language")
+    ) else None
+
+    def _detail(msgid: str) -> str:
+        return _(msgid, locale=declared_locale) if declared_locale else msgid
+
     if not AuthService.verify_password(req.current_password, current_admin.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect",
+            detail=_detail("Current password is incorrect"),
         )
 
     if len(req.new_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password too short",
+            detail=_detail("Password too short"),
         )
 
     current_admin.hashed_password = AuthService.hash_password(req.new_password)

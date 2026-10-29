@@ -29,6 +29,9 @@ msgstr "Incorrect password"
 msgid "Email already registered"
 msgstr "This email is already registered"
 
+msgid "Current password is incorrect"
+msgstr "Current password is incorrect"
+
 msgid "Password too short"
 msgstr "Password must be at least 8 characters long"
 

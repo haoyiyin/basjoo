@@ -810,7 +810,10 @@ async def clear_kb_urls(
     return {
         "success": True,
         "message": "All URLs and their knowledge base data cleared successfully",
-        "deleted_count": counters["docs"],
+        # "items cleared on this surface" = URL rows, matching `files:clear_all`.
+        # `counters["docs"]` is 0 for a URL that never got indexed, which made
+        # the UI report "已成功清空 0 条" while the list visibly emptied.
+        "deleted_count": deleted_url_count,
         "deleted_url_count": deleted_url_count,
         "deleted_doc_count": counters["docs"],
         "deleted_chunk_count": counters["chunks"],
@@ -888,7 +891,10 @@ async def upload_kb_files(
     source_agent_id: Optional[str] = None,
 ) -> FileUploadResponse:
     """Store uploads and queue KB document processing (parse→chunk→embed→Qdrant)."""
-    from services.kb_document_processor import KbDocumentProcessor
+    from services.kb_document_processor import (
+        KbDocumentProcessor,
+        sanitise_upload_filename,
+    )
 
     if len(files) > MAX_FILES_PER_UPLOAD:
         raise HTTPException(
@@ -906,7 +912,14 @@ async def upload_kb_files(
     items: list[FileItem] = []
 
     for upload_file in files[:MAX_FILES_PER_UPLOAD]:
-        filename = upload_file.filename or "unnamed"
+        raw_name = upload_file.filename or "unnamed"
+        # Sanitise BEFORE the row exists so the DB name, the list API, the
+        # download name and the on-disk file all agree.
+        filename = sanitise_upload_filename(raw_name)
+        if not filename:
+            failed += 1
+            errors.append(f"{raw_name!r}: unusable filename")
+            continue
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
         if ext not in ALLOWED_EXTENSIONS:
@@ -1160,6 +1173,10 @@ def kb_task_status(kb_id: str) -> tuple[str, Optional[str]]:
 
     job_id = None
     for task_id, task_info in task_lock.get_active_tasks(kb_id).items():
+        # `acquire_task` owns the shape; an unexpected one degrades to "no job id"
+        # instead of 500ing the endpoint the KB page polls while indexing runs.
+        if not isinstance(task_info, dict):
+            continue
         if task_info.get("type") in [
             TaskType.INDEX_REBUILD.value,
             TaskType.URL_CRAWL.value,

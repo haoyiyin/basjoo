@@ -470,6 +470,25 @@ describe("mobile CSS contract (src/index.css)", () => {
 		);
 	});
 
+	it("drops the viewport-height cap on the shell inside the 1024px block", () => {
+		// QA sweep C1: the base rule pins `max-height: calc(100vh - 2 * space-6)`
+		// (and the `100dvh` twin repeats it), while the narrow block sets
+		// `overflow-y: clip`. A clip box that is capped at the viewport height
+		// hides the settings form's last control with no scrollbar to reach it,
+		// so the narrow block has to release the cap.
+		const narrow = rulesFor(".playground-shell").filter((rule) =>
+			/overflow-y:\s*clip/.test(rule.declarations),
+		);
+		expect(narrow.length).toBeGreaterThan(0);
+		expect(
+			narrow.some((rule) => /max-height:\s*none/.test(rule.declarations)),
+			'.playground-shell inside @media (max-width: 1024px) must declare max-height: none',
+		).toBe(true);
+
+		// The desktop layout stays viewport-pinned: the base cap is untouched.
+		expect(CSS).toMatch(/\.playground-shell\s*\{[^}]*max-height:\s*calc\(100vh/);
+	});
+
 	it("keeps the stacked rules out of the desktop media block", () => {
 		const desktopAt = CSS.indexOf("/* Desktop (min-width: 1025px) */");
 		expect(desktopAt).toBeGreaterThan(0);

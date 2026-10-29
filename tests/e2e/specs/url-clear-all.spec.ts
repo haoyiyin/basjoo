@@ -31,13 +31,19 @@ test.describe("URL Bug Fixes", () => {
 		// 3. Login via UI
 		await adminLogin(page);
 
-		// 4. Navigate to agent URLs page
+		// 4. Navigate to agent URLs page — a legacy bookmark that redirects to the
+		//    bound KB's source-management page (`KnowledgeBaseSetup`).
 		const urlsRoute = agentRoute(context.agentId, "urls");
 		await page.goto(urlsRoute);
 		await page.waitForLoadState("domcontentloaded", { timeout: 15_000 });
 
-		// 5. Assert URL is correct
-		await expect(page).toHaveURL(new RegExp(`/agents/${context.agentId}/urls`));
+		// 5. Assert the redirect landed on the KB detail page with its URL panel
+		await expect(page).toHaveURL(/\/knowledge-bases\/[0-9a-f-]{36}/, {
+			timeout: 15_000,
+		});
+		await expect(page.getByTestId("kb-url-panel")).toBeVisible({
+			timeout: 10_000,
+		});
 
 		// 6. Find and fill the URL input (first input on the page)
 		const urlInput = page.locator('input[type="text"]').first();

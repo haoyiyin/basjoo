@@ -844,5 +844,10 @@
     "bindExisting": "Bind existing",
     "createKnowledgeBase": "Create new knowledge base",
     "agentInfo": "Agent details"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "body": "The page you are looking for does not exist or has been moved.",
+    "back": "Back to home"
   }
 }

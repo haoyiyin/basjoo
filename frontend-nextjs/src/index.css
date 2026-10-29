@@ -3408,6 +3408,12 @@ tbody tr:hover td {
     overflow-x: hidden;
     overflow-y: clip;
     height: auto !important;
+    /* The base rule pins `max-height` to the viewport (and the `100dvh`
+     * @supports twin repeats it). Inside a clip box that cap has no scroll
+     * container to reach the hidden part, so the settings pane's last control
+     * was unreachable below 1025px. Release the cap: the document becomes the
+     * single scroller. */
+    max-height: none !important;
     min-height: 0;
   }
 

@@ -844,5 +844,10 @@
     "bindExisting": "绑定现有",
     "createKnowledgeBase": "创建新知识库",
     "agentInfo": "智能体信息"
+  },
+  "notFound": {
+    "title": "页面不存在",
+    "body": "您访问的页面不存在或已被移动。",
+    "back": "返回首页"
   }
 }

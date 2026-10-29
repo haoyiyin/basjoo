@@ -29,6 +29,9 @@ msgstr "密码错误"
 msgid "Email already registered"
 msgstr "邮箱已被注册"
 
+msgid "Current password is incorrect"
+msgstr "当前密码不正确"
+
 msgid "Password too short"
 msgstr "密码长度至少为8个字符"
 

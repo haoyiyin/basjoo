@@ -29,6 +29,40 @@ UPLOAD_ROOT = Path(os.environ.get("KB_UPLOAD_ROOT", "/app/data/kb_uploads"))
 PROCESSING_ERROR_MESSAGE_MAX_LENGTH = 500
 PROCESSING_ERROR_MESSAGE_FALLBACK = "DOCUMENT_PROCESSING_FAILED"
 
+MAX_UPLOAD_FILENAME_LENGTH = 200
+WINDOWS_RESERVED_BASENAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+def sanitise_upload_filename(name: str) -> str:
+    """Return the one filename that may reach the DB row and the filesystem.
+
+    Strips control characters (NUL included), neutralises path separators,
+    prefixes Windows device basenames (``CON``, ``COM1``, ...) with ``_``,
+    collapses whitespace, keeps the extension and caps the whole name at
+    ``MAX_UPLOAD_FILENAME_LENGTH``. Returns ``""`` when nothing usable is left,
+    which the upload endpoint turns into a per-file ``errors[]`` entry.
+    """
+    cleaned = "".join(
+        "_" if ch in "/\\" else ch for ch in str(name or "") if ch.isprintable()
+    )
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return ""
+
+    if "." in cleaned:
+        stem, _, suffix = cleaned.rpartition(".")
+        ext = f".{suffix}" if suffix else ""
+    else:
+        stem, ext = cleaned, ""
+
+    if stem.strip(" .").upper() in WINDOWS_RESERVED_BASENAMES:
+        stem = f"_{stem}"
+
+    return f"{stem[: max(MAX_UPLOAD_FILENAME_LENGTH - len(ext), 0)]}{ext}"
+
 def _format_processing_error_message(exc: Exception) -> str:
     """Return a bounded, non-localized technical cause for persistence."""
     raw_message = str(exc).strip() or type(exc).__name__
@@ -100,7 +134,9 @@ class KbDocumentProcessor:
         doc_id = str(getattr(doc, "id", ""))
         filename = str(getattr(doc, "filename", ""))
         d = self._ensure_upload_dir(workspace_id, kb_id, doc_id)
-        safe_name = "".join(c for c in filename if c.isalnum() or c in "._-")[:200]
+        # One implementation only: the endpoint already sanitised the row, so this
+        # is a defensive re-run for rows created another way.
+        safe_name = sanitise_upload_filename(filename) or "unnamed"
         path = d / safe_name
         with open(path, "wb") as f:
             f.write(content)
