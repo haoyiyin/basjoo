@@ -14,31 +14,42 @@ has_swap() {
   [ -r /proc/swaps ] && [ "$(wc -l < /proc/swaps)" -gt 1 ]
 }
 
-if ! has_swap; then
-  printf '%s\n' '==> No swap detected. Creating 2GB swap file for Next.js build...'
-  if [ -f /swapfile ]; then
-    printf '%s\n' '==> Existing /swapfile found but not active, re-enabling...'
-    if ! ${SUDO} swapon /swapfile 2>/dev/null; then
-      printf '%s\n' '==> Re-enabling failed, recreating /swapfile...'
-      ${SUDO} rm -f /swapfile
+# Swap is an optimisation for the Next.js build, never a requirement: on hosts
+# where swapon is not permitted (containers, restricted VMs) the deploy must still
+# proceed.
+ensure_swap() {
+  if ! has_swap; then
+    printf '%s\n' '==> No swap detected. Creating 2GB swap file for the frontend build...' || true
+    if [ -f /swapfile ]; then
+      printf '%s\n' '==> Existing /swapfile found but not active, re-enabling...' || true
+      if ! ${SUDO} swapon /swapfile 2>/dev/null; then
+        printf '%s\n' '==> Re-enabling failed, recreating /swapfile...' || true
+        ${SUDO} rm -f /swapfile || true
+        ${SUDO} touch /swapfile 2>/dev/null || true
+        ${SUDO} chattr +C /swapfile 2>/dev/null || true
+        ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048 || true
+        ${SUDO} chmod 600 /swapfile || true
+        ${SUDO} mkswap /swapfile || true
+        ${SUDO} swapon /swapfile || true
+      fi
+    else
+      # Disable CoW on Btrfs before allocation (no-op on other filesystems)
       ${SUDO} touch /swapfile 2>/dev/null || true
       ${SUDO} chattr +C /swapfile 2>/dev/null || true
-      ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048
-      ${SUDO} chmod 600 /swapfile
-      ${SUDO} mkswap /swapfile
-      ${SUDO} swapon /swapfile
+      ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048 || true
+      ${SUDO} chmod 600 /swapfile || true
+      ${SUDO} mkswap /swapfile || true
+      ${SUDO} swapon /swapfile || true
     fi
-  else
-    # Disable CoW on Btrfs before allocation (no-op on other filesystems)
-    ${SUDO} touch /swapfile 2>/dev/null || true
-    ${SUDO} chattr +C /swapfile 2>/dev/null || true
-    ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048
-    ${SUDO} chmod 600 /swapfile
-    ${SUDO} mkswap /swapfile
-    ${SUDO} swapon /swapfile
+    if has_swap; then
+      printf '%s\n' '==> Swap enabled.'
+    else
+      printf '%s\n' '==> Swap unavailable (not permitted here); continuing without it.'
+    fi
   fi
-  printf '%s\n' '==> Swap enabled. Next.js build should now have enough memory.'
-fi
+}
+
+ensure_swap
 
 printf '%s\n' '==> Preparing .env for zero-config deployment'
 BASJOO_PROJECT_ROOT="$SCRIPT_DIR" python3 "$SCRIPT_DIR/backend/env_bootstrap.py"
