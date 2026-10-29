@@ -13,6 +13,8 @@ RUN npm ci --prefer-offline --no-audit --legacy-peer-deps
 COPY tsconfig.json vite.config.ts index.html ./
 COPY src ./src
 COPY public ./public
+# The theme-copy generator runs from `prebuild`, so the image must carry it too.
+COPY scripts ./scripts
 
 RUN npm run build
 

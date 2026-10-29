@@ -1,7 +1,17 @@
 /**
  * Basjoo AI Chat Widget
  * 可嵌入的智能聊天组件
+ *
+ * Colours, radii, spacing, shadows and type come from `./theme`, which is the
+ * widget's mirror of `frontend-nextjs/src/index.css` (the console's single
+ * source of truth). `theme.test.ts` fails if the mirror drifts.
+ *
+ * Never add a colour / radius / shadow / font literal to this file: paint with
+ * `theme.*` (or the operator's `widget_color`), so the widget cannot look like
+ * a different product from the console. See issue #48.
  */
+
+import { DEFAULT_ACCENT, resolveTheme } from './theme';
 
 interface WidgetConfig {
   agentId: string;
@@ -352,7 +362,9 @@ class BasjooWidget {
       if (!this.config.agentId && data.default_agent_id) {
         this.config.agentId = data.default_agent_id
       }
-      this.config.themeColor = this.config.themeColor || data.widget_color || '#3B82F6'
+      // Fallback is the console accent, from the one place it is defined
+      // (spec contract C1) — never a second hand-picked brand colour.
+      this.config.themeColor = this.config.themeColor || data.widget_color || DEFAULT_ACCENT
       if (!this.hasTitleOverride) {
         this.config.title = data.widget_title || 'AI助手'
       }
@@ -515,31 +527,24 @@ class BasjooWidget {
   private createStyles() {
     const style = document.createElement('style');
     style.id = 'basjoo-widget-styles';
-    const isDark = this.effectiveTheme === 'dark';
-    const bgColor = isDark ? '#1a1a2e' : 'white';
-    const textColor = isDark ? '#e2e8f0' : '#1f2937';
-    const mutedColor = isDark ? '#94a3b8' : '#6b7280';
-    const borderColor = isDark ? 'rgba(148, 163, 184, 0.2)' : '#e5e7eb';
-    const inputBg = isDark ? '#0f0f1a' : 'white';
-    const messageBg = isDark ? '#2d2d44' : '#f3f4f6';
-    const errorBg = isDark ? 'rgba(239, 68, 68, 0.2)' : '#fef2f2';
+    const theme = resolveTheme(this.effectiveTheme === 'dark');
 
     style.textContent = `
       #basjoo-widget-container, #basjoo-widget-container * {
         box-sizing: border-box;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-family: ${theme.fontText};
       }
 
       #basjoo-widget-button {
         position: fixed;
-        bottom: 24px;
-        ${this.config.position === 'left' ? 'left' : 'right'}: 24px;
+        bottom: ${theme.space6};
+        ${this.config.position === 'left' ? 'left' : 'right'}: ${theme.space6};
         width: 60px;
         height: 60px;
-        border-radius: 50%;
+        border-radius: ${theme.radiusFull};
         background-color: ${this.config.themeColor};
         cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        box-shadow: ${theme.shadow2};
         display: flex;
         align-items: center;
         justify-content: center;
@@ -549,13 +554,13 @@ class BasjooWidget {
 
       #basjoo-widget-button:hover {
         transform: scale(1.05);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+        box-shadow: ${theme.shadow3};
       }
 
       #basjoo-widget-button svg {
         width: 30px;
         height: 30px;
-        fill: white;
+        fill: ${theme.accentContrast};
       }
 
       .basjoo-unread-badge {
@@ -565,25 +570,26 @@ class BasjooWidget {
         min-width: 20px;
         height: 20px;
         padding: 0 6px;
-        border-radius: 10px;
-        background: #ef4444;
-        color: white;
+        border-radius: ${theme.radiusMd};
+        background: ${theme.error};
+        color: ${theme.textInverse};
         font-size: 11px;
         font-weight: 600;
         display: flex;
         align-items: center;
         justify-content: center;
-        border: 2px solid white;
+        border: 2px solid ${theme.surface};
       }
 
       .basjoo-greeting-bubble {
-        background: white;
-        color: ${textColor};
+        background: ${theme.surfaceRaised};
+        color: ${theme.textPrimary};
         padding: 10px 14px;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        border-radius: ${theme.radiusMd};
+        box-shadow: ${theme.shadow2};
+        font-family: ${theme.fontDisplay};
         font-size: 13px;
-        line-height: 1.4;
+        line-height: ${theme.leadingSnug};
         animation: basjoo-bubble-fadein 0.3s ease-out;
         max-width: 200px;
       }
@@ -595,10 +601,10 @@ class BasjooWidget {
         ${this.config.position === 'left' ? 'left' : 'right'}: 30px;
         width: 12px;
         height: 12px;
-        background: white;
+        background: ${theme.surfaceRaised};
         transform: rotate(45deg);
-        border-bottom: 1px solid ${borderColor};
-        border-right: 1px solid ${borderColor};
+        border-bottom: 1px solid ${theme.border};
+        border-right: 1px solid ${theme.border};
       }
 
       @keyframes basjoo-bubble-fadein {
@@ -615,13 +621,13 @@ class BasjooWidget {
       #basjoo-chat-window {
         position: fixed;
         bottom: 96px;
-        ${this.config.position === 'left' ? 'left' : 'right'}: 24px;
+        ${this.config.position === 'left' ? 'left' : 'right'}: ${theme.space6};
         width: 380px;
         height: 600px;
         max-height: calc(100vh - 120px);
-        background: ${bgColor};
-        border-radius: 20px;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        background: ${theme.surface};
+        border-radius: ${theme.radiusLg};
+        box-shadow: ${theme.shadow3};
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -641,18 +647,30 @@ class BasjooWidget {
 
       .basjoo-header {
         background: linear-gradient(135deg, ${this.config.themeColor} 0%, ${this.adjustColor(this.config.themeColor, -20)} 100%);
-        color: white;
-        padding: 20px 24px;
+        color: ${theme.accentContrast};
+        padding: ${theme.space5} ${theme.space6};
         display: flex;
         align-items: center;
         justify-content: space-between;
         flex-shrink: 0;
       }
 
-      .basjoo-header-title {
+      /* Scoped to the container on purpose: the blanket
+         #basjoo-widget-container * rule above is (1,0,0) and would otherwise
+         out-rank a bare .basjoo-header-title (0,1,0), silently dropping the
+         display face. The child rule repeats only the type, because the star
+         in the blanket selector otherwise wins inside the title's own span. */
+      #basjoo-widget-container .basjoo-header-title {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: ${theme.space3};
+        font-family: ${theme.fontDisplay};
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      #basjoo-widget-container .basjoo-header-title span {
+        font-family: ${theme.fontDisplay};
         font-size: 18px;
         font-weight: 600;
       }
@@ -661,9 +679,9 @@ class BasjooWidget {
         width: 32px;
         height: 32px;
         object-fit: contain;
-        border-radius: 8px;
-        background: rgba(255,255,255,0.2);
-        padding: 4px;
+        border-radius: ${theme.radiusSm};
+        background: ${this.hexToRgba(theme.accentContrast, 0.18)};
+        padding: ${theme.space1};
         flex-shrink: 0;
       }
 
@@ -671,28 +689,28 @@ class BasjooWidget {
         width: 32px;
         height: 32px;
         border: none;
-        background: rgba(255,255,255,0.15);
-        border-radius: 8px;
+        background: ${this.hexToRgba(theme.accentContrast, 0.15)};
+        border-radius: ${theme.radiusSm};
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
         transition: background 0.2s;
-        color: white;
+        color: ${theme.accentContrast};
       }
 
       .basjoo-close:hover {
-        background: rgba(255,255,255,0.25);
+        background: ${this.hexToRgba(theme.accentContrast, 0.28)};
       }
 
       .basjoo-messages {
         flex: 1;
         overflow-y: auto;
-        padding: 20px;
+        padding: ${theme.space5};
         display: flex;
         flex-direction: column;
-        gap: 16px;
-        background: ${inputBg};
+        gap: ${theme.space4};
+        background: ${theme.surfaceSunken};
       }
 
       #basjoo-widget-container .basjoo-message {
@@ -721,10 +739,10 @@ class BasjooWidget {
         width: fit-content;
         max-width: 100%;
         min-width: 0;
-        padding: 12px 16px;
-        border-radius: 16px;
+        padding: ${theme.space3} ${theme.space4};
+        border-radius: ${theme.radiusLg};
         font-size: 14px;
-        line-height: 1.6;
+        line-height: ${theme.leadingNormal};
         white-space: pre-wrap;
         word-break: break-word;
         overflow-wrap: anywhere;
@@ -763,16 +781,16 @@ class BasjooWidget {
       #basjoo-widget-container .basjoo-message-content code {
         font-family: SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
         font-size: 12px;
-        background: rgba(15, 23, 42, 0.08);
-        padding: 1px 4px;
-        border-radius: 4px;
+        background: ${theme.surfaceSunken};
+        padding: 1px ${theme.space1};
+        border-radius: ${theme.radiusSm};
       }
 
       #basjoo-widget-container .basjoo-message-content pre {
-        background: #0f172a;
-        color: #e2e8f0;
-        padding: 10px 12px;
-        border-radius: 10px;
+        background: ${theme.surfaceSunken};
+        color: ${theme.textPrimary};
+        padding: 10px ${theme.space3};
+        border-radius: ${theme.radiusMd};
         overflow-x: auto;
       }
 
@@ -788,36 +806,36 @@ class BasjooWidget {
       }
 
       #basjoo-widget-container .basjoo-message-content blockquote {
-        padding-left: 12px;
-        border-left: 3px solid rgba(148, 163, 184, 0.4);
-        color: ${mutedColor};
+        padding-left: ${theme.space3};
+        border-left: 3px solid ${theme.border};
+        color: ${theme.textMuted};
       }
 
       #basjoo-widget-container .basjoo-message-user .basjoo-message-content {
         background: ${this.config.themeColor};
-        color: white;
-        border-bottom-right-radius: 4px;
+        color: ${theme.accentContrast};
+        border-bottom-right-radius: ${theme.radiusSm};
       }
 
       #basjoo-widget-container .basjoo-message-user .basjoo-message-content a {
-        color: white;
+        color: ${theme.accentContrast};
       }
 
       #basjoo-widget-container .basjoo-message-user .basjoo-message-content code {
-        background: rgba(255, 255, 255, 0.18);
-        color: white;
+        background: ${this.hexToRgba(theme.accentContrast, 0.2)};
+        color: ${theme.accentContrast};
       }
 
       #basjoo-widget-container .basjoo-message-assistant .basjoo-message-content {
-        background: ${messageBg};
-        color: ${textColor};
-        border-bottom-left-radius: 4px;
+        background: ${theme.surfaceRaised};
+        color: ${theme.textPrimary};
+        border-bottom-left-radius: ${theme.radiusSm};
       }
 
       #basjoo-widget-container .basjoo-message-error .basjoo-message-content {
-        background: ${errorBg};
-        color: ${isDark ? '#fca5a5' : '#dc2626'};
-        border: 1px solid ${isDark ? 'rgba(239,68,68,0.35)' : '#fecaca'};
+        background: ${theme.errorBg};
+        color: ${theme.error};
+        border: 1px solid ${theme.error};
       }
 
       .basjoo-stream-cursor {
@@ -837,17 +855,17 @@ class BasjooWidget {
 
       .basjoo-loading {
         display: flex;
-        gap: 4px;
-        padding: 12px 16px !important;
+        gap: ${theme.space1};
+        padding: ${theme.space3} ${theme.space4} !important;
         align-self: flex-start;
-        margin-top: 4px !important;
+        margin-top: ${theme.space1} !important;
       }
 
       .basjoo-loading-dot {
         width: 8px;
         height: 8px;
-        border-radius: 50%;
-        background: ${mutedColor};
+        border-radius: ${theme.radiusFull};
+        background: ${theme.textMuted};
         animation: basjoo-bounce 1.4s infinite ease-in-out both;
       }
 
@@ -860,31 +878,31 @@ class BasjooWidget {
       }
 
       .basjoo-input-area {
-        padding: 16px 20px 24px 20px !important;
-        border-top: 1px solid ${borderColor};
+        padding: ${theme.space4} ${theme.space5} ${theme.space6} ${theme.space5} !important;
+        border-top: 1px solid ${theme.border};
         display: flex;
-        gap: 12px;
-        background: ${bgColor};
+        gap: ${theme.space3};
+        background: ${theme.surface};
         flex-shrink: 0;
       }
 
       .basjoo-input {
         flex: 1;
         height: 48px;
-        padding: 0 20px 0 20px !important;
-        border: 1px solid ${borderColor};
-        border-radius: 24px;
+        padding: 0 ${theme.space5} !important;
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radiusLg};
         font-size: 14px;
         outline: none;
         transition: all 0.2s;
-        background: ${inputBg};
-        color: ${textColor};
-        margin-bottom: 8px !important;
-        margin-left: 4px !important;
+        background: ${theme.surfaceRaised};
+        color: ${theme.textPrimary};
+        margin-bottom: ${theme.space2} !important;
+        margin-left: ${theme.space1} !important;
       }
 
       .basjoo-input::placeholder {
-        color: ${mutedColor};
+        color: ${theme.textMuted};
       }
 
       .basjoo-input:focus {
@@ -896,9 +914,9 @@ class BasjooWidget {
         width: 48px;
         height: 48px;
         border: none;
-        border-radius: 50%;
+        border-radius: ${theme.radiusFull};
         background: ${this.config.themeColor};
-        color: white;
+        color: ${theme.accentContrast};
         cursor: pointer;
         display: flex;
         align-items: center;
@@ -924,19 +942,19 @@ class BasjooWidget {
       }
 
       .basjoo-error {
-        padding: 12px 16px;
-        background: ${errorBg};
-        color: ${isDark ? '#fca5a5' : '#dc2626'};
+        padding: ${theme.space3} ${theme.space4};
+        background: ${theme.errorBg};
+        color: ${theme.error};
         font-size: 13px;
         text-align: center;
-        border-top: 1px solid ${isDark ? 'rgba(239,68,68,0.35)' : '#fecaca'};
+        border-top: 1px solid ${theme.error};
       }
 
       #basjoo-widget-container .basjoo-message-time {
         font-size: 11px;
-        color: ${mutedColor};
-        margin-top: 4px;
-        padding: 0 4px;
+        color: ${theme.textMuted};
+        margin-top: ${theme.space1};
+        padding: 0 ${theme.space1};
       }
 
       #basjoo-widget-container .basjoo-message-user .basjoo-message-time {
@@ -947,9 +965,9 @@ class BasjooWidget {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        color: ${mutedColor};
+        color: ${theme.textMuted};
         font-size: 12px;
-        margin-top: 8px;
+        margin-top: ${theme.space2};
       }
 
       .basjoo-thinking-spinner {
@@ -957,7 +975,7 @@ class BasjooWidget {
         height: 12px;
         border: 2px solid ${this.hexToRgba(this.config.themeColor, 0.2)};
         border-top-color: ${this.config.themeColor};
-        border-radius: 50%;
+        border-radius: ${theme.radiusFull};
         animation: basjoo-spin 0.8s linear infinite;
       }
 
@@ -982,50 +1000,81 @@ class BasjooWidget {
           height: calc(100vh - 120px);
           max-height: 640px;
           bottom: 88px;
-          left: 16px !important;
-          right: 16px !important;
+          left: ${theme.space4} !important;
+          right: ${theme.space4} !important;
         }
 
         #basjoo-widget-button {
-          bottom: 16px;
-          ${this.config.position === 'left' ? 'left' : 'right'}: 16px;
+          bottom: ${theme.space4};
+          ${this.config.position === 'left' ? 'left' : 'right'}: ${theme.space4};
         }
       }
     `;
     document.head.appendChild(style);
   }
 
-  private adjustColor(hex: string, amount: number): string {
-    let useHash = false;
-    let color = hex;
-    if (color[0] === '#') {
-      color = color.slice(1);
-      useHash = true;
+  /**
+   * Parse the colour shapes an operator can actually supply into 0-255
+   * channels: three- and six-digit hex, and an hsl triple with percent
+   * saturation and lightness (the console tokens are hsl strings, so the
+   * helpers must accept them). Returns null for anything else so the callers
+   * can fall back instead of emitting an invalid declaration.
+   */
+  private parseColor(value: string): { r: number; g: number; b: number } | null {
+    const raw = (value || '').trim();
+
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw);
+    if (hex) {
+      const digits = hex[1];
+      const bytes = digits.length === 3
+        ? digits.split('').map((digit) => parseInt(digit + digit, 16))
+        : [0, 2, 4].map((index) => parseInt(digits.slice(index, index + 2), 16));
+      return { r: bytes[0], g: bytes[1], b: bytes[2] };
     }
 
-    const num = parseInt(color, 16);
-    let r = (num >> 16) + amount;
-    let g = ((num >> 8) & 255) + amount;
-    let b = (num & 255) + amount;
+    const hsl = /^hsla?\(\s*([\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i.exec(raw);
+    if (hsl) {
+      const hue = ((Number.parseFloat(hsl[1]) % 360) + 360) % 360;
+      const saturation = Number.parseFloat(hsl[2]) / 100;
+      const lightness = Number.parseFloat(hsl[3]) / 100;
+      const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+      const second = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
+      const offset = lightness - chroma / 2;
+      let rgb: [number, number, number];
+      if (hue < 60) rgb = [chroma, second, 0];
+      else if (hue < 120) rgb = [second, chroma, 0];
+      else if (hue < 180) rgb = [0, chroma, second];
+      else if (hue < 240) rgb = [0, second, chroma];
+      else if (hue < 300) rgb = [second, 0, chroma];
+      else rgb = [chroma, 0, second];
+      return {
+        r: Math.round((rgb[0] + offset) * 255),
+        g: Math.round((rgb[1] + offset) * 255),
+        b: Math.round((rgb[2] + offset) * 255),
+      };
+    }
 
-    r = Math.max(0, Math.min(255, r));
-    g = Math.max(0, Math.min(255, g));
-    b = Math.max(0, Math.min(255, b));
-
-    return `${useHash ? '#' : ''}${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+    return null;
   }
 
-  private hexToRgba(hex: string, alpha: number): string {
-    let color = hex.replace('#', '');
-    if (color.length === 3) {
-      const [r, g, b] = color.split('');
-      color = `${r}${r}${g}${g}${b}${b}`;
+  /** Lighten (positive) or darken (negative) every channel by `amount`. */
+  private adjustColor(color: string, amount: number): string {
+    const parsed = this.parseColor(color);
+    if (!parsed) {
+      return color;
     }
 
-    const num = parseInt(color, 16);
-    const r = (num >> 16) & 255;
-    const g = (num >> 8) & 255;
-    const b = num & 255;
+    const clamp = (channel: number) => Math.max(0, Math.min(255, channel + amount));
+    const r = clamp(parsed.r);
+    const g = clamp(parsed.g);
+    const b = clamp(parsed.b);
+
+    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+  }
+
+  private hexToRgba(color: string, alpha: number): string {
+    const parsed = this.parseColor(color) ?? this.parseColor(DEFAULT_ACCENT);
+    const { r, g, b } = parsed ?? { r: 0, g: 0, b: 0 };
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 

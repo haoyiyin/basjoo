@@ -590,6 +590,11 @@
     "visitorWithId": "Visitor: {{id}}",
     "widgetSettings": "Widget Appearance Settings",
     "widgetSettingsDesc": "Configure chat window appearance and embed code",
+    "widgetPreview": {
+      "title": "Live preview",
+      "sampleUserMessage": "What are your opening hours?",
+      "samplePlaceholder": "Type your question..."
+    },
     "appearance": "Appearance",
     "appearanceDesc": "Customize theme and language preferences",
     "theme": "Theme",

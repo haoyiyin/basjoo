@@ -391,7 +391,7 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("allowed_widget_origins", "TEXT"),
         ("persona_type", "VARCHAR(20) DEFAULT 'general'"),
         ("widget_title", "VARCHAR(100) DEFAULT 'AI 客服'"),
-        ("widget_color", "VARCHAR(20) DEFAULT '#06B6D4'"),
+        ("widget_color", "VARCHAR(20) DEFAULT '#F9CA02'"),
         (
             "welcome_message",
             "TEXT DEFAULT '您好！我是Basjoo助手，有什么可以帮您的吗？'",
@@ -533,8 +533,15 @@ def _backfill_agents(cursor: sqlite3.Cursor):
         )
     if "widget_color" in col_names:
         cursor.execute(
-            "UPDATE agents SET widget_color = '#06B6D4' "
+            "UPDATE agents SET widget_color = '#F9CA02' "
             "WHERE widget_color IS NULL OR widget_color = ''"
+        )
+        # Rows still on one of the two retired defaults never chose that colour
+        # — both were shipping defaults, not operator picks — so they move to the
+        # console accent. A colour an operator actually picked is left alone.
+        cursor.execute(
+            "UPDATE agents SET widget_color = '#F9CA02' "
+            "WHERE widget_color IN ('#06B6D4', '#00aaff')"
         )
     if "welcome_message" in col_names:
         cursor.execute(

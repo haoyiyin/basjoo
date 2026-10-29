@@ -21,6 +21,7 @@ from sqlalchemy.sql import func
 
 from database import Base
 from config import DEFAULT_AGENT_MAX_TOKENS, DEFAULT_AGENT_SIMILARITY_THRESHOLD
+from constants import DEFAULT_WIDGET_COLOR
 
 
 def normalize_url(url: str) -> str:
@@ -188,7 +189,8 @@ class Agent(Base):
 
     # Widget 配置
     widget_title = Column(String(100), nullable=True, default="AI 客服")
-    widget_color = Column(String(20), nullable=True, default="#06B6D4")
+    # One default, shared with the SPA and the widget (spec contract C1).
+    widget_color = Column(String(20), nullable=True, default=DEFAULT_WIDGET_COLOR)
     welcome_message = Column(
         Text, nullable=True, default="您好！我是Basjoo助手，有什么可以帮您的吗？"
     )

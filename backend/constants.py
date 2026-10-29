@@ -14,6 +14,15 @@ FILE_UPLOAD_BODY_LIMIT = (
     MAX_FILES_PER_UPLOAD * MAX_FILE_SIZE + MULTIPART_OVERHEAD
 )  # 105 MiB — total body limit for file upload route
 
+# --- Widget ---
+# The console accent — `hsl(48 96% 49%)`, the logo's yellow — declared once for
+# the backend. The single source of truth for the value is
+# `frontend-nextjs/src/index.css` (`--color-accent-primary`); this constant, the
+# `Agent.widget_color` default, the widget's `DEFAULT_ACCENT` and the settings
+# page's `DEFAULT_WIDGET_COLOR` must all agree (spec contract C1,
+# `backend/tests/test_widget_palette.py` asserts it).
+DEFAULT_WIDGET_COLOR = "#F9CA02"
+
 # --- File upload ---
 ALLOWED_EXTENSIONS = frozenset({"txt", "md", "html", "pdf", "docx", "xlsx"})
 

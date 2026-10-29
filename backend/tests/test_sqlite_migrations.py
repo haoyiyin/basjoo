@@ -203,7 +203,10 @@ def test_migration_backfills_defaults():
         assert row["rate_limit_per_minute"] == 20
         assert row["persona_type"] == "general"
         assert row["widget_title"] == "AI 客服"
-        assert row["widget_color"] == "#06B6D4"
+        # Issue #48 (spec contract C1): the default is now the console accent.
+        # The old #06B6D4 was a shipping default, never an operator choice, so
+        # the migration backfill moves it too.
+        assert row["widget_color"] == "#F9CA02"
         assert "Basjoo" in row["welcome_message"] or "您好" in row["welcome_message"]
     finally:
         os.unlink(db_path)

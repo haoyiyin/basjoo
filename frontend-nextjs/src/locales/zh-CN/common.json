@@ -590,6 +590,11 @@
     "visitorWithId": "访客: {{id}}",
     "widgetSettings": "Widget外观设置",
     "widgetSettingsDesc": "配置对话窗口外观和嵌入代码",
+    "widgetPreview": {
+      "title": "实时预览",
+      "sampleUserMessage": "你们的营业时间是什么时候？",
+      "samplePlaceholder": "输入您的问题..."
+    },
     "appearance": "外观设置",
     "appearanceDesc": "自定义主题和语言偏好",
     "theme": "主题",
