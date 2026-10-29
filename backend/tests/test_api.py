@@ -37,6 +37,22 @@ async def test_large_request_rejection_keeps_cors_headers(public_client):
 
 
 @pytest.mark.asyncio
+async def test_kb_upload_route_is_not_capped_at_default_body_limit(public_client):
+    """KB uploads allow 5 × 20 MB + overhead, so 10 MB must not be rejected here."""
+    response = await public_client.post(
+        "/api/v1/knowledge-bases/kb_1/files:upload",
+        headers={
+            "Content-Length": str(11 * 1024 * 1024),
+            "Content-Type": "multipart/form-data",
+        },
+        content=b"{}",
+    )
+
+    # Auth rejects the request, but only after the guard let the body through.
+    assert response.status_code != 413
+
+
+@pytest.mark.asyncio
 async def test_get_default_agent_requires_auth(public_client):
     response = await public_client.get("/api/v1/agent:default")
     assert response.status_code == 401

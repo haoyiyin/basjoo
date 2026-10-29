@@ -434,6 +434,14 @@ async def test_kb_sources_summary_counts_kb_rows(client, bound_kb_id):
                     status="processing",
                     file_size=1024,
                 ),
+                # URL-derived documents are listed by `urls:*`, never by `files:*`,
+                # so they must not inflate the file counters.
+                KbDocument(
+                    kb_id=bound_kb_id,
+                    filename="url_1.txt",
+                    status="ready",
+                    file_size=4096,
+                ),
             ]
         )
         await session.commit()

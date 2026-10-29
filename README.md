@@ -144,7 +144,9 @@ shared across requests, so concurrency adds little). Its image is ≈2.1 GB.
 | OS | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
 | Docker | 20.10+ with the Compose plugin | latest |
 
-The RAM figure already covers the embedding container. Its model
+These figures are measured on our reference host, not enforced anywhere: `install-deploy.sh` only checks
+that the distro is Ubuntu- or Debian-derived, and no compose service declares a memory limit. The RAM figure
+already covers the embedding container. Its model
 (`ibm-granite/granite-embedding-97m-multilingual-r2`, ~400 MB) is downloaded once into the
 `local-embed-cache` volume; the stack stays usable during the download and the example agent is seeded on
 the next login. To use a hosted embedding API instead, create the KB with the `jina` / `siliconflow` /
@@ -167,7 +169,7 @@ browser ──▶ widget / admin SPA
 ### Knowledge bases
 
 `KnowledgeBase → KbDocument → KbChunk`, scoped by workspace. One Qdrant collection per KB (`kb_<12 hex>`,
-cosine distance), filtered by workspace only. Chunking defaults to 512 / 64 with embeddings upserted in
+cosine distance), queried with a `kb_id` payload filter. Chunking defaults to 512 / 64 with embeddings upserted in
 batches of ≤100; retrieval takes `top_k × 2` candidates and post-filters by score. The effective similarity
 threshold is the request argument, else the agent's `similarity_threshold`, else the service default.
 
@@ -189,7 +191,8 @@ silent mock answer. Session ids are enumerable, so the public endpoints require 
 `widget/src/BasjooWidget.tsx` bootstraps from `<script src="…/sdk.js?agent_id=agt_…">` (it also accepts
 `agentId` and `api_base`), auto-detects the API base from its own script URL, fetches
 `/api/v1/config:public` for the title, colour and greeting, keeps the visitor and session in `localStorage`,
-streams from `/api/v1/chat/stream`, and polls `/api/v1/chat/messages` every 3 s while a human has taken over.
+streams from `/api/v1/chat/stream`, and polls `/api/v1/chat/messages` (visitor id + `after_id`, assistant
+role only) every 3 s once the first reply lands — that is what surfaces human-takeover messages.
 
 ```html
 <script src="https://your-basjoo-host/sdk.js?agent_id=agt_xxxxxxxxxxxx" async></script>
@@ -205,6 +208,8 @@ default.
 | `DATABASE_URL` | `sqlite:///./data/basjoo.db` | application data (SQLite only — there is no PostgreSQL path) |
 | `REDIS_URL` | `redis://redis:6379/0` | rate limiting |
 | `QDRANT_URL` | `http://localhost:6333` | vector store |
+| `QDRANT_API_KEY` | unset | key for a Qdrant that requires auth |
+| `SCRAPLING_SERVICE_URL` | `http://scrapling-service:8001` | fetcher service used by URL ingestion |
 | `SECRET_KEY` / `SECRET_KEY_FILE` | generated → `/app/data/.secret_key` | JWT signing |
 | `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | generated → `/app/data/.encryption_key` | encrypts provider keys at rest |
 | `DEFAULT_AGENT_ID` | generated → `/app/data/.agent_id` | pins the default widget agent identity |
@@ -213,8 +218,9 @@ default.
 | `LOCAL_EMBEDDING_BASE_URL` | `http://local-embed:80/v1` | endpoint used by `local` knowledge bases |
 | `LOCAL_EMBEDDING_MODEL` | `ibm-granite/granite-embedding-97m-multilingual-r2` | model served there |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST_SIZE` | `1000` / `200` | global limiter |
-| `REQUIRE_SECRET_KEY` | unset | when `true`, refuse to boot with a generated secret |
+| `REQUIRE_SECRET_KEY` | unset | when `true`, refuse to boot with a generated secret (checked by the container entrypoint, not by the app) |
 | `SERVER_DOMAIN` | unset | nginx canonical host; anything else gets `444` |
+| `CORS_ALLOW_NULL_ORIGIN` | `false` | accept `Origin: null` sandboxed iframes |
 | `LOG_LEVEL` | `INFO` | |
 
 `SSRF_PROTECTION_ENABLED` is opt-in because a fake-ip / split-horizon resolver (sing-box, clash) maps public
@@ -277,8 +283,9 @@ New integrations should use the KB-scoped paths. The full schema is served at `/
   `docker-compose.yml` is the single Compose entrypoint, with `dev` and `prod` profiles and a pinned project
   name so a second checkout does not create a second, empty set of volumes.
 - `nginx` listens on `:8080` inside the container (published as `:80`) and enables `:443` only when readable
-  `cert.pem` / `key.pem` exist under `./ssl`. `client_max_body_size` is 12 MB, so oversized uploads get a JSON
-  error instead of an nginx HTML page.
+  `cert.pem` / `key.pem` exist under `./ssl`. `client_max_body_size` is 12 MB in the generated vhosts (50 MB in
+  the baked fallback config used when neither `SERVER_DOMAIN` nor certs are set), so oversized uploads get a
+  JSON error instead of an nginx HTML page.
 - Persistent volumes: `backend-data` → `/app/data` (SQLite database, secret keys, uploaded KB files),
   `qdrant-data`, `redis-data`, `local-embed-cache`. `docker compose down -v` deletes all four.
 - Existing embeds keep working as long as `backend-data` survives: the agent id is persisted in
@@ -295,6 +302,8 @@ New integrations should use the KB-scoped paths. The full schema is served at `/
 - Roles (`super_admin`, `admin`, `support`) are enforced by the API; the console exposes account settings and
   per-agent membership, not full admin CRUD.
 - Parsing covers `txt`, `md`, `html`, `pdf`, `docx`, `xlsx`. There is no OCR for scanned PDFs.
+- `Agent.last_error_code` / `last_error_message` / `last_error_at` are schema fields with no writer and no
+  UI yet; failures surface as the restricted reply and in the backend log, not as a console alert.
 
 ## Project layout
 
@@ -306,6 +315,7 @@ New integrations should use the KB-scoped paths. The full schema is served at `/
 | `scrapling-service/` | crawler microservice (crawl4ai + `curl_cffi`/readability fallback), container `basjoo-crawler` |
 | `nginx/` | reverse proxy used by the `prod` profile |
 | `tests/e2e/` | Playwright specs (smoke, prod-like, widget cross-origin) |
+| `scripts/` | `sync-widget.sh`, `prod_stability_check.sh` |
 | `resource/screenshots/` | the images used by these READMEs |
 
 `AGENTS.md` documents the architecture contracts in depth (KB scoping, the SSE watchdog, the design tokens);

@@ -80,14 +80,21 @@ detect_platform() {
 		;;
 	esac
 
-	[ "$is_debian_family" -eq 1 ] || fail "This installer currently supports Ubuntu and Debian only."
+	if [ "$is_debian_family" -eq 1 ]; then
+		if have_cmd apt-get; then
+			APT_CMD=apt-get
+		elif have_cmd apt; then
+			APT_CMD=apt
+		fi
+	fi
 
-	if have_cmd apt-get; then
-		APT_CMD=apt-get
-	elif have_cmd apt; then
-		APT_CMD=apt
-	else
-		fail "No apt package manager was found. On Ubuntu/Debian, install apt first or use a standard system image."
+	if [ -z "$APT_CMD" ]; then
+		# Unknown distro: only continue when the machine already has what we need.
+		if have_cmd docker && run_root docker compose version >/dev/null 2>&1; then
+			log "Non-Debian system (${PRETTY_NAME:-${ID:-unknown}}) with Docker already installed — skipping package setup"
+			return 0
+		fi
+		fail "Automatic install supports Ubuntu and Debian. On ${PRETTY_NAME:-${ID:-this system}}, install Docker Engine with the Compose plugin and git + python3 yourself, then re-run this script."
 	fi
 }
 
@@ -102,6 +109,15 @@ apt_install() {
 }
 
 ensure_base_dependencies() {
+	# Non-Debian hosts that already have Docker only need git + python3 present;
+	# there is no package manager to call, so check and fail with a clear message.
+	if [ -z "$APT_CMD" ]; then
+		for cmd in git python3; do
+			have_cmd "$cmd" || fail "$cmd is required but missing. Install it with your distribution's package manager and re-run."
+		done
+		return 0
+	fi
+
 	packages="ca-certificates git python3 curl wget"
 	if ! have_cmd lsblk; then
 		packages="$packages util-linux"
