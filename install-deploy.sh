@@ -157,12 +157,19 @@ ensure_docker() {
 	fi
 
 	if have_cmd systemctl; then
-		run_root systemctl enable --now docker
+		run_root systemctl enable --now docker >/dev/null 2>&1 || true
 	elif have_cmd service; then
-		run_root service docker start
+		run_root service docker start >/dev/null 2>&1 || true
 	fi
 
+	# systemd may be absent (containers, WSL without systemd) — what matters is that
+	# the daemon actually answers, not that a unit was enabled.
 	have_cmd docker || fail "Docker CLI is still unavailable after installation."
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		run_root docker info >/dev/null 2>&1 && break
+		sleep 2
+	done
+	run_root docker info >/dev/null 2>&1 || fail "Docker daemon is not reachable. Start it (e.g. 'sudo systemctl start docker') and re-run."
 	run_root docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is unavailable after installation."
 }
 
@@ -177,6 +184,13 @@ ensure_repo_dir_ready() {
 	fi
 }
 
+# git refuses to operate on a repo owned by another user. Running this script as
+# `sudo sh install-deploy.sh` inside your own checkout makes git run as root on a
+# user-owned tree, so every call goes through this wrapper.
+gitc() {
+	git -c safe.directory="$BASJOO_DIR" -c safe.directory="$SCRIPT_DIR" "$@"
+}
+
 clone_repo() {
 	ensure_repo_dir_ready
 	if [ ! -d "$BASJOO_DIR" ]; then
@@ -186,7 +200,7 @@ clone_repo() {
 		fi
 	fi
 	log "Cloning $BASJOO_REPO_URL into $BASJOO_DIR"
-	git clone --branch "$BASJOO_BRANCH" "$BASJOO_REPO_URL" "$BASJOO_DIR"
+	gitc clone --branch "$BASJOO_BRANCH" "$BASJOO_REPO_URL" "$BASJOO_DIR"
 }
 
 sync_repo() {
@@ -201,18 +215,18 @@ sync_repo() {
 
 	if [ -d "$BASJOO_DIR/.git" ]; then
 		log "Syncing repository to $BASJOO_REPO_URL#$BASJOO_BRANCH"
-		if git -C "$BASJOO_DIR" remote get-url origin >/dev/null 2>&1; then
-			git -C "$BASJOO_DIR" remote set-url origin "$BASJOO_REPO_URL"
+		if gitc -C "$BASJOO_DIR" remote get-url origin >/dev/null 2>&1; then
+			gitc -C "$BASJOO_DIR" remote set-url origin "$BASJOO_REPO_URL"
 		else
-			git -C "$BASJOO_DIR" remote add origin "$BASJOO_REPO_URL"
+			gitc -C "$BASJOO_DIR" remote add origin "$BASJOO_REPO_URL"
 		fi
-		git -C "$BASJOO_DIR" fetch --prune origin "$BASJOO_BRANCH"
-		git -C "$BASJOO_DIR" reset --hard
-		git -C "$BASJOO_DIR" checkout -B "$BASJOO_BRANCH" FETCH_HEAD
+		gitc -C "$BASJOO_DIR" fetch --prune origin "$BASJOO_BRANCH"
+		gitc -C "$BASJOO_DIR" reset --hard
+		gitc -C "$BASJOO_DIR" checkout -B "$BASJOO_BRANCH" FETCH_HEAD
 		if [ "$BASJOO_FORCE_CLEAN" = "1" ] || [ "$BASJOO_FORCE_CLEAN" = "true" ] || [ "$BASJOO_FORCE_CLEAN" = "yes" ]; then
-			git -C "$BASJOO_DIR" clean -fd
+			gitc -C "$BASJOO_DIR" clean -fd
 		fi
-		git -C "$BASJOO_DIR" reset --hard FETCH_HEAD
+		gitc -C "$BASJOO_DIR" reset --hard FETCH_HEAD
 		return 0
 	fi
 
