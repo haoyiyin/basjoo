@@ -321,7 +321,7 @@ http_get() {
 		else
 			curl -fsS --max-time 10 "$url" >/dev/null
 		fi
-		return 0
+		return $?
 	fi
 
 	if [ -n "$host_header" ]; then
