@@ -55,10 +55,17 @@ BASJOO_DIR=${BASJOO_DIR:-$DEFAULT_BASJOO_DIR}
 
 APT_CMD=
 APT_UPDATED=0
-DOCKER_BIN=docker
 
-if [ -n "$SUDO" ]; then
+# Prefer the plain `docker` binary when this user can already reach the daemon
+# (docker group, rootless, or root). Falling back to sudo unconditionally breaks
+# hosts where the Compose plugin is only installed for the invoking user
+# (~/.docker/cli-plugins), because sudo then sees a docker without compose.
+if docker info >/dev/null 2>&1; then
+	DOCKER_BIN=docker
+elif [ -n "$SUDO" ]; then
 	DOCKER_BIN='sudo docker'
+else
+	DOCKER_BIN=docker
 fi
 
 detect_platform() {
@@ -80,14 +87,21 @@ detect_platform() {
 		;;
 	esac
 
-	[ "$is_debian_family" -eq 1 ] || fail "This installer currently supports Ubuntu and Debian only."
+	if [ "$is_debian_family" -eq 1 ]; then
+		if have_cmd apt-get; then
+			APT_CMD=apt-get
+		elif have_cmd apt; then
+			APT_CMD=apt
+		fi
+	fi
 
-	if have_cmd apt-get; then
-		APT_CMD=apt-get
-	elif have_cmd apt; then
-		APT_CMD=apt
-	else
-		fail "No apt package manager was found. On Ubuntu/Debian, install apt first or use a standard system image."
+	if [ -z "$APT_CMD" ]; then
+		# Unknown distro: only continue when the machine already has what we need.
+		if have_cmd docker && compose_ok; then
+			log "Non-Debian system (${PRETTY_NAME:-${ID:-unknown}}) with Docker already installed — skipping package setup"
+			return 0
+		fi
+		fail "Automatic install supports Ubuntu and Debian. On ${PRETTY_NAME:-${ID:-this system}}, install Docker Engine with the Compose plugin and git + python3 yourself, then re-run this script."
 	fi
 }
 
@@ -102,12 +116,35 @@ apt_install() {
 }
 
 ensure_base_dependencies() {
-	packages="ca-certificates git python3 curl wget"
-	if ! have_cmd lsblk; then
-		packages="$packages util-linux"
+	# Non-Debian hosts have no package manager here, so just require the tools.
+	if [ -z "$APT_CMD" ]; then
+		for cmd in git python3; do
+			have_cmd "$cmd" || fail "$cmd is required but missing. Install it with your distribution's package manager and re-run."
+		done
+		return 0
 	fi
-	log "Installing required system packages"
-	apt_install $packages
+
+	# Everything below is only needed if it is actually missing. A host with a
+	# working toolchain must not be blocked by a broken apt mirror — that is a
+	# common state behind corporate proxies and in offline/air-gapped setups.
+	missing=
+	for cmd in git python3 curl; do
+		have_cmd "$cmd" || missing="$missing $cmd"
+	done
+	for pkg in ca-certificates; do
+		[ -e "/etc/ssl/certs/ca-certificates.crt" ] || missing="$missing $pkg"
+	done
+	if ! have_cmd lsblk; then
+		missing="$missing util-linux"
+	fi
+
+	if [ -z "$missing" ]; then
+		log "Required system packages are already present"
+		return 0
+	fi
+
+	log "Installing missing system packages:$missing"
+	apt_install $missing
 }
 
 download_file() {
@@ -127,8 +164,15 @@ download_file() {
 	fail "Neither curl nor wget is available for downloading required files."
 }
 
+# Both probes must test the same binary the deploy step will use (DOCKER_BIN),
+# otherwise a user-scoped Compose plugin looks "missing" under sudo and triggers a
+# pointless reinstall.
+compose_ok() {
+	$DOCKER_BIN compose version >/dev/null 2>&1
+}
+
 ensure_docker() {
-	if have_cmd docker && run_root docker compose version >/dev/null 2>&1; then
+	if have_cmd docker && compose_ok; then
 		log "Docker Engine and Docker Compose are already installed"
 	else
 		log "Installing Docker Engine and Docker Compose"
@@ -141,13 +185,20 @@ ensure_docker() {
 	fi
 
 	if have_cmd systemctl; then
-		run_root systemctl enable --now docker
+		run_root systemctl enable --now docker >/dev/null 2>&1 || true
 	elif have_cmd service; then
-		run_root service docker start
+		run_root service docker start >/dev/null 2>&1 || true
 	fi
 
+	# systemd may be absent (containers, WSL without systemd) — what matters is that
+	# the daemon actually answers, not that a unit was enabled.
 	have_cmd docker || fail "Docker CLI is still unavailable after installation."
-	run_root docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is unavailable after installation."
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		$DOCKER_BIN info >/dev/null 2>&1 && break
+		sleep 2
+	done
+	$DOCKER_BIN info >/dev/null 2>&1 || fail "Docker daemon is not reachable. Start it (e.g. 'sudo systemctl start docker') and re-run."
+	compose_ok || fail "Docker Compose plugin is unavailable after installation."
 }
 
 ensure_repo_dir_ready() {
@@ -161,6 +212,13 @@ ensure_repo_dir_ready() {
 	fi
 }
 
+# git refuses to operate on a repo owned by another user. Running this script as
+# `sudo sh install-deploy.sh` inside your own checkout makes git run as root on a
+# user-owned tree, so every call goes through this wrapper.
+gitc() {
+	git -c safe.directory="$BASJOO_DIR" -c safe.directory="$SCRIPT_DIR" "$@"
+}
+
 clone_repo() {
 	ensure_repo_dir_ready
 	if [ ! -d "$BASJOO_DIR" ]; then
@@ -170,7 +228,7 @@ clone_repo() {
 		fi
 	fi
 	log "Cloning $BASJOO_REPO_URL into $BASJOO_DIR"
-	git clone --branch "$BASJOO_BRANCH" "$BASJOO_REPO_URL" "$BASJOO_DIR"
+	gitc clone --branch "$BASJOO_BRANCH" "$BASJOO_REPO_URL" "$BASJOO_DIR"
 }
 
 sync_repo() {
@@ -185,18 +243,18 @@ sync_repo() {
 
 	if [ -d "$BASJOO_DIR/.git" ]; then
 		log "Syncing repository to $BASJOO_REPO_URL#$BASJOO_BRANCH"
-		if git -C "$BASJOO_DIR" remote get-url origin >/dev/null 2>&1; then
-			git -C "$BASJOO_DIR" remote set-url origin "$BASJOO_REPO_URL"
+		if gitc -C "$BASJOO_DIR" remote get-url origin >/dev/null 2>&1; then
+			gitc -C "$BASJOO_DIR" remote set-url origin "$BASJOO_REPO_URL"
 		else
-			git -C "$BASJOO_DIR" remote add origin "$BASJOO_REPO_URL"
+			gitc -C "$BASJOO_DIR" remote add origin "$BASJOO_REPO_URL"
 		fi
-		git -C "$BASJOO_DIR" fetch --prune origin "$BASJOO_BRANCH"
-		git -C "$BASJOO_DIR" reset --hard
-		git -C "$BASJOO_DIR" checkout -B "$BASJOO_BRANCH" FETCH_HEAD
+		gitc -C "$BASJOO_DIR" fetch --prune origin "$BASJOO_BRANCH"
+		gitc -C "$BASJOO_DIR" reset --hard
+		gitc -C "$BASJOO_DIR" checkout -B "$BASJOO_BRANCH" FETCH_HEAD
 		if [ "$BASJOO_FORCE_CLEAN" = "1" ] || [ "$BASJOO_FORCE_CLEAN" = "true" ] || [ "$BASJOO_FORCE_CLEAN" = "yes" ]; then
-			git -C "$BASJOO_DIR" clean -fd
+			gitc -C "$BASJOO_DIR" clean -fd
 		fi
-		git -C "$BASJOO_DIR" reset --hard FETCH_HEAD
+		gitc -C "$BASJOO_DIR" reset --hard FETCH_HEAD
 		return 0
 	fi
 
@@ -208,7 +266,7 @@ sync_repo() {
 }
 
 container_state() {
-	run_root docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true
+	$DOCKER_BIN inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true
 }
 
 wait_for_container() {
@@ -263,7 +321,7 @@ http_get() {
 		else
 			curl -fsS --max-time 10 "$url" >/dev/null
 		fi
-		return 0
+		return $?
 	fi
 
 	if [ -n "$host_header" ]; then
@@ -275,11 +333,11 @@ http_get() {
 
 show_failure_logs() {
 	log "Recent backend logs"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 backend-prod || true
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 backend-prod || true
 	log "Recent frontend logs"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 frontend-prod || true
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 frontend-prod || true
 	log "Recent nginx logs"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 nginx || true
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod logs --tail=100 nginx || true
 }
 
 verify_deployment() {
@@ -306,7 +364,7 @@ verify_deployment() {
 	}
 
 	log "Checking production stack status"
-	run_root docker compose --project-directory "$BASJOO_DIR" --profile prod ps
+	$DOCKER_BIN compose --project-directory "$BASJOO_DIR" --profile prod ps
 
 	server_domain=$(read_env_value SERVER_DOMAIN "$BASJOO_DIR/.env")
 	if [ -n "$server_domain" ]; then

@@ -14,6 +14,19 @@
 
 Basjoo 是一个可自托管的开源 AI 客服平台：把网站和一批文档变成一个可以嵌到任何页面的客服智能体，并配一套管理后台来运营它。
 
+## 安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
+```
+
+全新的 **Ubuntu / Debian** 机器上一条命令搞定：缺 Docker 就装、拉代码、起 `prod` profile、等健康检查
+通过、打印后台地址。注册的第一个账号就是工作区超级管理员。已经 clone 过？在仓库里跑
+`sudo sh install-deploy.sh`。
+
+**其他发行版也能用**——只要机器上已经有 Docker Engine（带 Compose 插件）、`git`、`python3`，脚本就跳过
+装包直接部署；缺东西时会停下并明确告诉你装什么。想自己用 Compose 起？看下面的「手动 Docker Compose」。
+
 - **FastAPI 后端**（`backend/`）——智能体、知识库、RAG 检索、SSE 流式聊天、认证、配额、定时任务
 - **Vite 单页管理后台**（`frontend-nextjs/`，目录名是上一代 Next.js 版本的遗留）
 - **可嵌入聊天组件**（`widget/`）——一个 `<script>` 标签，通过 HTTP + SSE 与后端通信
@@ -71,17 +84,6 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 
 ## 快速开始
 
-### 一键安装（Ubuntu / Debian）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy.sh | sudo sh
-```
-
-脚本会自动装 Docker（缺失时）、拉仓库、启动 **prod** profile、等待健康检查通过，并打印后台地址。已经
-检出仓库的话，直接 `sudo sh install-deploy.sh` 即可。
-
-第一个注册的账号成为该工作区的超级管理员。
-
 ### 手动 Docker Compose
 
 ```bash
@@ -124,7 +126,8 @@ LLM 推理始终是外部 API 调用。Embedding 也可以走外部，但默认�
 | 操作系统 | Ubuntu 22.04+ / Debian 11+ | Ubuntu 22.04+ / Debian 12+ |
 | Docker | 20.10+ 且带 Compose 插件 | 最新版 |
 
-内存下限已包含嵌入容器。它的模型（`ibm-granite/granite-embedding-97m-multilingual-r2`，约 400 MB）首次
+这些数字是在我们的参考机器上量的，代码里没有任何地方强制：`install-deploy.sh` 只检查发行版是不是 Ubuntu /
+Debian 系，compose 也没给任何服务设内存上限。内存下限已包含嵌入容器。它的模型（`ibm-granite/granite-embedding-97m-multilingual-r2`，约 400 MB）首次
 启动时下载一次并存入 `local-embed-cache` 卷；下载期间服务照常可用，示例智能体会在下次登录时创建。想改用
 托管 Embedding API，就用 `jina` / `siliconflow` / `custom` 新建知识库，并停掉 `local-embed`。
 
@@ -145,7 +148,7 @@ LLM 推理始终是外部 API 调用。Embedding 也可以走外部，但默认�
 ### 知识库
 
 `KnowledgeBase → KbDocument → KbChunk`，按工作区隔离。每个知识库一个 Qdrant 集合（`kb_<12 位十六进制>`，
-余弦距离），仅按工作区过滤。切块默认 512 / 64，embedding 每批不超过 100 条；检索先取 `top_k × 2` 个候选
+余弦距离），检索时带 `kb_id` payload 过滤。切块默认 512 / 64，embedding 每批不超过 100 条；检索先取 `top_k × 2` 个候选
 再按分数过滤。生效的相似度阈值依次是：请求参数 → 智能体的 `similarity_threshold` → 服务默认值。
 
 绑定是智能体与知识库之间唯一的联系：`PUT /api/v1/agents/{agent_id}/knowledge-base`。因为 `agents.kb_id`
@@ -162,8 +165,8 @@ LLM 推理始终是外部 API 调用。Embedding 也可以走外部，但默认�
 
 `widget/src/BasjooWidget.tsx` 从 `<script src="…/sdk.js?agent_id=agt_…">` 自举（也接受 `agentId` 和
 `api_base`），从自身脚本地址推断 API 基址，请求 `/api/v1/config:public` 拿标题、颜色与欢迎语，把访客和会话
-存在 `localStorage`，从 `/api/v1/chat/stream` 流式接收回复，人工接管期间每 3 秒轮询
-`/api/v1/chat/messages`。
+存在 `localStorage`，从 `/api/v1/chat/stream` 流式接收回复，并在首条回复落地后开始每 3 秒轮询
+`/api/v1/chat/messages`（带访客 id 与 `after_id`，只要 assistant 角色）——人工接管的消息就是这样到达的。
 
 ```html
 <script src="https://your-basjoo-host/sdk.js?agent_id=agt_xxxxxxxxxxxx" async></script>
@@ -178,6 +181,8 @@ LLM 推理始终是外部 API 调用。Embedding 也可以走外部，但默认�
 | `DATABASE_URL` | `sqlite:///./data/basjoo.db` | 业务数据（只有 SQLite，没有 PostgreSQL 分支） |
 | `REDIS_URL` | `redis://redis:6379/0` | 限流 |
 | `QDRANT_URL` | `http://localhost:6333` | 向量库 |
+| `QDRANT_API_KEY` | 未设置 | 需要鉴权的 Qdrant 所用密钥 |
+| `SCRAPLING_SERVICE_URL` | `http://scrapling-service:8001` | 网页入库调用的抓取服务 |
 | `SECRET_KEY` / `SECRET_KEY_FILE` | 自动生成 → `/app/data/.secret_key` | JWT 签名 |
 | `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | 自动生成 → `/app/data/.encryption_key` | 加密存储服务商密钥 |
 | `DEFAULT_AGENT_ID` | 自动生成 → `/app/data/.agent_id` | 固定默认组件智能体身份 |
@@ -186,9 +191,11 @@ LLM 推理始终是外部 API 调用。Embedding 也可以走外部，但默认�
 | `LOCAL_EMBEDDING_BASE_URL` | `http://local-embed:80/v1` | `local` 知识库使用的端点 |
 | `LOCAL_EMBEDDING_MODEL` | `ibm-granite/granite-embedding-97m-multilingual-r2` | 该端点上的模型 |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST_SIZE` | `1000` / `200` | 全局限流 |
-| `REQUIRE_SECRET_KEY` | 未设置 | 设为 `true` 时拒绝用自动生成的密钥启动 |
+| `REQUIRE_SECRET_KEY` | 未设置 | 设为 `true` 时拒绝用自动生成的密钥启动（由容器入口脚本检查，不由应用检查） |
 | `SERVER_DOMAIN` | 未设置 | nginx 规范域名，其他 Host 直接 `444` |
+| `CORS_ALLOW_NULL_ORIGIN` | `false` | 接受 `Origin: null` 的沙箱 iframe |
 | `LOG_LEVEL` | `INFO` | |
+| `DEBIAN_MIRROR` | `http://deb.debian.org` | 后端与抓取镜像构建时的 apt 源；代理会破坏默认源时改它 |
 
 `SSRF_PROTECTION_ENABLED` 默认关闭：fake-ip / 分离解析的 DNS（sing-box、clash）会把普通公网站点解析进私有
 网段，开着会拒绝所有真实抓取。协议、内嵌凭据、空主机名、`localhost`、直接 IP 字面量这几种检查始终生效；
@@ -248,7 +255,8 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 - Ubuntu/Debian 上走 `install-deploy.sh`，它内部调用 `deploy.sh`。`docker-compose.yml` 是唯一的 Compose
   入口，分 `dev` / `prod` 两个 profile，并固定了项目名，所以第二个 checkout 不会造出第二套空数据卷。
 - `nginx` 在容器内监听 `:8080`（映射到宿主机 `:80`），只有当 `./ssl` 下存在可读的 `cert.pem` / `key.pem`
-  时才开 `:443`。`client_max_body_size` 为 12 MB，超限请求因此拿到 JSON 报错而不是 nginx 的 HTML 页。
+  时才开 `:443`。生成的 vhost 里 `client_max_body_size` 为 12 MB（既没设 `SERVER_DOMAIN` 也没证书时用镜像
+  自带的兜底配置，是 50 MB），超限请求因此拿到 JSON 报错而不是 nginx 的 HTML 页。
 - 持久化卷：`backend-data` → `/app/data`（SQLite 数据库、密钥文件、上传的知识库文件）、`qdrant-data`、
   `redis-data`、`local-embed-cache`。`docker compose down -v` 会把四个都删掉。
 - 只要 `backend-data` 还在，旧嵌入代码就继续有效：智能体 id 落在 `/app/data/.agent_id`，迁移机器时用
@@ -263,6 +271,8 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 - 角色（`super_admin`、`admin`、`support`）由 API 强制，后台暴露的是账号设置与智能体成员，不是完整的
   管理员增删改查。
 - 文档解析支持 `txt`、`md`、`html`、`pdf`、`docx`、`xlsx`；扫描版 PDF 没有 OCR。
+- `Agent.last_error_code` / `last_error_message` / `last_error_at` 三个字段目前没有任何写入方，后台也没有
+  消费方；服务商失败只会体现为兜底回复和后端日志，不会在控制台弹告警。
 
 ## 仓库结构
 
@@ -274,6 +284,7 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 | `scrapling-service/` | 抓取微服务（crawl4ai + `curl_cffi`/readability 兜底），容器名 `basjoo-crawler` |
 | `nginx/` | `prod` profile 使用的反向代理 |
 | `tests/e2e/` | Playwright 用例（smoke、prod-like、组件跨域） |
+| `scripts/` | `sync-widget.sh`、`prod_stability_check.sh` |
 | `resource/screenshots/` | 这两份 README 用到的图片 |
 
 `AGENTS.md` 详细记录了架构契约（知识库作用域、SSE watchdog、设计令牌），改动这些区域的代码前先读它。

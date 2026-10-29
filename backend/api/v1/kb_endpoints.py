@@ -1212,30 +1212,32 @@ async def build_kb_sources_summary(
         )
     ) or 0
 
+    # Uploaded files only: `files:list` hides URL-derived docs (`url_*.txt`), so the
+    # counters here must use the same filter or the card and the list disagree.
+    own_files = (
+        KbDocument.kb_id == kb_id,
+        ~KbDocument.filename.like(URL_DOC_PREFIX, escape="\\"),
+    )
     file_total = (
-        await db.scalar(
-            select(func.count(KbDocument.id)).where(KbDocument.kb_id == kb_id)
-        )
+        await db.scalar(select(func.count(KbDocument.id)).where(*own_files))
     ) or 0
     file_ready = (
         await db.scalar(
             select(func.count(KbDocument.id)).where(
-                KbDocument.kb_id == kb_id, KbDocument.status == "ready"
+                *own_files, KbDocument.status == "ready"
             )
         )
     ) or 0
     file_processing = (
         await db.scalar(
             select(func.count(KbDocument.id)).where(
-                KbDocument.kb_id == kb_id,
+                *own_files,
                 KbDocument.status.in_(["pending", "processing"]),
             )
         )
     ) or 0
     file_size_bytes = (
-        await db.scalar(
-            select(func.sum(KbDocument.file_size)).where(KbDocument.kb_id == kb_id)
-        )
+        await db.scalar(select(func.sum(KbDocument.file_size)).where(*own_files))
     ) or 0
 
     url_pending = url_total - url_indexed

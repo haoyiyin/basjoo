@@ -136,8 +136,9 @@ async def log_requests(request, call_next):
 
         path = request.url.path
 
-        # Route-aware sizing: `/api/v1/files:upload` is the only large-body path.
-        if path.startswith("/api/v1/files:upload"):
+        # Route-aware sizing: uploads are the only large-body paths — the canonical
+        # KB route and its legacy agent-scoped alias.
+        if path.startswith("/api/v1/files:upload") or path.endswith("/files:upload"):
             max_size = FILE_UPLOAD_BODY_LIMIT
         else:
             max_size = DEFAULT_BODY_SIZE_LIMIT
