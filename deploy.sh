@@ -9,7 +9,12 @@ if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
   SUDO=sudo
 fi
 
-if ! swapon --noheadings --show 2>/dev/null | grep -q '[^[:space:]]'; then
+# /proc/swaps exists on every Linux and BusyBox swapon has no --show flag.
+has_swap() {
+  [ -r /proc/swaps ] && [ "$(wc -l < /proc/swaps)" -gt 1 ]
+}
+
+if ! has_swap; then
   printf '%s\n' '==> No swap detected. Creating 2GB swap file for Next.js build...'
   if [ -f /swapfile ]; then
     printf '%s\n' '==> Existing /swapfile found but not active, re-enabling...'
@@ -18,7 +23,7 @@ if ! swapon --noheadings --show 2>/dev/null | grep -q '[^[:space:]]'; then
       ${SUDO} rm -f /swapfile
       ${SUDO} touch /swapfile 2>/dev/null || true
       ${SUDO} chattr +C /swapfile 2>/dev/null || true
-      ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+      ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048
       ${SUDO} chmod 600 /swapfile
       ${SUDO} mkswap /swapfile
       ${SUDO} swapon /swapfile
@@ -27,7 +32,7 @@ if ! swapon --noheadings --show 2>/dev/null | grep -q '[^[:space:]]'; then
     # Disable CoW on Btrfs before allocation (no-op on other filesystems)
     ${SUDO} touch /swapfile 2>/dev/null || true
     ${SUDO} chattr +C /swapfile 2>/dev/null || true
-    ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+    ${SUDO} dd if=/dev/zero of=/swapfile bs=1M count=2048
     ${SUDO} chmod 600 /swapfile
     ${SUDO} mkswap /swapfile
     ${SUDO} swapon /swapfile
