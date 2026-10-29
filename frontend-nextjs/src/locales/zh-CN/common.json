@@ -964,5 +964,17 @@
     "errors": {
       "saveFailed": "保存修正失败"
     }
+  },
+  "unanswered": {
+    "filter": "未答问题",
+    "addToQa": "加入问答库",
+    "addToQaLabel": "把这条未答问题加入问答库：{{preview}}",
+    "addedToQa": "已加入问答库，问题为：",
+    "confidenceLabel": "置信度 {{value}}",
+    "dashboardStat": "未答问题",
+    "dashboardStatHint": "近 7 天未答问题，点击查看",
+    "errors": {
+      "addFailed": "加入问答库失败"
+    }
   }
 }

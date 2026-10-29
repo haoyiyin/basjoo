@@ -964,5 +964,17 @@
     "errors": {
       "saveFailed": "Failed to save the correction"
     }
+  },
+  "unanswered": {
+    "filter": "Unanswered",
+    "addToQa": "Add to Q&A",
+    "addToQaLabel": "Add this unanswered question to the Q&A index: {{preview}}",
+    "addedToQa": "Added to the Q&A index. Question:",
+    "confidenceLabel": "Confidence {{value}}",
+    "dashboardStat": "Unanswered",
+    "dashboardStatHint": "Unanswered questions in the last 7 days — open the filtered list",
+    "errors": {
+      "addFailed": "Could not add the pair"
+    }
   }
 }
