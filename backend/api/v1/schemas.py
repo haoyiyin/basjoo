@@ -47,6 +47,14 @@ class ChatRequest(BaseModel):
     params: Optional[Dict[str, Any]] = Field(
         None, description="推理参数（temperature, max_tokens等）"
     )
+    # #44: a preview turn never consumes the daily allowance. The flag is a
+    # *request*, not a grant: the chat path accepts it only when the request
+    # carries a valid admin bearer token, so the public endpoint cannot be used
+    # as a free LLM. Default False — every existing caller is unchanged.
+    preview: bool = Field(
+        False,
+        description="Admin-only: run this turn without consuming the daily quota",
+    )
 
 
 class SourceItem(BaseModel):
@@ -86,6 +94,10 @@ class ChatResponse(BaseModel):
     no_answer_reason: Optional[str] = Field(
         None, description="Why the bot did not answer (contract C3)"
     )
+    # #44: the primary allowance was spent, so this answer came from the
+    # agent's fallback model. `model` names what actually answered.
+    degraded: bool = Field(False, description="Answered by the fallback model")
+    model: Optional[str] = Field(None, description="Model that produced `reply`")
 
 
 class ContextRequest(BaseModel):
@@ -496,6 +508,14 @@ class AgentConfig(BaseModel):
     away_message: Optional[str] = Field(
         None, description="Widget copy shown outside business hours (#43)"
     )
+    # #44 — quota degradation. `fallback_api_key` is never returned; the
+    # payload only says whether one is stored, like `api_key_set`.
+    fallback_model: Optional[str] = Field(
+        None, description="Model that answers once the daily allowance is spent"
+    )
+    fallback_api_key_set: bool = Field(
+        False, description="Whether a fallback API key is configured"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -603,6 +623,14 @@ class AgentUpdateRequest(BaseModel):
     )
     away_message: Optional[str] = Field(
         None, description="Widget copy shown outside business hours (#43)"
+    )
+    # #44 — quota degradation. Both are optional; an empty string on
+    # `fallback_api_key` clears it (same convention as `api_key`).
+    fallback_model: Optional[str] = Field(
+        None, max_length=100, description="Model that answers once the daily allowance is spent"
+    )
+    fallback_api_key: Optional[str] = Field(
+        None, max_length=500, description="Key for the fallback model (encrypted at rest)"
     )
 
     @field_validator("allowed_widget_origins")

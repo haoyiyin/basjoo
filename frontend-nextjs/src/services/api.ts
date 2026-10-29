@@ -12,6 +12,12 @@ export interface ChatRequest {
 		temperature?: number;
 		max_tokens?: number;
 	};
+	/**
+	 * #44: ask for a turn that does not consume the daily allowance. The
+	 * backend honours it only for an admin bearer token, so this is a hint, not
+	 * a grant — it is safe for the Playground to always send it.
+	 */
+	preview?: boolean;
 }
 
 export interface UsageInfo {
@@ -27,6 +33,12 @@ export interface ChatResponse {
 	session_id?: string;
 	message_id?: number;
 	taken_over?: boolean;
+	mode?: "ai" | "human";
+	no_answer_reason?: string | null;
+	/** #44: true when the fallback model answered. */
+	degraded?: boolean;
+	/** #44: the model that actually produced the reply. */
+	model?: string | null;
 }
 
 export interface StreamDoneMeta {
@@ -34,6 +46,14 @@ export interface StreamDoneMeta {
 	session_id?: string;
 	usage?: UsageInfo | null;
 	taken_over?: boolean;
+	/** #43: who answers next. `taken_over` implies `human`. */
+	mode?: "ai" | "human";
+	/** #43: machine token explaining why the bot stayed silent. */
+	no_answer_reason?: string | null;
+	/** #44: true when the fallback model answered (primary allowance spent). */
+	degraded?: boolean;
+	/** #44: the model that actually produced the answer. */
+	model?: string | null;
 }
 
 export interface Source {
@@ -83,6 +103,12 @@ export interface Agent {
 	business_hours?: BusinessHoursPayload | null;
 	/** Widget copy shown outside business hours (#43). */
 	away_message?: string | null;
+	/** #44: model that answers once the daily allowance is spent. */
+	fallback_model?: string | null;
+	/** Write-only: a typed value replaces the stored (encrypted) fallback key. */
+	fallback_api_key?: string;
+	/** #44: whether a fallback key is stored (the key itself is never returned). */
+	fallback_api_key_set?: boolean;
 	model: string;
 	temperature: number;
 	max_tokens: number;

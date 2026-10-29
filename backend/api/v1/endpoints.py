@@ -107,6 +107,8 @@ from services.answer_quality import (
     is_real_question,
     looks_like_fallback,
 )
+from services.quota import message_weight
+from services.spam_check import screen_answered_turn
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -184,6 +186,52 @@ def get_agent_plaintext_keys(agent: Agent) -> Optional[str]:
     return None
 
 
+def get_agent_fallback_plaintext_key(agent: Agent) -> Optional[str]:
+    """Decrypted `fallback_api_key` (#44) — a second helper, on purpose.
+
+    `get_agent_plaintext_keys` is the primary key's reader and its env fallback
+    is agent-specific, so it is left alone. This one is the fallback model's key
+    and has no env fallback: an operator who configures a fallback model without
+    a key gets the primary key instead (see `resolve_llm_degradation`), which is
+    the documented "same provider, cheaper model" case.
+    """
+    stored_key = decrypt_api_key(getattr(agent, "fallback_api_key", None))
+    if stored_key:
+        return stored_key
+    return None
+
+
+def resolve_llm_degradation(agent: Agent) -> Dict[str, Any]:
+    """Decide how to serve a message when the primary allowance is spent (#44).
+
+    Returns ``{"degraded": False}`` when there is nothing to fall back to — no
+    `fallback_model`, or no key at all (neither the fallback key nor the primary
+    one) — and the caller keeps today's HTTP 429 / SSE `QUOTA_EXCEEDED`.
+
+    Otherwise ``{"degraded": True, "model": <fallback model>, "api_key": ...,
+    "api_base": ...}``: the caller builds the LLM service from these values and
+    the visitor still gets a real answer. Only when both allowances are gone
+    does the request stop, and "the fallback allowance is gone" is exactly this
+    function returning `degraded: False` — there is no second counter.
+    """
+    fallback_model = (getattr(agent, "fallback_model", None) or "").strip()
+    if not fallback_model:
+        return {"degraded": False}
+
+    api_key = get_agent_fallback_plaintext_key(agent) or get_agent_plaintext_keys(agent)
+    if not api_key:
+        return {"degraded": False}
+
+    return {
+        "degraded": True,
+        "model": fallback_model,
+        "api_key": api_key,
+        # A fallback model frequently lives on the same provider, so the
+        # primary base is the right default; there is no separate fallback base.
+        "api_base": agent.api_base,
+    }
+
+
 def build_agent_config(
     agent: Agent, *, kb_name: Optional[str] = None, kb_status: Optional[str] = None
 ) -> dict:
@@ -237,6 +285,10 @@ def build_agent_config(
         "escalation_rules": getattr(agent, "escalation_rules", None),
         "business_hours": business_hours_config_payload(agent),
         "away_message": business_hours_away_message(agent),
+        # #44 quota degradation: the fallback model round-trips, its key does
+        # not — only a boolean, exactly like `api_key_set`.
+        "fallback_model": getattr(agent, "fallback_model", None),
+        "fallback_api_key_set": bool(get_agent_fallback_plaintext_key(agent)),
         "is_active": is_active,
         "deleted_at": deleted_at,
         "purge_after": getattr(agent, "purge_after", None),
@@ -907,12 +959,32 @@ async def prepare_chat_request(
 
     enforce_widget_origin_whitelist(agent, http_request, admin_user)
 
+    # #44: `preview: true` is a *request*, and the endpoint is public, so it is
+    # honoured only for an authenticated admin — the same guard that lets the
+    # admin dashboard bypass the widget origin whitelist. Without a token the
+    # flag is ignored and the turn is billed like any other, which keeps the
+    # public endpoint from becoming a free LLM.
+    preview = bool(getattr(request, "preview", False)) and admin_user is not None
+
     quota = await check_quota(agent, db)
+    degradation = {"degraded": False}
     if quota.used_messages_today >= quota.max_messages_per_day:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Daily message quota exceeded",
-        )
+        # A preview turn never hits the wall and never pays for it.
+        if not preview:
+            degradation = resolve_llm_degradation(agent)
+            if not degradation["degraded"]:
+                # No fallback model, or no key for either path: today's
+                # behaviour, unchanged. Only when both allowances are gone does
+                # the request stop.
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Daily message quota exceeded",
+                )
+            logger.warning(
+                "Daily quota spent for agent %s — degrading to fallback model %s",
+                agent.id,
+                degradation["model"],
+            )
 
     agent_id = agent.id
     agent_workspace_id = agent.workspace_id
@@ -941,6 +1013,15 @@ async def prepare_chat_request(
     # answer nothing. The reason travels as a machine token; the widget
     # localizes it. Business hours live inside `answer_gate` so `/chat` and
     # `/chat/stream` cannot drift about them.
+    # #44: sampled spam screening runs BEFORE the answer gate decides, on the
+    # turn that is about to be answered (ai_turn_count + 1). A hit sets
+    # `status = "paused"`, so the `answer_gate` call below sees it and the
+    # message is stored with no answer — the gate is still the single decider.
+    # Pausing is per session: a new session for the same visitor starts active.
+    # `screen_answered_turn` logs and commits the pause itself, so the gate
+    # below is still the only thing that decides whether the bot speaks.
+    await screen_answered_turn(session, request.message, db)
+
     mute_reason = answer_gate(session, agent)
     if mute_reason is not None:
         return {
@@ -1181,13 +1262,22 @@ async def prepare_chat_request(
         messages.extend(conversation_history)
     messages.append({"role": "user", "content": request.message})
 
-    llm = get_llm_service(
-        use_mock=use_mock_llm,
-        api_key=agent_api_key,
-        api_base=agent.api_base,
-        model=agent.model,
-        provider_type=agent.provider_type,
-    )
+    if degradation["degraded"]:
+        llm = get_llm_service(
+            use_mock=use_mock_llm,
+            api_key=degradation["api_key"],
+            api_base=degradation["api_base"],
+            model=degradation["model"],
+            provider_type=agent.provider_type,
+        )
+    else:
+        llm = get_llm_service(
+            use_mock=use_mock_llm,
+            api_key=agent_api_key,
+            api_base=agent.api_base,
+            model=agent.model,
+            provider_type=agent.provider_type,
+        )
 
     return {
         "mode": "llm",
@@ -1198,6 +1288,18 @@ async def prepare_chat_request(
         "use_mock_llm": use_mock_llm,
         "llm": llm,
         "messages": messages,
+        # #44: what actually answers, so the SSE `done` event and the blocking
+        # `ChatResponse` can tell the visitor the fallback model was used.
+        "degraded": degradation["degraded"],
+        "model": degradation["model"] if degradation["degraded"] else agent.model,
+        # A preview turn is served normally but never increments the counter.
+        "preview": preview,
+        # A degraded answer costs 1, exactly like a primary one (see
+        # `services/quota.py`): the operator already paid for the model they
+        # did not get.
+        "message_weight": message_weight(
+            degradation["model"] if degradation["degraded"] else agent.model
+        ),
         "sources": kb_sources,  # Include KB sources for SSE event
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -1304,6 +1406,8 @@ async def persist_chat_response(
     db: AsyncSession,
     retrieval_scores: Optional[Dict[str, List[float]]] = None,
     restricted_reply: Optional[str] = None,
+    preview: bool = False,
+    message_weight: int = 1,
 ) -> ChatMessage:
     """Persist a completed user/assistant exchange.
 
@@ -1311,6 +1415,11 @@ async def persist_chat_response(
     and the SSE path: `confidence` from the scores the prompt was built with,
     `is_unanswered` from the SiteGPT rule — a real question (≥15 non-whitespace
     chars) with nothing retrieved, or any answer that is the fallback sentence.
+
+    #44: the daily counter is incremented here and nowhere else, so `preview`
+    (skip it entirely) and `message_weight` (how much this model costs) have a
+    single place to act. `ai_turn_count` is the answered-turn counter the spam
+    sampler reads, and it advances once per *answered* turn.
     """
     scores = retrieval_scores or {}
     confidence = compute_confidence(
@@ -1343,6 +1452,9 @@ async def persist_chat_response(
     db.add(assistant_message)
 
     session.message_count += 2
+    # #44: answered turns only. The spam sampler reads this, so a turn that was
+    # never answered (paused, taken over, rate limited) must not advance it.
+    session.ai_turn_count = (getattr(session, "ai_turn_count", None) or 0) + 1
     if usage:
         session.total_tokens += usage.get("total_tokens", 0)
     session.updated_at = func.now()
@@ -1350,17 +1462,19 @@ async def persist_chat_response(
     from sqlalchemy import update
 
     try:
-        await db.execute(
-            update(WorkspaceQuota)
-            .where(
-                WorkspaceQuota.workspace_id == workspace_id,
-                WorkspaceQuota.id == quota_id,
+        if not preview:
+            await db.execute(
+                update(WorkspaceQuota)
+                .where(
+                    WorkspaceQuota.workspace_id == workspace_id,
+                    WorkspaceQuota.id == quota_id,
+                )
+                .values(
+                    used_messages_today=WorkspaceQuota.used_messages_today
+                    + int(message_weight),
+                    updated_at=func.now(),
+                )
             )
-            .values(
-                used_messages_today=WorkspaceQuota.used_messages_today + 1,
-                updated_at=func.now(),
-            )
-        )
         await db.commit()
         await db.refresh(assistant_message)
     except OperationalError:
@@ -1467,6 +1581,12 @@ async def chat(
         max_tokens = chat_context["max_tokens"]
         use_mock_llm = chat_context["use_mock_llm"]
         retrieval_scores = chat_context.get("retrieval_scores") or {}
+        # #44: degradation + preview travel from the prepare phase to the
+        # response so `ChatResponse` can say which model answered.
+        degraded = bool(chat_context.get("degraded"))
+        answered_model = chat_context.get("model")
+        preview = bool(chat_context.get("preview"))
+        weight = int(chat_context.get("message_weight") or 1)
 
         # Restricted reply config for graceful LLM failure fallback
         _agent = chat_context["agent"]
@@ -1534,6 +1654,8 @@ async def chat(
             db=persist_db,
             retrieval_scores=retrieval_scores,
             restricted_reply=_restricted_reply,
+            preview=preview,
+            message_weight=weight,
         )
         await publish_chat_response(session_obj, request.message, reply)
 
@@ -1543,6 +1665,8 @@ async def chat(
         usage=usage,
         session_id=session_public_id,
         message_id=assistant_message.id,
+        degraded=degraded,
+        model=answered_model,
     )
 
 
@@ -1624,6 +1748,12 @@ async def chat_stream(
                 max_tokens = chat_context["max_tokens"]
                 use_mock_llm = chat_context["use_mock_llm"]
                 retrieval_scores = chat_context.get("retrieval_scores") or {}
+                # #44: degradation + preview travel from the prepare phase to
+                # the `done` event so the client can say which model answered.
+                degraded = bool(chat_context.get("degraded"))
+                answered_model = chat_context.get("model")
+                preview = bool(chat_context.get("preview"))
+                weight = int(chat_context.get("message_weight") or 1)
 
                 # Restricted reply config for graceful LLM failure fallback
                 _agent = chat_context["agent"]
@@ -1808,6 +1938,8 @@ async def chat_stream(
                     db=persist_db,
                     retrieval_scores=retrieval_scores,
                     restricted_reply=_restricted_reply,
+                    preview=preview,
+                    message_weight=weight,
                 )
                 await publish_chat_response(session_obj, request.message, reply)
                 yield sse_event(
@@ -1818,6 +1950,10 @@ async def chat_stream(
                         "usage": usage,
                         "taken_over": False,
                         "mode": "ai",
+                        # #44: the visitor gets a real answer from the fallback
+                        # model, and the UI says so.
+                        "degraded": degraded,
+                        "model": answered_model,
                     },
                 )
             except OperationalError as error:
@@ -2380,7 +2516,9 @@ async def update_agent(
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
     for field, value in update_data.items():
-        if field == "api_key" and isinstance(value, str):
+        # Both keys are Fernet-encrypted at rest; an empty string clears the
+        # stored value, exactly like the primary key.
+        if field in ("api_key", "fallback_api_key") and isinstance(value, str):
             value = value.strip()
             if value:
                 value = encrypt_api_key(value)

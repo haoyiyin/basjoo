@@ -239,6 +239,10 @@ export default function Playground() {
           usage: usage ?? meta?.usage ?? undefined,
           isStreaming: false,
           thinkingElapsed: undefined,
+          /* #44: the SSE `done` event carries the flag; ChatPanel renders the
+           * "answered with the fallback model" line from it. */
+          degraded: meta?.degraded ?? false,
+          model: meta?.model ?? null,
         };
         return next;
       });
@@ -261,6 +265,10 @@ export default function Playground() {
           temperature: chatParams.temperature,
           max_tokens: chatParams.max_tokens,
         },
+        /* #44: the Playground is the operator's own test surface, so its turns
+         * never consume the daily allowance. The backend ignores the flag
+         * without an admin token, so this cannot leak to the public widget. */
+        preview: true,
       };
 
       await api.streamChat(request, {
