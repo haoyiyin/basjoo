@@ -116,8 +116,7 @@ apt_install() {
 }
 
 ensure_base_dependencies() {
-	# Non-Debian hosts that already have Docker only need git + python3 present;
-	# there is no package manager to call, so check and fail with a clear message.
+	# Non-Debian hosts have no package manager here, so just require the tools.
 	if [ -z "$APT_CMD" ]; then
 		for cmd in git python3; do
 			have_cmd "$cmd" || fail "$cmd is required but missing. Install it with your distribution's package manager and re-run."
@@ -125,12 +124,27 @@ ensure_base_dependencies() {
 		return 0
 	fi
 
-	packages="ca-certificates git python3 curl wget"
+	# Everything below is only needed if it is actually missing. A host with a
+	# working toolchain must not be blocked by a broken apt mirror — that is a
+	# common state behind corporate proxies and in offline/air-gapped setups.
+	missing=
+	for cmd in git python3 curl; do
+		have_cmd "$cmd" || missing="$missing $cmd"
+	done
+	for pkg in ca-certificates; do
+		[ -e "/etc/ssl/certs/ca-certificates.crt" ] || missing="$missing $pkg"
+	done
 	if ! have_cmd lsblk; then
-		packages="$packages util-linux"
+		missing="$missing util-linux"
 	fi
-	log "Installing required system packages"
-	apt_install $packages
+
+	if [ -z "$missing" ]; then
+		log "Required system packages are already present"
+		return 0
+	fi
+
+	log "Installing missing system packages:$missing"
+	apt_install $missing
 }
 
 download_file() {
