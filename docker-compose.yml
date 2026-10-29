@@ -137,6 +137,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-http://deb.debian.org}
     container_name: basjoo-backend
     environment:
       - DATABASE_URL=sqlite:////app/data/basjoo.db
