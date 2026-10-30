@@ -1438,18 +1438,18 @@ class BasjooWidget {
         gap: 6px;
         min-height: 32px;
         padding: 0 12px;
-        border: 1px solid rgba(255,255,255,0.35);
-        background: rgba(255,255,255,0.15);
+        border: 1px solid ${this.hexToRgba(theme.accentContrast, 0.35)};
+        background: ${this.hexToRgba(theme.accentContrast, 0.15)};
         border-radius: 16px;
         cursor: pointer;
-        color: white;
+        color: ${theme.accentContrast};
         font-size: 13px;
         font-weight: 500;
         transition: background 0.2s;
       }
 
       .basjoo-human:hover {
-        background: rgba(255,255,255,0.28);
+        background: ${this.hexToRgba(theme.accentContrast, 0.28)};
       }
 
       .basjoo-human[hidden] {
