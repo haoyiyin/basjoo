@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
@@ -189,12 +190,54 @@ class Agent(Base):
 
     # Widget 配置
     widget_title = Column(String(100), nullable=True, default="AI 客服")
-    # One default, shared with the SPA and the widget (spec contract C1).
-    widget_color = Column(String(20), nullable=True, default=DEFAULT_WIDGET_COLOR)
+    # One default, defined once in constants.py: the console accent
+    # (hsl(48 96% 49%) == #F9CA02, frontend-nextjs/src/index.css).
+    widget_color = Column(
+        String(20), nullable=True, default=DEFAULT_WIDGET_COLOR
+    )
     welcome_message = Column(
         Text, nullable=True, default="您好！我是Basjoo助手，有什么可以帮您的吗？"
     )
     history_days = Column(Integer, nullable=False, default=30)
+
+    # --- Widget install surface (#40) --------------------------------------
+    # Regular expressions matched against location.pathname; a match means the
+    # widget renders nothing on that page.
+    excluded_paths = Column(JSON, nullable=True, default=None)
+    # bubble | inline | iframe
+    display_mode = Column(String(20), nullable=False, default="bubble")
+    # [{"label", "action": "message"|"link", "value", "path"}]  — `path` is an
+    # optional regex that scopes the starter to one page.
+    starters = Column(JSON, nullable=True, default=None)
+    # Home-screen cards: [{"heading", "text", "action": "chat"|"kb-search"|"link", "value"}]
+    widget_cards = Column(JSON, nullable=True, default=None)
+    # Percentage of visitors (0-100) that get the widget; sticky per visitor.
+    traffic_percentage = Column(Integer, nullable=False, default=100)
+
+    # --- Conversation policy (#43, #41) ------------------------------------
+    # Plain-language escalation rules appended to the prompt (a prompt, not a
+    # rule engine).
+    escalation_rules = Column(Text, nullable=True)
+    # {"timezone": "Asia/Shanghai", "schedule": [{"day": 0, "start": 540, "end": 1080}]}
+    # Absent = always online. Resolved with zoneinfo, never a fixed offset.
+    business_hours = Column(JSON, nullable=True, default=None)
+    away_message = Column(Text, nullable=True)
+    # One line rendered as the first assistant message, with a consent gate.
+    ai_disclosure = Column(Text, nullable=True)
+
+    # --- Answer control (#39) ---------------------------------------------
+    # Operator-written facts that outrank retrieved chunks and are injected on
+    # every message, capped at 6 passages.
+    fixed_facts = Column(Text, nullable=True)
+
+    # --- Quota degradation (#44) ------------------------------------------
+    fallback_model = Column(String(100), nullable=True)
+    # Fernet-encrypted, same helper as api_key.
+    fallback_api_key = Column(String(500), nullable=True)
+
+    # --- Signed visitor identity (#46) ------------------------------------
+    # Fernet-encrypted HMAC secret. Absent = today's anonymous-only behaviour.
+    identity_secret = Column(String(500), nullable=True)
 
     # 状态
     is_active = Column(Boolean, default=True)
@@ -334,8 +377,29 @@ class ChatSession(Base):
     visitor_region = Column(String(50), nullable=True)  # 访客省份/地区
     visitor_city = Column(String(50), nullable=True)  # 访客城市
 
-    # 会话状态: active-活跃, taken_over-已接管, closed-已关闭
+    # 会话状态: active-活跃, taken_over-已接管, resolved-已解决, closed-已关闭, paused-已暂停(垃圾消息)
     status = Column(String(20), nullable=False, default="active", index=True)
+    # Who is expected to answer: "ai" or "human". A single operator reply sets
+    # mode="human" without touching `status`, so "human answered, bot still
+    # available" is representable (#43).
+    mode = Column(String(10), nullable=False, default="ai")
+    # First human message time; NULL means the bot has answered everything.
+    human_replied_at = Column(DateTime(timezone=True), nullable=True)
+    # Set when a lead form was submitted from this session (#41).
+    contact_email = Column(String(255), nullable=True)
+    contact_name = Column(String(100), nullable=True)
+    # Idempotency guard for the closing transcript email (#41).
+    transcript_sent_at = Column(DateTime(timezone=True), nullable=True)
+    # Active procedure + step pointer (#39).
+    active_procedure_id = Column(String(36), nullable=True)
+    procedure_step = Column(Integer, default=0)
+    # Async classification (#45): filled ~30 min after the session goes quiet.
+    topic = Column(String(100), nullable=True)
+    sentiment = Column(String(20), nullable=True)
+    outcome = Column(String(20), nullable=True)
+    # Number of messages in this session that got an AI answer (spam-check
+    # sampling counts turns, #44).
+    ai_turn_count = Column(Integer, default=0)
 
     # 统计
     message_count = Column(Integer, default=0)
@@ -384,6 +448,15 @@ class ChatMessage(Base):
     # 发送者信息（用于区分人工和 Agent）
     sender_type = Column(String(20), nullable=True)  # 'agent', 'human'
     sender_id = Column(String(50), nullable=True)  # 管理员ID（人工发送时）
+
+    # Answer quality (#42). Both nullable/defaulted so existing rows need no
+    # backfill: confidence 0..1 from the retrieval score, is_unanswered set when
+    # the answer was the fallback or nothing was retrieved for a real question.
+    confidence = Column(Float, nullable=True)
+    is_unanswered = Column(Boolean, nullable=False, default=False)
+    # Thumbs vote (#41): -1 / 0 / +1, where 0 retracts. Stored on the visitor's
+    # own message so the vote renders in the transcript's own context.
+    rating = Column(Integer, nullable=True)
 
     # 引用来源
     sources = Column(
@@ -647,3 +720,97 @@ class KbChunk(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     document = relationship("KbDocument", back_populates="chunks")
+
+
+class QaItem(Base):
+    """A curated question/answer pair, embedded into a per-KB Q&A index.
+
+    Deliberately not a `KbDocument`: a pair is retrieved against the raw visitor
+    phrasing in its own collection, so a near-miss is not diluted by the rest of
+    the site's chunks (#39).
+    """
+
+    __tablename__ = "qa_items"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    kb_id = Column(
+        String(36), ForeignKey("knowledge_bases.id"), nullable=False, index=True
+    )
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    hits = Column(Integer, nullable=False, default=0)
+    last_hit_at = Column(DateTime(timezone=True), nullable=True)
+    # manual | revise | unanswered — provenance, so the UI can show how a pair
+    # got here. Not an enum: a new provenance value must not need a migration.
+    source = Column(String(20), nullable=False, default="manual")
+    # ChatMessage.id this pair was written back from. No FK on purpose: deleting
+    # a session must not cascade-delete a curated answer.
+    source_message_id = Column(Integer, nullable=True)
+    # sha256 of the embedded text; an unchanged pair is not re-embedded.
+    embedding_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("kb_id", "question", name="uq_qa_items_kb_question"),
+    )
+
+
+class Procedure(Base):
+    """An ordered, human-written list of steps the bot follows, one per turn."""
+
+    __tablename__ = "procedures"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    # [{"text": "...", "requires_action": "link" | "form" | null}]
+    steps = Column(JSON, nullable=False, default=list)
+    enabled = Column(Boolean, nullable=False, default=True)
+    # Microsecond precision on purpose: "the first enabled procedure" is ordered
+    # by `created_at`, and SQLite's CURRENT_TIMESTAMP only resolves to the second,
+    # so two procedures written in the same second would tie. The server default
+    # still covers raw-SQL inserts (migrations, fixtures).
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=func.now(),
+    )
+
+
+class Lead(Base):
+    """A captured visitor, from an offline form, a prechat form or a trigger."""
+
+    __tablename__ = "leads"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True, index=True)
+    session_id = Column(String(50), nullable=True, index=True)
+    name = Column(String(100), nullable=True)
+    email = Column(String(255), nullable=True, index=True)
+    phone = Column(String(50), nullable=True)
+    message = Column(Text, nullable=True)
+    # offline-form | prechat | trigger | manual
+    source = Column(String(20), nullable=False, default="offline-form")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Webhook(Base):
+    """A best-effort outbound webhook. One attempt, 5s timeout, logged only."""
+
+    __tablename__ = "webhooks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    url = Column(String(1000), nullable=False)
+    # Exact event names from SPEC.md C5.
+    events = Column(JSON, nullable=False, default=list)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

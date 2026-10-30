@@ -10,6 +10,7 @@ import { Icon } from '../components/Icon'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useIsMobile } from '../hooks/useMediaQuery'
 import { WS_BASE_URL } from '../lib/env'
+import { api } from '../services/api'
 import { formatAssistantMessageContent } from '../utils/citations'
 
 interface Session {
@@ -53,6 +54,12 @@ export default function Sessions() {
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(false)
   const [sendingMessage, setSendingMessage] = useState(false)
+  // Issue item 4: correct one assistant answer and turn it into a curated pair.
+  const [reviseOpen, setReviseOpen] = useState(false)
+  const [reviseDraft, setReviseDraft] = useState('')
+  const [reviseSaving, setReviseSaving] = useState(false)
+  const [reviseError, setReviseError] = useState<string | null>(null)
+  const [reviseSaved, setReviseSaved] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -262,6 +269,50 @@ export default function Sessions() {
       minute: '2-digit',
     })
   }
+
+  /**
+   * Revise answer (issue item 4): the operator's correction is posted as a
+   * curated pair on the agent's bound KB, so the *next* identical question is
+   * answered from it with no reindex.
+   */
+  const openRevise = (content: string) => {
+    setReviseDraft(content)
+    setReviseError(null)
+    setReviseSaved(null)
+    setReviseOpen(true)
+  }
+
+  const closeRevise = () => {
+    setReviseOpen(false)
+    setReviseError(null)
+  }
+
+  const handleReviseSubmit = async () => {
+    if (!selectedSession || reviseSaving) return
+    const answer = reviseDraft.trim()
+    if (!answer) {
+      setReviseError(t('reviseAnswer.answerRequired'))
+      return
+    }
+    setReviseSaving(true)
+    setReviseError(null)
+    try {
+      const result = await api.reviseAnswer(selectedSession.id, answer)
+      setReviseOpen(false)
+      setReviseSaved(
+        result.replaced
+          ? t('reviseAnswer.savedReplaced')
+          : t('reviseAnswer.saved'),
+      )
+    } catch (err) {
+      setReviseError(
+        err instanceof Error ? err.message : t('reviseAnswer.errors.saveFailed'),
+      )
+    } finally {
+      setReviseSaving(false)
+    }
+  }
+
   const rowStyle = isMobile
     ? { flexDirection: 'column' as const, alignItems: 'stretch' as const }
     : undefined
@@ -705,12 +756,38 @@ export default function Sessions() {
                               </div>
                               <div
                                 style={{
-                                  fontSize: 'var(--text-xs)',
-                                  color: 'var(--fg-dim)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  flexWrap: 'wrap',
+                                  gap: 'var(--space-2)',
                                   marginTop: 'var(--space-2)',
                                 }}
                               >
-                                {formatTime(msg.created_at)}
+                                <span
+                                  style={{
+                                    fontSize: 'var(--text-xs)',
+                                    color: 'var(--fg-dim)',
+                                  }}
+                                >
+                                  {formatTime(msg.created_at)}
+                                </span>
+                                {!isVisitor && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    data-testid={`revise-answer-${msg.id}`}
+                                    aria-label={t('reviseAnswer.actionLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    title={t('reviseAnswer.actionLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    onClick={() => openRevise(msg.content)}
+                                  >
+                                    {t('reviseAnswer.action')}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -780,6 +857,127 @@ export default function Sessions() {
             )}
           </section>
         </div>
+
+        {reviseSaved && (
+          <div
+            className="toast toast-success"
+            role="status"
+            aria-live="polite"
+            data-testid="revise-answer-saved"
+            style={{ position: 'fixed', right: 'var(--space-6)', bottom: 'var(--space-6)', zIndex: 70 }}
+          >
+            <span className="toast-description">{reviseSaved}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              aria-label={t('knowledgeBases.actions.close')}
+              title={t('knowledgeBases.actions.close')}
+              onClick={() => setReviseSaved(null)}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
+
+        {reviseOpen && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 'var(--space-4)',
+              overflowY: 'auto',
+            }}
+            onClick={closeRevise}
+          >
+            <div className="sheet-backdrop" aria-hidden="true" />
+            <div
+              className="sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="revise-answer-title"
+              data-testid="revise-answer-sheet"
+              style={{
+                position: 'relative',
+                maxWidth: '560px',
+                width: '100%',
+                minWidth: 0,
+                maxHeight: 'calc(100vh - var(--space-8))',
+                borderRadius: 'var(--radius-lg)',
+              }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="sheet-header">
+                <div style={{ minWidth: 0 }}>
+                  <h2 id="revise-answer-title" className="card-title">
+                    {t('reviseAnswer.title')}
+                  </h2>
+                  <p className="field-hint" style={{ marginTop: 'var(--space-1)' }}>
+                    {t('reviseAnswer.description')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-icon"
+                  aria-label={t('knowledgeBases.actions.close')}
+                  title={t('knowledgeBases.actions.close')}
+                  onClick={closeRevise}
+                >
+                  <Icon name="close" size={16} />
+                </button>
+              </div>
+
+              <div className="sheet-body">
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label className="field-label" htmlFor="revise-answer-text">
+                    {t('reviseAnswer.label')}
+                  </label>
+                  <textarea
+                    id="revise-answer-text"
+                    className="input textarea"
+                    value={reviseDraft}
+                    onChange={(event) => {
+                      setReviseDraft(event.target.value);
+                      setReviseError(null);
+                    }}
+                    rows={6}
+                    placeholder={t('reviseAnswer.placeholder')}
+                  />
+                  {reviseError && (
+                    <p role="alert" className="field-error">
+                      {reviseError}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="sheet-footer">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={closeRevise}
+                >
+                  {t('buttons.cancel')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleReviseSubmit}
+                  disabled={reviseSaving}
+                  aria-busy={reviseSaving}
+                >
+                  {reviseSaving ? (
+                    <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                  ) : null}
+                  {t('reviseAnswer.submit')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </AdminLayout>
   )

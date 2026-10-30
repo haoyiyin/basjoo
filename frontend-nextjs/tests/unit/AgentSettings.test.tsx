@@ -24,6 +24,12 @@ vi.mock('../../src/services/api', () => ({
     getAgent: vi.fn(),
     getDefaultAgent: vi.fn(),
     updateAgent: vi.fn(),
+    // #39: fixed facts and procedures are their own endpoints, not agent PATCH.
+    updateFixedFacts: vi.fn(),
+    listProcedures: vi.fn(),
+    createProcedure: vi.fn(),
+    updateProcedure: vi.fn(),
+    deleteProcedure: vi.fn(),
   },
 }));
 
@@ -72,6 +78,8 @@ beforeEach(() => {
   mockedApi.getAgent.mockResolvedValue(agent as never);
   mockedApi.getDefaultAgent.mockResolvedValue(agent as never);
   mockedApi.updateAgent.mockResolvedValue(agent as never);
+  mockedApi.listProcedures.mockResolvedValue({ items: [], total: 0 } as never);
+  mockedApi.updateFixedFacts.mockResolvedValue({ fixed_facts: null } as never);
 });
 
 describe('AgentSettings', () => {
@@ -170,6 +178,43 @@ describe('AgentSettings', () => {
         expect.objectContaining({ restricted_reply: 'New restricted reply' }),
       );
     });
+  });
+
+  it('renders the fixed-facts card and saves through its own endpoint', async () => {
+    const user = userEvent.setup();
+    mockedApi.getAgent.mockResolvedValue({
+      ...agent,
+      fixed_facts: 'Address: 3F, 100 Hengshan Road.',
+    } as never);
+    mockedApi.updateFixedFacts.mockResolvedValue({
+      fixed_facts: 'Address: 3F, 100 Hengshan Road.\n\nBooking: https://b.example.com',
+    } as never);
+
+    renderAgentSettings();
+
+    const textarea = await screen.findByLabelText('fixedFacts.label');
+    expect(textarea).toHaveValue('Address: 3F, 100 Hengshan Road.');
+
+    await user.type(textarea, '\n\nBooking: https://b.example.com');
+    await user.click(screen.getByRole('button', { name: 'fixedFacts.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateFixedFacts).toHaveBeenCalledWith(
+        'agt_1',
+        'Address: 3F, 100 Hengshan Road.\n\nBooking: https://b.example.com',
+      );
+    });
+    // The general agent PATCH must not carry fixed facts.
+    expect(mockedApi.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('mounts the procedure editor for the route agent', async () => {
+    renderAgentSettings();
+
+    await waitFor(() =>
+      expect(mockedApi.listProcedures).toHaveBeenCalledWith('agt_1'),
+    );
+    expect(screen.getByTestId('agent-procedures-card')).toBeInTheDocument();
   });
 
   it('allows setting rate_limit_per_minute to 0 (no limit)', async () => {
