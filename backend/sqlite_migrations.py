@@ -418,6 +418,22 @@ def _create_feature_tables(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS ix_leads_session_id ON leads(session_id)"
         )
+        # #41 — operator triage + the page the form was submitted from. Added to
+        # the existing table with `_ensure_columns`, so a database that already
+        # ran the batch schema gains them without a rebuild.
+        _ensure_columns(
+            cursor,
+            "leads",
+            [
+                ("page_url", "VARCHAR(1000)"),
+                ("contacted", "BOOLEAN DEFAULT 0"),
+                ("contacted_at", "DATETIME"),
+                ("updated_at", "DATETIME"),
+            ],
+        )
+        cursor.execute(
+            "UPDATE leads SET contacted = 0 WHERE contacted IS NULL"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS webhooks (
@@ -526,6 +542,8 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("business_hours", "TEXT"),
         ("away_message", "TEXT"),
         ("ai_disclosure", "TEXT"),
+        # #41 — prechat form policy: off | optional | required.
+        ("prechat_mode", "VARCHAR(20) DEFAULT 'off'"),
         # #39 — answer control.
         ("fixed_facts", "TEXT"),
         # #44 — quota degradation.
@@ -575,6 +593,12 @@ def _migrate_agents(cursor: sqlite3.Cursor):
     )
     cursor.execute(
         "UPDATE agents SET traffic_percentage = 100 WHERE traffic_percentage IS NULL"
+    )
+    # #41: a prechat form defaults off, so an existing agent behaves exactly as
+    # it did before the column existed.
+    cursor.execute(
+        "UPDATE agents SET prechat_mode = 'off' "
+        "WHERE prechat_mode IS NULL OR prechat_mode = ''"
     )
 
 

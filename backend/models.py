@@ -225,8 +225,12 @@ class Agent(Base):
     # Absent = always online. Resolved with zoneinfo, never a fixed offset.
     business_hours = Column(JSON, nullable=True, default=None)
     away_message = Column(Text, nullable=True)
-    # One line rendered as the first assistant message, with a consent gate.
+    # One line rendered in the widget's conversation chrome, verbatim (the text
+    # is operator-authored and is never translated; only the label around it
+    # is). Absent = nothing rendered.
     ai_disclosure = Column(Text, nullable=True)
+    # "off" | "optional" | "required" (#41). Anything else reads as "off".
+    prechat_mode = Column(String(20), nullable=False, default="off")
 
     # --- Answer control (#39) ---------------------------------------------
     # Operator-written facts that outrank retrieved chunks and are injected on
@@ -388,7 +392,10 @@ class ChatSession(Base):
     mode = Column(String(10), nullable=False, default="ai")
     # First human message time; NULL means the bot has answered everything.
     human_replied_at = Column(DateTime(timezone=True), nullable=True)
-    # Set when a lead form was submitted from this session (#41).
+    # Set when a lead form was submitted from this session (#41). These are
+    # operator metadata captured by the widget's prechat/offline form and are
+    # NEVER part of the prompt handed to the model (asserted by
+    # tests/test_prechat_isolation.py on the assembled message array).
     contact_email = Column(String(255), nullable=True)
     contact_name = Column(String(100), nullable=True)
     # Idempotency guard for the closing transcript email (#41).
@@ -802,6 +809,15 @@ class Lead(Base):
     message = Column(Text, nullable=True)
     # offline-form | prechat | trigger | manual
     source = Column(String(20), nullable=False, default="offline-form")
+    # The page the visitor submitted from (#41). Visitor-supplied and therefore
+    # bounded, never fetched.
+    page_url = Column(String(1000), nullable=True)
+    # Operator triage: "contacted" is a manual checkbox, not a workflow (#41).
+    contacted = Column(Boolean, nullable=False, default=False)
+    contacted_at = Column(DateTime(timezone=True), nullable=True)
+    # A second submit from the same session updates this row instead of
+    # creating one, so the timestamp tracks the latest edit.
+    updated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

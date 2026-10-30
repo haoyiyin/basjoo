@@ -49,6 +49,9 @@ from models import (
 )
 from api.v1.schemas import (
     ChatRequest,
+    MessageFeedbackPayload,
+    MessageFeedbackRequest,
+    TranscriptEmailResponse,
     ChatResponse,
     ContextRequest,
     ContextResponse,
@@ -109,11 +112,34 @@ from services.answer_quality import (
     looks_like_fallback,
 )
 from services.quota import message_weight
+from services.lead_service import (
+    SOURCE_PRECHAT,
+    release_transcript_claim,
+    touch_transcript_sent,
+    upsert_lead,
+)
+from services.transcript_service import (
+    SMTP_NOT_CONFIGURED_MESSAGE,
+    SMTP_SEND_FAILED_MESSAGE,
+    SmtpNotConfigured,
+    TranscriptSendFailed,
+    render_transcript,
+    send_transcript_email,
+    smtp_is_configured,
+)
+from i18n.core import _, get_locale_from_request
 from services.spam_check import screen_answered_turn
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
 import os
+
+# #41 — the operator-facing results of the transcript button. These are msgids:
+# `_()` translates them per request locale, and the English strings double as
+# the catalog keys, so the UI never has to guess why nothing was sent.
+TRANSCRIPT_SENT = "Transcript sent"
+TRANSCRIPT_ALREADY_SENT = "Transcript was already sent"
+TRANSCRIPT_NO_CONTACT_EMAIL = "This session has no contact email"
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +259,13 @@ def resolve_llm_degradation(agent: Agent) -> Dict[str, Any]:
     }
 
 
+def _non_empty_str(value: Any) -> Optional[str]:
+    """A trimmed string, or None for blank/non-string — never `"   "`."""
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
 def build_agent_config(
     agent: Agent, *, kb_name: Optional[str] = None, kb_status: Optional[str] = None
 ) -> dict:
@@ -286,6 +319,10 @@ def build_agent_config(
         "escalation_rules": getattr(agent, "escalation_rules", None),
         "business_hours": business_hours_config_payload(agent),
         "away_message": business_hours_away_message(agent),
+        # #41: the disclosure line (verbatim, never translated server-side) and
+        # the prechat policy both round-trip so the settings page can edit them.
+        "ai_disclosure": getattr(agent, "ai_disclosure", None),
+        "prechat_mode": getattr(agent, "prechat_mode", None) or "off",
         # #44 quota degradation: the fallback model round-trips, its key does
         # not — only a boolean, exactly like `api_key_set`.
         "fallback_model": getattr(agent, "fallback_model", None),
@@ -959,6 +996,40 @@ async def get_or_create_chat_session(
     return session
 
 
+async def absorb_prechat_submission(
+    db: AsyncSession,
+    agent: Agent,
+    session: ChatSession,
+    prechat,
+) -> None:
+    """Store the prechat answers as session metadata plus one lead (#41).
+
+    Idempotent by design: `upsert_lead` keys on the session, so a visitor who
+    refreshes and re-submits the form edits their existing lead instead of
+    creating a second one. A blank submission writes nothing at all.
+    """
+    name = (getattr(prechat, "name", None) or "").strip()
+    email = (getattr(prechat, "email", None) or "").strip()
+    if not name and not email:
+        return
+    try:
+        await upsert_lead(
+            db,
+            agent=agent,
+            session=session,
+            session_public_id=session.session_id,
+            name=name or None,
+            email=email or None,
+            source=SOURCE_PRECHAT,
+            commit=False,
+        )
+        await db.commit()
+    except Exception as error:  # identity capture must never break the chat
+        await db.rollback()
+        logger.warning(
+            "Prechat capture for session %s skipped: %s", session.session_id, error
+        )
+
 async def prepare_chat_request(
     request: ChatRequest,
     http_request: Request,
@@ -1042,6 +1113,13 @@ async def prepare_chat_request(
     use_mock_llm = False
 
     session = await get_or_create_chat_session(agent, request, http_request, db)
+
+    # #41: the prechat form's answers land on the session and a lead row. They
+    # are *identity*, not conversation: nothing below this line reads
+    # `request.prechat` again, so the assembled `messages` array cannot contain
+    # them (asserted by tests/test_prechat_isolation.py).
+    if getattr(request, "prechat", None) is not None:
+        await absorb_prechat_submission(db, agent, session, request.prechat)
 
     # #43 / contract C3+C6: ONE gate decides whether the bot answers. `resolved`,
     # `closed`, `paused`, `taken_over`, a plain `mode="human"` reply and a
@@ -2201,6 +2279,85 @@ async def release_chat_to_ai(
     }
 
 
+@router.post("/chat/feedback")
+async def submit_message_feedback(
+    payload: MessageFeedbackRequest,
+    request: Request,
+    session_id: str,
+    message_id: int,
+    visitor_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Thumbs on one assistant turn (#41). `value` is 1, -1, or 0 to clear.
+
+    The vote is stored on the rated assistant row's `rating` column (the
+    spine's -1 / 0 / +1, same column the whole batch shares), so it renders in
+    the transcript's own context and the analytics rollup counts answers, not
+    votes. Ownership is enforced the same way `/chat/messages` enforces it: a
+    foreign or unknown session answers the same 404, so the id is never
+    confirmed.
+
+    Idempotent by assignment, not by accumulation: clicking 👎 again sends
+    `value: 0` and the row goes back to "no vote".
+    """
+    if payload.value not in (-1, 0, 1):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="value must be -1, 0 or 1",
+        )
+
+    session = await resolve_public_chat_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.visitor_id and session.visitor_id != (visitor_id or ""):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    agent = await db.scalar(select(Agent).where(Agent.id == session.agent_id))
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    enforce_widget_origin_whitelist(agent, request)
+
+    message = await db.scalar(
+        select(ChatMessage).where(
+            ChatMessage.id == message_id, ChatMessage.session_id == session.id
+        )
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.role != "assistant":
+        # Only an answer can be rated; a vote on a visitor turn has no meaning
+        # and would skew the analytics rollup.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only assistant messages can be rated",
+        )
+
+    # `chat_messages.rating` lives on the visitor turn the answer replied to
+    # (see the column's own comment), so the vote sits in the transcript's own
+    # context: "this question's answer was bad". The nearest preceding user row
+    # is that turn.
+    rated = await db.scalar(
+        select(ChatMessage)
+        .where(
+            ChatMessage.session_id == session.id,
+            ChatMessage.role == "user",
+            ChatMessage.id < message.id,
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(1)
+    )
+    target = rated if rated is not None else message
+    target.rating = payload.value
+    await db.commit()
+
+    return MessageFeedbackPayload(
+        message_id=target.id,
+        assistant_message_id=message.id,
+        session_id=session.session_id,
+        rating=payload.value,
+        cleared=payload.value == 0,
+    )
+
 @router.get("/chat/messages")
 async def get_chat_messages(
     session_id: str,
@@ -2256,6 +2413,9 @@ async def get_chat_messages(
             "role": msg.role,
             "content": msg.content,
             "sources": msg.sources or [],
+            # #41: persisted thumbs, so a reload shows the vote the visitor cast.
+            "rating": msg.rating if msg.rating is not None else 0,
+            "sender_type": msg.sender_type,
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
         }
         for msg in messages
@@ -3075,6 +3235,16 @@ async def get_public_config(
         "online": is_online(agent) if agent else True,
         "business_hours": business_hours_config_payload(agent) if agent else None,
         "away_message": business_hours_away_message(agent) if agent else None,
+        # #41: the disclosure line is returned verbatim (it is the operator's own
+        # copy, in their own language); the widget translates only the label
+        # around it. Absent -> nothing rendered. `prechat_mode` is the widget's
+        # prechat policy: off | optional | required.
+        "ai_disclosure": _non_empty_str(getattr(agent, "ai_disclosure", None))
+        if agent
+        else None,
+        "prechat_mode": (getattr(agent, "prechat_mode", None) or "off")
+        if agent
+        else "off",
     }
 
 # --- #40: the install surface ------------------------------------------------
@@ -3359,6 +3529,10 @@ async def get_session_messages(
             # ("no signal", shown as an em dash), never 0.0.
             "confidence": msg.confidence,
             "is_unanswered": bool(msg.is_unanswered),
+            # #41: the thumbs state rides along so the session view renders the
+            # operator's own votes without a second request per message.
+            "rating": msg.rating if msg.rating is not None else 0,
+            "sender_type": msg.sender_type,
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
         }
         for msg in messages
@@ -3552,6 +3726,123 @@ async def reopen_session(
 
     return {"session": serialize_admin_session(session)}
 
+
+@router.post(
+    "/admin/sessions/{session_id}/email-transcript",
+    response_model=TranscriptEmailResponse,
+)
+async def email_session_transcript(
+    session_id: str,
+    request: Request,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send this session's transcript to its contact email — **exactly once**.
+
+    The send is claimed with a conditional `UPDATE ... WHERE transcript_sent_at
+    IS NULL` *before* the mail is built, so two concurrent callers (a double
+    click, a manual send racing the scheduler's close, two scheduler runs) cannot
+    both send: exactly one wins the row and the other observes
+    `already_sent: true` with the same stable body.
+
+    Unset SMTP is a configuration state, not a crash: 503 with the localized
+    "SMTP is not configured" / "SMTP 未配置". A failed SMTP conversation releases
+    the claim so a retry is possible, and answers 502 — never a 500.
+    """
+    session = await _load_operable_session(db, session_id, current_user)
+    agent = await db.scalar(select(Agent).where(Agent.id == session.agent_id))
+    locale = get_locale_from_request(request)
+
+    # Already sent: answer the stable body without touching SMTP at all, so a
+    # second click cannot resend even when the mail server is up.
+    if session.transcript_sent_at is not None:
+        return TranscriptEmailResponse(
+            success=True,
+            sent=False,
+            already_sent=True,
+            recipient=session.contact_email,
+            sent_at=session.transcript_sent_at,
+            message=_(TRANSCRIPT_ALREADY_SENT, locale=locale),
+        )
+
+    recipient = (session.contact_email or "").strip()
+    if not recipient:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_(TRANSCRIPT_NO_CONTACT_EMAIL, locale=locale),
+        )
+
+    # Check SMTP BEFORE claiming the slot: a 503 must leave the session
+    # emailable, otherwise the operator's first attempt burns the only try.
+    if not smtp_is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_(SMTP_NOT_CONFIGURED_MESSAGE, locale=locale),
+        )
+
+    messages = (
+        await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session.id)
+            .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+        )
+    ).scalars().all()
+
+    claimed, sent_at = await touch_transcript_sent(db, session.id)
+    if not claimed:
+        # Lost the race (or a second request landed between the check and here).
+        return TranscriptEmailResponse(
+            success=True,
+            sent=False,
+            already_sent=True,
+            recipient=recipient,
+            sent_at=sent_at,
+            message=_(TRANSCRIPT_ALREADY_SENT, locale=locale),
+        )
+
+    body = render_transcript(
+        agent_name=getattr(agent, "name", None),
+        session_public_id=session.session_id,
+        messages=messages,
+        created_at=session.created_at,
+        contact_name=session.contact_name,
+    )
+    title = getattr(agent, "name", None) or "Basjoo"
+    try:
+        await send_transcript_email(
+            recipient=recipient,
+            subject=f"{title} — conversation transcript ({session.session_id})",
+            body=body,
+        )
+    except SmtpNotConfigured as error:
+        await release_transcript_claim(db, session.id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_(SMTP_NOT_CONFIGURED_MESSAGE, locale=locale),
+        ) from error
+    except TranscriptSendFailed as error:
+        # The claim is released so a corrected retry can send; the caller gets a
+        # typed 502 instead of a 500 with a traceback.
+        await release_transcript_claim(db, session.id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_(SMTP_SEND_FAILED_MESSAGE, locale=locale),
+        ) from error
+
+    logger.info(
+        "Transcript for session %s emailed to %s by admin %s",
+        session.session_id,
+        recipient,
+        current_user.id,
+    )
+    return TranscriptEmailResponse(
+        success=True,
+        sent=True,
+        already_sent=False,
+        recipient=recipient,
+        sent_at=sent_at,
+        message=_(TRANSCRIPT_SENT, locale=locale),
+    )
 
 @router.post("/admin/sessions/send")
 async def send_session_message(

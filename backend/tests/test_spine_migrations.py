@@ -30,6 +30,7 @@ NEW_COLUMNS = {
         "business_hours",
         "away_message",
         "ai_disclosure",
+        "prechat_mode",
         "fixed_facts",
         "fallback_model",
         "fallback_api_key",
