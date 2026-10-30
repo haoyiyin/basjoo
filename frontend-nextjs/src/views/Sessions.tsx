@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
 import HelpTooltip from '../components/HelpTooltip'
@@ -38,12 +38,26 @@ interface Message {
     question?: string
     id?: string
   }>
+  /** #42: retrieval signal 0..1, or null when nothing was retrieved. */
+  confidence?: number | null
+  /** #42: true when the answer did not really answer (see answer_quality.py). */
+  is_unanswered?: boolean
   created_at: string
+}
+
+/** Below this an answer is weak enough to badge in the transcript (#42). */
+const LOW_CONFIDENCE_THRESHOLD = 0.5
+
+/** The confidence chip: a percentage in the mono face, or an em dash. */
+function confidenceLabel(confidence: number | null | undefined): string {
+  if (typeof confidence !== 'number') return '—'
+  return `${Math.round(confidence * 100)}%`
 }
 
 export default function Sessions() {
   const { t } = useTranslation('common')
   const { agentId } = useParams<{ agentId?: string }>()
+  const [searchParams] = useSearchParams()
   const { token } = useAuth()
   const isMobile = useIsMobile()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -60,6 +74,14 @@ export default function Sessions() {
   const [reviseSaving, setReviseSaving] = useState(false)
   const [reviseError, setReviseError] = useState<string | null>(null)
   const [reviseSaved, setReviseSaved] = useState<string | null>(null)
+  // #42: the session-list quality filters and the "Add to Q&A" write-back.
+  // `?unanswered=1` is the dashboard tile's entry point into the same filter.
+  const [unansweredOnly, setUnansweredOnly] = useState(
+    searchParams.get('unanswered') === '1',
+  )
+  const [qaFromMessageSaving, setQaFromMessageSaving] = useState<number | null>(null)
+  const [qaFromMessageSaved, setQaFromMessageSaved] = useState<string | null>(null)
+  const [qaFromMessageError, setQaFromMessageError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -95,9 +117,12 @@ export default function Sessions() {
     try {
       const statusParam = filter === 'all' ? '' : `&status=${filter}`
       const keywordParam = keyword ? `&keyword=${encodeURIComponent(keyword)}` : ''
+      // #42: "未答问题 / Unanswered" narrows the list to sessions with at
+      // least one assistant message the quality rule flagged.
+      const unansweredParam = unansweredOnly ? '&unanswered=true' : ''
 
       const response = await fetch(
-        `/api/v1/admin/sessions?skip=0&limit=50${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}`,
+        `/api/v1/admin/sessions?skip=0&limit=50${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}${unansweredParam}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -112,7 +137,7 @@ export default function Sessions() {
     } finally {
       setLoading(false)
     }
-  }, [filter, keyword, token])
+  }, [filter, keyword, token, unansweredOnly, agentId])
 
   const connectWebSocket = useCallback(() => {
     if (!token) return
@@ -313,9 +338,54 @@ export default function Sessions() {
     }
   }
 
+  /**
+   * "Add to Q&A" (#42): one click turns a triaged answer into a curated pair.
+   * It calls the existing `POST /admin/qa/from-message/{id}` — the backend
+   * already derives the question from the preceding user message, so the action
+   * needs no input. Adding the pair *is* the triage decision, so the row is then
+   * dismissed out of the unanswered queue (the message itself is untouched).
+   */
+  const handleAddToQa = async (messageId: number) => {
+    if (qaFromMessageSaving !== null) return
+    setQaFromMessageSaving(messageId)
+    setQaFromMessageError(null)
+    setQaFromMessageSaved(null)
+    try {
+      const result = await api.addQaFromMessage(messageId)
+      setQaFromMessageSaved(result.qa_item.question)
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === messageId
+            ? { ...message, is_unanswered: false }
+            : message,
+        ),
+      )
+    } catch (err) {
+      setQaFromMessageError(
+        err instanceof Error
+          ? err.message
+          : t('unanswered.errors.addFailed'),
+      )
+      return
+    } finally {
+      setQaFromMessageSaving(null)
+    }
+
+    // The pair exists, so the queue row is done. A dismissal failure is
+    // cosmetic — the message stays answered and the operator can retry — so it
+    // is logged rather than turned into an error toast over a success.
+    try {
+      await api.dismissUnanswered(messageId)
+      void fetchSessions()
+    } catch (err) {
+      console.error('Failed to dismiss the unanswered row:', err)
+    }
+  }
+
   const rowStyle = isMobile
     ? { flexDirection: 'column' as const, alignItems: 'stretch' as const }
     : undefined
+
   const iconButtonStyle = isMobile
     ? { minWidth: 44, minHeight: 44 }
     : undefined
@@ -360,7 +430,7 @@ export default function Sessions() {
             </h1>
             <p className="page-subtitle">{t('settings.chatCenterDesc')}</p>
           </div>
-          <div className="page-actions">
+          <div className="page-actions" style={{ flexWrap: 'wrap' }}>
             {(['all', 'active', 'taken_over', 'closed'] as const).map((status) => (
               <button
                 key={status}
@@ -372,6 +442,17 @@ export default function Sessions() {
                 {statusLabel(status)}
               </button>
             ))}
+            {/* #42: the triage filter. A chip, not a status: it composes with
+             * the status buttons instead of replacing them. */}
+            <button
+              type="button"
+              className={unansweredOnly ? 'btn btn-primary' : 'btn btn-secondary'}
+              data-testid="sessions-filter-unanswered"
+              aria-pressed={unansweredOnly}
+              onClick={() => setUnansweredOnly((value) => !value)}
+            >
+              {t('unanswered.filter')}
+            </button>
           </div>
         </header>
 
@@ -772,6 +853,52 @@ export default function Sessions() {
                                 >
                                   {formatTime(msg.created_at)}
                                 </span>
+                                {/* #42: a weak answer carries its own percentage, in mono so the
+                                 * column of scores lines up. NULL means "no retrieval signal"
+                                 * and stays an em dash, never 0%. */}
+                                {!isVisitor &&
+                                  typeof msg.confidence === 'number' &&
+                                  msg.confidence < LOW_CONFIDENCE_THRESHOLD && (
+                                  <span
+                                    className="badge badge-warning"
+                                    data-testid={`message-confidence-${msg.id}`}
+                                    aria-label={t('unanswered.confidenceLabel', {
+                                      value: confidenceLabel(msg.confidence),
+                                    })}
+                                    title={t('unanswered.confidenceLabel', {
+                                      value: confidenceLabel(msg.confidence),
+                                    })}
+                                  >
+                                    <span className="mono">{confidenceLabel(msg.confidence)}</span>
+                                  </span>
+                                )}
+                                {/* #42: one click turns the turn into a curated pair. The
+                                 * backend derives the question from the preceding user
+                                 * message, so the action needs no input. */}
+                                {!isVisitor && msg.is_unanswered && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    data-testid={`add-to-qa-${msg.id}`}
+                                    aria-label={t('unanswered.addToQaLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    title={t('unanswered.addToQaLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    disabled={qaFromMessageSaving === msg.id}
+                                    aria-busy={qaFromMessageSaving === msg.id}
+                                    onClick={() => void handleAddToQa(msg.id)}
+                                  >
+                                    {qaFromMessageSaving === msg.id ? (
+                                      <div
+                                        className="spinner"
+                                        style={{ width: '14px', height: '14px' }}
+                                      />
+                                    ) : null}
+                                    {t('unanswered.addToQa')}
+                                  </button>
+                                )}
                                 {!isVisitor && (
                                   <button
                                     type="button"
@@ -857,6 +984,51 @@ export default function Sessions() {
             )}
           </section>
         </div>
+
+        {/* #42: the created pair is echoed inline — the backend derived the
+         * question from the preceding user message, so this is the confirmation
+         * that a real question landed in the index. */}
+        {(qaFromMessageSaved || qaFromMessageError) && (
+          <div
+            className={
+              qaFromMessageError ? 'toast toast-error' : 'toast toast-success'
+            }
+            role={qaFromMessageError ? 'alert' : 'status'}
+            aria-live="polite"
+            data-testid="add-to-qa-result"
+            style={{
+              position: 'fixed',
+              right: 'var(--space-6)',
+              bottom: 'var(--space-6)',
+              zIndex: 70,
+            }}
+          >
+            <span className="toast-description">
+              {qaFromMessageError ? (
+                qaFromMessageError
+              ) : (
+                <>
+                  {t('unanswered.addedToQa')}
+                  {qaFromMessageSaved ? (
+                    <span className="mono"> {qaFromMessageSaved}</span>
+                  ) : null}
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              aria-label={t('knowledgeBases.actions.close')}
+              title={t('knowledgeBases.actions.close')}
+              onClick={() => {
+                setQaFromMessageSaved(null)
+                setQaFromMessageError(null)
+              }}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
 
         {reviseSaved && (
           <div

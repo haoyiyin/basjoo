@@ -423,6 +423,35 @@ export interface QaFromMessageResponse {
 }
 
 /**
+ * One row of the #42 unanswered queue. `question` is the visitor's own message
+ * (not the answer), `occurrences` is how often the same normalised question was
+ * flagged unanswered for that agent.
+ */
+export interface UnansweredItem {
+	message_id: number;
+	session_id: string;
+	question: string;
+	answer: string;
+	/** null means "no retrieval signal" — render an em dash, never 0%. */
+	confidence: number | null;
+	created_at?: string | null;
+	occurrences: number;
+}
+
+export interface UnansweredList {
+	items: UnansweredItem[];
+	total: number;
+}
+
+export interface UnansweredQuery {
+	/** ISO-8601; the backend defaults to 30 days back. */
+	since?: string;
+	agent_id?: string;
+	skip?: number;
+	limit?: number;
+}
+
+/**
  * One ordered step of a procedure. `requires_action` names a channel capability
  * (`link`, `form`, or anything else); a step whose action is unavailable skips
  * the whole procedure, so the value must round-trip freely.
@@ -1549,6 +1578,35 @@ class APIService {
 	): Promise<QaFromMessageResponse> {
 		return this.request<QaFromMessageResponse>(
 			`/api/v1/admin/qa/from-message/${messageId}`,
+			{ method: "POST" },
+		);
+	}
+
+	// --------------------------------------------------- unanswered (#42)
+
+	/** The triage queue of answers that did not really answer. */
+	async getUnanswered(
+		query: UnansweredQuery = {},
+	): Promise<UnansweredList> {
+		const params = new URLSearchParams();
+		if (query.since) params.set("since", query.since);
+		if (query.agent_id) params.set("agent_id", query.agent_id);
+		if (typeof query.skip === "number") params.set("skip", String(query.skip));
+		if (typeof query.limit === "number")
+			params.set("limit", String(query.limit));
+		const suffix = params.toString();
+		return this.request<UnansweredList>(
+			`/api/v1/admin/sessions/unanswered${suffix ? `?${suffix}` : ""}`,
+		);
+	}
+
+	/**
+	 * Take a triaged row out of the queue. The message stays in the transcript;
+	 * only `is_unanswered` is cleared.
+	 */
+	async dismissUnanswered(messageId: number): Promise<{ dismissed: boolean }> {
+		return this.request<{ dismissed: boolean }>(
+			`/api/v1/admin/sessions/unanswered/${messageId}:dismiss`,
 			{ method: "POST" },
 		);
 	}

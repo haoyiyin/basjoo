@@ -39,6 +39,10 @@ export default function Dashboard() {
 		null,
 	);
 	const [visitorCount, setVisitorCount] = useState<number | null>(null);
+	// #42: unanswered questions in the last 7 days. The analytics endpoint is
+	// workstream 6's; until it lands this is one dedicated call to the triage
+	// queue's own `total`, so no counter column exists either way.
+	const [unansweredCount, setUnansweredCount] = useState<number | null>(null);
 	const [agentIdCopied, setAgentIdCopied] = useState(false);
 	const [kbId, setKbId] = useState<string | null>(null);
 	const [kbName, setKbName] = useState<string | null>(null);
@@ -74,6 +78,33 @@ export default function Dashboard() {
 		} catch (error) {
 			console.error("Failed to load data:", error);
 			navigate("/agents");
+			return;
+		}
+		// Independent of the agent/quota block: a missing quality signal must
+		// never send the operator to /agents.
+		await loadUnanswered(routeAgentId);
+	};
+
+	/**
+	 * #42's stat: how many answers in the last 7 days did not really answer.
+	 * The analytics endpoint (workstream 6) will own this number; until then the
+	 * triage queue's own `total` is the same count from the same rows, so no
+	 * counter column is introduced.
+	 */
+	const loadUnanswered = async (agentIdValue: string) => {
+		const since = new Date(
+			Date.now() - 7 * 24 * 60 * 60 * 1000,
+		).toISOString();
+		try {
+			const result = await api.getUnanswered({
+				agent_id: agentIdValue,
+				since,
+				limit: 1,
+			});
+			setUnansweredCount(result.total);
+		} catch (error) {
+			console.error("Failed to load unanswered count:", error);
+			setUnansweredCount(null);
 		}
 	};
 
@@ -128,6 +159,19 @@ export default function Dashboard() {
 							{activeSessionCount === null ? NO_VALUE : activeSessionCount}
 						</div>
 					</div>
+					{/* #42: the whole card is the link to the filtered session list, so
+					 * the number is one click away from the rows that produced it. */}
+					<Link
+						className="stat stat-link"
+						to={`/agents/${routeAgentId ?? ""}/sessions?unanswered=1`}
+						data-testid="dashboard-stat-unanswered"
+						title={t("unanswered.dashboardStatHint")}
+					>
+						<div className="stat-label">{t("unanswered.dashboardStat")}</div>
+						<div className="stat-value">
+							{unansweredCount === null ? NO_VALUE : unansweredCount}
+						</div>
+					</Link>
 				</div>
 
 				{/* Status and identity: a definition list, not a card per fact. The

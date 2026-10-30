@@ -10,14 +10,21 @@ permission model is introduced here.
 """
 
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from api.endpoints.auth import get_current_admin, require_admin_or_super_admin
+from api.endpoints.auth import (
+    get_current_admin,
+    require_admin_or_super_admin,
+    require_chat_operator,
+)
 from api.v1.endpoints import require_bound_kb
 from api.v1.schemas import (
     FixedFactsRequest,
@@ -35,9 +42,21 @@ from api.v1.schemas import (
     QaItemUpdateRequest,
     ReviseAnswerRequest,
     ReviseAnswerResponse,
+    UnansweredItem,
+    UnansweredListResponse,
 )
 from database import get_db
-from models import AdminUser, Agent, ChatMessage, ChatSession, KnowledgeBase, Procedure, QaItem
+from models import (
+    AdminUser,
+    Agent,
+    AgentMember,
+    ChatMessage,
+    ChatSession,
+    KnowledgeBase,
+    Procedure,
+    QaItem,
+)
+from services.answer_quality import UNANSWERED_MIN_QUESTION_CHARS
 from services.qa_service import QaService
 
 logger = logging.getLogger(__name__)
@@ -46,7 +65,7 @@ router = APIRouter(prefix="/api/v1", tags=["qa"])
 
 # Issue #42's rule, reused here: a question shorter than this cannot be a real
 # visitor question, so it is never turned into a curated pair.
-MIN_QA_QUESTION_LENGTH = 15
+MIN_QA_QUESTION_LENGTH = UNANSWERED_MIN_QUESTION_CHARS
 
 def _require_workspace(current_user: AdminUser) -> int:
     workspace_id = getattr(current_user, "workspace_id", None)
@@ -394,6 +413,13 @@ async def qa_from_message(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
         )
+    # #42: only an assistant message is an answer worth curating. Accepting a
+    # user message would store the visitor's own words as the answer.
+    if message.role != "assistant":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only an assistant message can be added to the Q&A index",
+        )
     session, agent = await _load_session_for_admin(
         db, message.session_id, current_user
     )
@@ -433,6 +459,227 @@ async def qa_from_message(
     )
     await _sync_best_effort(item, db)
     return QaFromMessageResponse(qa_item=QaItemPayload.model_validate(item))
+
+# --------------------------------------------------- unanswered triage (#42)
+
+def _scope_session_query(query, current_user: AdminUser, agent_id: Optional[str]):
+    """Apply the workspace/agent-membership rule the session routes already use.
+
+    Kept local so the new endpoints scope identically: a super admin sees only
+    its own workspace, an agent member sees only its agents, and an explicit
+    `agent_id` still has to pass `require_agent_for_admin` (a foreign agent is
+    therefore a 403 before any row is read).
+    """
+    if agent_id:
+        query = query.where(ChatSession.agent_id == agent_id)
+    elif current_user.role == "super_admin":
+        if not current_user.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current admin has no workspace assigned",
+            )
+        query = query.join(Agent, Agent.id == ChatSession.agent_id).where(
+            Agent.workspace_id == current_user.workspace_id
+        )
+    else:
+        query = query.where(
+            ChatSession.agent_id.in_(
+                select(AgentMember.agent_id).where(
+                    AgentMember.admin_user_id == current_user.id
+                )
+            )
+        )
+    return query
+
+#: `2026-01-01T00:00:00+08:00` sent unencoded arrives as `...00:00 08:00`,
+#: because `+` means space in a query string. Put the offset sign back.
+_UNENCODED_OFFSET = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?) (\d{2}:?\d{2})$")
+
+def _parse_since(since: Optional[str]) -> datetime:
+    """ISO-8601 `since`, default 30 days back. A bad value is a 400, not a 500."""
+    if not since:
+        return datetime.now(timezone.utc) - timedelta(days=30)
+    text = since.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    unencoded = _UNENCODED_OFFSET.match(text)
+    if unencoded:
+        text = f"{unencoded.group(1)}+{unencoded.group(2)}"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="`since` must be an ISO-8601 timestamp",
+        ) from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+def normalized_question_sql(column):
+    """`normalize_text` as a SQL expression: trim, collapse whitespace, lowercase.
+
+    The `occurrences` count is a `GROUP BY` over this key, so the whole queue is
+    one query instead of a Python scan of every unanswered row. SQLite has no
+    regexp `replace`, so runs of spaces are halved eight times — 256 consecutive
+    spaces collapse to one, far past anything a visitor types.
+    """
+    text = func.lower(column)
+    for whitespace in ("\t", "\n", "\r"):
+        text = func.replace(text, whitespace, " ")
+    for _ in range(8):
+        text = func.replace(text, "  ", " ")
+    return func.trim(text)
+
+@router.get("/admin/sessions/unanswered", response_model=UnansweredListResponse)
+async def list_unanswered(
+    since: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    skip: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """The triage queue: assistant answers that did not really answer.
+
+    `question` is the visitor's own message — the nearest earlier `role="user"`
+    row in the session, the same rule `qa/from-message` uses to prefill a pair —
+    never the assistant's answer text.
+    """
+    from api.v1.endpoints import require_agent_for_admin
+
+    if agent_id:
+        await require_agent_for_admin(db, agent_id, current_user)
+    cutoff = _parse_since(since)
+
+    assistant = aliased(ChatMessage)
+    question_sq = (
+        select(ChatMessage.content)
+        .where(
+            ChatMessage.session_id == assistant.session_id,
+            ChatMessage.role == "user",
+            ChatMessage.id < assistant.id,
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(1)
+        .correlate(assistant)
+        .scalar_subquery()
+    )
+
+    base = (
+        select(
+            assistant.id.label("message_id"),
+            ChatSession.session_id.label("session_public_id"),
+            ChatSession.agent_id.label("agent_id"),
+            assistant.content.label("answer"),
+            assistant.confidence.label("confidence"),
+            assistant.created_at.label("created_at"),
+            # Trimmed for display: the operator reads it, and the pair's question
+            # is stored trimmed by `from-message` too. The grouping key below
+            # normalises further (collapse + lowercase).
+            func.trim(question_sq).label("question"),
+        )
+        .join(ChatSession, ChatSession.id == assistant.session_id)
+        .where(
+            assistant.role == "assistant",
+            assistant.is_unanswered.is_(True),
+            assistant.created_at >= cutoff,
+        )
+    )
+    base = _scope_session_query(base, current_user, agent_id)
+    rows_cte = base.cte("unanswered_rows")
+
+    # COALESCE: an assistant message with no preceding user row (a human reply,
+    # say) must still be listed. Without it the grouping key is NULL, `NULL =
+    # NULL` never joins, and the row would silently vanish from the queue.
+    keyed = select(
+        rows_cte,
+        func.coalesce(
+            normalized_question_sql(rows_cte.c.question), ""
+        ).label("question_key"),
+    ).cte("unanswered_keyed")
+
+    counts = (
+        select(
+            keyed.c.agent_id.label("agent_id"),
+            keyed.c.question_key.label("question_key"),
+            func.count().label("occurrences"),
+        )
+        .group_by(keyed.c.agent_id, keyed.c.question_key)
+        .cte("unanswered_counts")
+    )
+
+    joined = keyed.join(
+        counts,
+        (counts.c.agent_id == keyed.c.agent_id)
+        & (counts.c.question_key == keyed.c.question_key),
+    )
+
+    total = await db.scalar(select(func.count()).select_from(joined))
+
+    result = await db.execute(
+        select(
+            keyed.c.message_id,
+            keyed.c.session_public_id,
+            keyed.c.question,
+            keyed.c.answer,
+            keyed.c.confidence,
+            keyed.c.created_at,
+            counts.c.occurrences,
+        )
+        .select_from(joined)
+        .order_by(keyed.c.created_at.desc(), keyed.c.message_id.desc())
+        .offset(max(0, skip))
+        .limit(limit)
+    )
+
+    items = [
+        UnansweredItem(
+            message_id=row.message_id,
+            session_id=row.session_public_id,
+            question=row.question or "",
+            answer=row.answer or "",
+            confidence=row.confidence,
+            created_at=row.created_at,
+            occurrences=int(row.occurrences or 1),
+        )
+        for row in result.all()
+    ]
+    return UnansweredListResponse(items=items, total=int(total or 0))
+
+@router.post("/admin/sessions/unanswered/{message_id}:dismiss")
+async def dismiss_unanswered(
+    message_id: int,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take a triaged row out of the queue without deleting the message."""
+    from api.v1.endpoints import require_agent_for_admin
+
+    message = await db.get(ChatMessage, message_id)
+    if not message or message.role != "assistant":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
+        )
+    session = await db.get(ChatSession, message.session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
+        )
+    # A message from another workspace answers exactly like a missing one, so
+    # the queue never confirms that a foreign id exists.
+    try:
+        await require_agent_for_admin(db, session.agent_id, current_user)
+    except HTTPException as error:
+        if error.status_code in (status.HTTP_403_FORBIDDEN, status.HTTP_410_GONE):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Message not found"
+            ) from error
+        raise
+
+    message.is_unanswered = False
+    await db.commit()
+    return {"dismissed": True}
 
 # ------------------------------------------------------------- procedures
 

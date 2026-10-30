@@ -93,6 +93,8 @@ vi.mock("../../src/services/api", () => ({
 		updateQaItem: vi.fn(),
 		deleteQaItem: vi.fn(),
 		importQaItems: vi.fn(),
+		// #42: the dashboard's unanswered tile reads the triage queue.
+		getUnanswered: vi.fn(async () => ({ items: [], total: 0 })),
 		uploadKbFiles: vi.fn(),
 		deleteKbFile: vi.fn(),
 		clearKbFiles: vi.fn(),
@@ -647,6 +649,7 @@ const { default: Dashboard } = await import("../../src/views/Dashboard");
 const { default: Home } = await import("../../src/views/Home");
 const { default: Playground } = await import("../../src/views/Playground");
 const { default: AdminLayout } = await import("../../src/components/AdminLayout");
+const { default: Sessions } = await import("../../src/views/Sessions");
 const { Login } = await import("../../src/views/Login");
 const { Register } = await import("../../src/views/Register");
 
@@ -744,6 +747,41 @@ describe("375px width: no horizontal overflow", () => {
 		assertPageRootContract(view as HTMLElement, "dashboard-page");
 		assertNoInlineWidthOverflow(view as HTMLElement);
 		assertTapTargets(view as HTMLElement);
+	});
+
+	it("Sessions", async () => {
+		// The transcript talks to the admin API with raw fetch; the 375px
+		// contract only needs the list + the new quality chip to lay out.
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ items: [], total: 0 }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			})) as typeof fetch;
+		try {
+			const { container } = renderAt375(
+				<MemoryRouter initialEntries={["/agents/agt_1/sessions"]}>
+					<Routes>
+						<Route path="/agents/:agentId/sessions" element={<Sessions />} />
+					</Routes>
+				</MemoryRouter>,
+			);
+
+			await screen.findByTestId("sessions-page");
+			// #42's filter chip is part of the toolbar, so it must not push the
+			// action row past 375px and must stay a 44px tap target.
+			expect(
+				await screen.findByTestId("sessions-filter-unanswered"),
+			).toBeInTheDocument();
+			const view = container.querySelector<HTMLElement>(
+				'[data-testid="viewport-375"]',
+			);
+			assertPageRootContract(view as HTMLElement, "sessions-page");
+			assertNoInlineWidthOverflow(view as HTMLElement);
+			assertTapTargets(view as HTMLElement);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 
 	it("Home", async () => {

@@ -86,6 +86,15 @@ from services.kb_retrieval_service import KbRetrievalService
 from services.kb_service import KbService
 from services.qa_service import QaService
 from services.procedure_service import resolve_active_procedure
+from services.answer_quality import (
+    DEFAULT_EMPTY_ANSWER_REPLY,
+    DEFAULT_RATE_LIMIT_REPLY,
+    DEFAULT_RESTRICTED_REPLY,
+    LOW_CONFIDENCE_THRESHOLD,
+    compute_confidence,
+    is_real_question,
+    looks_like_fallback,
+)
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -948,7 +957,7 @@ async def prepare_chat_request(
         if messages_last_minute >= agent_rate_limit_per_minute:
             limit_reply = get_restricted_reply(
                 agent_restricted_reply,
-                "抱歉，当前服务受限，请稍后再试。",
+                DEFAULT_RATE_LIMIT_REPLY,
             )
             logger.info(f"{limit_key} exceeded rate limit, returning auto reply")
             return {
@@ -1018,6 +1027,7 @@ async def prepare_chat_request(
 
     kb_context = ""
     kb_sources = []  # Track sources for SSE event
+    kb_results: List[Dict[str, Any]] = []
     if getattr(agent, "kb_id", None):
         try:
             kb_retriever = KbRetrievalService()
@@ -1139,6 +1149,13 @@ async def prepare_chat_request(
         "sources": kb_sources,  # Include KB sources for SSE event
         "temperature": temperature,
         "max_tokens": max_tokens,
+        # #42: the retrieval signals are threaded through instead of being
+        # re-queried at persistence time, so `confidence` is exactly the score
+        # that shaped this prompt.
+        "retrieval_scores": {
+            "kb_scores": [r.get("score") for r in kb_results if r.get("score") is not None],
+            "qa_scores": [h.get("score") for h in qa_hits if h.get("score") is not None],
+        },
     }
 
 
@@ -1208,8 +1225,26 @@ async def persist_chat_response(
     sources: List[Dict[str, Any]],
     usage: Optional[Dict[str, int]],
     db: AsyncSession,
+    retrieval_scores: Optional[Dict[str, List[float]]] = None,
+    restricted_reply: Optional[str] = None,
 ) -> ChatMessage:
-    """Persist a completed user/assistant exchange."""
+    """Persist a completed user/assistant exchange.
+
+    #42 answer-quality signals are stamped here, once, for both the blocking
+    and the SSE path: `confidence` from the scores the prompt was built with,
+    `is_unanswered` from the SiteGPT rule — a real question (≥15 non-whitespace
+    chars) with nothing retrieved, or any answer that is the fallback sentence.
+    """
+    scores = retrieval_scores or {}
+    confidence = compute_confidence(
+        kb_scores=scores.get("kb_scores") or [],
+        qa_scores=scores.get("qa_scores") or [],
+    )
+    nothing_retrieved = not (scores.get("kb_scores") or scores.get("qa_scores"))
+    is_unanswered = is_real_question(request.message) and (
+        nothing_retrieved or looks_like_fallback(reply, restricted_reply)
+    )
+
     user_message = ChatMessage(
         session_id=session.id,
         role="user",
@@ -1225,6 +1260,8 @@ async def persist_chat_response(
         prompt_tokens=usage.get("prompt_tokens") if usage else None,
         completion_tokens=usage.get("completion_tokens") if usage else None,
         sender_type="agent",
+        confidence=confidence,
+        is_unanswered=is_unanswered,
     )
     db.add(assistant_message)
 
@@ -1340,6 +1377,7 @@ async def chat(
         temperature = chat_context["temperature"]
         max_tokens = chat_context["max_tokens"]
         use_mock_llm = chat_context["use_mock_llm"]
+        retrieval_scores = chat_context.get("retrieval_scores") or {}
 
         # Restricted reply config for graceful LLM failure fallback
         _agent = chat_context["agent"]
@@ -1359,7 +1397,7 @@ async def chat(
     except Exception:
         logger.exception("LLM call failed in non-streaming chat")
         fallback = get_restricted_reply(
-            _restricted_reply, "抱歉，当前服务繁忙，请稍后再试。"
+            _restricted_reply, DEFAULT_RESTRICTED_REPLY
         )
         return ChatResponse(
             reply=fallback,
@@ -1372,7 +1410,7 @@ async def chat(
     if not reply or not reply.strip():
         logger.warning("LLM returned empty response for session %s", session_public_id)
         reply = get_restricted_reply(
-            _restricted_reply, "抱歉，我暂时无法回答这个问题，请换个方式提问。"
+            _restricted_reply, DEFAULT_EMPTY_ANSWER_REPLY
         )
     real_usage = llm.get_last_usage()
     if real_usage:
@@ -1405,6 +1443,8 @@ async def chat(
             sources=sources,
             usage=usage,
             db=persist_db,
+            retrieval_scores=retrieval_scores,
+            restricted_reply=_restricted_reply,
         )
         await publish_chat_response(session_obj, request.message, reply)
 
@@ -1478,6 +1518,7 @@ async def chat_stream(
                 temperature = chat_context["temperature"]
                 max_tokens = chat_context["max_tokens"]
                 use_mock_llm = chat_context["use_mock_llm"]
+                retrieval_scores = chat_context.get("retrieval_scores") or {}
 
                 # Restricted reply config for graceful LLM failure fallback
                 _agent = chat_context["agent"]
@@ -1535,7 +1576,7 @@ async def chat_stream(
                 if elapsed > STREAM_MAX_DURATION_SECONDS:
                     logger.warning("Stream timeout after %.0fs", elapsed)
                     fallback = get_restricted_reply(
-                        _restricted_reply, "抱歉，当前服务繁忙，请稍后再试。"
+                        _restricted_reply, DEFAULT_RESTRICTED_REPLY
                     )
                     yield sse_event("content", {"content": fallback})
                     yield sse_event(
@@ -1595,7 +1636,7 @@ async def chat_stream(
             logger.exception("LLM streaming failed")
             # Graceful fallback: return agent's restricted reply instead of a technical error
             fallback = get_restricted_reply(
-                _restricted_reply, "抱歉，当前服务繁忙，请稍后再试。"
+                _restricted_reply, DEFAULT_RESTRICTED_REPLY
             )
             yield sse_event("content", {"content": fallback})
             yield sse_event(
@@ -1618,7 +1659,7 @@ async def chat_stream(
                 "LLM returned empty stream response for session %s", session_public_id
             )
             reply = get_restricted_reply(
-                _restricted_reply, "抱歉，我暂时无法回答这个问题，请换个方式提问。"
+                _restricted_reply, DEFAULT_EMPTY_ANSWER_REPLY
             )
             yield sse_event("content", {"content": reply})
         real_usage = llm.get_last_usage()
@@ -1658,6 +1699,8 @@ async def chat_stream(
                     sources=sources,
                     usage=usage,
                     db=persist_db,
+                    retrieval_scores=retrieval_scores,
+                    restricted_reply=_restricted_reply,
                 )
                 await publish_chat_response(session_obj, request.message, reply)
                 yield sse_event(
@@ -2534,6 +2577,8 @@ async def list_sessions(
     agent_id: Optional[str] = None,
     status: Optional[str] = None,
     keyword: Optional[str] = None,
+    low_confidence: bool = False,
+    unanswered: bool = False,
     skip: int = 0,
     limit: int = 50,
     current_user: AdminUser = Depends(require_chat_operator),
@@ -2543,6 +2588,11 @@ async def list_sessions(
     获取会话列表
 
     支持按状态和关键词过滤
+
+    #42 adds two quality filters that select *sessions*, not messages: a session
+    is listed when at least one assistant message crosses the threshold. They are
+    EXISTS subqueries so a session with ten bad answers is still one row, and
+    they compose with the existing params instead of replacing them.
     """
     query = select(ChatSession)
     if agent_id:
@@ -2575,6 +2625,29 @@ async def list_sessions(
     # 关键词搜索（搜索 visitor_id）
     if keyword:
         query = query.where(ChatSession.visitor_id.ilike(f"%{keyword}%"))
+
+    # #42 quality filters: at least one assistant message that is weak or unanswered.
+    if low_confidence:
+        query = query.where(
+            select(ChatMessage.id)
+            .where(
+                ChatMessage.session_id == ChatSession.id,
+                ChatMessage.role == "assistant",
+                ChatMessage.confidence.isnot(None),
+                ChatMessage.confidence < LOW_CONFIDENCE_THRESHOLD,
+            )
+            .exists()
+        )
+    if unanswered:
+        query = query.where(
+            select(ChatMessage.id)
+            .where(
+                ChatMessage.session_id == ChatSession.id,
+                ChatMessage.role == "assistant",
+                ChatMessage.is_unanswered.is_(True),
+            )
+            .exists()
+        )
 
     # 按更新时间倒序
     query = query.order_by(ChatSession.updated_at.desc().nulls_first())
@@ -2646,6 +2719,11 @@ async def get_session_messages(
             "role": msg.role,
             "content": msg.content,
             "sources": msg.sources or [],
+            # #42: the admin transcript is where the operator triages, so the
+            # two quality signals travel with the message. NULL stays null
+            # ("no signal", shown as an em dash), never 0.0.
+            "confidence": msg.confidence,
+            "is_unanswered": bool(msg.is_unanswered),
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
         }
         for msg in messages

@@ -30,6 +30,8 @@ vi.mock("../../src/services/api", () => ({
 		getAgent: vi.fn(),
 		getQuota: vi.fn(),
 		getSourcesSummary: vi.fn(),
+		// #42 adds a third tile: unanswered answers in the last 7 days.
+		getUnanswered: vi.fn(async () => ({ items: [], total: 0 })),
 	},
 }));
 
@@ -83,12 +85,15 @@ describe("Dashboard statistics", () => {
 		expect(root).toHaveClass("admin-page");
 	});
 
-	it("renders exactly two counters: users and sessions", async () => {
+	it("renders three counters: users, sessions and unanswered", async () => {
 		renderDashboard();
 
 		const grid = await screen.findByTestId("dashboard-stats");
+		// #42 adds the unanswered tile; it is labelled from the `unanswered.*`
+		// namespace, so only the two original tiles match `dashboard.*`.
 		expect(within(grid).getAllByText(/^dashboard\./)).toHaveLength(2);
-		expect(grid.querySelectorAll(".stat")).toHaveLength(2);
+		expect(within(grid).getByText("unanswered.dashboardStat")).toBeInTheDocument();
+		expect(grid.querySelectorAll(".stat")).toHaveLength(3);
 
 		const users = screen.getByTestId("dashboard-stat-user");
 		expect(within(users).getByText("dashboard.userCount")).toBeInTheDocument();
@@ -134,6 +139,39 @@ describe("Dashboard statistics", () => {
 		// 5 + 6 live in the counters row.
 		expect(screen.getByTestId("dashboard-stat-user")).toBeInTheDocument();
 		expect(screen.getByTestId("dashboard-stat-session")).toBeInTheDocument();
+	});
+
+	it("shows the unanswered tile from the 7-day queue and links to the filtered list", async () => {
+		mockedApi.getUnanswered.mockResolvedValue({
+			items: [],
+			total: 7,
+		} as unknown as Awaited<ReturnType<typeof api.getUnanswered>>);
+
+		renderDashboard();
+
+		const tile = await screen.findByTestId("dashboard-stat-unanswered");
+		await waitFor(() => {
+			expect(tile.querySelector(".stat-value")?.textContent).toBe("7");
+		});
+		expect(tile).toHaveTextContent("unanswered.dashboardStat");
+		// The whole card is the link into the filtered session list.
+		expect(tile.tagName).toBe("A");
+		expect(tile.getAttribute("href")).toBe("/agents/agt_1/sessions?unanswered=1");
+		// The window is the last 7 days, asked of the queue itself.
+		expect(mockedApi.getUnanswered).toHaveBeenCalledWith(
+			expect.objectContaining({ agent_id: "agt_1", limit: 1 }),
+		);
+	});
+
+	it("renders an em dash for the unanswered tile when the call fails", async () => {
+		mockedApi.getUnanswered.mockRejectedValueOnce(new Error("offline"));
+
+		renderDashboard();
+
+		const tile = await screen.findByTestId("dashboard-stat-unanswered");
+		await waitFor(() => {
+			expect(tile.querySelector(".stat-value")?.textContent).toBe("—");
+		});
 	});
 
 	it("falls back to an em dash when visitor_count is absent", async () => {

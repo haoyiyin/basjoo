@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 from services.url_safety import validate_url_safe
+from services.answer_quality import DEFAULT_RATE_LIMIT_REPLY
 
 
 def normalize_widget_origin(origin: str) -> str:
@@ -436,7 +437,7 @@ class AgentConfig(BaseModel):
         default=20, ge=0, description="Rate limit per minute (0 = unlimited)"
     )
     restricted_reply: Optional[str] = Field(
-        default="抱歉，当前服务受限，请稍后再试。",
+        default=DEFAULT_RATE_LIMIT_REPLY,
         description="Fallback reply when service is restricted (rate limit, AI failure, etc.)",
     )
     last_error_code: Optional[str] = None
@@ -947,6 +948,27 @@ class QaFromMessageResponse(BaseModel):
     """`POST /admin/qa/from-message/{message_id}` (#42 reuses it)."""
 
     qa_item: QaItemPayload
+
+class UnansweredItem(BaseModel):
+    """One row of the #42 triage queue.
+
+    `question` is the visitor's own user message (not the answer, not the
+    assistant text) so the operator reads what was actually asked.
+    """
+
+    message_id: int
+    session_id: str
+    question: str
+    answer: str
+    confidence: Optional[float] = None
+    created_at: Optional[datetime] = None
+    occurrences: int = 1
+
+class UnansweredListResponse(BaseModel):
+    """`GET /admin/sessions/unanswered`."""
+
+    items: List[UnansweredItem] = Field(default_factory=list)
+    total: int = 0
 
 class ProcedureStep(BaseModel):
     """One ordered step; `requires_action` names a channel capability.

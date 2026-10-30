@@ -30,6 +30,8 @@ vi.mock("../../src/services/api", () => ({
 		getAgent: vi.fn(),
 		getQuota: vi.fn(),
 		getSourcesSummary: vi.fn(),
+		// #42's unanswered tile reads the triage queue's own total.
+		getUnanswered: vi.fn(async () => ({ items: [], total: 0 })),
 	},
 }));
 
@@ -115,11 +117,14 @@ describe("Dashboard agent scope", () => {
 		]) {
 			expect(screen.queryByText(shortcut)).toBeNull();
 		}
-		// The only link is the bound knowledge base's name (R3): no playground,
-		// file or URL shortcut came back.
+		// Two links: the bound knowledge base's name (R3) and #42's unanswered
+		// stat tile, which opens the filtered session list. No playground, file
+		// or URL shortcut came back.
 		const links = Array.from(container.querySelectorAll("a"));
-		expect(links).toHaveLength(1);
-		expect(links[0].getAttribute("href")).toBe("/knowledge-bases/kb_bound");
+		expect(links).toHaveLength(2);
+		const hrefs = links.map((link) => link.getAttribute("href"));
+		expect(hrefs).toContain("/knowledge-bases/kb_bound");
+		expect(hrefs).toContain("/agents/agt_1/sessions?unanswered=1");
 		expect(router.state.location.pathname).toBe("/agents/agt_1/dashboard");
 	});
 });
