@@ -389,10 +389,12 @@ export default function KnowledgeBases() {
 						<div className="empty-actions">
 							<button
 								type="button"
-								className="btn btn-secondary"
+								className="btn btn-secondary btn-icon"
+								aria-label={t("knowledgeBases.retry")}
+								title={t("knowledgeBases.retry")}
 								onClick={() => setReloadToken((value) => value + 1)}
 							>
-								{t("knowledgeBases.retry")}
+								<Icon name="refresh" size={16} />
 							</button>
 						</div>
 					</div>
@@ -404,6 +406,9 @@ export default function KnowledgeBases() {
 						</p>
 						{isSuperAdmin && (
 							<div className="empty-actions">
+								{/* The primary action keeps its words (#65): 创建 is one of the
+								 * labels the issue says stays text, and this is the same
+								 * action as the header's. */}
 								<button
 									type="button"
 									className="btn btn-primary"

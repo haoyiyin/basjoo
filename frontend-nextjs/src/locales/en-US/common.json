@@ -120,7 +120,6 @@
     "jinaApiTimeout": "Jina API response timeout, please try again later",
     "jinaApiRateLimit": "Jina API rate limit exceeded, please try again later",
     "rateLimitExceeded": "Conversation limit reached, please try again later",
-    "dailyQuotaExceeded": "Daily conversation quota exceeded, please try again tomorrow",
     "noApiKeyConfigured": "No API Key configured, please configure in AI Settings",
     "agentErrorBanner": "Agent issue detected",
     "agentErrorDismiss": "Dismiss",
@@ -230,8 +229,6 @@
     "selectSession": "Select a session",
     "selectSessionDesc": "Select a session from the left list to view chat history and interact with visitors",
     "conversation": "Conversation",
-    "quotaInfo": "Quota Info",
-    "messagesPerDay": "messages/day",
     "indexInfo": "Index Info",
     "indexedUrls": "Indexed URLs",
     "indexedFiles": "Indexed Files",
@@ -365,18 +362,11 @@
     "apiBase": "API Base URL",
     "modelName": "Model Name",
     "modelNameDesc": "Specify the LLM model to use, such as deepseek-chat, gpt-4, etc.",
-    "fallbackModel": "Fallback model",
-    "fallbackModelDesc": "Answers visitors once the daily allowance is spent. Leave it empty and chat stops at the limit instead.",
-    "fallbackMode": "Answer source after a limit",
-    "fallbackModeDesc": "What answers when the main model cannot: your fallback model, your saved Q&A keywords, or both, one after the other.",
-    "fallbackModeOff": "Off (today's behaviour)",
-    "fallbackModeLlm": "Fallback model only",
-    "fallbackModeKeyword": "Keyword FAQ only",
-    "fallbackModeLlmThenKeyword": "Model, then keyword",
-    "fallbackModeMissHint": "In this mode an unmatched message is answered with your auto reply as a normal message, not with a rate-limit error.",
-    "fallbackApiKey": "Fallback API key",
-    "fallbackApiKeyDesc": "Key for the fallback model, stored encrypted. Leave it empty to reuse the primary key above.",
-    "fallbackConfigured": "Configured",
+    "fallbackMode": "Answer source when the model cannot",
+    "fallbackModeDesc": "What answers when the model itself fails: nothing (your auto reply goes out) or your saved Q&A keyword pairs first, then your auto reply on a miss.",
+    "fallbackModeOff": "Off — answer with the auto reply",
+    "fallbackModeKeyword": "Keyword Q&A first, then the auto reply",
+    "fallbackModeMissHint": "In this mode an unmatched message is answered with your auto reply as a normal message, never with an error.",
     "modelNamePreferNonThinking": "We recommend configuring a non-thinking model first, as it is usually more stable and easier to control in final output.",
     "modelNameThinkingAdvice": "If you plan to use a built-in thinking model, test it thoroughly in Playground before using it in production scenarios.",
     "modelNameTip1": "Different models have different performance and cost characteristics.",
@@ -444,7 +434,6 @@
     "multilingualSettings": "Auto translation",
     "multilingualSettingsDesc": "When AI settings are available, the system automatically generates Chinese and English versions from your default copy and shows the right one based on the visitor's browser language.",
     "secureStorage": "Your API key will be securely stored and will not be leaked",
-    "pleaseConfigureApiKey": "Please configure API key first to use AI conversation features",
     "widgetAppearance": "Widget Appearance",
     "widgetAppearanceDesc": "Customize the display effect of the chat window.",
     "windowTitleDesc": "Window Title: Title text displayed at the top of the chat window.",
@@ -550,7 +539,13 @@
       "invalidUrl": "Invalid URL, please re-enter"
     },
     "embeddingGetKey": "Get API Key:",
-    "tencentcloud": "Tencent Hunyuan"
+    "tencentcloud": "Tencent Hunyuan",
+    "personaWhenHint": "The first layer of every system prompt, so it shapes every single answer.",
+    "embedWhitelistWhenHint": "Checked on every widget request, so a domain removed here loses the widget immediately.",
+    "modelNotConfigured": "No model configured",
+    "modelNotConfiguredHint": "No LLM key is saved. Public traffic with the mode above set to \"off\" is refused; the Playground can still answer from your keyword pairs.",
+    "fallbackModeWhenHint": "Only used when the model itself fails (provider error, timeout, empty answer) — never on a healthy turn.",
+    "modelNotConfiguredBanner": "No model configured — answers come from your keyword Q&A until a key is saved"
   },
   "personas": {
     "generic": {
@@ -635,7 +630,22 @@
       "accountInfoSection": "Account information",
       "name": "Name",
       "email": "Email"
-    }
+    },
+    "widgetAppearanceWhenHint": "Applied to the widget on every page load, for every visitor, the moment you save."
+  },
+  "settingsGroups": {
+    "defineAi": "Define the AI",
+    "defineAiDesc": "Who the bot is and how it walks a conversation, in the order the model reads them: the persona is the system prompt's first layer, procedures come last.",
+    "defineAiPersonaPointer": "The persona, provider and model are edited in the Playground's AI settings pane, where you can try each change against a real conversation.",
+    "materials": "Give it material",
+    "materialsDesc": "What it is allowed to answer from. Both layers reach the prompt only in the positions below, never as a retraining of the model.",
+    "materialsQaPointer": "Your curated Q&A pairs live on the bound knowledge base (Knowledge base → Q&A), because a pair is embedded there on its own and needs no reindex.",
+    "handoff": "When a human takes over",
+    "handoffDesc": "The only thing here that changes behaviour is the clock: outside these ranges the widget closes its composer and shows the away message. Starting a handoff itself is still a button in the conversation view.",
+    "install": "Put the bot on your website",
+    "installDesc": "Nothing here changes what the bot says — it decides where the window appears and who sees it.",
+    "outbound": "Tell your other systems",
+    "outboundDesc": "Your server is notified after the fact — nothing here changes an answer, it only reports what already happened."
   },
   "playground": {
     "testAiEffect": "Test your AI Agent conversation",
@@ -658,7 +668,6 @@
     "startChat": "Start Conversation",
     "startChatHint": "Enter message to test your AI Agent",
     "inputPlaceholder": "Enter your question...",
-    "messagesPerDay": "messages/day",
     "indexedUrls": "Indexed URLs",
     "indexedFiles": "Indexed Files",
     "chunks": "Chunks",
@@ -668,7 +677,9 @@
     "usageTips": "Usage Tips",
     "tip1": "Enter questions to test Agent responses",
     "tip2": "View citation sources to verify retrieval",
-    "tip3": "Click 'Rebuild Index' to update knowledge base"
+    "tip3": "Click 'Rebuild Index' to update knowledge base",
+    "noModelBanner": "No model configured — answering from keyword Q&A right now",
+    "noModelBannerAction": "Open model settings"
   },
   "sources": {
     "title": "Knowledge Sources",
@@ -716,9 +727,7 @@
     "processingFailedFallback": "We couldn't process this file. Please upload a valid, readable PDF, TXT, MD, HTML, DOCX, or XLSX document."
   },
   "chat": {
-    "degradedNotice": "Quota reached — answering with the fallback model",
-    "scriptedNotice": "Answered from a saved FAQ",
-    "fallbackModelNote": "Fallback model: {{model}}"
+    "scriptedNotice": "Answered from a saved FAQ"
   },
   "citations": {
     "references": "References"
@@ -937,7 +946,8 @@
       "importFailed": "Failed to import pairs",
       "tooManyKeywords": "At most {{max}} keywords per pair",
       "keywordTooLong": "Each keyword can be at most {{max}} characters"
-    }
+    },
+    "vsFixedFactsHint": "Fixed facts appear on every turn and must be repeated as written; a Q&A pair appears only when a visitor asks and the match hits. Put addresses and links in fixed facts, and listable questions in Q&A pairs."
   },
   "fixedFacts": {
     "title": "Fixed facts",
@@ -946,7 +956,9 @@
     "placeholder": "Address: 3F, 100 Hengshan Road, Xuhui District, Shanghai.\n\nBooking link: https://booking.example.com/new?ref=basjoo",
     "hint": "Each blank-line-separated passage is one fact; at most 6 are injected.",
     "linkHint": "Links written here are reproduced verbatim.",
-    "save": "Save fixed facts"
+    "save": "Save fixed facts",
+    "whenHint": "Injected verbatim into every request, after the Q&A hits and before the knowledge-base passages — at most 6 blank-line-separated passages.",
+    "vsQaHint": "Fixed facts appear on every turn and must be repeated as written; a Q&A pair appears only when a visitor asks and the match hits. Put addresses and links in fixed facts, and listable questions in Q&A pairs."
   },
   "procedures": {
     "title": "Procedures",
@@ -989,7 +1001,8 @@
       "loadFailed": "Failed to load procedures",
       "saveFailed": "Failed to save the procedure",
       "deleteFailed": "Failed to delete the procedure"
-    }
+    },
+    "whenHint": "Matched once per turn, in order, and only when the visitor's message fits the current step. A procedure that needs an unavailable action is skipped whole — the model answers instead."
   },
   "reviseAnswer": {
     "action": "Revise answer",
@@ -1034,13 +1047,6 @@
       "reopen": "Could not reopen the session. Please try again."
     }
   },
-  "escalation": {
-    "title": "Escalation rules",
-    "description": "Describe in plain language when the bot should suggest a human. This text is appended at the very end of the system prompt, after the procedures block, up to 2000 characters.",
-    "label": "Escalation rules",
-    "placeholder": "If the visitor explicitly asks for a human, sounds frustrated, or mentions a refund dispute, suggest a human handoff.",
-    "hint": "Leave empty to add nothing to the prompt."
-  },
   "visitorDeletion": {
     "action": "Delete visitor",
     "actionTitle": "Erase every session, message and lead belonging to this visitor",
@@ -1074,11 +1080,13 @@
       "Friday",
       "Saturday",
       "Sunday"
-    ]
+    ],
+    "whenHint": "Evaluated on every chat request: outside these ranges the widget hides the composer and shows the away message.",
+    "awayMessageWhenHint": "Shown instead of the composer for as long as the request falls outside the ranges above."
   },
   "install": {
     "title": "Install",
-    "description": "Copy and paste this into your site's HTML. It points at a server-generated script, so it can never contain localhost.",
+    "description": "This snippet puts the bot on your website. Copy it into your site's HTML; it points at a server-generated script, so it can never contain localhost.",
     "copy": "Copy code",
     "copied": "Copied",
     "copyFailed": "Could not copy — please select the code manually.",
@@ -1119,7 +1127,16 @@
     "starterActionLink": "Open a link",
     "starterValue": "Message text / link URL",
     "starterPath": "Path scope (regex, optional)",
-    "starterPathPlaceholder": "^/pricing$"
+    "starterPathPlaceholder": "^/pricing$",
+    "displayModeDiffBubble": "Floating bubble in the bottom-right corner.",
+    "displayModeDiffInline": "Rendered inline inside the container element you name below — no floating button.",
+    "displayModeDiffIframe": "Rendered in an isolated iframe, so the host page's CSS cannot affect it.",
+    "displayModeWhenHint": "Decided at page load for each visitor; changing it affects the next page view, not a conversation already open.",
+    "inlineContainerWhenHint": "Resolved when the page loads, so renaming the element breaks the embed on the next refresh.",
+    "excludedPathsWhenHint": "Matched against location.pathname on load — a page added to this list loads nothing on the next visit.",
+    "trafficPercentageWhenHint": "Rolled once per visitor and remembered, so a visitor never flips between shown and hidden.",
+    "cardsWhenHint": "Served with the widget config, so the next page load renders the new cards — an open window sees them on its next message.",
+    "startersWhenHint": "Sent with the widget config on load; an already-open window picks them up on its next refresh."
   },
   "webhooks": {
     "title": "Webhooks",
@@ -1156,7 +1173,6 @@
       "messages": "Messages",
       "leads": "Leads",
       "handoffs": "Escalated",
-      "degraded": "Degraded answers",
       "negativeFeedback": "Thumbs down",
       "positiveRate": "Positive rate"
     },

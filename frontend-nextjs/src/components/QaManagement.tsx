@@ -352,6 +352,15 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 			</div>
 
 			<div className="card-body">
+				{/*
+				 * #63: the same contrast sentence the 固定事实 block carries, so an
+				 * operator reading either side learns the difference between "every
+				 * turn, verbatim" and "only on a semantic hit".
+				 */}
+				<p className="field-hint" data-testid="qa-vs-fixed-facts">
+					{t("qa.vsFixedFactsHint")}
+				</p>
+
 				{error && (
 					<p role="alert" className="field-error" data-testid="qa-error">
 						{error}
@@ -373,20 +382,25 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 							onChange={(event) => setTesterMessage(event.target.value)}
 							placeholder={t("qa.testerPlaceholder")}
 						/>
+						{/* #65: the tester's run control is a glyph button; its accessible
+						    name and tooltip are the label it used to show. */}
 						<button
 							type="button"
-							className="btn btn-secondary"
+							className="btn btn-secondary btn-icon"
 							onClick={() => void handleTest()}
 							disabled={testing}
 							aria-busy={testing}
+							aria-label={t("qa.testerSubmit")}
+							title={t("qa.testerSubmit")}
 						>
 							{testing ? (
 								<div
 									className="spinner"
 									style={{ width: "14px", height: "14px" }}
 								/>
-							) : null}
-							{t("qa.testerSubmit")}
+							) : (
+								<Icon name="play" size={16} />
+							)}
 						</button>
 					</div>
 					{testerError && (
@@ -666,14 +680,17 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 										</label>
 										<button
 											type="button"
-											className="btn btn-ghost"
+											className="btn btn-icon"
 											onClick={() => openEdit(item)}
 											disabled={busy}
 											aria-label={t("qa.editLabel", {
 												question: item.question,
 											})}
+											title={t("qa.editLabel", {
+												question: item.question,
+											})}
 										>
-											{t("buttons.edit")}
+											<Icon name="edit" size={16} />
 										</button>
 										<button
 											type="button"

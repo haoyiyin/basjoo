@@ -13,15 +13,6 @@ import type {
 } from "../services/api";
 import { useTranslation } from "react-i18next";
 
-interface QuotaState {
-	used_urls: number;
-	max_urls: number;
-	used_files: number;
-	max_files: number;
-	used_messages_today: number;
-	max_messages_per_day: number;
-}
-
 /**
  * Placeholder for statistics the API cannot currently supply. It is a
  * typographic symbol, not translatable copy: it must never be replaced with a
@@ -44,7 +35,6 @@ const RANGES: Array<{ key: AnalyticsRange; days: number }> = [
  */
 const LOWER_IS_BETTER = new Set<keyof AnalyticsOverview["tiles"]>([
 	"unanswered",
-	"degraded",
 	"negative_feedback",
 	"handoffs",
 ]);
@@ -106,7 +96,6 @@ const SECONDARY_TILES: Array<{
 	{ name: "messages", label: "analytics.metrics.messages" },
 	{ name: "leads", label: "analytics.metrics.leads" },
 	{ name: "handoffs", label: "analytics.metrics.handoffs" },
-	{ name: "degraded", label: "analytics.metrics.degraded" },
 	{ name: "negative_feedback", label: "analytics.metrics.negativeFeedback" },
 	{ name: "positive_feedback_rate", label: "analytics.metrics.positiveRate" },
 ];
@@ -157,7 +146,6 @@ export default function Dashboard() {
 	const agentIdCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
-	const [quota, setQuota] = useState<QuotaState | null>(null);
 	const [agentId, setAgentId] = useState<string | null>(null);
 	const [agentName, setAgentName] = useState<string>("");
 	const [apiKeySet, setApiKeySet] = useState(false);
@@ -212,14 +200,12 @@ export default function Dashboard() {
 			setVisitorCount(
 				typeof agent.visitor_count === "number" ? agent.visitor_count : null,
 			);
-			const quotaData = await api.getQuota(agent.id);
-			setQuota(quotaData);
 		} catch (error) {
 			console.error("Failed to load data:", error);
 			navigate("/agents");
 			return;
 		}
-		// Independent of the agent/quota block: a missing quality signal must
+		// Independent of the identity block: a missing quality signal must
 		// never send the operator to /agents.
 		await loadUnanswered(routeAgentId);
 	};
@@ -672,11 +658,13 @@ export default function Dashboard() {
 								<span className="identity-actions">
 									<button
 										type="button"
-										className="btn btn-secondary"
+										className="btn btn-secondary btn-icon"
 										data-testid="dashboard-kb-bind"
+										aria-label={t("dashboard.bindExisting")}
+										title={t("dashboard.bindExisting")}
 										onClick={() => setBindOpen(true)}
 									>
-										{t("dashboard.bindExisting")}
+										<Icon name="link" size={16} />
 									</button>
 									<Link
 										className="btn btn-primary"
@@ -689,24 +677,6 @@ export default function Dashboard() {
 							)}
 						</dd>
 					</div>
-
-				{/* Quota joins the identity list as a real row: it is the same kind
-				 * of label/value fact, so it sits in the same grid instead of
-				 * floating under it as an unlabelled mono line. */}
-				{quota && (
-					<div className="identity-row" data-testid="dashboard-quota-row">
-						<dt className="identity-label">{t("labels.quotaInfo")}</dt>
-						<dd className="identity-value">
-							<span
-								className="mono"
-								data-testid="dashboard-quota"
-								style={{ fontVariantNumeric: "tabular-nums" }}
-							>
-								{`${quota.used_messages_today} / ${quota.max_messages_per_day} ${t("labels.messagesPerDay")}`}
-							</span>
-						</dd>
-					</div>
-				)}
 				</dl>
 			</div>
 

@@ -829,17 +829,24 @@ export default function URLManagement() {
             </button>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-icon"
+              aria-label={
+                crawling
+                  ? t('labels.urlManagement.crawling')
+                  : t('labels.urlManagement.crawlSite')
+              }
+              title={
+                crawling
+                  ? t('labels.urlManagement.crawling')
+                  : t('labels.urlManagement.crawlSite')
+              }
               onClick={handleCrawlSite}
               disabled={crawling || backendBusy || !newUrl.trim()}
             >
               {crawling ? (
-                <>
-                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                  {t('labels.urlManagement.crawling')}
-                </>
+                <div className="spinner" style={{ width: '14px', height: '14px' }} />
               ) : (
-                t('labels.urlManagement.crawlSite')
+                <Icon name="link" size={16} />
               )}
             </button>
             <button
@@ -982,11 +989,12 @@ export default function URLManagement() {
             {crawlPolling && (
               <button
                 type="button"
-                className="btn btn-ghost"
+                className="btn btn-ghost btn-icon"
+                aria-label={t('labels.urlManagement.stopPolling')}
+                title={t('labels.urlManagement.stopPolling')}
                 onClick={stopPolling}
               >
-                <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                {t('labels.urlManagement.stopPolling')}
+                <Icon name="stop" size={16} />
               </button>
             )}
             {pollingStopped && !crawlPolling && (

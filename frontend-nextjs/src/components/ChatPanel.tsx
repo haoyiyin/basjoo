@@ -16,10 +16,6 @@ export interface Message {
 	usage?: UsageInfo;
 	isStreaming?: boolean;
 	thinkingElapsed?: number;
-	/** #44: this answer came from the agent's fallback model. */
-	degraded?: boolean;
-	/** #44: the model that produced the answer (shown with the notice). */
-	model?: string | null;
 	timestamp: Date;
 }
 
@@ -530,22 +526,6 @@ function ChatPanel({
 												)}
 											</div>
 										</div>
-
-										{/* #44: the daily allowance was spent, so the
-										    fallback model answered. One line, tokens only. */}
-										{msg.role === "assistant" && msg.degraded && (
-											<div
-												style={{
-													padding: "0 var(--space-1)",
-													fontSize: "var(--text-xs)",
-													lineHeight: "var(--leading-snug)",
-													color: "var(--fg-dim)",
-												}}
-											>
-												{t('chat.degradedNotice')}
-												{msg.model ? ` · ${msg.model}` : ''}
-											</div>
-										)}
 
 										{/* Token usage (assistant messages only) */}
 										{msg.role === "assistant" && msg.usage && (

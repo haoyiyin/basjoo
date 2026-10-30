@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import HelpTooltip from "./HelpTooltip";
+import { Icon } from "./Icon";
 import { api } from "../services/api";
 import type { Agent, FallbackMode, ProviderType } from "../services/api";
 
@@ -18,21 +19,26 @@ const PERSONA_TYPES: PersonaType[] = [
 const SILICONFLOW_OFFICIAL_URL = "https://siliconflow.cn/";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 
-/** #60 — the four answer sources, in the order an operator should read them. */
-const FALLBACK_MODES: FallbackMode[] = [
-	"off",
-	"llm",
-	"keyword",
-	"llm_then_keyword",
-];
+/** #62 — the two answer sources left after the fallback model was removed. */
+const FALLBACK_MODES: FallbackMode[] = ["off", "keyword"];
 
 /** One label per mode; each label carries its own one-line effect. */
 const FALLBACK_MODE_LABEL_KEYS: Record<FallbackMode, string> = {
 	off: "labels.fallbackModeOff",
-	llm: "labels.fallbackModeLlm",
 	keyword: "labels.fallbackModeKeyword",
-	llm_then_keyword: "labels.fallbackModeLlmThenKeyword",
 };
+
+/**
+ * Coerce whatever the backend reports into the two live modes (#62 / D4).
+ *
+ * `llm` and `llm_then_keyword` are retired with the #44 fallback model and read
+ * as `off`; so does anything unknown, NULL or empty. The backend already
+ * normalises, so this is defence in depth against a stale row answering `GET`
+ * before the migration has run.
+ */
+export function readFallbackMode(value: unknown): FallbackMode {
+	return value === "keyword" ? "keyword" : "off";
+}
 
 interface ChatParamOverrides {
 	temperature: number;
@@ -81,9 +87,6 @@ export default function AISettingsForm({
 		enable_context: false,
 		rate_limit_per_minute: 20,
 		restricted_reply: "",
-		// #44: the model that answers once the daily allowance is spent.
-		fallback_model: "",
-		fallback_api_key: "",
 		// #60: which answer source is actually consulted once the model cannot
 		// answer. `off` is the upgrade-safe default, matching the backend.
 		fallback_mode: "off" as FallbackMode,
@@ -144,11 +147,10 @@ export default function AISettingsForm({
 					20,
 				restricted_reply:
 					agentData.restricted_reply ?? t("labels.restrictedReplyPlaceholder"),
-				// The fallback key is never returned; only a boolean, so the
-				// input starts empty and a typed value replaces the stored one.
-				fallback_model: agentData.fallback_model ?? "",
-				fallback_api_key: "",
-				fallback_mode: agentData.fallback_mode ?? "off",
+				// #62: the #44 fallback model and its key are gone; the retired
+				// `llm` / `llm_then_keyword` values read as `off` rather than
+				// being echoed into a select that no longer has those options.
+				fallback_mode: readFallbackMode(agentData.fallback_mode),
 			});
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.loadFailed"));
@@ -224,14 +226,6 @@ export default function AISettingsForm({
 				updateData.api_key = formData.api_key;
 			}
 
-			// #44: the fallback model round-trips unconditionally (an empty
-			// string clears it); its key is only written when one was typed,
-			// exactly like the primary key.
-			updateData.fallback_model = formData.fallback_model;
-			if (formData.fallback_api_key.trim()) {
-				updateData.fallback_api_key = formData.fallback_api_key;
-			}
-
 			// #60: which answer source is consulted once the model cannot answer.
 			updateData.fallback_mode = formData.fallback_mode;
 
@@ -249,7 +243,6 @@ export default function AISettingsForm({
 			setFormData((prev) => ({
 				...prev,
 				api_key: "",
-				fallback_api_key: "",
 			}));
 			onSave?.(updatedAgent);
 		} catch (err) {
@@ -322,8 +315,6 @@ export default function AISettingsForm({
 		formData.rate_limit_per_minute,
 		formData.restricted_reply,
 		formData.api_key,
-		formData.fallback_model,
-		formData.fallback_api_key,
 		formData.fallback_mode,
 		handleSave,
 	]);
@@ -404,12 +395,10 @@ export default function AISettingsForm({
 		}));
 	};
 
-	// #60 — the keyword matcher is armed in two of the four modes; only then is
-	// a miss served from the "auto reply" copy below, which is why the extra
-	// hint only appears for those two.
-	const keywordFallbackArmed =
-		formData.fallback_mode === "keyword" ||
-		formData.fallback_mode === "llm_then_keyword";
+	// #62 — the keyword matcher is armed in exactly one mode; only then is a
+	// miss served from the "auto reply" copy below, which is why the extra hint
+	// only appears for it.
+	const keywordFallbackArmed = formData.fallback_mode === "keyword";
 
 	if (loading) {
 		return (
@@ -461,9 +450,14 @@ export default function AISettingsForm({
 				</div>
 			)}
 
+			{/* #66: this used to read "configure an API key first to use AI
+			    conversation". That is no longer true — a keyless agent still answers
+			    from the keyword pairs — so the state is described, not demanded. The
+			    glyph comes from the shared registry (R3), not a hand-rolled <svg>. */}
 			{!agent?.api_key_set && (
 				<div
 					role="status"
+					data-testid="ai-settings-no-model-banner"
 					style={{
 						display: "flex",
 						alignItems: "center",
@@ -477,20 +471,8 @@ export default function AISettingsForm({
 						fontSize: "var(--text-sm)",
 					}}
 				>
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2"
-						aria-hidden="true"
-					>
-						<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-						<line x1="12" y1="9" x2="12" y2="13" />
-						<line x1="12" y1="17" x2="12.01" y2="17" />
-					</svg>
-					<span>{t("labels.pleaseConfigureApiKey")}</span>
+					<Icon name="alert" size={16} />
+					<span>{t("labels.modelNotConfiguredBanner")}</span>
 				</div>
 			)}
 
@@ -517,6 +499,9 @@ export default function AISettingsForm({
 							position="top"
 							size="xs"
 						/>
+					</span>
+					<span className="field-hint" data-testid="persona-when-hint">
+						{t("labels.personaWhenHint")}
 					</span>
 					<select
 						className="select"
@@ -770,6 +755,19 @@ export default function AISettingsForm({
 										✓ {t("labels.configured")}
 									</span>
 								)}
+								{/* #66: an explicit "no model" state, not a bare empty field. */}
+								{agent && !agent.api_key_set && (
+									<span
+										data-testid="ai-key-missing"
+										style={{
+											marginLeft: "var(--space-2)",
+											color: "var(--color-warning)",
+											fontSize: "var(--text-xs)",
+										}}
+									>
+										{t("labels.modelNotConfigured")}
+									</span>
+								)}
 							</span>
 							{agent?.api_key_set && (
 								<button
@@ -810,6 +808,11 @@ export default function AISettingsForm({
 						{apiKeyError && (
 							<span className="field-error">
 								{t("errors.aiApiKeyInvalid")}
+							</span>
+						)}
+						{agent && !agent.api_key_set && (
+							<span className="field-hint" data-testid="ai-key-missing-hint">
+								{t("labels.modelNotConfiguredHint")}
 							</span>
 						)}
 					</div>
@@ -857,9 +860,9 @@ export default function AISettingsForm({
 					/>
 				</div>
 
-				{/* #60 — which answer source is consulted once the model cannot
-				    answer. This is the operator switch the feature never had: without
-				    it an operator could curate keyword pairs that nothing ever reached. */}
+				{/* #60/#62 — which answer source is consulted once the model cannot
+				    answer. Two options only: the #44 fallback model is gone, so `off` and
+				    `keyword` are all that is left. */}
 				<div className="field">
 					<span className="field-label">
 						{t("labels.fallbackMode")}
@@ -868,13 +871,14 @@ export default function AISettingsForm({
 							content={[
 								t("labels.fallbackModeDesc"),
 								t("labels.fallbackModeOff"),
-								t("labels.fallbackModeLlm"),
 								t("labels.fallbackModeKeyword"),
-								t("labels.fallbackModeLlmThenKeyword"),
 							]}
 							position="top"
 							size="xs"
 						/>
+					</span>
+					<span className="field-hint" data-testid="fallback-mode-when-hint">
+						{t("labels.fallbackModeWhenHint")}
 					</span>
 					<select
 						className="input select"
@@ -902,88 +906,6 @@ export default function AISettingsForm({
 							{t("labels.fallbackModeMissHint")}
 						</span>
 					)}
-				</div>
-
-				{/* #44 — quota degradation. Two fields on the same two-column grid
-				    as the primary key, so the pair reads as one setting. */}
-				<div
-					style={{
-						display: "grid",
-						gridTemplateColumns: "1fr 1fr",
-						gap: "var(--space-4)",
-					}}
-				>
-					<div className="field">
-						<span className="field-label">
-							{t("labels.fallbackModel")}
-							<HelpTooltip
-								title={t("labels.fallbackModel")}
-								content={[t("labels.fallbackModelDesc")]}
-								position="top"
-								size="xs"
-							/>
-						</span>
-						<input
-							className="input"
-							type="text"
-							aria-label={t("labels.fallbackModel")}
-							value={formData.fallback_model}
-							onChange={(e) =>
-								setFormData({
-									...formData,
-									fallback_model: e.target.value,
-								})
-							}
-							placeholder={getDefaultModel(formData.provider_type)}
-						/>
-						<span className="field-hint">
-							{t("labels.fallbackModelDesc")}
-						</span>
-					</div>
-
-					<div className="field">
-						<span
-							className="field-label"
-							style={{
-								display: "flex",
-								justifyContent: "space-between",
-								alignItems: "center",
-								gap: "var(--space-2)",
-							}}
-						>
-							<span>{t("labels.fallbackApiKey")}</span>
-							{agent?.fallback_api_key_set && (
-								<span
-									style={{
-										color: "var(--color-success)",
-										fontSize: "var(--text-xs)",
-									}}
-								>
-									✓ {t("labels.fallbackConfigured")}
-								</span>
-							)}
-						</span>
-						<input
-							className="input"
-							type="password"
-							aria-label={t("labels.fallbackApiKey")}
-							value={formData.fallback_api_key}
-							onChange={(e) =>
-								setFormData({
-									...formData,
-									fallback_api_key: e.target.value,
-								})
-							}
-							placeholder={
-								agent?.fallback_api_key_set
-									? t("placeholders.enterNewApiKey")
-									: "sk-..."
-							}
-						/>
-						<span className="field-hint">
-							{t("labels.fallbackApiKeyDesc")}
-						</span>
-					</div>
 				</div>
 
 				<div

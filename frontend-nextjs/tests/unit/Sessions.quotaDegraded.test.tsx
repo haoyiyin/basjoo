@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
 /**
- * #44 — a degraded answer is visible in the operator's transcript.
+ * #62 — the #44 degraded marker is gone from the operator's transcript.
  *
- * The SSE `done` event carries `degraded`, and the admin message list echoes it
- * per message, so the transcript shows WHY an answer may be weaker: the primary
- * allowance was spent and the fallback model answered.
+ * The old test pinned the opposite: a `degraded: true` assistant row rendered
+ * `message-degraded-<id>` with the fallback model's name. #62 deleted the
+ * `chat_messages.degraded` column, the wire field and the #44 fallback model,
+ * so this file now pins the ABSENCE:
  *
- * Pinned here on the real rendered surface (not a helper): the note appears on
- * the degraded assistant message only, and never on a visitor message or on a
- * normal assistant answer.
+ *   1. the message type carries no `degraded` / `model` fields (source-level,
+ *      so a field cannot creep back in unnoticed);
+ *   2. a legacy row that still carries both flags renders no marker at all —
+ *      the marker hookups, the testid prefix and the retired copy are absent;
+ *   3. the transcript around it is untouched (both answers still render).
+ *
+ * The #60 scripted note is covered by `Sessions.scripted.test.tsx` and stays.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -61,6 +68,7 @@ const session = {
 	last_message: "额度用尽后的回答。",
 };
 
+/** A legacy payload: row 4 still carries the retired `degraded` fields. */
 const messages = [
 	{
 		id: 1,
@@ -84,7 +92,7 @@ const messages = [
 		id: 4,
 		role: "assistant",
 		content: "额度用尽后的回答。",
-		// #44: the fallback model answered this one.
+		// #44: the wire used to carry this. #62 removed it end to end.
 		degraded: true,
 		model: "cheap-fallback-model",
 		created_at: "2026-01-01T00:01:05Z",
@@ -138,36 +146,46 @@ async function openTranscript(user: ReturnType<typeof userEvent.setup>) {
 	await screen.findByTestId("revise-answer-4");
 }
 
-describe("Sessions — degraded answer notice (#44)", () => {
-	it("shows the notice on the degraded answer, and nowhere else", async () => {
-		const user = userEvent.setup();
-		renderSessions();
-		await openTranscript(user);
-
-		const notice = await screen.findByTestId("message-degraded-4");
-		expect(notice).toHaveTextContent("chat.degradedNotice");
-		// The model that actually answered is named.
-		expect(notice).toHaveTextContent("cheap-fallback-model");
-
-		// A normal assistant answer and every visitor message carry no notice.
-		expect(screen.queryByTestId("message-degraded-2")).toBeNull();
-		expect(screen.queryByTestId("message-degraded-1")).toBeNull();
-		expect(screen.queryByTestId("message-degraded-3")).toBeNull();
+describe("Sessions — the degraded marker is gone (#62)", () => {
+	it("keeps no `degraded` / `model` field on the transcript message type", () => {
+		const source = readFileSync(
+			resolve(process.cwd(), "src/views/Sessions.tsx"),
+			"utf-8",
+		);
+		// The marker's hookups, its testid prefix and the retired copy all die
+		// with the field; a re-introduction has to fail here first.
+		expect(source).not.toMatch(/message-degraded-/);
+		expect(source).not.toMatch(/chat\.degradedNotice/);
+		expect(source).not.toMatch(/chat\.fallbackModelNote/);
+		expect(source).not.toMatch(/^\s*degraded\?:/m);
+		// #60's scripted note is a different feature and stays.
+		expect(source).toMatch(/message-scripted-/);
+		expect(source).toMatch(/chat\.scriptedNotice/);
 	});
 
-	it("keeps the transcript intact around the notice", async () => {
+	it("renders no marker, even on a legacy row carrying `degraded: true`", async () => {
 		const user = userEvent.setup();
 		renderSessions();
 		await openTranscript(user);
 
-		// Both answers are still rendered (the Markdown renderer owns the exact
-		// node), and only one of them carries the notice.
-		const container = await screen.findByTestId("chat-messages").catch(() => null);
-		const transcript = container ?? document.body;
-		expect(transcript.textContent).toContain("退款窗口为收货后 30 天。");
-		expect(transcript.textContent).toContain("额度用尽后的回答。");
+		// The tolerance case: the field arrives, nothing is rendered for it.
+		expect(screen.queryByTestId("message-degraded-4")).toBeNull();
+		expect(screen.queryAllByTestId(/^message-degraded-/)).toHaveLength(0);
+		expect(screen.queryByText("chat.degradedNotice")).toBeNull();
+		expect(screen.queryByText("chat.fallbackModelNote")).toBeNull();
+		// The model name the old marker printed is nowhere either.
+		expect(document.body.textContent).not.toContain("cheap-fallback-model");
+	});
 
-		const notices = screen.getAllByTestId(/^message-degraded-/);
-		expect(notices).toHaveLength(1);
+	it("keeps the transcript intact around the removed marker", async () => {
+		const user = userEvent.setup();
+		renderSessions();
+		await openTranscript(user);
+
+		// Both answers still render (the Markdown renderer owns the exact node).
+		expect(document.body.textContent).toContain("退款窗口为收货后 30 天。");
+		expect(document.body.textContent).toContain("额度用尽后的回答。");
+		// And there is no degraded marker anywhere on the page.
+		expect(screen.queryAllByTestId(/^message-degraded-/)).toHaveLength(0);
 	});
 });

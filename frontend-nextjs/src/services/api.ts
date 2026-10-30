@@ -13,9 +13,10 @@ export interface ChatRequest {
 		max_tokens?: number;
 	};
 	/**
-	 * #44: ask for a turn that does not consume the daily allowance. The
-	 * backend honours it only for an admin bearer token, so this is a hint, not
-	 * a grant — it is safe for the Playground to always send it.
+	 * #66: "an authenticated admin is testing on the Playground". The backend
+	 * honours it only for an admin bearer token, so this is a hint, not a
+	 * grant — it is safe for the Playground to always send it. A keyless agent
+	 * serves the keyword path on a preview turn regardless of `fallback_mode`.
 	 */
 	preview?: boolean;
 }
@@ -39,10 +40,6 @@ export interface ChatResponse {
 	 */
 	mode?: "ai" | "human" | "scripted";
 	no_answer_reason?: string | null;
-	/** #44: true when the fallback model answered. */
-	degraded?: boolean;
-	/** #44: the model that actually produced the reply. */
-	model?: string | null;
 	/** #60: what matched a `scripted` reply — today always `keyword`. */
 	matched_by?: string | null;
 }
@@ -52,7 +49,6 @@ export interface StreamDoneMeta {
 	session_id?: string;
 	usage?: UsageInfo | null;
 	taken_over?: boolean;
-	/** #43: who answers next. `taken_over` implies `human`. */
 	/**
 	 * #43: who answers next. `taken_over` implies `human`.
 	 * #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
@@ -60,10 +56,6 @@ export interface StreamDoneMeta {
 	mode?: "ai" | "human" | "scripted";
 	/** #43: machine token explaining why the bot stayed silent. */
 	no_answer_reason?: string | null;
-	/** #44: true when the fallback model answered (primary allowance spent). */
-	degraded?: boolean;
-	/** #44: the model that actually produced the answer. */
-	model?: string | null;
 	/** #60: what matched a `scripted` answer — today always `keyword`. */
 	matched_by?: string | null;
 }
@@ -101,11 +93,13 @@ export type EmbeddingProvider =
 	| "local";
 
 /**
- * #60 — the operator's choice of answer source once the model cannot answer.
- * Mirrors `Literal["off", "llm", "keyword", "llm_then_keyword"]` in
- * `backend/api/v1/schemas.py` (`AgentConfig` / `AgentUpdateRequest`).
+ * #62/#60 — the operator's choice of answer source once the model cannot
+ * answer. Two values only: the #44 fallback model is gone, so `llm` and
+ * `llm_then_keyword` are retired and read as `off`. Mirrors
+ * `Literal["off", "keyword"]` in `backend/api/v1/schemas.py`
+ * (`AgentConfig` / `AgentUpdateRequest`).
  */
-export type FallbackMode = "off" | "llm" | "keyword" | "llm_then_keyword";
+export type FallbackMode = "off" | "keyword";
 
 export interface Agent {
 	id: string;
@@ -116,25 +110,16 @@ export interface Agent {
 	system_prompt: string;
 	/** Operator-written facts that outrank retrieved chunks (#39). */
 	fixed_facts?: string | null;
-	/** Plain-language escalation prompt, appended after the procedures block (#43). */
-	escalation_rules?: string | null;
 	/** `{"timezone": IANA, "schedule": [{"day": 0-6, "start": min, "end": min}]}` (#43). */
 	business_hours?: BusinessHoursPayload | null;
 	/** Widget copy shown outside business hours (#43). */
 	away_message?: string | null;
-	/** #44: model that answers once the daily allowance is spent. */
-	fallback_model?: string | null;
 	/**
-	 * #60 — what actually answers once the model cannot: `off` (today's
-	 * behaviour), `llm` (the #44 fallback model only), `keyword` (the saved
-	 * Q&A keyword pairs only) or `llm_then_keyword`. Mirrors
-	 * `AgentConfig.fallback_mode` / `AgentUpdateRequest.fallback_mode`.
+	 * #60 — what actually answers once the model cannot: `off` (straight to
+	 * the restricted reply) or `keyword` (the saved Q&A keyword pairs first).
+	 * Mirrors `AgentConfig.fallback_mode` / `AgentUpdateRequest.fallback_mode`.
 	 */
 	fallback_mode?: FallbackMode;
-	/** Write-only: a typed value replaces the stored (encrypted) fallback key. */
-	fallback_api_key?: string;
-	/** #44: whether a fallback key is stored (the key itself is never returned). */
-	fallback_api_key_set?: boolean;
 	/** #40: regexes matched against `location.pathname`; a match renders nothing. */
 	excluded_paths?: string[] | null;
 	/** #40: bubble | inline | iframe. */
@@ -450,20 +435,23 @@ export interface FileItem {
 	processing_stage?: string | null;
 }
 
+/**
+ * Storage and abuse limits. #62 removed the daily message allowance end to end:
+ * the backend `QuotaInfo` no longer returns `max_messages_per_day`,
+ * `used_messages_today` or `remaining_messages_today`, so declaring them here
+ * would be a required-field lie — the wire never sends them.
+ */
 export interface Quota {
 	max_agents: number;
 	max_urls: number;
 	max_files: number;
-	max_messages_per_day: number;
 	max_total_text_mb: number;
 	used_agents: number;
 	used_urls: number;
 	used_files: number;
-	used_messages_today: number;
 	used_total_text_mb: number;
 	remaining_urls: number;
 	remaining_files: number;
-	remaining_messages_today: number;
 }
 
 export interface AgentCreateInput {
@@ -644,7 +632,6 @@ export type AnalyticsTileName =
 	| "leads"
 	| "handoffs"
 	| "unanswered"
-	| "degraded"
 	| "negative_feedback"
 	| "positive_feedback_rate";
 

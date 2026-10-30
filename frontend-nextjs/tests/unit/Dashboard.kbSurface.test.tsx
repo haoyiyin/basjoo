@@ -119,8 +119,12 @@ describe("Dashboard knowledge-base row (R3)", () => {
 			within(row).getByText("dashboard.unboundKnowledgeBase"),
 		).toBeInTheDocument();
 
+		// #65: the bind action is an icon button, so the accessible name — not
+		// the glyph — carries the label it used to print.
 		const bind = within(row).getByTestId("dashboard-kb-bind");
-		expect(bind).toHaveTextContent("dashboard.bindExisting");
+		expect(bind).toHaveAttribute("aria-label", "dashboard.bindExisting");
+		expect(bind).toHaveAttribute("title", "dashboard.bindExisting");
+		expect(bind).toHaveClass("btn-icon");
 		const create = within(row).getByTestId("dashboard-kb-create");
 		expect(create).toHaveTextContent("dashboard.createKnowledgeBase");
 		expect(create).toHaveAttribute(

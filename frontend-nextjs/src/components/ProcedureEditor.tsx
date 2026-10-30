@@ -349,14 +349,7 @@ export default function ProcedureEditor({ agentId }: ProcedureEditorProps) {
 										aria-label={t("procedures.moveUp", { index: index + 1 })}
 										title={t("procedures.moveUp", { index: index + 1 })}
 									>
-										<span
-											style={{
-												display: "flex",
-												transform: "rotate(90deg)",
-											}}
-										>
-											<Icon name="back" size={16} />
-										</span>
+										<Icon name="chevron-up" size={16} />
 									</button>
 									<button
 										type="button"
@@ -366,14 +359,7 @@ export default function ProcedureEditor({ agentId }: ProcedureEditorProps) {
 										aria-label={t("procedures.moveDown", { index: index + 1 })}
 										title={t("procedures.moveDown", { index: index + 1 })}
 									>
-										<span
-											style={{
-												display: "flex",
-												transform: "rotate(-90deg)",
-											}}
-										>
-											<Icon name="back" size={16} />
-										</span>
+										<Icon name="chevron-down" size={16} />
 									</button>
 									<button
 										type="button"
@@ -392,11 +378,12 @@ export default function ProcedureEditor({ agentId }: ProcedureEditorProps) {
 						<div className="page-actions page-actions-start">
 							<button
 								type="button"
-								className="btn btn-secondary"
+								className="btn btn-secondary btn-icon"
+								aria-label={t("procedures.addStep")}
+								title={t("procedures.addStep")}
 								onClick={addStep}
 							>
 								<Icon name="plus" size={16} />
-								{t("procedures.addStep")}
 							</button>
 						</div>
 
@@ -436,10 +423,12 @@ export default function ProcedureEditor({ agentId }: ProcedureEditorProps) {
 							</button>
 							<button
 								type="button"
-								className="btn btn-ghost"
+								className="btn btn-ghost btn-icon"
+								aria-label={t("buttons.cancel")}
+								title={t("buttons.cancel")}
 								onClick={closeEditor}
 							>
-								{t("buttons.cancel")}
+								<Icon name="close" size={16} />
 							</button>
 						</div>
 					</div>
@@ -512,14 +501,17 @@ export default function ProcedureEditor({ agentId }: ProcedureEditorProps) {
 										</label>
 										<button
 											type="button"
-											className="btn btn-ghost"
+											className="btn btn-ghost btn-icon"
 											onClick={() => openEdit(procedure)}
 											disabled={busy}
 											aria-label={t("procedures.editLabel", {
 												name: procedure.name,
 											})}
+											title={t("procedures.editLabel", {
+												name: procedure.name,
+											})}
 										>
-											{t("buttons.edit")}
+											<Icon name="edit" size={16} />
 										</button>
 										<button
 											type="button"

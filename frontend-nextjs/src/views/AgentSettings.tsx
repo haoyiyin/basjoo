@@ -558,8 +558,8 @@ export default function AgentSettings() {
   const [fixedFactsSaving, setFixedFactsSaving] = useState(false);
   const [fixedFactsSaved, setFixedFactsSaved] = useState(false);
   const [fixedFactsError, setFixedFactsError] = useState<string | null>(null);
-  // #43 conversation policy: a plain-language prompt block plus business hours.
-  const [escalationRules, setEscalationRules] = useState<string>('');
+  // #43 conversation policy: the business hours that decide handoff-adjacent
+  // behaviour. #64 removed `escalation_rules`, the prompt block beside it.
   const [businessHours, setBusinessHours] = useState<BusinessHoursConfig | null>(null);
   const [awayMessage, setAwayMessage] = useState<string>('');
   // #40 install surface: the server-rendered loader's inputs.
@@ -613,7 +613,6 @@ export default function AgentSettings() {
       setFormData(data);
       setOriginsText(data.allowed_widget_origins.join('\n'));
       setFixedFacts(loadedAgent.fixed_facts ?? '');
-      setEscalationRules(loadedAgent.escalation_rules ?? '');
       setBusinessHours(normalizeBusinessHours(loadedAgent.business_hours ?? null));
       setAwayMessage(loadedAgent.away_message ?? '');
       // #40 install surface.
@@ -737,7 +736,6 @@ export default function AgentSettings() {
         allowed_widget_origins: normalizedOrigins,
         rate_limit_per_minute: typeof formData.rate_limit_per_minute === 'number' ? formData.rate_limit_per_minute : 20,
         restricted_reply: formData.restricted_reply ?? '',
-        escalation_rules: escalationRules.trim() ? escalationRules.trim() : null,
         business_hours: businessHours,
         away_message: awayMessage.trim() ? awayMessage.trim() : null,
         // #40: the install surface rides the same save.
@@ -755,7 +753,6 @@ export default function AgentSettings() {
       const updatedAgent = await api.updateAgent(agent.id, updates);
       setAgent(updatedAgent);
       setFormData(formDataFromAgent(updatedAgent));
-      setEscalationRules(updatedAgent.escalation_rules ?? '');
       setBusinessHours(normalizeBusinessHours(updatedAgent.business_hours ?? null));
       setAwayMessage(updatedAgent.away_message ?? '');
       setOriginsText(normalizedOrigins.join('\n'));
@@ -983,122 +980,20 @@ export default function AgentSettings() {
           </div>
         )}
 
-        {/* Widget appearance + embed code */}
-        <section className="card">
-          <div className="card-header">
-            <h2 className="card-title">{t('settings.widgetSettings')}</h2>
-          </div>
 
-          {/*
-           * The fields and the live preview sit side by side on desktop and
-           * stack at 375px. The preview is 360px wide (the widget window is
-           * 380px) so it always fits inside the card without overflow.
-           */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
-              gap: 'var(--space-6)',
-              alignItems: 'flex-start',
-            }}
-          >
-            <div style={{ flex: '1 1 280px', minWidth: 0, width: '100%' }}>
-              <div className="field">
-                <label className="field-label" htmlFor="widget_title">
-                  {t('labels.widgetTitle')}
-                </label>
-                <input
-                  id="widget_title"
-                  className="input"
-                  type="text"
-                  value={formData?.widget_title || ''}
-                  onChange={(e) => updateField('widget_title', e.target.value)}
-                />
-              </div>
-
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label className="field-label" htmlFor="widget_color">
-                  {t('labels.themeColor')}
-                </label>
-                <input
-                  id="widget_color"
-                  className="input"
-                  type="color"
-                  value={formData?.widget_color || DEFAULT_WIDGET_COLOR}
-                  onChange={(e) => updateField('widget_color', e.target.value)}
-                  style={{
-                    width: '60px',
-                    minHeight: '40px',
-                    padding: 'var(--space-1)',
-                    cursor: 'pointer',
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* The shipped widget, painted with its own token set. */}
-            <div style={{ flex: '0 0 auto', maxWidth: '100%', minWidth: 0 }}>
-              <p className="field-label" style={{ marginBottom: 'var(--space-2)' }}>
-                {t('settings.widgetPreview.title')}
-              </p>
-              <WidgetPreview
-                title={formData?.widget_title || ''}
-                color={formData?.widget_color || DEFAULT_WIDGET_COLOR}
-                welcomeMessage={formData?.welcome_message || ''}
-                userMessage={t('settings.widgetPreview.sampleUserMessage')}
-                placeholder={t('settings.widgetPreview.samplePlaceholder')}
-              />
-            </div>
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="welcome_message">
-              {t('labels.welcomeMessage')}
-            </label>
-            <textarea
-              id="welcome_message"
-              className="input textarea"
-              value={formData?.welcome_message || ''}
-              onChange={(e) => updateField('welcome_message', e.target.value)}
-              rows={3}
-            />
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="history_days">
-              {t('labels.historyRetention')}
-            </label>
-            <input
-              id="history_days"
-              className="input"
-              type="number"
-              value={formData?.history_days || DEFAULT_HISTORY_DAYS}
-              onChange={(e) => updateField('history_days', parseInt(e.target.value, 10) || DEFAULT_HISTORY_DAYS)}
-              min={1}
-              max={365}
-              style={{ width: '120px' }}
-            />
-          </div>
-
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label className="field-label" htmlFor="allowed_widget_origins">
-              {t('labels.embedWhitelist')}
-            </label>
-            <textarea
-              id="allowed_widget_origins"
-              className="input textarea"
-              value={originsText}
-              onChange={(e) => {
-                setOriginsText(e.target.value);
-                setValidationError(null);
-              }}
-              rows={3}
-              placeholder={t('placeholders.embedWhitelist')}
-            />
-            <p className="field-hint">{t('labels.embedWhitelistFormatHint')}</p>
-          </div>
-        </section>
-
+        {/* #63: grouping in prompt-assembly order (D1). */}
+        <h2 className="h2" data-testid="settings-group-define-ai">
+          {t('settingsGroups.defineAi')}
+        </h2>
+        <p className="page-subtitle" style={{ marginTop: 0, marginBottom: "var(--space-4)" }}>
+          {t('settingsGroups.defineAiDesc')}
+        </p>
+        {/* #63/D1: 人设 and the model config are edited in the Playground's AI
+            settings pane, not here. Say so, or "定义 AI" looks like it is missing
+            its first field. */}
+        <p className="field-hint" data-testid="settings-group-define-ai-persona-pointer">
+          {t('settingsGroups.defineAiPersonaPointer')}
+        </p>
         {/* AI conversation limit */}
         <section className="card">
           <div className="card-header">
@@ -1152,7 +1047,26 @@ export default function AgentSettings() {
             <p className="field-hint">{t('labels.restrictedReplyDesc')}</p>
           </div>
         </section>
+        {/* Procedures — one step per turn (#39).
+            #63: the "when this takes effect" hint sits here, in the group
+            header, because the editor itself is a shared component. */}
+        <p className="field-hint" data-testid="procedures-when-hint">
+          {t('procedures.whenHint')}
+        </p>
+        {agent && <ProcedureEditor agentId={agent.id} />}
 
+        {/* #63: grouping in prompt-assembly order (D1). */}
+        <h2 className="h2" data-testid="settings-group-materials">
+          {t('settingsGroups.materials')}
+        </h2>
+        <p className="page-subtitle" style={{ marginTop: 0, marginBottom: "var(--space-4)" }}>
+          {t('settingsGroups.materialsDesc')}
+        </p>
+        {/* #63/D1: the other half of 给它资料 is the Q&A panel, which lives on the
+            knowledge base, not here — say where it is so the group is complete. */}
+        <p className="field-hint" data-testid="settings-group-materials-qa-pointer">
+          {t('settingsGroups.materialsQaPointer')}
+        </p>
         {/* Fixed facts — injected ahead of every KB passage (#39) */}
         <section className="card" data-testid="agent-fixed-facts-card">
           <div className="card-header">
@@ -1195,6 +1109,13 @@ export default function AgentSettings() {
             />
             <p className="field-hint">{t('fixedFacts.hint')}</p>
             <p className="field-hint">{t('fixedFacts.linkHint')}</p>
+            {/* #63: when this takes effect, and the contrast with the Q&A panel. */}
+            <p className="field-hint" data-testid="fixed-facts-when-hint">
+              {t('fixedFacts.whenHint')}
+            </p>
+            <p className="field-hint" data-testid="fixed-facts-vs-qa">
+              {t('fixedFacts.vsQaHint')}
+            </p>
             {fixedFactsError && (
               <p role="alert" className="field-error">
                 {fixedFactsError}
@@ -1207,93 +1128,14 @@ export default function AgentSettings() {
             )}
           </div>
         </section>
-
-        {/* Procedures — one step per turn (#39) */}
-        {agent && <ProcedureEditor agentId={agent.id} />}
-
-        {/* #43 conversation policy: escalation prompt + business hours */}
-        <section className="card" data-testid="agent-escalation-card">
-          <div className="card-header">
-            <h2 className="card-title">{t('escalation.title')}</h2>
-          </div>
-
-          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
-            {t('escalation.description')}
-          </p>
-
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label className="field-label" htmlFor="escalation_rules">
-              {t('escalation.label')}
-            </label>
-            <textarea
-              id="escalation_rules"
-              className="input textarea"
-              value={escalationRules}
-              onChange={(e) => setEscalationRules(e.target.value)}
-              rows={5}
-              maxLength={2000}
-              placeholder={t('escalation.placeholder')}
-            />
-            <p className="field-hint">{t('escalation.hint')}</p>
-            <p className="field-hint">
-              {escalationRules.length} / 2000
-            </p>
-          </div>
-        </section>
-
-        {/* #47 outbound webhooks: endpoint + signing secret, saved with the form */}
-        <section className="card" data-testid="agent-webhook-card">
-          <div className="card-header">
-            <h2 className="card-title">{t('webhooks.title')}</h2>
-          </div>
-
-          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
-            {t('webhooks.description')}
-          </p>
-
-          <div className="field">
-            <label className="field-label" htmlFor="webhook_url">
-              {t('webhooks.urlLabel')}
-            </label>
-            <input
-              id="webhook_url"
-              className="input"
-              type="url"
-              inputMode="url"
-              value={webhookUrl}
-              onChange={(event) => setWebhookUrl(event.target.value)}
-              placeholder={t('webhooks.urlPlaceholder')}
-              maxLength={1000}
-              spellCheck={false}
-            />
-            <p className="field-hint">{t('webhooks.urlHint')}</p>
-          </div>
-
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label className="field-label" htmlFor="webhook_secret">
-              {t('webhooks.secretLabel')}
-            </label>
-            <input
-              id="webhook_secret"
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={webhookSecret}
-              onChange={(event) => setWebhookSecret(event.target.value)}
-              /* Masked: the stored secret never leaves the server, so the field
-                 is empty until the operator types a replacement. */
-              placeholder={
-                webhookSecretSet ? t('webhooks.secretMasked') : t('webhooks.secretPlaceholder')
-              }
-              maxLength={200}
-              spellCheck={false}
-            />
-            <p className="field-hint">
-              {webhookSecretSet ? t('webhooks.secretSetHint') : t('webhooks.secretHint')}
-            </p>
-          </div>
-        </section>
-
+        {/* #63: 何时转人工 — the only handoff-adjacent control that survived
+            #64 (business hours decided when the composer closes). */}
+        <h2 className="h2" data-testid="settings-group-handoff">
+          {t('settingsGroups.handoff')}
+        </h2>
+        <p className="page-subtitle" style={{ marginTop: 0, marginBottom: "var(--space-4)" }}>
+          {t('settingsGroups.handoffDesc')}
+        </p>
         <section className="card" data-testid="agent-business-hours-card">
           <div className="card-header">
             <h2 className="card-title">{t('businessHours.title')}</h2>
@@ -1301,6 +1143,11 @@ export default function AgentSettings() {
 
           <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
             {t('businessHours.description')}
+          </p>
+
+          {/* #63: when this takes effect. */}
+          <p className="field-hint" data-testid="business-hours-when-hint">
+            {t('businessHours.whenHint')}
           </p>
 
           <div className="field">
@@ -1431,14 +1278,152 @@ export default function AgentSettings() {
               placeholder={t('businessHours.awayMessagePlaceholder')}
             />
             <p className="field-hint">{t('businessHours.awayMessageHint')}</p>
+            <p className="field-hint" data-testid="away-message-when-hint">
+              {t('businessHours.awayMessageWhenHint')}
+            </p>
           </div>
         </section>
 
+        {/* #63: grouping in prompt-assembly order (D1). */}
+        <h2 className="h2" data-testid="settings-group-install">
+          {t('settingsGroups.install')}
+        </h2>
+        <p className="page-subtitle" style={{ marginTop: 0, marginBottom: "var(--space-4)" }}>
+          {t('settingsGroups.installDesc')}
+        </p>
+        {/* Widget appearance + embed code */}
+        <section className="card">
+          <div className="card-header">
+            <h2 className="card-title">{t('settings.widgetSettings')}</h2>
+          </div>
+
+          {/* #63: when this takes effect. */}
+          <p className="field-hint" data-testid="widget-appearance-when-hint">
+            {t('settings.widgetAppearanceWhenHint')}
+          </p>
+
+          {/*
+           * The fields and the live preview sit side by side on desktop and
+           * stack at 375px. The preview is 360px wide (the widget window is
+           * 380px) so it always fits inside the card without overflow.
+           */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
+              gap: 'var(--space-6)',
+              alignItems: 'flex-start',
+            }}
+          >
+            <div style={{ flex: '1 1 280px', minWidth: 0, width: '100%' }}>
+              <div className="field">
+                <label className="field-label" htmlFor="widget_title">
+                  {t('labels.widgetTitle')}
+                </label>
+                <input
+                  id="widget_title"
+                  className="input"
+                  type="text"
+                  value={formData?.widget_title || ''}
+                  onChange={(e) => updateField('widget_title', e.target.value)}
+                />
+              </div>
+
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label className="field-label" htmlFor="widget_color">
+                  {t('labels.themeColor')}
+                </label>
+                <input
+                  id="widget_color"
+                  className="input"
+                  type="color"
+                  value={formData?.widget_color || DEFAULT_WIDGET_COLOR}
+                  onChange={(e) => updateField('widget_color', e.target.value)}
+                  style={{
+                    width: '60px',
+                    minHeight: '40px',
+                    padding: 'var(--space-1)',
+                    cursor: 'pointer',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* The shipped widget, painted with its own token set. */}
+            <div style={{ flex: '0 0 auto', maxWidth: '100%', minWidth: 0 }}>
+              <p className="field-label" style={{ marginBottom: 'var(--space-2)' }}>
+                {t('settings.widgetPreview.title')}
+              </p>
+              <WidgetPreview
+                title={formData?.widget_title || ''}
+                color={formData?.widget_color || DEFAULT_WIDGET_COLOR}
+                welcomeMessage={formData?.welcome_message || ''}
+                userMessage={t('settings.widgetPreview.sampleUserMessage')}
+                placeholder={t('settings.widgetPreview.samplePlaceholder')}
+              />
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="welcome_message">
+              {t('labels.welcomeMessage')}
+            </label>
+            <textarea
+              id="welcome_message"
+              className="input textarea"
+              value={formData?.welcome_message || ''}
+              onChange={(e) => updateField('welcome_message', e.target.value)}
+              rows={3}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="history_days">
+              {t('labels.historyRetention')}
+            </label>
+            <input
+              id="history_days"
+              className="input"
+              type="number"
+              value={formData?.history_days || DEFAULT_HISTORY_DAYS}
+              onChange={(e) => updateField('history_days', parseInt(e.target.value, 10) || DEFAULT_HISTORY_DAYS)}
+              min={1}
+              max={365}
+              style={{ width: '120px' }}
+            />
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="allowed_widget_origins">
+              {t('labels.embedWhitelist')}
+            </label>
+            <textarea
+              id="allowed_widget_origins"
+              className="input textarea"
+              value={originsText}
+              onChange={(e) => {
+                setOriginsText(e.target.value);
+                setValidationError(null);
+              }}
+              rows={3}
+              placeholder={t('placeholders.embedWhitelist')}
+            />
+            <p className="field-hint">{t('labels.embedWhitelistFormatHint')}</p>
+            <p className="field-hint" data-testid="embed-whitelist-when-hint">
+              {t('labels.embedWhitelistWhenHint')}
+            </p>
+          </div>
+        </section>
         {/* #40 install surface: display mode, excluded paths, rollout */}
         <section className="card" data-testid="agent-install-card">
           <div className="card-header">
             <h2 className="card-title">{t('install.title')}</h2>
           </div>
+
+          {/* #63: the description starts with WHAT it is, not with a detail. */}
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('install.description')}
+          </p>
 
           <div className="field">
             <label className="field-label" htmlFor="display_mode">
@@ -1455,7 +1440,17 @@ export default function AgentSettings() {
               <option value="inline">{t('install.displayModeInline')}</option>
               <option value="iframe">{t('install.displayModeIframe')}</option>
             </select>
+            {/* #63: one line per mode, so the difference is readable without
+                switching the select. */}
+            <p className="field-hint" data-testid="install-display-mode-diff">
+              {t('install.displayModeDiffBubble')}
+            </p>
+            <p className="field-hint">{t('install.displayModeDiffInline')}</p>
+            <p className="field-hint">{t('install.displayModeDiffIframe')}</p>
             <p className="field-hint">{t('install.displayModeHint')}</p>
+            <p className="field-hint" data-testid="install-display-mode-when-hint">
+              {t('install.displayModeWhenHint')}
+            </p>
           </div>
 
           {displayMode !== 'bubble' && (
@@ -1472,6 +1467,9 @@ export default function AgentSettings() {
                 placeholder={t('install.inlineContainerPlaceholder')}
               />
               <p className="field-hint">{t('install.inlineContainerHint')}</p>
+              <p className="field-hint" data-testid="install-inline-container-when-hint">
+                {t('install.inlineContainerWhenHint')}
+              </p>
             </div>
           )}
 
@@ -1489,6 +1487,9 @@ export default function AgentSettings() {
               placeholder={t('install.excludedPathsPlaceholder')}
             />
             <p className="field-hint">{t('install.excludedPathsHint')}</p>
+            <p className="field-hint" data-testid="install-excluded-paths-when-hint">
+              {t('install.excludedPathsWhenHint')}
+            </p>
           </div>
 
           <div className="field" style={{ marginBottom: 0 }}>
@@ -1511,9 +1512,11 @@ export default function AgentSettings() {
               style={{ width: '120px' }}
             />
             <p className="field-hint">{t('install.trafficPercentageHint')}</p>
+            <p className="field-hint" data-testid="install-traffic-when-hint">
+              {t('install.trafficPercentageWhenHint')}
+            </p>
           </div>
         </section>
-
         {/* #40: entry cards */}
         <section className="card" data-testid="agent-cards-card">
           <div className="card-header">
@@ -1522,6 +1525,11 @@ export default function AgentSettings() {
 
           <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
             {t('install.cardsHint')}
+          </p>
+
+          {/* #63: when this takes effect. */}
+          <p className="field-hint" data-testid="install-cards-when-hint">
+            {t('install.cardsWhenHint')}
           </p>
 
           {cardRows.length === 0 ? (
@@ -1626,7 +1634,6 @@ export default function AgentSettings() {
             </button>
           </div>
         </section>
-
         {/* #40: starters */}
         <section className="card" data-testid="agent-starters-card">
           <div className="card-header">
@@ -1635,6 +1642,11 @@ export default function AgentSettings() {
 
           <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
             {t('install.startersHint')}
+          </p>
+
+          {/* #63: when this takes effect. */}
+          <p className="field-hint" data-testid="install-starters-when-hint">
+            {t('install.startersWhenHint')}
           </p>
 
           {starterRows.length === 0 ? (
@@ -1755,22 +1767,24 @@ export default function AgentSettings() {
             </button>
           </div>
         </section>
-
         {/* #40: the server-rendered snippet + copy button */}
         <section className="card" data-testid="agent-embed-card">
           <div className="card-header">
             <h2 className="card-title">{t('labels.widgetEmbedCode')}</h2>
             <div className="page-actions">
+              {/* #65: the copy control is a glyph button; its accessible name
+                  and tooltip are the same locale string the text label used, so
+                  no new copy was invented. */}
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="btn btn-secondary btn-icon"
                 data-testid="install-copy"
                 onClick={handleCopyEmbedCode}
                 disabled={!embedCode}
-                aria-label={t('install.copy')}
-                title={t('install.copy')}
+                aria-label={embedCopied ? t('install.copied') : t('install.copy')}
+                title={embedCopied ? t('install.copied') : t('install.copy')}
               >
-                {embedCopied ? t('install.copied') : t('install.copy')}
+                <Icon name={embedCopied ? 'check' : 'copy'} size={16} />
               </button>
             </div>
           </div>
@@ -1832,6 +1846,67 @@ export default function AgentSettings() {
               {t('install.copied')}
             </p>
           )}
+        </section>
+        {/* #63: outbound webhooks are neither prompt material nor install
+            surface, so they get their own trailing group rather than being
+            swallowed by 把机器人放到网站上. */}
+        <h2 className="h2" data-testid="settings-group-outbound">
+          {t('settingsGroups.outbound')}
+        </h2>
+        <p className="page-subtitle" style={{ marginTop: 0, marginBottom: "var(--space-4)" }}>
+          {t('settingsGroups.outboundDesc')}
+        </p>
+        {/* #47 outbound webhooks: endpoint + signing secret, saved with the form */}
+        <section className="card" data-testid="agent-webhook-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('webhooks.title')}</h2>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('webhooks.description')}
+          </p>
+
+          <div className="field">
+            <label className="field-label" htmlFor="webhook_url">
+              {t('webhooks.urlLabel')}
+            </label>
+            <input
+              id="webhook_url"
+              className="input"
+              type="url"
+              inputMode="url"
+              value={webhookUrl}
+              onChange={(event) => setWebhookUrl(event.target.value)}
+              placeholder={t('webhooks.urlPlaceholder')}
+              maxLength={1000}
+              spellCheck={false}
+            />
+            <p className="field-hint">{t('webhooks.urlHint')}</p>
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="webhook_secret">
+              {t('webhooks.secretLabel')}
+            </label>
+            <input
+              id="webhook_secret"
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={webhookSecret}
+              onChange={(event) => setWebhookSecret(event.target.value)}
+              /* Masked: the stored secret never leaves the server, so the field
+                 is empty until the operator types a replacement. */
+              placeholder={
+                webhookSecretSet ? t('webhooks.secretMasked') : t('webhooks.secretPlaceholder')
+              }
+              maxLength={200}
+              spellCheck={false}
+            />
+            <p className="field-hint">
+              {webhookSecretSet ? t('webhooks.secretSetHint') : t('webhooks.secretHint')}
+            </p>
+          </div>
         </section>
       </div>
     </AdminLayout>

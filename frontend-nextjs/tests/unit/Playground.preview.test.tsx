@@ -8,8 +8,13 @@
  * must not eat the daily allowance.
  *
  * The flag is a *request*: the backend honours it only for a valid admin bearer
- * token, so sending it from the console is safe by construction (that guard is
- * asserted backend-side in `test_quota_degradation.py`).
+ * token, so sending it from the console is safe by construction.
+ *
+ * #62 removed the daily allowance and `degraded`, so the flag no longer means
+ * "do not bill me" — it now means "serve the keyword path for a keyless agent
+ * regardless of `fallback_mode`" (#66 / D2, D3). The request assertion is the
+ * same; the degraded-notice assertion at the bottom is inverted, because the
+ * notice and the `degraded`/`model` fields on the `done` event are gone.
  */
 import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
@@ -84,7 +89,6 @@ beforeEach(() => {
 	mockedApi.streamChat.mockImplementation(async (_request, callbacks) => {
 		callbacks.onSources([]);
 		callbacks.onContent("preview answer");
-		// #44: the backend marks a degraded turn in the `done` event.
 		callbacks.onDone({
 			message_id: 1,
 			session_id: "sess_1",
@@ -95,7 +99,7 @@ beforeEach(() => {
 	Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe("Playground previews are free (#44)", () => {
+describe("Playground previews (#44, #62, #66)", () => {
 	it("sends preview: true on every streamed turn", async () => {
 		renderPlayground();
 
@@ -110,17 +114,18 @@ describe("Playground previews are free (#44)", () => {
 		expect(request.message).toBe("does the playground bill me?");
 	});
 
-	it("renders the degraded notice when the done event says the fallback answered", async () => {
+	it("renders no degraded notice — the fallback model is gone (#62)", async () => {
+		// Inverted from the #44 assertion. A `done` event may not carry
+		// `degraded`/`model` any more, so a turn that used the keyword path is
+		// an ordinary answer with no annotation above it.
 		mockedApi.streamChat.mockImplementation(async (_request, callbacks) => {
 			callbacks.onSources([]);
-			callbacks.onContent("fallback answer");
+			callbacks.onContent("keyword answer");
 			callbacks.onDone({
 				message_id: 2,
 				session_id: "sess_1",
 				usage: null,
 				taken_over: false,
-				degraded: true,
-				model: "cheap-fallback-model",
 			});
 		});
 
@@ -131,7 +136,8 @@ describe("Playground previews are free (#44)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "buttons.send" }));
 
 		await waitFor(() =>
-			expect(screen.getByText("chat.degradedNotice · cheap-fallback-model")).toBeInTheDocument(),
+			expect(screen.getByText("keyword answer")).toBeInTheDocument(),
 		);
+		expect(screen.queryByText(/chat\.degradedNotice/)).not.toBeInTheDocument();
 	});
 });
