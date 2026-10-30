@@ -665,6 +665,28 @@ export interface DeleteResult {
 	id: string;
 }
 
+/**
+ * #46: what a one-click visitor deletion removed.
+ *
+ * The console prints these counts back to the operator ("已删除 2 个会话、6 条
+ * 消息") rather than a bare "done", because "did it really erase everything?"
+ * is the whole question a GDPR-shaped request is asking.
+ */
+export interface VisitorDeletionCounts {
+	sessions: number;
+	messages: number;
+	leads: number;
+	/** Messages that carried a thumbs up/down (#41 feedback). */
+	feedback: number;
+}
+
+export interface VisitorDeletionResult {
+	success: boolean;
+	visitor_id: string;
+	deleted: VisitorDeletionCounts;
+	total: number;
+}
+
 export async function parseErrorResponse(response: Response): Promise<string> {
 	const contentType = (
 		response.headers.get("content-type") || ""
@@ -1851,6 +1873,20 @@ class APIService {
 		return this.request<{ dismissed: boolean }>(
 			`/api/v1/admin/sessions/unanswered/${messageId}:dismiss`,
 			{ method: "POST" },
+		);
+	}
+
+	/**
+	 * #46: erase one visitor's data in a single transaction.
+	 *
+	 * Admin-authenticated and workspace-scoped server-side: a visitor that only
+	 * exists in another workspace answers 404, exactly like the handoff routes.
+	 * `visitor_id` is URL-encoded because a signed identity is `email:hash`.
+	 */
+	async deleteVisitor(visitorId: string): Promise<VisitorDeletionResult> {
+		return this.request<VisitorDeletionResult>(
+			`/api/v1/admin/visitors/${encodeURIComponent(visitorId)}`,
+			{ method: "DELETE" },
 		);
 	}
 

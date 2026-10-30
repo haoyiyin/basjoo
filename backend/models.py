@@ -397,7 +397,9 @@ class ChatSession(Base):
     locale = Column(String(10), nullable=True, default="zh-CN")
 
     # 访客信息
-    visitor_id = Column(String(100), nullable=True, index=True)  # 访客标识
+    # #46: a signed identity is `<email>:<hmac hex>` (254 + ':' + 64 <= 319), so
+    # the column has to hold an address as well as the old anonymous random id.
+    visitor_id = Column(String(320), nullable=True, index=True)  # 访客标识
     visitor_ip = Column(String(50), nullable=True)  # 访客 IP
     visitor_user_agent = Column(String(500), nullable=True)  # 访客浏览器信息
     visitor_country = Column(String(50), nullable=True)  # 访客国家

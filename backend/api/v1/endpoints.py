@@ -111,6 +111,13 @@ from services.answer_quality import (
 from services.quota import message_weight
 from services.spam_check import screen_answered_turn
 from services.webhook_service import enqueue_webhook
+from services.visitor_identity import (
+    IDENTITY_MISMATCH,
+    identity_required,
+    verified_identity_email,
+    verify_visitor_identity,
+)
+from services.visitor_deletion import delete_visitor_data
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -297,6 +304,10 @@ def build_agent_config(
         "webhook_secret_set": bool(
             decrypt_api_key(getattr(agent, "webhook_secret", None))
         ),
+        # #46 signed visitor identity: the secret is write-only, like every other
+        # credential. `identity_secret_set` is what the settings page needs to
+        # explain that the host page must now pass `identify({email, hash})`.
+        "identity_secret_set": identity_required(agent),
         # #40: the install surface round-trips so the settings page can edit it.
         "excluded_paths": list(getattr(agent, "excluded_paths", None) or []),
         "display_mode": getattr(agent, "display_mode", None) or "bubble",
@@ -769,6 +780,10 @@ WIDGET_ORIGIN_NOT_ALLOWED_CODE = "ORIGIN_NOT_ALLOWED"
 # #29: pause is a lifecycle state of its own, kept distinct from a soft delete so
 # the widget can tell "temporarily off" from "gone".
 AGENT_PAUSED_DETAIL = "Agent is paused"
+# #46: the visitor's identity does not verify against the agent's HMAC secret.
+# The `detail` is the machine token and the SSE `code` is the same string, so the
+# widget can render one readable sentence instead of a bare 403.
+IDENTITY_MISMATCH_DETAIL = IDENTITY_MISMATCH
 
 
 def normalize_request_origin(value: str) -> Optional[str]:
@@ -827,6 +842,33 @@ def enforce_widget_origin_whitelist(
         detail=WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
     )
 
+def enforce_signed_visitor_identity(agent: Agent, visitor_id: Optional[str]) -> None:
+    """#46 — reject an identity that does not match the agent's HMAC secret.
+
+    A public route that is not the chat turn itself (`/chat/messages`,
+    `/chat/escalate`, `/chat/release`) calls this before it acts on the visitor
+    id. The per-session owner check those routes already do stays as the second
+    gate: this one proves *who* the caller claims to be, the ownership check
+    proves the claim is the owner of that session.
+
+    An agent with no `identity_secret` accepts everything — that is today's
+    behaviour, and the reason every existing embed keeps working.
+    """
+    # `verify_visitor_identity` answers True for an agent with no secret (there is
+    # nothing to check), which is exactly the regression guard we want here. It is
+    # called once: reaching for `identity_required` first would decrypt the same
+    # secret twice per request.
+    if verify_visitor_identity(agent, visitor_id):
+        return
+    logger.warning(
+        "Signed visitor identity rejected agent_id=%s visitor=%r",
+        agent.id,
+        (visitor_id or "")[:80],
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail=IDENTITY_MISMATCH_DETAIL
+    )
+
 
 def get_stream_error_code(error: HTTPException) -> str:
     """Map HTTP errors to stream-friendly error codes."""
@@ -845,6 +887,10 @@ def get_stream_error_code(error: HTTPException) -> str:
             return WIDGET_ORIGIN_NOT_ALLOWED_CODE
         if detail == AGENT_PAUSED_DETAIL:
             return "AGENT_PAUSED"
+        # #46: the identity rejection travels as its own code so the widget can
+        # explain it, rather than folding it into the generic FORBIDDEN.
+        if detail == IDENTITY_MISMATCH_DETAIL:
+            return IDENTITY_MISMATCH
         return "FORBIDDEN"
     if error.status_code == status.HTTP_400_BAD_REQUEST:
         if detail == "Agent has no LLM API key configured":
@@ -860,6 +906,11 @@ def get_safe_stream_error_message(code: str) -> str:
         "QUOTA_EXCEEDED": "Daily message quota exceeded",
         "RATE_LIMITED": "Rate limit exceeded",
         WIDGET_ORIGIN_NOT_ALLOWED_CODE: WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
+        # #46: a visitor-facing sentence, because the host page's mistake (a
+        # stale hash, or no `identify()` at all) is what usually causes this.
+        IDENTITY_MISMATCH: (
+            "Your identity could not be verified. Refresh the page or sign in again."
+        ),
         "FORBIDDEN": "Request was denied",
         "AGENT_PAUSED": "This assistant is paused",
         "AGENT_DELETED": "This assistant is no longer available",
@@ -1002,6 +1053,14 @@ async def prepare_chat_request(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=AGENT_PAUSED_DETAIL
         )
+
+    # #46: when the operator configured an HMAC secret, the ONLY accepted
+    # `visitor_id` is `<email>:<hmac>`. The comparison is constant-time and both
+    # failure shapes (wrong value of the right length, wrong length) answer the
+    # same 403 with the same machine code, so nothing leaks. An agent with no
+    # secret has nothing to verify and reaches its own 404/400 path unchanged —
+    # that is the regression guard for every existing embed.
+    enforce_signed_visitor_identity(agent, request.visitor_id)
 
     authorization = http_request.headers.get("Authorization", "")
     admin_user = None
@@ -2129,6 +2188,10 @@ async def escalate_chat(
     if not agent or getattr(agent, "deleted_at", None) or not agent.is_active:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # #46: same signed-identity gate as `/chat/messages`; the ownership check
+    # below stays as the second gate.
+    enforce_signed_visitor_identity(agent, visitor_id)
+
     session = await resolve_public_chat_session(db, session_public_id)
     if (
         not session
@@ -2239,6 +2302,10 @@ async def release_chat_to_ai(
     if not agent or getattr(agent, "deleted_at", None) or not agent.is_active:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # #46: same signed-identity gate as `/chat/messages`; the ownership check
+    # below stays as the second gate.
+    enforce_signed_visitor_identity(agent, visitor_id)
+
     session = await resolve_public_chat_session(db, session_public_id)
     if (
         not session
@@ -2266,6 +2333,58 @@ async def release_chat_to_ai(
     }
 
 
+@router.get("/chat/session:current")
+async def get_current_visitor_session(
+    agent_id: str,
+    request: Request,
+    visitor_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """#46 — "which session is mine?" for a known visitor identity.
+
+    The second half of acceptance box 2. The widget's session id lives in
+    `localStorage`, which a second device does not share; this route turns the
+    *identity* into the thread. The lookup is scoped to one agent and one
+    visitor, and it only ever answers a session id the caller could already read
+    with `GET /chat/messages` using the same `visitor_id` — so it reveals
+    nothing that the chat surface does not, and an unknown identity simply gets
+    `{"session_id": null}`.
+
+    Signed agents verify the HMAC first (`identity_mismatch` / 403). Agents with
+    no secret get the same resolution an unsigned visitor always had, which is
+    what makes this additive rather than a behaviour change.
+    """
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent or getattr(agent, "deleted_at", None) or not agent.is_active:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    enforce_signed_visitor_identity(agent, visitor_id)
+    enforce_widget_origin_whitelist(agent, request)
+
+    identity = (visitor_id or "").strip()
+    if not identity:
+        return {"session_id": None, "status": None, "mode": None}
+
+    session = (
+        await db.execute(
+            select(ChatSession)
+            .where(
+                ChatSession.agent_id == agent.id,
+                ChatSession.visitor_id == identity,
+                ChatSession.status != "closed",
+            )
+            .order_by(ChatSession.created_at.desc(), ChatSession.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+
+    return {
+        "session_id": session.session_id if session else None,
+        "status": session.status if session else None,
+        "mode": session_mode(session) if session else None,
+    }
+
 @router.get("/chat/messages")
 async def get_chat_messages(
     session_id: str,
@@ -2287,18 +2406,28 @@ async def get_chat_messages(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    agent_result = await db.execute(select(Agent).where(Agent.id == session.agent_id))
+    agent = agent_result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # #46: a signed-identity agent answers 403 `identity_mismatch` for a forged or
+    # stale hash. This runs BEFORE the ownership 404 so a visitor whose host page
+    # passed the wrong `identify()` hash is told why, instead of being told the
+    # session does not exist. It reveals nothing about the session: whether the
+    # agent requires signed identities is already public on `/config:public`
+    # (`identity_required`).
+    enforce_signed_visitor_identity(agent, visitor_id)
+
     # 会话 id 按 agent 可枚举，因此只有其 visitor 能读回 transcript。
+    # (#46: this ownership check stays as the SECOND gate — a valid signature
+    # proves who is asking, this proves the asker owns this transcript.)
     if session.visitor_id and session.visitor_id != (visitor_id or ""):
         raise HTTPException(status_code=404, detail="Session not found")
 
     # 已关闭的会话返回空数组，SDK 收到空数组会清除 sessionId 并开启新会话
     if session.status == "closed":
         return []
-
-    agent_result = await db.execute(select(Agent).where(Agent.id == session.agent_id))
-    agent = agent_result.scalar_one_or_none()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
 
     enforce_widget_origin_whitelist(agent, request)
 
@@ -2634,7 +2763,13 @@ async def update_agent(
     for field, value in update_data.items():
         # Every secret is Fernet-encrypted at rest; an empty string clears the
         # stored value, exactly like the primary key.
-        if field in ("api_key", "fallback_api_key", "webhook_secret") and isinstance(
+        if field in (
+            "api_key",
+            "fallback_api_key",
+            "webhook_secret",
+            # #46: the HMAC key is a credential like any other.
+            "identity_secret",
+        ) and isinstance(
             value, str
         ):
             value = value.strip()
@@ -3142,6 +3277,11 @@ async def get_public_config(
         "online": is_online(agent) if agent else True,
         "business_hours": business_hours_config_payload(agent) if agent else None,
         "away_message": business_hours_away_message(agent) if agent else None,
+        # #46 / contract C2: does this agent accept only signed identities? The
+        # widget uses it to say "this site signs you in" before the visitor
+        # sends a message, instead of discovering it as a 403 afterwards. It
+        # reveals no secret: the flag is already implied by the 403.
+        "identity_required": identity_required(agent) if agent else False,
     }
 
 # --- #40: the install surface ------------------------------------------------
@@ -3431,8 +3571,100 @@ async def get_session_messages(
         for msg in messages
     ]
 
+# --- #46: one-click visitor deletion ---------------------------------------
+
+async def visible_agent_ids(db: AsyncSession, current_user: AdminUser) -> List[str]:
+    """Every agent the caller may act on, for a workspace-scoped sweep.
+
+    Mirrors `list_sessions`: a workspace super admin sees the agents of their
+    own workspace, an agent member sees the agents they are a member of. A
+    visitor is one person across the workspace's assistants, so deletion has to
+    be able to span agents — a customer who talked to two of them is one
+    visitor, and "delete this visitor" must mean all of it.
+    """
+    if current_user.role == "super_admin":
+        if not current_user.workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current admin has no workspace assigned",
+            )
+        result = await db.execute(
+            select(Agent.id).where(Agent.workspace_id == current_user.workspace_id)
+        )
+        return [row[0] for row in result.all()]
+
+    result = await db.execute(
+        select(AgentMember.agent_id).where(
+            AgentMember.admin_user_id == current_user.id
+        )
+    )
+    return [row[0] for row in result.all()]
+
+@router.delete("/admin/visitors/{visitor_id}")
+
+async def delete_visitor(
+    visitor_id: str,
+    current_user: AdminUser = Depends(require_chat_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """#46 — delete one visitor's data, and say exactly how much went.
+
+    Children first, one transaction: leads (they may point at a session), then
+    messages, then sessions. Nothing is committed until every delete succeeded,
+    so a failure part-way through leaves the visitor intact rather than
+    half-erased.
+
+    A visitor that exists only in another workspace produces zero rows and the
+    route answers 404 — the same shape as the handoff routes, so deletion never
+    confirms that a foreign visitor exists.
+    """
+    visitor_key = (visitor_id or "").strip()
+    if not visitor_key:
+        raise HTTPException(status_code=404, detail="Visitor not found")
+
+    agent_ids = await visible_agent_ids(db, current_user)
+    if not agent_ids:
+        raise HTTPException(status_code=404, detail="Visitor not found")
+
+    # A signed identity (#46) carries a verified email; sweeping leads by that
+    # address catches a lead captured by the offline form before any session
+    # existed. An unsigned id never selects rows by string match, so a caller
+    # cannot use deletion as a lookup for somebody else's address.
+    email = None
+    agent_rows = await db.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+    for candidate in agent_rows.scalars().all():
+        email = verified_identity_email(candidate, visitor_key)
+        if email:
+            break
+
+    counts = await delete_visitor_data(
+        db, visitor_id=visitor_key, agent_ids=agent_ids, email=email
+    )
+
+    if counts["sessions"] == 0 and counts["leads"] == 0:
+        # Nothing matched: the deletes wrote no rows, and the caller's
+        # transaction still holds the agent reads above.
+        await db.rollback()
+        raise HTTPException(status_code=404, detail="Visitor not found")
+
+    await db.commit()
+
+    logger.warning(
+        "Admin %s deleted visitor %r: %s", current_user.id, visitor_key[:80], counts
+    )
+
+    return {
+        "success": True,
+        "visitor_id": visitor_key,
+        "deleted": counts,
+        # The console says "已删除 2 个会话、6 条消息" from these numbers;
+        # `total` is what it shows when a single count is asked for.
+        "total": sum(counts.values()),
+    }
+
 
 @router.post("/admin/sessions/{session_id}/takeover")
+
 async def takeover_session(
     session_id: str,
     current_user: AdminUser = Depends(require_chat_operator),

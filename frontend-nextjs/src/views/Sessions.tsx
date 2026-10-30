@@ -102,6 +102,13 @@ export default function Sessions() {
   const [qaFromMessageSaving, setQaFromMessageSaving] = useState<number | null>(null)
   const [qaFromMessageSaved, setQaFromMessageSaved] = useState<string | null>(null)
   const [qaFromMessageError, setQaFromMessageError] = useState<string | null>(null)
+  // #46: one-click visitor deletion. `deletingVisitor` doubles as the guard so a
+  // double click cannot fire two DELETEs; the counts feed the confirmation line.
+  const [deletingVisitor, setDeletingVisitor] = useState(false)
+  const [visitorDeletionResult, setVisitorDeletionResult] = useState<string | null>(
+    null,
+  )
+  const [visitorDeletionError, setVisitorDeletionError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -463,6 +470,50 @@ export default function Sessions() {
       void fetchSessions()
     } catch (err) {
       console.error('Failed to dismiss the unanswered row:', err)
+    }
+  }
+
+  /**
+   * #46: erase one visitor's data in a single click, after a confirm step.
+   *
+   * The action is scoped to a *visitor*, not a session: a signed-in customer may
+   * hold several sessions, and a GDPR-shaped request means all of them plus
+   * their leads and feedback. `window.confirm` is the confirm step — deliberately
+   * native, because a modal for a destructive admin action is not worth a new
+   * dependency, and the sentence names what will be erased.
+   *
+   * The response carries row counts, so the toast says exactly what went.
+   */
+  const handleDeleteVisitor = async (visitorId: string) => {
+    if (deletingVisitor || !visitorId) return
+    if (!window.confirm(t('visitorDeletion.confirm', { id: visitorId }))) return
+
+    setDeletingVisitor(true)
+    setVisitorDeletionResult(null)
+    setVisitorDeletionError(null)
+    try {
+      const result = await api.deleteVisitor(visitorId)
+      setVisitorDeletionResult(
+        t('visitorDeletion.deleted', {
+          sessions: result.deleted.sessions,
+          messages: result.deleted.messages,
+          leads: result.deleted.leads,
+        }),
+      )
+      // The row that was open is gone, so drop the selection and refetch the list.
+      if (selectedSession?.visitor_id === visitorId) {
+        setSelectedSession(null)
+        setMessages([])
+      }
+      await fetchSessions()
+    } catch (err) {
+      setVisitorDeletionError(
+        err instanceof Error
+          ? err.message
+          : t('visitorDeletion.errors.failed'),
+      )
+    } finally {
+      setDeletingVisitor(false)
     }
   }
 
@@ -849,6 +900,24 @@ export default function Sessions() {
                         }
                       >
                         {t('handoff.reopen')}
+                      </button>
+                    )}
+                    {/* #46: erase the whole visitor, not just this session —
+                     * their other sessions, messages, leads and feedback go in
+                     * the same transaction. Destructive, so it is the danger
+                     * variant and asks for confirmation first. */}
+                    {selectedSession.visitor_id && (
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        data-testid="session-action-delete-visitor"
+                        disabled={deletingVisitor}
+                        title={t('visitorDeletion.actionTitle')}
+                        onClick={() =>
+                          void handleDeleteVisitor(selectedSession.visitor_id!)
+                        }
+                      >
+                        {t('visitorDeletion.action')}
                       </button>
                     )}
                     {!isMobile && (
@@ -1275,6 +1344,41 @@ export default function Sessions() {
               onClick={() => {
                 setQaFromMessageSaved(null)
                 setQaFromMessageError(null)
+              }}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* #46: what the deletion actually removed. Row counts, not a shrug —
+         * "did it erase everything?" is the question being asked. */}
+        {(visitorDeletionResult || visitorDeletionError) && (
+          <div
+            className={
+              visitorDeletionError ? 'toast toast-error' : 'toast toast-success'
+            }
+            role={visitorDeletionError ? 'alert' : 'status'}
+            aria-live="polite"
+            data-testid="visitor-deletion-result"
+            style={{
+              position: 'fixed',
+              right: 'var(--space-6)',
+              bottom: 'var(--space-6)',
+              zIndex: 70,
+            }}
+          >
+            <span className="toast-description">
+              {visitorDeletionError ?? visitorDeletionResult}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              aria-label={t('knowledgeBases.actions.close')}
+              title={t('knowledgeBases.actions.close')}
+              onClick={() => {
+                setVisitorDeletionResult(null)
+                setVisitorDeletionError(null)
               }}
             >
               <Icon name="close" size={16} />
