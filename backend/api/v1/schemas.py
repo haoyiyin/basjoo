@@ -8,6 +8,35 @@ from urllib.parse import urlsplit
 from services.url_safety import validate_url_safe
 from services.answer_quality import DEFAULT_RATE_LIMIT_REPLY
 
+# #41 — the offline-form field contract, in one place so the test can assert the
+# same numbers the schema enforces.
+LEAD_NAME_MAX_LENGTH = 100
+LEAD_MESSAGE_MAX_LENGTH = 2000
+
+
+def is_plausible_email(value: str) -> bool:
+    """A structural email check with the stdlib only.
+
+    `email-validator` is not installed and `pip install` is not available on the
+    request path, so this is the same shape a strict parser accepts: exactly one
+    `@`, a non-empty local part, a dotted domain, and no whitespace anywhere.
+    """
+    if not isinstance(value, str):
+        return False
+    if len(value) > 255 or any(char.isspace() for char in value):
+        return False
+    local, at, domain = value.partition("@")
+    if not at or not local or "@" in domain:
+        return False
+    if local.startswith(".") or local.endswith(".") or ".." in local:
+        return False
+    labels = domain.split(".")
+    if len(labels) < 2 or any(not label for label in labels):
+        return False
+    # A TLD of digits only (`a@b.123`) is not a domain.
+    return not labels[-1].isdigit() and len(labels[-1]) >= 2
+
+
 
 def normalize_widget_origin(origin: str) -> str:
     raw_origin = origin.strip()
@@ -26,6 +55,19 @@ def normalize_widget_origin(origin: str) -> str:
 
 # ========== Chat & Context Schemas ==========
 
+
+class PrechatSubmission(BaseModel):
+    """The visitor's identity, captured before the first turn (#41).
+
+    **Never prompt content.** These two fields exist to be written onto the
+    session and a lead row; the chat path must never append them to `messages`.
+    Deliberately *not* email-validated here: a typo in a prechat form must not
+    stop the visitor from asking their question (the widget validates as they
+    type, and `/leads` — where the address is the point — does enforce it).
+    """
+
+    name: Optional[str] = Field(None, max_length=LEAD_NAME_MAX_LENGTH)
+    email: Optional[str] = Field(None, max_length=255)
 
 class ChatRequest(BaseModel):
     """聊天请求"""
@@ -67,6 +109,11 @@ class ChatRequest(BaseModel):
         None,
         max_length=4000,
         description="Host-page context inserted after the retrieval results (#40)",
+    )
+    # #41: the prechat form's answers. Stored on the session (and as a lead),
+    # never included in the prompt — see `test_prechat_isolation.py`.
+    prechat: Optional[PrechatSubmission] = Field(
+        None, description="Visitor identity captured by the prechat form (#41)"
     )
 
 
@@ -530,6 +577,14 @@ class AgentConfig(BaseModel):
     away_message: Optional[str] = Field(
         None, description="Widget copy shown outside business hours (#43)"
     )
+    # #41 — disclosure and the prechat contract. `ai_disclosure` is shown
+    # verbatim by the widget; `prechat_mode` is off | optional | required.
+    ai_disclosure: Optional[str] = Field(
+        None, description="AI disclosure line rendered by the widget (#41)"
+    )
+    prechat_mode: str = Field(
+        "off", description="off | optional | required prechat form (#41)"
+    )
     # #44 — quota degradation. `fallback_api_key` is never returned; the
     # payload only says whether one is stored, like `api_key_set`.
     fallback_model: Optional[str] = Field(
@@ -675,6 +730,15 @@ class AgentUpdateRequest(BaseModel):
     )
     away_message: Optional[str] = Field(
         None, description="Widget copy shown outside business hours (#43)"
+    )
+    # #41 — disclosure + prechat. An empty `ai_disclosure` clears it.
+    ai_disclosure: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="AI disclosure line rendered verbatim by the widget (#41)",
+    )
+    prechat_mode: Optional[Literal["off", "optional", "required"]] = Field(
+        None, description="Prechat form policy: off | optional | required (#41)"
     )
     # #44 — quota degradation. Both are optional; an empty string on
     # `fallback_api_key` clears it (same convention as `api_key`).
@@ -1177,3 +1241,124 @@ class FixedFactsRequest(BaseModel):
     """Operator-written facts that outrank retrieved chunks."""
 
     fixed_facts: Optional[str] = None
+
+
+# ========== #41: lead capture, transcript email, thumbs feedback ==========
+
+
+class LeadSubmitRequest(BaseModel):
+    """`POST /api/v1/leads` — the widget's offline form.
+
+    The field rules are the acceptance contract: they exist so a bad submit is a
+    **field-level** 422 (`loc == ["body", "<field>"]`) that the widget can map
+    back onto its own input rather than a generic toast.
+    """
+
+    agent_id: str = Field(..., min_length=1, max_length=50)
+    session_id: Optional[str] = Field(None, max_length=200)
+    name: str = Field(..., min_length=1, max_length=LEAD_NAME_MAX_LENGTH)
+    email: str = Field(...)
+    message: Optional[str] = Field(None, max_length=LEAD_MESSAGE_MAX_LENGTH)
+    page_url: Optional[str] = Field(None, max_length=1000)
+    # offline-form (default) | prechat | trigger. `manual` is operator-only.
+    source: Literal["offline-form", "prechat", "trigger"] = "offline-form"
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        # max_length is enforced by Field; this only rejects "   ", which passes
+        # min_length but is not a name. A blank name must be a field-level 422.
+        stripped = (value or "").strip()
+        if not stripped:
+            raise ValueError("Name cannot be blank")
+        return stripped
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, value: str) -> str:
+        # `email-validator` is not a dependency and must not become one on a
+        # public request path, so this is the stdlib check: one `@`, a dotted
+        # domain, no whitespace and no display-name form. Anything that fails
+        # is a 422 whose `loc` names this field, which is what the widget maps
+        # back onto its own input.
+        cleaned = (value or "").strip()
+        if not is_plausible_email(cleaned):
+            raise ValueError("Enter a valid email address")
+        return cleaned
+
+
+class LeadPayload(BaseModel):
+    """One lead as the dashboard renders it."""
+
+    id: str
+    agent_id: str
+    session_id: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    message: Optional[str] = None
+    source: str = "offline-form"
+    page_url: Optional[str] = None
+    contacted: bool = False
+    contacted_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class LeadListResponse(BaseModel):
+    """`GET /api/v1/admin/leads`."""
+
+    items: List[LeadPayload] = Field(default_factory=list)
+    total: int = 0
+    uncontacted: int = 0
+
+
+class LeadContactedRequest(BaseModel):
+    """The dashboard's "contacted" toggle."""
+
+    contacted: bool
+
+
+class TranscriptEmailResponse(BaseModel):
+    """`POST /api/v1/admin/sessions/{id}/email-transcript`.
+
+    `sent` is false on the second call for the same session: the send is guarded
+    by a conditional UPDATE, so a double click / a second scheduler run is a
+    no-op that still answers 200 with the same stable body.
+    """
+
+    success: bool
+    sent: bool
+    already_sent: bool = False
+    recipient: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    message: Optional[str] = None
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Thumbs on one assistant turn: 1 = up, -1 = down, 0 = clear."""
+
+    value: int = Field(..., description="1 up, -1 down, 0 clear")
+
+
+class MessageFeedbackPayload(BaseModel):
+    """The vote as stored: `rating` on the *visitor's* message row.
+
+    `rating` is `-1 / 0 / +1` on the user turn the `assistant_message_id` was a
+    reply to (the spine's column, `chat_messages.rating`), which is what makes a
+    vote render in the transcript's own context.
+    """
+
+    message_id: int
+    assistant_message_id: int
+    session_id: str
+    rating: int
+    cleared: bool = False

@@ -203,6 +203,16 @@ class Settings(BaseSettings):
     # 日志
     log_level: str = "info"
 
+    # #41 — transcript email. Absent host/from means "SMTP is not configured",
+    # which the route answers as a 503 instead of a 500. `SMTP_USE_TLS` defaults
+    # to on (STARTTLS); the sender falls back to `SMTP_USER`.
+    smtp_host: str = ""
+    smtp_port: str = "587"
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: str = "true"
+
     def model_post_init(self, __context) -> None:
         secret_key_file = self.secret_key_file.strip() or "/app/data/.secret_key"
         object.__setattr__(self, "secret_key_file", secret_key_file)

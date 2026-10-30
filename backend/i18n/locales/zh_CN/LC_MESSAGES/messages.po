@@ -87,3 +87,19 @@ msgstr "未找到可读取的文本内容。请上传包含可读文本的文档
 
 msgid "File content does not match the selected document type. Please upload a valid, readable document."
 msgstr "文件内容与所选文档类型不匹配。请上传有效且可读取的文档。"
+
+# #41 — 对话记录邮件 + 线索表单
+msgid "SMTP is not configured"
+msgstr "SMTP 未配置"
+
+msgid "Could not send the transcript email"
+msgstr "无法发送对话记录邮件"
+
+msgid "Transcript sent"
+msgstr "对话记录已发送"
+
+msgid "Transcript was already sent"
+msgstr "对话记录已发送过"
+
+msgid "This session has no contact email"
+msgstr "该会话没有联系邮箱"
