@@ -481,6 +481,10 @@ class ChatMessage(Base):
     # the answer was the fallback or nothing was retrieved for a real question.
     confidence = Column(Float, nullable=True)
     is_unanswered = Column(Boolean, nullable=False, default=False)
+    # #44 / #45: this answer came from the agent's fallback model because the
+    # primary allowance was spent. Persisted here so the dashboard can count
+    # degraded answers from its own rows instead of a counter column.
+    degraded = Column(Boolean, nullable=False, default=False)
     # Thumbs vote (#41): -1 / 0 / +1, where 0 retracts. Stored on the visitor's
     # own message so the vote renders in the transcript's own context.
     rating = Column(Integer, nullable=True)

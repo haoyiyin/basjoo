@@ -1140,6 +1140,37 @@ a.btn-danger:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* #45: the delta is coloured by meaning, not by arithmetic sign. A rise in
+ * unanswered questions is bad news, so `.is-better` / `.is-worse` are assigned
+ * from the metric's own direction (see `deltaTone` in Dashboard.tsx). `is-flat`
+ * is the zero case — including "0 -> 0" and "no baseline" — and stays in the
+ * muted role so a metric that did not move does not shout. */
+.stat-delta.is-better {
+  color: var(--color-success);
+}
+
+.stat-delta.is-worse {
+  color: var(--color-error);
+}
+
+.stat-delta.is-flat {
+  color: var(--fg-dim);
+}
+
+/* A labelled control that sits inline in a page header's action row: same
+ * label/value pair as `.field`, without the stack's bottom margin. */
+.field-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.field-inline .field-label {
+  margin: 0;
+  white-space: nowrap;
+}
+
 /* A row of stats: auto-fit so it degrades to one column at 375px. */
 .stat-grid {
   display: grid;

@@ -1480,6 +1480,7 @@ async def persist_chat_response(
     preview: bool = False,
     message_weight: int = 1,
     agent: Optional[Agent] = None,
+    degraded: bool = False,
 ) -> ChatMessage:
     """Persist a completed user/assistant exchange.
 
@@ -1520,6 +1521,9 @@ async def persist_chat_response(
         sender_type="agent",
         confidence=confidence,
         is_unanswered=is_unanswered,
+        # #45: persist what #44 already reports on the response, so the
+        # dashboard can count degraded answers from rows rather than a counter.
+        degraded=bool(degraded),
     )
     db.add(assistant_message)
 
@@ -1754,6 +1758,7 @@ async def chat(
             preview=preview,
             message_weight=weight,
             agent=_agent,
+            degraded=degraded,
         )
         await publish_chat_response(session_obj, request.message, reply)
 
@@ -2039,6 +2044,7 @@ async def chat_stream(
                     preview=preview,
                     message_weight=weight,
                     agent=_agent,
+                    degraded=degraded,
                 )
                 await publish_chat_response(session_obj, request.message, reply)
                 yield sse_event(

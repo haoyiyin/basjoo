@@ -1094,5 +1094,48 @@
     "secretMasked": "••••••••（已保存，输入可替换）",
     "secretHint": "用于生成 X-Basjoo-Signature: sha256=<hmac> 请求头。密钥加密存储。",
     "secretSetHint": "已保存签名密钥。留空表示保持不变，输入新值则替换。"
+  },
+  "analytics": {
+    "windowFallback": "vs 前 {{days}} 天",
+    "windowFallbackOne": "vs 前 1 天",
+    "rangeLabel": "时间范围",
+    "ranges": {
+      "24h": "今天",
+      "7d": "近 7 天",
+      "30d": "近 30 天",
+      "90d": "近 90 天"
+    },
+    "deltaUp": "↑ {{value}}%",
+    "deltaDown": "↓ {{value}}%",
+    "deltaNew": "新增",
+    "deltaNone": "持平",
+    "export": "导出 CSV",
+    "exporting": "正在导出…",
+    "loading": "正在加载统计…",
+    "loadError": "统计暂时无法加载，其余信息不受影响。",
+    "metricsTitle": "会话质量（{{label}}）",
+    "metrics": {
+      "messages": "消息数",
+      "leads": "留资线索",
+      "handoffs": "转人工会话",
+      "degraded": "降级回答",
+      "negativeFeedback": "点踩",
+      "positiveRate": "好评率"
+    },
+    "outcomesTitle": "会话结果分布",
+    "outcomesEmptyTitle": "还没有可分类的会话",
+    "outcomesEmptyDescription": "会话结束约 30 分钟后，系统会在后台自动判断结果，不会影响正在进行的对话。",
+    "outcomes": {
+      "resolved": "已解决",
+      "abandoned": "未回复即离开",
+      "escalated": "已转人工",
+      "noAnswer": "没能回答",
+      "unclassified": "待分类"
+    },
+    "topUnansweredTitle": "最该补上的问题",
+    "topUnansweredEmptyTitle": "这个区间没有未答问题",
+    "topUnansweredEmptyDescription": "这段时间内每个回答都命中了知识库。",
+    "topUnansweredAction": "查看全部未答问题",
+    "occurrences": "{{count}} 次"
   }
 }

@@ -166,7 +166,15 @@ def run_sqlite_migrations(database_url: str) -> None:
                     ("is_unanswered", "BOOLEAN DEFAULT 0"),
                     # #41 — thumbs vote (-1/0/+1).
                     ("rating", "INTEGER"),
+                    # #45 — the degraded flag #44 already returns on the
+                    # response, persisted so analytics can count it. Existing
+                    # rows read as 0 (a primary answer; the column did not
+                    # exist to be degraded before).
+                    ("degraded", "BOOLEAN DEFAULT 0"),
                 ],
+            )
+            cursor.execute(
+                "UPDATE chat_messages SET degraded = 0 WHERE degraded IS NULL"
             )
 
 

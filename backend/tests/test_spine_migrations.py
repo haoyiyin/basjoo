@@ -51,7 +51,8 @@ NEW_COLUMNS = {
         "outcome",
         "ai_turn_count",
     ],
-    "chat_messages": ["confidence", "is_unanswered", "rating"],
+    # #45: `degraded` persists the flag #44 already returned on the response.
+    "chat_messages": ["confidence", "is_unanswered", "rating", "degraded"],
     # #47: the diffed-refetch key and the two-phase upload queue stage.
     "kb_documents": ["item_hash", "processing_stage"],
 }
