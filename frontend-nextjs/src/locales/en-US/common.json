@@ -1099,5 +1099,48 @@
     "secretMasked": "•••••••• (stored — type to replace)",
     "secretHint": "Used for the X-Basjoo-Signature: sha256=<hmac> header. Stored encrypted.",
     "secretSetHint": "A secret is stored. Leave this field empty to keep it, or type a new one to replace it."
+  },
+  "analytics": {
+    "windowFallback": "vs the previous {{days}} days",
+    "windowFallbackOne": "vs the previous 1 day",
+    "rangeLabel": "Range",
+    "ranges": {
+      "24h": "Today",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "90d": "Last 90 days"
+    },
+    "deltaUp": "↑ {{value}}%",
+    "deltaDown": "↓ {{value}}%",
+    "deltaNew": "new",
+    "deltaNone": "no change",
+    "export": "Export CSV",
+    "exporting": "Exporting…",
+    "loading": "Loading statistics…",
+    "loadError": "Statistics could not be loaded. The rest of this page is unaffected.",
+    "metricsTitle": "Conversation quality ({{label}})",
+    "metrics": {
+      "messages": "Messages",
+      "leads": "Leads",
+      "handoffs": "Escalated",
+      "degraded": "Degraded answers",
+      "negativeFeedback": "Thumbs down",
+      "positiveRate": "Positive rate"
+    },
+    "outcomesTitle": "How conversations ended",
+    "outcomesEmptyTitle": "Nothing to classify yet",
+    "outcomesEmptyDescription": "About 30 minutes after a conversation goes quiet, the outcome is worked out in the background — live chat is never affected.",
+    "outcomes": {
+      "resolved": "Resolved",
+      "abandoned": "Left without an answer",
+      "escalated": "Escalated to a human",
+      "noAnswer": "Could not answer",
+      "unclassified": "Awaiting classification"
+    },
+    "topUnansweredTitle": "What to fix next",
+    "topUnansweredEmptyTitle": "No unanswered questions in this window",
+    "topUnansweredEmptyDescription": "Every answer in this period was found in the knowledge base.",
+    "topUnansweredAction": "Open all unanswered questions",
+    "occurrences": "{{count}}×"
   }
 }

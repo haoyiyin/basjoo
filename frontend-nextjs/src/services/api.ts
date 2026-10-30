@@ -525,6 +525,92 @@ export interface UnansweredList {
 	total: number;
 }
 
+/**
+ * #45: one tile of the dashboard. `delta_kind` says how to read the delta:
+ * `none` means the previous window had nothing to compare against and the value
+ * did not move, `new` means the metric did not exist before (never a percentage,
+ * because a percentage of zero is not a number an operator should ever see).
+ * `window_label` is the comparison window in words — it is not optional, so a
+ * tile can never be rendered as a bare number.
+ */
+export type DeltaKind = "none" | "new" | "pct";
+
+export interface AnalyticsTile {
+	value: number;
+	previous: number;
+	delta: number;
+	/** null when the delta is not a percentage (`delta_kind` is not `pct`). */
+	delta_pct: number | null;
+	delta_kind: DeltaKind;
+	/** e.g. "vs previous 7 days" / "vs 前 7 天". */
+	window_label: string;
+}
+
+export interface AnalyticsWindow {
+	from: string;
+	to: string;
+	previous_from: string;
+	previous_to: string;
+	days: number;
+	label: string;
+}
+
+export interface AnalyticsFunnel {
+	opens: number;
+	conversations: number;
+	leads: number;
+	conversation_rate: number;
+	lead_rate: number;
+}
+
+export interface OutcomeSplit {
+	resolved: number;
+	abandoned: number;
+	escalated: number;
+	"no-answer": number;
+	total: number;
+	classified: number;
+	unclassified: number;
+}
+
+/** A pointer to #42's triage queue, not a copy of it. */
+export interface TopUnansweredItem {
+	/** Grouped by the queue's own normaliser, so the two surfaces agree. */
+	question: string;
+	occurrences: number;
+	/** The queue's coordinates: deep-link target and "add to Q&A" handle. */
+	message_id: number | null;
+	last_seen?: string | null;
+}
+
+export interface AnalyticsOverview {
+	range: AnalyticsRange;
+	window: AnalyticsWindow;
+	tiles: Record<AnalyticsTileName, AnalyticsTile>;
+	funnel: AnalyticsFunnel;
+	outcome_split: OutcomeSplit;
+	top_unanswered: TopUnansweredItem[];
+}
+
+export type AnalyticsRange = "24h" | "7d" | "30d" | "90d";
+
+export type AnalyticsTileName =
+	| "sessions"
+	| "messages"
+	| "ai_replies"
+	| "visitors"
+	| "leads"
+	| "handoffs"
+	| "unanswered"
+	| "degraded"
+	| "negative_feedback"
+	| "positive_feedback_rate";
+
+export interface AnalyticsQuery {
+	range?: AnalyticsRange;
+	agent_id?: string;
+}
+
 export interface UnansweredQuery {
 	/** ISO-8601; the backend defaults to 30 days back. */
 	since?: string;
@@ -1699,6 +1785,62 @@ class APIService {
 		return this.request<UnansweredList>(
 			`/api/v1/admin/sessions/unanswered${suffix ? `?${suffix}` : ""}`,
 		);
+	}
+
+	// ------------------------------------------------------- analytics (#45)
+
+	/**
+	 * The dashboard's whole payload: tiles with deltas *and* the comparison
+	 * window in words, the outcome split and the top unanswered questions.
+	 *
+	 * One request rather than five so the tiles, the funnel and the export link
+	 * can never disagree about which window they describe.
+	 */
+	async getAnalyticsOverview(
+		query: AnalyticsQuery = {},
+	): Promise<AnalyticsOverview> {
+		const params = new URLSearchParams();
+		if (query.range) params.set("range", query.range);
+		if (query.agent_id) params.set("agent_id", query.agent_id);
+		const suffix = params.toString();
+		return this.request<AnalyticsOverview>(
+			`/api/v1/admin/stats/overview${suffix ? `?${suffix}` : ""}`,
+		);
+	}
+
+	/**
+	 * The CSV for the *same* filters the dashboard is showing.
+	 *
+	 * Returns the bytes rather than triggering the download here, so the caller
+	 * owns the object URL and can revoke it — a leaked blob URL per click is a
+	 * slow memory leak in a long-lived admin session.
+	 */
+	async exportStatsCsv(
+		query: AnalyticsQuery = {},
+	): Promise<{ blob: Blob; filename: string }> {
+		const params = new URLSearchParams();
+		if (query.range) params.set("range", query.range);
+		if (query.agent_id) params.set("agent_id", query.agent_id);
+		// The locale decides the window label the server stamps on the file, so
+		// the exported header matches the console's language.
+		params.set("locale", this.getLocale());
+		const url = new URL(
+			`${this.baseUrl}/api/v1/admin/stats/export.csv?${params.toString()}`,
+			window.location.origin,
+		);
+		const token = localStorage.getItem("token");
+		const response = await fetch(url.toString(), {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		if (!response.ok) {
+			throw new Error(await parseErrorResponse(response));
+		}
+		const disposition = response.headers.get("content-disposition") ?? "";
+		const match = /filename="?([^";]+)"?/.exec(disposition);
+		return {
+			blob: await response.blob(),
+			filename: match?.[1] ?? "basjoo-stats.csv",
+		};
 	}
 
 	/**

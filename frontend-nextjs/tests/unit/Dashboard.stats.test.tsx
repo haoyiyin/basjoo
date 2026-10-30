@@ -32,6 +32,15 @@ vi.mock("../../src/services/api", () => ({
 		getSourcesSummary: vi.fn(),
 		// #42 adds a third tile: unanswered answers in the last 7 days.
 		getUnanswered: vi.fn(async () => ({ items: [], total: 0 })),
+		// #45's analytics payload is deliberately *not* stubbed here: this file
+		// owns the identity/stats contract, and leaving it rejected proves the
+		// tiles fall back to the agent payload (and an em dash) instead of
+		// blanking the page. The tiles themselves are covered by
+		// tests/unit/Dashboard.deltas.test.tsx.
+		getAnalyticsOverview: vi.fn(async () => {
+			throw new Error("analytics not stubbed in this file");
+		}),
+		exportStatsCsv: vi.fn(),
 	},
 }));
 
@@ -219,14 +228,19 @@ describe("Dashboard statistics", () => {
 		]) {
 			expect(screen.queryByText(shortcut)).toBeNull();
 		}
-		// The only button left is the agent-id copy control (#30 removed the KB
-		// rebind icon); no quick-start shortcut came back.
+		// Exactly two buttons and no shortcuts: the agent-id copy control (#30
+		// removed the KB rebind icon) and #45's CSV export. Anything else is a
+		// quick-start shortcut creeping back.
 		expect(
 			screen.getByTestId("dashboard-agent-id-copy"),
 		).toBeInTheDocument();
 		expect(screen.queryByTestId("dashboard-kb-change")).toBeNull();
 		expect(screen.getByTestId("dashboard-kb-link")).toBeInTheDocument();
-		expect(screen.getAllByRole("button")).toHaveLength(1);
+		const buttons = screen.getAllByRole("button");
+		expect(buttons).toHaveLength(2);
+		expect(
+			buttons.map((button) => button.getAttribute("data-testid")).sort(),
+		).toEqual(["dashboard-agent-id-copy", "dashboard-export"]);
 	});
 
 	it("renders no knowledge-base parameter labels", async () => {
