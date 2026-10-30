@@ -150,7 +150,8 @@ class ChatResponse(BaseModel):
     taken_over: bool = Field(False, description="会话是否已被人工接管")
     # #43: who is expected to answer. `mode="human"` alone (a single operator
     # reply) is NOT a takeover — `taken_over` stays False.
-    mode: str = Field("ai", description="ai | human")
+    # #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
+    mode: str = Field("ai", description="ai | human | scripted")
     # #43: machine token explaining why the bot stayed silent
     # (taken_over | resolved | closed | paused | human | after_hours). Null when
     # it answered. `after_hours` means the schedule was closed and the session
@@ -162,6 +163,12 @@ class ChatResponse(BaseModel):
     # agent's fallback model. `model` names what actually answered.
     degraded: bool = Field(False, description="Answered by the fallback model")
     model: Optional[str] = Field(None, description="Model that produced `reply`")
+    # #60: what produced a `mode="scripted"` reply — today always `keyword`.
+    # Null for every other mode, so a client can render the muted notice from
+    # one field without inferring it from `mode`.
+    matched_by: Optional[str] = Field(
+        None, description="What matched a scripted reply (keyword)"
+    )
 
 
 class ContextRequest(BaseModel):
@@ -597,6 +604,11 @@ class AgentConfig(BaseModel):
     fallback_api_key_set: bool = Field(
         False, description="Whether a fallback API key is configured"
     )
+    # #60 — the third answer source. Four values; `off` is the upgrade-safe
+    # default so an existing deployment changes nothing.
+    fallback_mode: Optional[
+        Literal["off", "llm", "keyword", "llm_then_keyword"]
+    ] = Field("off", description="off | llm | keyword | llm_then_keyword (#60)")
     # --- #40: the install surface ------------------------------------------
     # Regexes matched against `location.pathname`; a match renders nothing.
     excluded_paths: List[str] = Field(
@@ -757,6 +769,10 @@ class AgentUpdateRequest(BaseModel):
     fallback_api_key: Optional[str] = Field(
         None, max_length=500, description="Key for the fallback model (encrypted at rest)"
     )
+    # #60 — the operator's choice of answer source once the model cannot answer.
+    fallback_mode: Optional[
+        Literal["off", "llm", "keyword", "llm_then_keyword"]
+    ] = Field(None, description="off | llm | keyword | llm_then_keyword (#60)")
     # --- #40: the install surface ------------------------------------------
     excluded_paths: Optional[List[str]] = Field(
         None, description="Path regexes where the widget must not mount (#40)"
@@ -1103,8 +1119,21 @@ class QaItemPayload(BaseModel):
     last_hit_at: Optional[datetime] = None
     source: str
     source_message_id: Optional[int] = None
+    # #60 — normalised trigger words the LLM-free fallback matches on. Empty
+    # means "never served by the keyword path"; the semantic path still sees it.
+    keywords: List[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def _keywords_never_null(cls, value: Optional[List[str]]) -> List[str]:
+        """The column is nullable (a pre-#60 row has `NULL`), the API is not.
+
+        `[]` is the one spelling of "this pair has no trigger words", so the
+        admin UI never has to special-case null vs empty.
+        """
+        return list(value or [])
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1119,6 +1148,9 @@ class QaItemCreateRequest(BaseModel):
 
     question: str = Field(..., min_length=1)
     answer: str = Field(..., min_length=1)
+    # #60 — normalised and validated by the endpoint, which owns the single
+    # `keyword_fallback.normalize` the matcher also uses.
+    keywords: List[str] = Field(default_factory=list)
 
     @field_validator("question", "answer")
     @classmethod
@@ -1134,6 +1166,8 @@ class QaItemUpdateRequest(BaseModel):
     question: Optional[str] = Field(None, min_length=1)
     answer: Optional[str] = Field(None, min_length=1)
     enabled: Optional[bool] = None
+    # #60 — absent means "leave the keywords alone", `[]` means "clear them".
+    keywords: Optional[List[str]] = None
 
     @field_validator("question", "answer")
     @classmethod
@@ -1144,6 +1178,22 @@ class QaItemUpdateRequest(BaseModel):
         if not text:
             raise ValueError("must not be blank")
         return text
+
+class QaMatchRequest(BaseModel):
+    """`POST /knowledge-bases/{kb_id}/qa-items:match` — the operator's tester."""
+
+    message: str = Field(..., min_length=1)
+
+class QaMatchResponse(BaseModel):
+    """What the LLM-free keyword path would serve for one message.
+
+    `matched` is `None` on a miss, and `score`/`matched_keywords` are then
+    empty: a miss is a normal answer, never an error.
+    """
+
+    matched: Optional[QaItemPayload] = None
+    score: Optional[float] = None
+    matched_keywords: List[str] = Field(default_factory=list)
 
 class QaImportPair(BaseModel):
     """One row of a bulk import (CSV/paste box)."""

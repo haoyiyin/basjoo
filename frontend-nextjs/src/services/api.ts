@@ -33,12 +33,18 @@ export interface ChatResponse {
 	session_id?: string;
 	message_id?: number;
 	taken_over?: boolean;
-	mode?: "ai" | "human";
+	/**
+	 * #43: who answers next. `taken_over` implies `human`.
+	 * #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
+	 */
+	mode?: "ai" | "human" | "scripted";
 	no_answer_reason?: string | null;
 	/** #44: true when the fallback model answered. */
 	degraded?: boolean;
 	/** #44: the model that actually produced the reply. */
 	model?: string | null;
+	/** #60: what matched a `scripted` reply — today always `keyword`. */
+	matched_by?: string | null;
 }
 
 export interface StreamDoneMeta {
@@ -47,13 +53,19 @@ export interface StreamDoneMeta {
 	usage?: UsageInfo | null;
 	taken_over?: boolean;
 	/** #43: who answers next. `taken_over` implies `human`. */
-	mode?: "ai" | "human";
+	/**
+	 * #43: who answers next. `taken_over` implies `human`.
+	 * #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
+	 */
+	mode?: "ai" | "human" | "scripted";
 	/** #43: machine token explaining why the bot stayed silent. */
 	no_answer_reason?: string | null;
 	/** #44: true when the fallback model answered (primary allowance spent). */
 	degraded?: boolean;
 	/** #44: the model that actually produced the answer. */
 	model?: string | null;
+	/** #60: what matched a `scripted` answer — today always `keyword`. */
+	matched_by?: string | null;
 }
 
 export interface Source {
@@ -88,6 +100,13 @@ export type EmbeddingProvider =
 	| "custom"
 	| "local";
 
+/**
+ * #60 — the operator's choice of answer source once the model cannot answer.
+ * Mirrors `Literal["off", "llm", "keyword", "llm_then_keyword"]` in
+ * `backend/api/v1/schemas.py` (`AgentConfig` / `AgentUpdateRequest`).
+ */
+export type FallbackMode = "off" | "llm" | "keyword" | "llm_then_keyword";
+
 export interface Agent {
 	id: string;
 	workspace_id?: number;
@@ -105,6 +124,13 @@ export interface Agent {
 	away_message?: string | null;
 	/** #44: model that answers once the daily allowance is spent. */
 	fallback_model?: string | null;
+	/**
+	 * #60 — what actually answers once the model cannot: `off` (today's
+	 * behaviour), `llm` (the #44 fallback model only), `keyword` (the saved
+	 * Q&A keyword pairs only) or `llm_then_keyword`. Mirrors
+	 * `AgentConfig.fallback_mode` / `AgentUpdateRequest.fallback_mode`.
+	 */
+	fallback_mode?: FallbackMode;
 	/** Write-only: a typed value replaces the stored (encrypted) fallback key. */
 	fallback_api_key?: string;
 	/** #44: whether a fallback key is stored (the key itself is never returned). */
@@ -464,6 +490,12 @@ export interface QaItem {
 	/** manual | revise | unanswered — how the pair got here. */
 	source: string;
 	source_message_id?: number | null;
+	/**
+	 * #60 — trigger words for the LLM-free keyword fallback, already normalised
+	 * by the backend (`keyword_fallback.normalize`). Empty means the pair is only
+	 * reachable semantically.
+	 */
+	keywords?: string[];
 	created_at?: string | null;
 	updated_at?: string | null;
 }
@@ -476,12 +508,22 @@ export interface QaItemListResponse {
 export interface QaItemCreateInput {
 	question: string;
 	answer: string;
+	keywords?: string[];
 }
 
 export interface QaItemUpdateInput {
 	question?: string;
 	answer?: string;
 	enabled?: boolean;
+	/** Omit to leave the stored trigger words alone; `[]` clears them. */
+	keywords?: string[];
+}
+
+/** #60 — what the keyword path would serve for one message (the tester). */
+export interface QaMatchResponse {
+	matched: QaItem | null;
+	score: number | null;
+	matched_keywords: string[];
 }
 
 export interface QaImportPair {
@@ -1764,6 +1806,18 @@ class APIService {
 		return this.request<QaImportResponse>(
 			`${this.kbBase(kbId)}/qa-items:import`,
 			{ method: "POST", body: JSON.stringify({ items }) },
+		);
+	}
+
+	/**
+	 * #60 — ask the LLM-free keyword path what it would serve for one message.
+	 * Read-only: one SELECT over the KB's enabled pairs, no embedding, so the
+	 * tester answers exactly what an outage would answer.
+	 */
+	async testQaMatch(kbId: string, message: string): Promise<QaMatchResponse> {
+		return this.request<QaMatchResponse>(
+			`${this.kbBase(kbId)}/qa-items:match`,
+			{ method: "POST", body: JSON.stringify({ message }) },
 		);
 	}
 

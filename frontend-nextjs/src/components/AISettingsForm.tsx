@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import HelpTooltip from "./HelpTooltip";
 import { api } from "../services/api";
-import type { Agent, ProviderType } from "../services/api";
+import type { Agent, FallbackMode, ProviderType } from "../services/api";
 
 type PersonaType = "general" | "customer-service" | "sales" | "custom";
 type ApiFormatType = "openai" | "openai_compatible" | "anthropic" | "google";
@@ -17,6 +17,22 @@ const PERSONA_TYPES: PersonaType[] = [
 ];
 const SILICONFLOW_OFFICIAL_URL = "https://siliconflow.cn/";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+
+/** #60 — the four answer sources, in the order an operator should read them. */
+const FALLBACK_MODES: FallbackMode[] = [
+	"off",
+	"llm",
+	"keyword",
+	"llm_then_keyword",
+];
+
+/** One label per mode; each label carries its own one-line effect. */
+const FALLBACK_MODE_LABEL_KEYS: Record<FallbackMode, string> = {
+	off: "labels.fallbackModeOff",
+	llm: "labels.fallbackModeLlm",
+	keyword: "labels.fallbackModeKeyword",
+	llm_then_keyword: "labels.fallbackModeLlmThenKeyword",
+};
 
 interface ChatParamOverrides {
 	temperature: number;
@@ -68,6 +84,9 @@ export default function AISettingsForm({
 		// #44: the model that answers once the daily allowance is spent.
 		fallback_model: "",
 		fallback_api_key: "",
+		// #60: which answer source is actually consulted once the model cannot
+		// answer. `off` is the upgrade-safe default, matching the backend.
+		fallback_mode: "off" as FallbackMode,
 	});
 	const [personaError, setPersonaError] = useState(false);
 
@@ -129,6 +148,7 @@ export default function AISettingsForm({
 				// input starts empty and a typed value replaces the stored one.
 				fallback_model: agentData.fallback_model ?? "",
 				fallback_api_key: "",
+				fallback_mode: agentData.fallback_mode ?? "off",
 			});
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.loadFailed"));
@@ -211,6 +231,9 @@ export default function AISettingsForm({
 			if (formData.fallback_api_key.trim()) {
 				updateData.fallback_api_key = formData.fallback_api_key;
 			}
+
+			// #60: which answer source is consulted once the model cannot answer.
+			updateData.fallback_mode = formData.fallback_mode;
 
 			if (formData.api_key.trim()) {
 				const aiTestResult = await api.testAIApi(agent.id, updateData);
@@ -301,6 +324,7 @@ export default function AISettingsForm({
 		formData.api_key,
 		formData.fallback_model,
 		formData.fallback_api_key,
+		formData.fallback_mode,
 		handleSave,
 	]);
 
@@ -379,6 +403,13 @@ export default function AISettingsForm({
 			model: getDefaultModel(provider),
 		}));
 	};
+
+	// #60 — the keyword matcher is armed in two of the four modes; only then is
+	// a miss served from the "auto reply" copy below, which is why the extra
+	// hint only appears for those two.
+	const keywordFallbackArmed =
+		formData.fallback_mode === "keyword" ||
+		formData.fallback_mode === "llm_then_keyword";
 
 	if (loading) {
 		return (
@@ -824,6 +855,53 @@ export default function AISettingsForm({
 						}
 						placeholder={getDefaultModel(formData.provider_type)}
 					/>
+				</div>
+
+				{/* #60 — which answer source is consulted once the model cannot
+				    answer. This is the operator switch the feature never had: without
+				    it an operator could curate keyword pairs that nothing ever reached. */}
+				<div className="field">
+					<span className="field-label">
+						{t("labels.fallbackMode")}
+						<HelpTooltip
+							title={t("labels.fallbackMode")}
+							content={[
+								t("labels.fallbackModeDesc"),
+								t("labels.fallbackModeOff"),
+								t("labels.fallbackModeLlm"),
+								t("labels.fallbackModeKeyword"),
+								t("labels.fallbackModeLlmThenKeyword"),
+							]}
+							position="top"
+							size="xs"
+						/>
+					</span>
+					<select
+						className="input select"
+						aria-label={t("labels.fallbackMode")}
+						data-testid="fallback-mode-select"
+						value={formData.fallback_mode}
+						onChange={(e) =>
+							setFormData({
+								...formData,
+								fallback_mode: e.target.value as FallbackMode,
+							})
+						}
+					>
+						{FALLBACK_MODES.map((mode) => (
+							<option key={mode} value={mode}>
+								{t(FALLBACK_MODE_LABEL_KEYS[mode])}
+							</option>
+						))}
+					</select>
+					<span className="field-hint">
+						{t("labels.fallbackModeDesc")}
+					</span>
+					{keywordFallbackArmed && (
+						<span className="field-hint">
+							{t("labels.fallbackModeMissHint")}
+						</span>
+					)}
 				</div>
 
 				{/* #44 — quota degradation. Two fields on the same two-column grid

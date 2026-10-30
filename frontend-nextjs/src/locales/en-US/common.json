@@ -367,6 +367,13 @@
     "modelNameDesc": "Specify the LLM model to use, such as deepseek-chat, gpt-4, etc.",
     "fallbackModel": "Fallback model",
     "fallbackModelDesc": "Answers visitors once the daily allowance is spent. Leave it empty and chat stops at the limit instead.",
+    "fallbackMode": "Answer source after a limit",
+    "fallbackModeDesc": "What answers when the main model cannot: your fallback model, your saved Q&A keywords, or both, one after the other.",
+    "fallbackModeOff": "Off (today's behaviour)",
+    "fallbackModeLlm": "Fallback model only",
+    "fallbackModeKeyword": "Keyword FAQ only",
+    "fallbackModeLlmThenKeyword": "Model, then keyword",
+    "fallbackModeMissHint": "In this mode an unmatched message is answered with your auto reply as a normal message, not with a rate-limit error.",
     "fallbackApiKey": "Fallback API key",
     "fallbackApiKeyDesc": "Key for the fallback model, stored encrypted. Leave it empty to reuse the primary key above.",
     "fallbackConfigured": "Configured",
@@ -710,6 +717,7 @@
   },
   "chat": {
     "degradedNotice": "Quota reached — answering with the fallback model",
+    "scriptedNotice": "Answered from a saved FAQ",
     "fallbackModelNote": "Fallback model: {{model}}"
   },
   "citations": {
@@ -877,6 +885,10 @@
     "answer": "Answer",
     "questionPlaceholder": "e.g. How long is your refund window?",
     "answerPlaceholder": "e.g. Refunds are accepted within 30 days of delivery.",
+    "keywords": "Keywords",
+    "keywordsPlaceholder": "e.g. refund, return, money back",
+    "keywordsHint": "Separate with commas or spaces. Up to 20, at least 2 characters each. Any one of them makes this pair answer when the model is unavailable.",
+    "keywordsEmpty": "No keywords",
     "questionTooShort": "The question needs at least 15 characters",
     "answerRequired": "Please write an answer",
     "createSubmit": "Save pair",
@@ -908,11 +920,23 @@
     "importResult": "Imported {{created}}, skipped {{skipped}}",
     "importEmpty": "Nothing to import",
     "showing": "Showing {{shown}} of {{total}} pairs",
+    "testerTitle": "Try a message",
+    "testerDescription": "No model is called — this is purely keyword matching, so it is exactly what a visitor gets while the model is down.",
+    "testerPlaceholder": "e.g. I would like a refund",
+    "testerSubmit": "Test match",
+    "testerMiss": "No pair matched. The visitor gets the restricted reply.",
+    "testerQuestion": "Matched question",
+    "testerAnswer": "Answer served",
+    "testerScore": "Score {{score}}",
+    "testerMatchedKeywords": "Matched keywords: {{keywords}}",
+    "testerFailed": "The match test failed",
     "errors": {
       "loadFailed": "Failed to load Q&A",
       "saveFailed": "Failed to save the pair",
       "deleteFailed": "Failed to delete the pair",
-      "importFailed": "Failed to import pairs"
+      "importFailed": "Failed to import pairs",
+      "tooManyKeywords": "At most {{max}} keywords per pair",
+      "keywordTooLong": "Each keyword can be at most {{max}} characters"
     }
   },
   "fixedFacts": {

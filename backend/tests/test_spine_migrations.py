@@ -53,7 +53,15 @@ NEW_COLUMNS = {
         "ai_turn_count",
     ],
     # #45: `degraded` persists the flag #44 already returned on the response.
-    "chat_messages": ["confidence", "is_unanswered", "rating", "degraded"],
+    # #60: `mode` distinguishes a model answer from a keyword-matched one.
+    "chat_messages": [
+        "confidence",
+        "is_unanswered",
+        "rating",
+        "degraded",
+        "mode",
+        "matched_by",
+    ],
     # #47: the diffed-refetch key and the two-phase upload queue stage.
     "kb_documents": ["item_hash", "processing_stage"],
 }
