@@ -22,6 +22,7 @@ NEW_COLUMNS = {
     "agents": [
         "excluded_paths",
         "display_mode",
+        "inline_container",
         "starters",
         "widget_cards",
         "traffic_percentage",

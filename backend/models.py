@@ -206,6 +206,9 @@ class Agent(Base):
     excluded_paths = Column(JSON, nullable=True, default=None)
     # bubble | inline | iframe
     display_mode = Column(String(20), nullable=False, default="bubble")
+    # CSS selector the inline/iframe modes mount into. Null = the widget's own
+    # default (`#basjoo-chat`).
+    inline_container = Column(String(200), nullable=True, default=None)
     # [{"label", "action": "message"|"link", "value", "path"}]  — `path` is an
     # optional regex that scopes the starter to one page.
     starters = Column(JSON, nullable=True, default=None)

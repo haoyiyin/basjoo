@@ -55,6 +55,19 @@ class ChatRequest(BaseModel):
         False,
         description="Admin-only: run this turn without consuming the daily quota",
     )
+    # #40: host-page context, pushed by `window.Basjoo.setContext({before, after})`.
+    # Untrusted text: capped and wrapped in a labelled block on the server, never
+    # treated as instructions.
+    context_before: Optional[str] = Field(
+        None,
+        max_length=4000,
+        description="Host-page context inserted before the instruction block (#40)",
+    )
+    context_after: Optional[str] = Field(
+        None,
+        max_length=4000,
+        description="Host-page context inserted after the retrieval results (#40)",
+    )
 
 
 class SourceItem(BaseModel):
@@ -516,6 +529,28 @@ class AgentConfig(BaseModel):
     fallback_api_key_set: bool = Field(
         False, description="Whether a fallback API key is configured"
     )
+    # --- #40: the install surface ------------------------------------------
+    # Regexes matched against `location.pathname`; a match renders nothing.
+    excluded_paths: List[str] = Field(
+        default_factory=list, description="Path regexes where the widget does not mount (#40)"
+    )
+    display_mode: str = Field(
+        "bubble", description="bubble | inline | iframe (#40)"
+    )
+    inline_container: Optional[str] = Field(
+        None, description="CSS selector the inline/iframe modes mount into (#40)"
+    )
+    starters: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="[{'label', 'action': 'message'|'link', 'value', 'path'}] (#40)",
+    )
+    widget_cards: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Entry-screen cards: [{'heading', 'text', 'chat'|'kb_search'|'form'}] (#40)",
+    )
+    traffic_percentage: int = Field(
+        100, ge=0, le=100, description="Share of visitors that get the widget (#40)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -631,6 +666,27 @@ class AgentUpdateRequest(BaseModel):
     )
     fallback_api_key: Optional[str] = Field(
         None, max_length=500, description="Key for the fallback model (encrypted at rest)"
+    )
+    # --- #40: the install surface ------------------------------------------
+    excluded_paths: Optional[List[str]] = Field(
+        None, description="Path regexes where the widget must not mount (#40)"
+    )
+    display_mode: Optional[Literal["bubble", "inline", "iframe"]] = Field(
+        None, description="bubble | inline | iframe (#40)"
+    )
+    inline_container: Optional[str] = Field(
+        None, max_length=200, description="CSS selector for the inline/iframe mount (#40)"
+    )
+    starters: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="[{'label', 'action': 'message'|'link', 'value', 'path'}] (#40)",
+    )
+    widget_cards: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Entry-screen cards: [{'heading', 'text', 'chat'|'kb_search'|'form'}] (#40)",
+    )
+    traffic_percentage: Optional[int] = Field(
+        None, ge=0, le=100, description="Share of visitors that get the widget (#40)"
     )
 
     @field_validator("allowed_widget_origins")

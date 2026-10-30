@@ -30,6 +30,9 @@ vi.mock('../../src/services/api', () => ({
     createProcedure: vi.fn(),
     updateProcedure: vi.fn(),
     deleteProcedure: vi.fn(),
+    // #40: the embed snippet's origin comes from the server, never from
+    // `window.location.origin`.
+    getPublicOrigin: vi.fn(),
   },
 }));
 
@@ -80,6 +83,9 @@ beforeEach(() => {
   mockedApi.updateAgent.mockResolvedValue(agent as never);
   mockedApi.listProcedures.mockResolvedValue({ items: [], total: 0 } as never);
   mockedApi.updateFixedFacts.mockResolvedValue({ fixed_facts: null } as never);
+  // A dashboard opened on http://localhost:3000 must still hand out the public
+  // host: the origin is the server's answer, not the browser's.
+  mockedApi.getPublicOrigin.mockResolvedValue('https://api.example.com' as never);
 });
 
 describe('AgentSettings', () => {
@@ -95,7 +101,10 @@ describe('AgentSettings', () => {
     expect(screen.getByLabelText('labels.welcomeMessage')).toHaveValue('Hello there');
     expect(screen.getByLabelText('labels.historyRetention')).toHaveValue(30);
     expect(screen.getByLabelText('labels.embedWhitelist')).toHaveValue('https://example.com');
-    expect(screen.getByText(/sdk\.js\?agent_id=agt_1/)).toBeInTheDocument();
+    // #40: one script tag pointing at the server-rendered loader on the public host.
+    expect(screen.getByTestId('install-embed-code').textContent).toBe(
+      '<script src="https://api.example.com/api/v1/agents/agt_1/embed.js" async></script>',
+    );
   });
 
   it('blocks save and shows invalid origin message for malformed whitelist entries', async () => {
@@ -134,6 +143,13 @@ describe('AgentSettings', () => {
         escalation_rules: null,
         business_hours: null,
         away_message: null,
+        // #40: the install surface rides the same PATCH.
+        display_mode: 'bubble',
+        inline_container: null,
+        excluded_paths: [],
+        traffic_percentage: 100,
+        starters: [],
+        widget_cards: [],
       });
     });
   });

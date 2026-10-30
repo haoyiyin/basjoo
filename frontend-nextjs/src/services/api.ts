@@ -109,6 +109,18 @@ export interface Agent {
 	fallback_api_key?: string;
 	/** #44: whether a fallback key is stored (the key itself is never returned). */
 	fallback_api_key_set?: boolean;
+	/** #40: regexes matched against `location.pathname`; a match renders nothing. */
+	excluded_paths?: string[] | null;
+	/** #40: bubble | inline | iframe. */
+	display_mode?: "bubble" | "inline" | "iframe" | null;
+	/** #40: CSS selector the inline/iframe modes mount into. */
+	inline_container?: string | null;
+	/** #40: `[{label, action, value, path}]` — `path` scopes a starter to a page. */
+	starters?: WidgetStarter[] | null;
+	/** #40: entry-screen cards — `[{logo, heading, text, chat|kb_search|form}]`. */
+	widget_cards?: WidgetCard[] | null;
+	/** #40: share of visitors that get the widget (0-100). */
+	traffic_percentage?: number | null;
 	model: string;
 	temperature: number;
 	max_tokens: number;
@@ -164,6 +176,26 @@ export interface Agent {
 export interface BusinessHoursPayload {
 	timezone: string;
 	schedule: Array<{ day: number; start: number; end: number }>;
+}
+
+/** #40: one starter chip. `path` is an optional regex scoping it to a page. */
+export interface WidgetStarter {
+	label: string;
+	action: "message" | "link";
+	/** Sent text for `message`, the URL for `link`. */
+	value?: string;
+	url?: string;
+	path?: string;
+}
+
+/** #40: one entry-screen card. */
+export interface WidgetCard {
+	logo?: string;
+	heading?: string;
+	text?: string;
+	chat?: string;
+	kb_search?: string;
+	form?: string;
 }
 
 /** Lifecycle state of a knowledge base, mirrored from `KnowledgeBase.status`. */
@@ -979,6 +1011,25 @@ class APIService {
 
 	async getQuota(agentId: string): Promise<Quota> {
 		return this.request<Quota>(`/api/v1/quota?agent_id=${agentId}`);
+	}
+
+	/**
+	 * #40: the server's own idea of its public address.
+	 *
+	 * The embed snippet must never be composed from `window.location.origin`: a
+	 * dashboard opened on `localhost` would hand out a `localhost` snippet. The
+	 * API answers with the forwarded host, so the copied tag is right everywhere.
+	 */
+	async getPublicOrigin(agentId: string): Promise<string | null> {
+		try {
+			const payload = await this.request<{ api_base?: string }>(
+				`/api/v1/config:public?agent_id=${encodeURIComponent(agentId)}`,
+			);
+			const origin = payload?.api_base?.trim();
+			return origin ? origin.replace(/\/$/, "") : null;
+		} catch {
+			return null;
+		}
 	}
 
 	// Knowledge base APIs (workspace-scoped, independent of any agent)
