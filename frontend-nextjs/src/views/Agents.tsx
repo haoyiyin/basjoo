@@ -436,6 +436,8 @@ export default function Agents() {
 							{t("agents.emptyHint")}
 						</p>
 						<div className="empty-actions">
+							{/* The primary action keeps its words (#65): 创建 stays text, and
+							 * this is the same action as the header's. */}
 							<button
 								type="button"
 								className="btn btn-primary"

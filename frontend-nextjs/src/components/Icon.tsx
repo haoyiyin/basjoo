@@ -26,6 +26,30 @@ export const ICON_NAMES = [
 	"copy",
 	"check",
 	"save",
+	"edit",
+	"search",
+	"filter",
+	"download",
+	"upload",
+	"link",
+	"stop",
+	"play",
+	"eye",
+	"eye-off",
+	"chevron-down",
+	"chevron-up",
+	"chevron-left",
+	"chevron-right",
+	"external-link",
+	"clock",
+	"user",
+	"user-x",
+	"check-circle",
+	"rotate-ccw",
+	"reply",
+	"key",
+	"logout",
+	"alert",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -154,6 +178,125 @@ const ICON_PATHS: Record<IconName, ReactElement> = {
 			<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
 			<polyline points="17 21 17 13 7 13 7 21" />
 			<polyline points="7 3 7 8 15 8" />
+		</>
+	),
+	edit: (
+		<>
+			<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" />
+			<path d="m15 5 4 4" />
+		</>
+	),
+	search: (
+		<>
+			<circle cx="11" cy="11" r="8" />
+			<path d="m21 21-4.3-4.3" />
+		</>
+	),
+	filter: <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />,
+	download: (
+		<>
+			<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+			<polyline points="7 10 12 15 17 10" />
+			<path d="M12 15V3" />
+		</>
+	),
+	upload: (
+		<>
+			<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+			<polyline points="17 8 12 3 7 8" />
+			<path d="M12 3v12" />
+		</>
+	),
+	link: (
+		<>
+			<path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+			<path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+		</>
+	),
+	stop: <rect x="5" y="5" width="14" height="14" rx="2" />,
+	play: <polygon points="6 3 20 12 6 21 6 3" />,
+	eye: (
+		<>
+			<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+			<circle cx="12" cy="12" r="3" />
+		</>
+	),
+	"eye-off": (
+		<>
+			<path d="M9.9 5.2A10.9 10.9 0 0 1 12 5c6.5 0 10 7 10 7a17.8 17.8 0 0 1-3.3 4.3" />
+			<path d="M6.6 6.6A17.8 17.8 0 0 0 2 12s3.5 7 10 7a10.9 10.9 0 0 0 4.5-1" />
+			<path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+			<path d="m2 2 20 20" />
+		</>
+	),
+	"chevron-down": <path d="m6 9 6 6 6-6" />,
+	"chevron-up": <path d="m18 15-6-6-6 6" />,
+	"chevron-left": <path d="m15 18-6-6 6-6" />,
+	"chevron-right": <path d="m9 18 6-6-6-6" />,
+	"external-link": (
+		<>
+			<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+			<polyline points="15 3 21 3 21 9" />
+			<path d="M10 14 21 3" />
+		</>
+	),
+	clock: (
+		<>
+			<circle cx="12" cy="12" r="10" />
+			<polyline points="12 6 12 12 16 14" />
+		</>
+	),
+	user: (
+		<>
+			<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+			<circle cx="12" cy="7" r="4" />
+		</>
+	),
+	"user-x": (
+		<>
+			<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+			<circle cx="12" cy="7" r="4" />
+			<path d="m17 8 5 5" />
+			<path d="m22 8-5 5" />
+		</>
+	),
+	"check-circle": (
+		<>
+			<path d="M21.8 10A10 10 0 1 1 17 3.3" />
+			<polyline points="22 4 12 14.01 9 11.01" />
+		</>
+	),
+	"rotate-ccw": (
+		<>
+			<path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+			<polyline points="3 3 3 8 8 8" />
+		</>
+	),
+	reply: (
+		<>
+			<polyline points="9 17 4 12 9 7" />
+			<path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+		</>
+	),
+	key: (
+		<>
+			<circle cx="7.5" cy="15.5" r="5.5" />
+			<path d="m21 2-9.6 9.6" />
+			<path d="m15.5 7.5 3 3L22 7l-3-3" />
+		</>
+	),
+	logout: (
+		<>
+			<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+			<polyline points="16 17 21 12 16 7" />
+			<path d="M21 12H9" />
+		</>
+	),
+	alert: (
+		<>
+			<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+			<path d="M12 9v4" />
+			<path d="M12 17h.01" />
 		</>
 	),
 };

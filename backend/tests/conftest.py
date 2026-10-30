@@ -65,9 +65,7 @@ async def reset_quota():
         for quota in quotas:
             quota.used_urls = 0
             quota.used_qa_items = 0
-            quota.used_messages_today = 0
             quota.used_total_text_mb = 0.0
-            quota.last_message_reset = datetime.now(timezone.utc)
         await session.commit()
 
 

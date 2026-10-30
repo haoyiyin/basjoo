@@ -354,7 +354,10 @@ def _create_legacy_workspace_db(db_path: str) -> str:
     conn.execute("INSERT INTO workspaces (id, name, owner_email) VALUES (1, 'WS1', 'ws1@test.com')")
     conn.execute("INSERT INTO workspaces (id, name, owner_email) VALUES (2, 'WS2', 'ws2@test.com')")
 
-    # Create workspace_quotas with full schema
+    # Create workspace_quotas (legacy schema still carrying the retired #62
+    # daily-message columns — the migration must DROP them without losing the
+    # other limits; the assertion lives in
+    # test_migration_drops_retired_message_quota_columns).
     conn.execute("""
         CREATE TABLE workspace_quotas (
             id INTEGER PRIMARY KEY,
@@ -363,6 +366,8 @@ def _create_legacy_workspace_db(db_path: str) -> str:
             max_urls INTEGER DEFAULT 500,
             max_qa_items INTEGER DEFAULT 100,
             max_messages_per_day INTEGER DEFAULT 1500,
+            used_messages_today INTEGER DEFAULT 0,
+            last_message_reset DATETIME,
             max_total_text_mb INTEGER DEFAULT 20
         )
     """)
@@ -409,6 +414,65 @@ def _create_legacy_workspace_db(db_path: str) -> str:
     conn.commit()
     conn.close()
     return db_path
+
+
+def test_migration_drops_retired_message_quota_columns():
+    """#62: the legacy daily-message columns are dropped by the upgrade.
+
+    The other workspace_quotas limits are storage/abuse guards and must
+    survive — the assertion below pins both halves of that decision.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        _create_legacy_workspace_db(db_path)
+
+        # Precondition: the fixture really is the pre-#62 shape.
+        conn = sqlite3.connect(db_path)
+        try:
+            before = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(workspace_quotas)")
+            }
+        finally:
+            conn.close()
+        assert "max_messages_per_day" in before
+        assert "used_messages_today" in before
+        assert "last_message_reset" in before
+
+        run_sqlite_migrations(f"sqlite:///{db_path}")
+
+        conn = sqlite3.connect(db_path)
+        try:
+            after = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(workspace_quotas)")
+            }
+            # The row itself survives the column drop (data is not the point
+            # of the columns, but losing the workspace's quota row would be).
+            count = conn.execute(
+                "SELECT COUNT(*) FROM workspace_quotas"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        for retired in (
+            "max_messages_per_day",
+            "used_messages_today",
+            "last_message_reset",
+        ):
+            assert retired not in after, f"{retired} must be dropped"
+        for kept in (
+            "max_agents",
+            "max_urls",
+            "max_qa_items",
+            "max_total_text_mb",
+            "workspace_id",
+        ):
+            assert kept in after, f"{kept} must survive the drop"
+        assert count == 2, "the quota rows themselves are untouched"
+    finally:
+        os.unlink(db_path)
 
 
 def test_migration_backfills_workspace_id_for_all_admin_roles():

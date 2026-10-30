@@ -42,9 +42,6 @@ msgstr "System already has an administrator, please contact existing administrat
 msgid "Agent not found"
 msgstr "Agent not found"
 
-msgid "Daily message quota exceeded"
-msgstr "Daily message quota exceeded, please try again tomorrow"
-
 msgid "URL fetching failed"
 msgstr "Failed to fetch URL"
 

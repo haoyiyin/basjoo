@@ -93,13 +93,14 @@ class ChatRequest(BaseModel):
     params: Optional[Dict[str, Any]] = Field(
         None, description="推理参数（temperature, max_tokens等）"
     )
-    # #44: a preview turn never consumes the daily allowance. The flag is a
-    # *request*, not a grant: the chat path accepts it only when the request
-    # carries a valid admin bearer token, so the public endpoint cannot be used
-    # as a free LLM. Default False — every existing caller is unchanged.
+    # #66: a preview turn is the operator testing in the Playground. The flag is
+    # a *request*, not a grant: the chat path accepts it only when the request
+    # carries a valid admin bearer token, so the public endpoint cannot use it.
+    # Its one job is to let a keyless agent serve the keyword path regardless of
+    # `fallback_mode`. Default False — every existing caller is unchanged.
     preview: bool = Field(
         False,
-        description="Admin-only: run this turn without consuming the daily quota",
+        description="Admin-only Playground turn (#66): keyless agents serve the keyword path",
     )
     # #40: host-page context, pushed by `window.Basjoo.setContext({before, after})`.
     # Untrusted text: capped and wrapped in a labelled block on the server, never
@@ -159,10 +160,6 @@ class ChatResponse(BaseModel):
     no_answer_reason: Optional[str] = Field(
         None, description="Why the bot did not answer (contract C3)"
     )
-    # #44: the primary allowance was spent, so this answer came from the
-    # agent's fallback model. `model` names what actually answered.
-    degraded: bool = Field(False, description="Answered by the fallback model")
-    model: Optional[str] = Field(None, description="Model that produced `reply`")
     # #60: what produced a `mode="scripted"` reply — today always `keyword`.
     # Null for every other mode, so a client can render the muted notice from
     # one field without inferring it from `mode`.
@@ -577,10 +574,6 @@ class AgentConfig(BaseModel):
         None,
         description="Operator-written facts injected on every message, above KB chunks (#39)",
     )
-    escalation_rules: Optional[str] = Field(
-        None,
-        description="Plain-language escalation prompt appended after procedures (#43)",
-    )
     business_hours: Optional[Dict[str, Any]] = Field(
         None,
         description="{\"timezone\": IANA, \"schedule\": [{\"day\": 0-6, \"start\": min, \"end\": min}]} (#43)",
@@ -596,19 +589,11 @@ class AgentConfig(BaseModel):
     prechat_mode: str = Field(
         "off", description="off | optional | required prechat form (#41)"
     )
-    # #44 — quota degradation. `fallback_api_key` is never returned; the
-    # payload only says whether one is stored, like `api_key_set`.
-    fallback_model: Optional[str] = Field(
-        None, description="Model that answers once the daily allowance is spent"
-    )
-    fallback_api_key_set: bool = Field(
-        False, description="Whether a fallback API key is configured"
-    )
-    # #60 — the third answer source. Four values; `off` is the upgrade-safe
+    # #60 — the third answer source. Two values; `off` is the upgrade-safe
     # default so an existing deployment changes nothing.
-    fallback_mode: Optional[
-        Literal["off", "llm", "keyword", "llm_then_keyword"]
-    ] = Field("off", description="off | llm | keyword | llm_then_keyword (#60)")
+    fallback_mode: Optional[Literal["off", "keyword"]] = Field(
+        "off", description="off | keyword (#60)"
+    )
     # --- #40: the install surface ------------------------------------------
     # Regexes matched against `location.pathname`; a match renders nothing.
     excluded_paths: List[str] = Field(
@@ -740,11 +725,6 @@ class AgentUpdateRequest(BaseModel):
     fixed_facts: Optional[str] = Field(
         None, description="Operator-written facts injected above KB chunks (#39)"
     )
-    escalation_rules: Optional[str] = Field(
-        None,
-        max_length=2000,
-        description="Plain-language escalation prompt, appended after procedures (#43)",
-    )
     business_hours: Optional[Dict[str, Any]] = Field(
         None,
         description="Business hours JSON: timezone + per-weekday minute ranges (#43)",
@@ -761,18 +741,10 @@ class AgentUpdateRequest(BaseModel):
     prechat_mode: Optional[Literal["off", "optional", "required"]] = Field(
         None, description="Prechat form policy: off | optional | required (#41)"
     )
-    # #44 — quota degradation. Both are optional; an empty string on
-    # `fallback_api_key` clears it (same convention as `api_key`).
-    fallback_model: Optional[str] = Field(
-        None, max_length=100, description="Model that answers once the daily allowance is spent"
-    )
-    fallback_api_key: Optional[str] = Field(
-        None, max_length=500, description="Key for the fallback model (encrypted at rest)"
-    )
     # #60 — the operator's choice of answer source once the model cannot answer.
-    fallback_mode: Optional[
-        Literal["off", "llm", "keyword", "llm_then_keyword"]
-    ] = Field(None, description="off | llm | keyword | llm_then_keyword (#60)")
+    fallback_mode: Optional[Literal["off", "keyword"]] = Field(
+        None, description="off | keyword (#60)"
+    )
     # --- #40: the install surface ------------------------------------------
     excluded_paths: Optional[List[str]] = Field(
         None, description="Path regexes where the widget must not mount (#40)"
@@ -977,16 +949,13 @@ class QuotaInfo(BaseModel):
     max_agents: int
     max_urls: int
     max_files: int
-    max_messages_per_day: int
     max_total_text_mb: int
     used_agents: int
     used_urls: int
     used_files: int
-    used_messages_today: int
     used_total_text_mb: float
     remaining_urls: int
     remaining_files: int
-    remaining_messages_today: int
 
 
 # ========== Session Schemas ==========

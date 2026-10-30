@@ -269,21 +269,20 @@ const kbFixture: KnowledgeBaseDetail = {
 	created_at: "2026-01-01T00:00:00Z",
 };
 
-const quotaFixture: Quota = {
+// #62: the daily message allowance is gone from `QuotaInfo`, so the fixture
+// carries only the storage/abuse limits that survive.
+const quotaFixture = {
 	max_agents: 5,
 	max_urls: 100,
 	max_files: 100,
-	max_messages_per_day: 500,
 	max_total_text_mb: 50,
 	used_agents: 1,
 	used_urls: 3,
 	used_files: 2,
-	used_messages_today: 7,
 	used_total_text_mb: 1,
 	remaining_urls: 97,
 	remaining_files: 98,
-	remaining_messages_today: 493,
-};
+} as unknown as Quota;
 
 const urlFixture: URLSource = {
 	id: 1,
@@ -903,7 +902,10 @@ describe("Playground tabs at mobile width", () => {
 		expect(screen.queryByTestId("chat-message-input")).not.toBeInTheDocument();
 	});
 
-	it("keeps the no-API-key banner and the disabled send control", async () => {
+	it("keeps the no-model banner and the enabled send control", async () => {
+		// #66 replaced the old "configure a key first" gate with a banner that
+		// explains what actually answers: the keyword path, served even without a
+		// model. Send stays enabled, so this pins the banner *and* the inversion.
 		mockedApi.getAgent.mockResolvedValue({
 			...agentFixture,
 			api_key_set: false,
@@ -916,12 +918,14 @@ describe("Playground tabs at mobile width", () => {
 			</MemoryRouter>,
 		);
 
-		expect(
-			await screen.findByText("labels.pleaseConfigureApiKey"),
-		).toBeInTheDocument();
+		const banner = await screen.findByTestId("playground-no-model-banner");
+		expect(banner).toHaveTextContent("playground.noModelBanner");
+		fireEvent.change(screen.getByTestId("chat-message-input"), {
+			target: { value: "hello there" },
+		});
 		expect(
 			screen.getByRole("button", { name: "buttons.send" }),
-		).toBeDisabled();
+		).toBeEnabled();
 	});
 
 	it("caps the settings column in CSS instead of an inline side-rail width", async () => {

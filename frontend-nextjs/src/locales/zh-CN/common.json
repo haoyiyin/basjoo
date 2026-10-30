@@ -120,7 +120,6 @@
     "jinaApiTimeout": "Jina API 响应超时，请稍后重试",
     "jinaApiRateLimit": "Jina API 请求过于频繁，请稍后重试",
     "rateLimitExceeded": "对话次数已达上限，请稍后再试",
-    "dailyQuotaExceeded": "今日对话配额已用完，请明天再试",
     "noApiKeyConfigured": "未配置 API Key，请在 AI 设置中配置",
     "agentErrorBanner": "Agent 异常提醒",
     "agentErrorDismiss": "忽略此通知",
@@ -230,8 +229,6 @@
     "selectSession": "选择一个会话",
     "selectSessionDesc": "从左侧列表中选择一个会话，查看聊天记录并与访客互动",
     "conversation": "对话",
-    "quotaInfo": "配额信息",
-    "messagesPerDay": "消息/日",
     "indexInfo": "索引信息",
     "indexedUrls": "已索引URL",
     "indexedFiles": "已索引文件",
@@ -365,18 +362,11 @@
     "apiBase": "API 基础地址",
     "modelName": "模型名称",
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
-    "fallbackModel": "备用模型",
-    "fallbackModelDesc": "每日额度用尽后，由这个模型继续回答访客。留空则额度用尽后直接停止回答。",
-    "fallbackMode": "额度用尽后的回答方式",
-    "fallbackModeDesc": "主模型无法回答时用什么顶上：备用模型、已保存的问答关键词，或先用模型再退到关键词。",
-    "fallbackModeOff": "关闭（保持现状）",
-    "fallbackModeLlm": "仅备用模型",
-    "fallbackModeKeyword": "仅关键词问答",
-    "fallbackModeLlmThenKeyword": "备用模型 → 关键词",
-    "fallbackModeMissHint": "此模式下，未命中任何关键词的消息会用你设置的自动回复正常作答，而不是返回额度超限错误。",
-    "fallbackApiKey": "备用模型 API Key",
-    "fallbackApiKeyDesc": "备用模型专用的密钥，加密存储；留空则复用上方的主密钥。",
-    "fallbackConfigured": "已配置",
+    "fallbackMode": "模型无法回答时",
+    "fallbackModeDesc": "模型自己失败时由什么顶上：什么也不顶上（直接发你的自动回复），或先查已保存的问答关键词、没命中再发自动回复。",
+    "fallbackModeOff": "关闭 — 直接发自动回复",
+    "fallbackModeKeyword": "先关键词问答，再自动回复",
+    "fallbackModeMissHint": "此模式下，未命中任何关键词的消息会用你设置的自动回复正常作答，不会返回错误。",
     "modelNamePreferNonThinking": "建议优先配置非思考模型，通常更稳定，也更容易控制最终输出。",
     "modelNameThinkingAdvice": "如需使用自带思考模型，请先在调试区中充分测试后再用于正式场景。",
     "modelNameTip1": "不同模型有不同的性能和成本特点。",
@@ -444,7 +434,6 @@
     "multilingualSettings": "自动翻译",
     "multilingualSettingsDesc": "系统会在 AI 设置可用时，根据你填写的默认文案自动生成中英文版本，并根据访客浏览器语言显示对应内容。",
     "secureStorage": "您的 API 密钥将被安全存储，不会泄露",
-    "pleaseConfigureApiKey": "请先配置 API 密钥才能使用 AI 对话功能",
     "widgetAppearance": "Widget 外观",
     "widgetAppearanceDesc": "自定义聊天窗口的显示效果。",
     "windowTitleDesc": "窗口标题：显示在聊天窗口顶部的标题文字。",
@@ -550,7 +539,13 @@
       "invalidUrl": "无效网址，请重新输入"
     },
     "embeddingGetKey": "获取 API Key:",
-    "tencentcloud": "腾讯混元"
+    "tencentcloud": "腾讯混元",
+    "personaWhenHint": "作为系统提示词的第一层，每次对话都会影响它的回答。",
+    "embedWhitelistWhenHint": "每次挂件请求都会校验，因此这里删掉的域名会立刻失去挂件。",
+    "modelNotConfigured": "未配置模型",
+    "modelNotConfiguredHint": "尚未保存 LLM 密钥。上方模式下，公开访客会被拒绝；调试区仍可用关键词问答作答。",
+    "fallbackModeWhenHint": "只在模型本身失败时（服务商报错、超时、返回空答案）才会用到，正常对话不会触发。",
+    "modelNotConfiguredBanner": "未配置模型 — 在保存密钥之前，回答来自关键词问答"
   },
   "personas": {
     "generic": {
@@ -635,7 +630,22 @@
       "accountInfoSection": "账号信息",
       "name": "名称",
       "email": "邮箱"
-    }
+    },
+    "widgetAppearanceWhenHint": "保存后立即生效，每次页面加载、对每位访客都会套用。"
+  },
+  "settingsGroups": {
+    "defineAi": "定义 AI",
+    "defineAiDesc": "它是什么、怎么推进一次对话，按模型实际读取的顺序排列：人设是系统提示词的第一层，服务流程排在最后。",
+    "defineAiPersonaPointer": "人设、服务商和模型在调试区的 AI 设置里修改，那里可以边改边用真实对话验证。",
+    "materials": "给它资料",
+    "materialsDesc": "它被允许依据什么回答。这两层只在下面的位置进入提示词，不会重新训练模型。",
+    "materialsQaPointer": "你精选的问答对放在所绑定的知识库里（知识库 → 问答），因为问答对是在知识库中单独向量化建立的，改动后不需要重建索引。",
+    "handoff": "何时转人工",
+    "handoffDesc": "这一组里唯一会改变行为的是时间：落在这些时间段之外时，挂件会关闭输入框并显示离线留言。真正发起转人工仍然是会话页里的一个按钮。",
+    "install": "把机器人放到网站上",
+    "installDesc": "这一段不改变机器人说什么，只决定窗口出现在哪里、谁能看到。",
+    "outbound": "通知你的其他系统",
+    "outboundDesc": "这些是事后通知：不会改变任何一条回答，只把已经发生的事情报告出去。"
   },
   "playground": {
     "testAiEffect": "测试您的 AI Agent 对话效果",
@@ -658,7 +668,6 @@
     "startChat": "开始对话",
     "startChatHint": "输入消息测试您的 AI Agent",
     "inputPlaceholder": "输入您的问题...",
-    "messagesPerDay": "消息/日",
     "indexedUrls": "已索引URL",
     "indexedFiles": "已索引文件",
     "chunks": "文档块",
@@ -668,7 +677,9 @@
     "usageTips": "使用提示",
     "tip1": "输入问题测试 Agent 响应",
     "tip2": "查看引用来源验证检索",
-    "tip3": "点击\"重建索引\"更新知识库"
+    "tip3": "点击\"重建索引\"更新知识库",
+    "noModelBanner": "未配置模型 — 当前由关键词问答回答",
+    "noModelBannerAction": "前往模型设置"
   },
   "sources": {
     "title": "知识源",
@@ -716,9 +727,7 @@
     "processingFailedFallback": "无法处理此文件。请上传有效的、可读的 PDF、TXT、MD、HTML、DOCX 或 XLSX 文档。"
   },
   "chat": {
-    "degradedNotice": "额度用尽，已使用备用模型",
-    "scriptedNotice": "由常见问题自动回答",
-    "fallbackModelNote": "备用模型：{{model}}"
+    "scriptedNotice": "由常见问题自动回答"
   },
   "citations": {
     "references": "参考来源"
@@ -937,7 +946,8 @@
       "importFailed": "导入问答失败",
       "tooManyKeywords": "最多只能设置 {{max}} 个关键词",
       "keywordTooLong": "每个关键词最多 {{max}} 个字符"
-    }
+    },
+    "vsFixedFactsHint": "固定事实每轮都会出现、必须照说；问答对只在访客问到、且语义命中时才出现。地址和链接放固定事实，可以列举的问题放问答对。"
   },
   "fixedFacts": {
     "title": "固定事实",
@@ -946,7 +956,9 @@
     "placeholder": "营业地址：上海市徐汇区衡山路 100 号 3 楼。\n\n预约链接：https://booking.example.com/new?ref=basjoo",
     "hint": "用空行分隔的每一段是一条独立事实，最多注入 6 段。",
     "linkHint": "这里出现的链接会被要求原样输出。",
-    "save": "保存固定事实"
+    "save": "保存固定事实",
+    "whenHint": "每次请求都会原样注入，排在问答对之后、知识库资料之前，最多 6 段（以空行分隔）。",
+    "vsQaHint": "固定事实每轮都会出现、必须照说；问答对只在访客问到、且语义命中时才出现。地址和链接放固定事实，可以列举的问题放问答对。"
   },
   "procedures": {
     "title": "服务流程",
@@ -989,7 +1001,8 @@
       "loadFailed": "加载服务流程失败",
       "saveFailed": "保存流程失败",
       "deleteFailed": "删除流程失败"
-    }
+    },
+    "whenHint": "每轮只匹配一次，按顺序推进，并且只在访客这句话吻合当前步骤时才生效。若某个步骤需要的动作当前渠道不支持，则整条流程跳过，改由模型回答。"
   },
   "reviseAnswer": {
     "action": "修改回答",
@@ -1034,13 +1047,6 @@
       "reopen": "重新打开失败，请稍后重试。"
     }
   },
-  "escalation": {
-    "title": "升级规则",
-    "description": "用自然语言描述什么时候应该主动建议转人工。这段文字会追加在系统提示词的最后（流程之后），最多 2000 字。",
-    "label": "升级规则",
-    "placeholder": "如果用户明确要求人工、表达强烈不满或提到退款纠纷，请主动建议转人工。",
-    "hint": "留空则不注入任何内容。"
-  },
   "visitorDeletion": {
     "action": "删除访客",
     "actionTitle": "清除该访客的全部会话、消息与留资线索",
@@ -1074,11 +1080,13 @@
       "周五",
       "周六",
       "周日"
-    ]
+    ],
+    "whenHint": "每次对话请求都会判断：落在这段时间之外时，挂件会隐藏输入框并显示离线留言。",
+    "awayMessageWhenHint": "请求落在上方时间段之外期间，用它替代输入框显示。"
   },
   "install": {
     "title": "安装方式",
-    "description": "把这段代码复制粘贴到网站的 HTML 中即可。它指向服务器生成的脚本，因此不会包含 localhost。",
+    "description": "这段代码把机器人放到你的网站上。把它复制进站点 HTML 即可；它指向服务端生成的脚本，因此永远不会写成 localhost。",
     "copy": "复制代码",
     "copied": "已复制",
     "copyFailed": "复制失败，请手动选择代码。",
@@ -1119,7 +1127,16 @@
     "starterActionLink": "打开链接",
     "starterValue": "消息内容 / 链接地址",
     "starterPath": "生效路径（正则，可选）",
-    "starterPathPlaceholder": "^/pricing$"
+    "starterPathPlaceholder": "^/pricing$",
+    "displayModeDiffBubble": "悬浮气泡，固定显示在右下角。",
+    "displayModeDiffInline": "内联挂载到你下面指定的容器元素里，不会出现悬浮按钮。",
+    "displayModeDiffIframe": "用独立的 iframe 隔离渲染，宿主页面的样式影响不到它。",
+    "displayModeWhenHint": "在页面加载时为每位访客决定；改动会影响下一次页面浏览，不影响已经打开的对话。",
+    "inlineContainerWhenHint": "在页面加载时解析，所以改了元素名，下次刷新后嵌入就会失效。",
+    "excludedPathsWhenHint": "加载时按 location.pathname 匹配，加进这份名单的页面下次访问时什么都不加载。",
+    "trafficPercentageWhenHint": "每位访客只抽一次并记住，所以访客不会时而看到、时而又看不到。",
+    "cardsWhenHint": "随挂件配置一起下发，下次页面加载就会渲染新卡片；已打开的窗口会在下一条消息时看到。",
+    "startersWhenHint": "加载时随挂件配置一起下发；已经打开的窗口下次刷新时生效。"
   },
   "webhooks": {
     "title": "Webhook",
@@ -1156,7 +1173,6 @@
       "messages": "消息数",
       "leads": "留资线索",
       "handoffs": "转人工会话",
-      "degraded": "降级回答",
       "negativeFeedback": "点踩",
       "positiveRate": "好评率"
     },

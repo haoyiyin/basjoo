@@ -46,7 +46,6 @@ def test_build_csv_prefixes_the_bom_and_keeps_the_frozen_column_order():
                 "messages": 2,
                 "answered": 1,
                 "unanswered": 0,
-                "degraded": 0,
                 "leads": 0,
                 "negative_feedback": 0,
                 "avg_confidence": None,
@@ -65,12 +64,13 @@ def test_build_csv_prefixes_the_bom_and_keeps_the_frozen_column_order():
         "messages",
         "answered",
         "unanswered",
-        "degraded",
         "leads",
         "negative_feedback",
         "avg_confidence",
     ]
     assert CSV_COLUMNS == tuple(rows[0])
+    # #62 / D6: the retired `degraded` column is gone from the frozen set.
+    assert "degraded" not in rows[0]
     # The injection guard applies to the real rendering, not just the helper.
     assert rows[1][0] == "'=cmd|calc"
 

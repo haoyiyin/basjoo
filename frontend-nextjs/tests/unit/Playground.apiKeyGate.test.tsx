@@ -1,4 +1,19 @@
 // @vitest-environment jsdom
+/**
+ * #66 — the Playground no longer walls a keyless agent.
+ *
+ * Before this wave a `!apiKeySet` check sat in `handleSendMessage` and
+ * `sendDisabled={apiKeySet !== true}` sat on the composer, so an operator could
+ * not exercise a keyword-only agent at all. The backend now serves the keyword
+ * path for `preview: true`, so the gate is *inverted* into a banner:
+ *
+ * 1. the banner is persistent above the transcript and says what is answering;
+ * 2. the stream opens anyway (`preview: true` still travels);
+ * 3. the banner disappears as soon as `api_key_set` flips to true.
+ *
+ * The old assertions ("never opens the SSE stream", "send is disabled") are the
+ * behaviours this issue deletes, so they are inverted here rather than dropped.
+ */
 import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -72,40 +87,33 @@ beforeEach(() => {
 	Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe("Playground API key gate (#19)", () => {
-	it("shows the configure-API-key banner and never opens the SSE stream without a key", async () => {
-		const fetchSpy = vi.spyOn(globalThis, "fetch");
+describe("Playground keyless agent (#66)", () => {
+	it("shows the not-configured banner and still opens the SSE stream", async () => {
 		mockedApi.getAgent.mockResolvedValue({ ...baseAgent, api_key_set: false });
 
 		renderPlayground();
 
-		// Desktop two-pane layout: the settings rail owns the missing-key alert,
-		// so the chat pane must NOT repeat it. (The narrow, tabbed layout mounts
-		// only the chat pane and does show it there — covered by
-		// mobileLayout.test.tsx "keeps the no-API-key banner".)
-		await waitFor(() =>
-			expect(mockedApi.getAgent).toHaveBeenCalled(),
-		);
-		expect(
-			screen.queryByText("labels.pleaseConfigureApiKey"),
-		).not.toBeInTheDocument();
+		// The banner is what replaces the gate: it names the real behaviour.
+		const banner = await screen.findByTestId("playground-no-model-banner");
+		expect(banner).toHaveTextContent("playground.noModelBanner");
+		// The action is a real link to the model settings tab, not a dead button:
+		// an operator can open it in a new tab, and its target is inspectable.
+		const action = screen.getByTestId("playground-no-model-banner-action");
+		expect(action).toHaveTextContent("playground.noModelBannerAction");
+		expect(action).toHaveAttribute("href", "?tab=settings");
 
 		const input = screen.getByTestId("chat-message-input");
 		fireEvent.change(input, { target: { value: "hello there" } });
-		// Both activation paths: the (disabled) send button and Enter in the box.
 		fireEvent.click(screen.getByRole("button", { name: "buttons.send" }));
-		fireEvent.keyDown(input, { key: "Enter" });
 
-		// Give any stray async send a tick to start before asserting.
-		await waitFor(() => {
-			expect(mockedApi.streamChat).not.toHaveBeenCalled();
-		});
-		expect(fetchSpy).not.toHaveBeenCalled();
-		expect(input).toHaveValue("hello there");
-		fetchSpy.mockRestore();
+		// Inverted: the stream is allowed now, and it is still a preview turn.
+		await waitFor(() => expect(mockedApi.streamChat).toHaveBeenCalled());
+		const request = mockedApi.streamChat.mock.calls[0][0];
+		expect(request.preview).toBe(true);
+		expect(request.message).toBe("hello there");
 	});
 
-	it("disables the send control when the agent has no API key", async () => {
+	it("keeps the send control enabled for a keyless agent", async () => {
 		mockedApi.getAgent.mockResolvedValue({ ...baseAgent, api_key_set: false });
 
 		renderPlayground();
@@ -113,34 +121,63 @@ describe("Playground API key gate (#19)", () => {
 		const input = await screen.findByTestId("chat-message-input");
 		fireEvent.change(input, { target: { value: "hello there" } });
 
-		expect(screen.getByRole("button", { name: "buttons.send" })).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "buttons.send" }),
+		).toBeEnabled();
 	});
 
-	it("disables the send control while the agent is still loading (apiKeySet === null)", async () => {
-		// Never resolves: the agent stays `undefined` and apiKeySet stays null.
-		mockedApi.getAgent.mockReturnValue(new Promise<Agent>(() => {}));
-
-		renderPlayground();
-
-		const input = await screen.findByTestId("chat-message-input");
-		// Non-empty input, so the only thing that can disable send is the gate.
-		fireEvent.change(input, { target: { value: "hello there" } });
-
-		expect(screen.getByRole("button", { name: "buttons.send" })).toBeDisabled();
-	});
-
-	it("does not show the banner and keeps send enabled when the key is configured", async () => {
+	it("does not show the banner when the key is configured", async () => {
 		mockedApi.getAgent.mockResolvedValue({ ...baseAgent, api_key_set: true });
 
 		renderPlayground();
 
-		const input = await screen.findByTestId("chat-message-input");
-		await waitFor(() => {
-			expect(
-				screen.queryByText("labels.pleaseConfigureApiKey"),
-			).not.toBeInTheDocument();
+		await screen.findByTestId("chat-message-input");
+		await waitFor(() => expect(mockedApi.getAgent).toHaveBeenCalled());
+		expect(
+			screen.queryByTestId("playground-no-model-banner"),
+		).not.toBeInTheDocument();
+
+		fireEvent.change(screen.getByTestId("chat-message-input"), {
+			target: { value: "hello there" },
 		});
-		fireEvent.change(input, { target: { value: "hello there" } });
-		expect(screen.getByRole("button", { name: "buttons.send" })).toBeEnabled();
+		expect(
+			screen.getByRole("button", { name: "buttons.send" }),
+		).toBeEnabled();
+	});
+
+	it("drops the banner once a key is saved", async () => {
+		// `apiKeySet` is read from `agent.api_key_set`, so the same mount with a
+		// saved key must render without the banner. (The save path re-reads the
+		// agent, which is what makes the banner vanish in the real UI.)
+		mockedApi.getAgent.mockResolvedValue({ ...baseAgent, api_key_set: false });
+
+		const first = render(
+			<MemoryRouter initialEntries={["/agents/agt_1/playground"]}>
+				<Routes>
+					<Route path="/agents/:agentId/playground" element={<Playground />} />
+				</Routes>
+			</MemoryRouter>,
+		);
+
+		expect(
+			await screen.findByTestId("playground-no-model-banner"),
+		).toBeInTheDocument();
+		first.unmount();
+
+		mockedApi.getAgent.mockResolvedValue({ ...baseAgent, api_key_set: true });
+		render(
+			<MemoryRouter initialEntries={["/agents/agt_1/playground"]}>
+				<Routes>
+					<Route path="/agents/:agentId/playground" element={<Playground />} />
+				</Routes>
+			</MemoryRouter>,
+		);
+
+		await screen.findByTestId("chat-message-input");
+		await waitFor(() =>
+			expect(
+				screen.queryByTestId("playground-no-model-banner"),
+			).not.toBeInTheDocument(),
+		);
 	});
 });

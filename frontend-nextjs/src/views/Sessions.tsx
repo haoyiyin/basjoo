@@ -51,10 +51,6 @@ interface Message {
   confidence?: number | null
   /** #42: true when the answer did not really answer (see answer_quality.py). */
   is_unanswered?: boolean
-  /** #44: true when the fallback model answered (primary allowance spent). */
-  degraded?: boolean
-  /** #44: the model that produced this answer. */
-  model?: string | null
   /**
    * #60: how this answer was produced. `scripted` means a keyword-matched FAQ
    * pair answered, with no model call at all.
@@ -848,65 +844,82 @@ export default function Sessions() {
                         <>
                           <button
                             type="button"
-                            className="btn btn-secondary"
+                            className="btn btn-icon"
                             data-testid="session-action-reply"
+                            aria-label={t('handoff.reply')}
+                            title={t('handoff.reply')}
                             disabled={pendingAction !== null}
+                            style={iconButtonStyle}
                             onClick={() => {
                               setReplyOpen((open) => !open)
                               setActionError(null)
                             }}
                           >
-                            {t('handoff.reply')}
+                            <Icon name="reply" size={16} />
                           </button>
                           {selectedSession.status === 'active' &&
                             selectedSession.mode !== 'human' && (
                               <button
                                 type="button"
-                                className="btn btn-secondary"
+                                className="btn btn-icon"
                                 data-testid="session-action-takeover"
+                                aria-label={t('handoff.takeover')}
+                                title={t('handoff.takeover')}
                                 disabled={pendingAction !== null}
+                                style={iconButtonStyle}
                                 onClick={() => handleTakeover(selectedSession.id)}
                               >
-                                {t('handoff.takeover')}
+                                <Icon name="user" size={16} />
                               </button>
                             )}
                           {selectedSession.mode === 'human' && (
                             <button
                               type="button"
-                              className="btn btn-secondary"
+                              className="btn btn-icon"
                               data-testid="session-action-release"
+                              aria-label={t('handoff.release')}
+                              title={t('handoff.release')}
                               disabled={pendingAction !== null}
+                              style={iconButtonStyle}
                               onClick={() =>
                                 void runSessionAction(selectedSession.id, 'release')
                               }
                             >
-                              {t('handoff.release')}
+                              <Icon name="user-x" size={16} />
                             </button>
                           )}
+                          {/* #43: four explicit actions, all glyphs (#65). The
+                           * text primary of this view is the composer's send. */}
                           <button
                             type="button"
-                            className="btn btn-primary"
+                            className="btn btn-primary btn-icon"
                             data-testid="session-action-resolve"
+                            aria-label={t('handoff.resolve')}
+                            title={t('handoff.resolve')}
                             disabled={pendingAction !== null}
+                            style={iconButtonStyle}
                             onClick={() =>
                               void runSessionAction(selectedSession.id, 'resolve')
                             }
                           >
-                            {t('handoff.resolve')}
+                            <Icon name="check-circle" size={16} />
                           </button>
                         </>
                       )}
                     {selectedSession.status === 'resolved' && (
                       <button
                         type="button"
-                        className="btn btn-primary"
+                        className="btn btn-icon"
                         data-testid="session-action-reopen"
+                        aria-label={t('handoff.reopen')}
+                        title={t('handoff.reopen')}
                         disabled={pendingAction !== null}
+                        style={iconButtonStyle}
                         onClick={() =>
                           void runSessionAction(selectedSession.id, 'reopen')
                         }
                       >
-                        {t('handoff.reopen')}
+                        <Icon name="rotate-ccw" size={16} />
                       </button>
                     )}
                     {/* #46: erase the whole visitor, not just this session —
@@ -916,15 +929,17 @@ export default function Sessions() {
                     {selectedSession.visitor_id && (
                       <button
                         type="button"
-                        className="btn btn-danger"
+                        className="btn btn-danger btn-icon"
                         data-testid="session-action-delete-visitor"
                         disabled={deletingVisitor}
-                        title={t('visitorDeletion.actionTitle')}
+                        aria-label={t('visitorDeletion.action')}
+                        title={t('visitorDeletion.action')}
+                        style={iconButtonStyle}
                         onClick={() =>
                           void handleDeleteVisitor(selectedSession.visitor_id!)
                         }
                       >
-                        {t('visitorDeletion.action')}
+                        <Icon name="trash" size={16} />
                       </button>
                     )}
                     {!isMobile && (
@@ -1110,11 +1125,10 @@ export default function Sessions() {
                                   </span>
                                 )}
                                 {/* #60: a keyword-matched FAQ pair answered with no
-                                 * model call. One note beside the #44 one — and never
-                                 * both, because a scripted turn is not a degraded one.
-                                 * A scripted MISS carries the same `mode` but no
-                                 * `matched_by`: its text is the operator's apology, so
-                                 * calling it `由常见问题自动回答` would be a lie. Only a
+                                 * model call. The note is keyed off `matched_by`, not
+                                 * `mode`: a scripted MISS carries the same `mode` but no
+                                 * `matched_by`, and its text is the operator's apology,
+                                 * so calling it `由常见问题自动回答` would be a lie. Only a
                                  * hit gets the note. */}
                                 {!isVisitor &&
                                   msg.mode === 'scripted' &&
@@ -1130,36 +1144,13 @@ export default function Sessions() {
                                     {t('chat.scriptedNotice')}
                                   </span>
                                 )}
-                                {/* #44: the daily allowance was spent and the fallback
-                                 * model answered. One small note in the meta row so the
-                                 * operator knows why the answer may be weaker. A scripted
-                                 * turn is mutually exclusive with this one: the backend
-                                 * persists `degraded=False` for it, and the guard here
-                                 * keeps the two notes from ever stacking. */}
-                                {!isVisitor && msg.degraded && msg.mode !== 'scripted' && (
-                                  <span
-                                    data-testid={`message-degraded-${msg.id}`}
-                                    title={
-                                      msg.model
-                                        ? t('chat.fallbackModelNote', { model: msg.model })
-                                        : t('chat.degradedNotice')
-                                    }
-                                    style={{
-                                      fontSize: 'var(--text-xs)',
-                                      color: 'var(--fg-dim)',
-                                    }}
-                                  >
-                                    {t('chat.degradedNotice')}
-                                    {msg.model ? ` · ${msg.model}` : ''}
-                                  </span>
-                                )}
                                 {/* #42: one click turns the turn into a curated pair. The
                                  * backend derives the question from the preceding user
                                  * message, so the action needs no input. */}
                                 {!isVisitor && msg.is_unanswered && (
                                   <button
                                     type="button"
-                                    className="btn btn-ghost"
+                                    className="btn btn-ghost btn-icon"
                                     data-testid={`add-to-qa-${msg.id}`}
                                     aria-label={t('unanswered.addToQaLabel', {
                                       preview: msg.content.slice(0, 40),
@@ -1169,6 +1160,7 @@ export default function Sessions() {
                                     })}
                                     disabled={qaFromMessageSaving === msg.id}
                                     aria-busy={qaFromMessageSaving === msg.id}
+                                    style={iconButtonStyle}
                                     onClick={() => void handleAddToQa(msg.id)}
                                   >
                                     {qaFromMessageSaving === msg.id ? (
@@ -1176,14 +1168,15 @@ export default function Sessions() {
                                         className="spinner"
                                         style={{ width: '14px', height: '14px' }}
                                       />
-                                    ) : null}
-                                    {t('unanswered.addToQa')}
+                                    ) : (
+                                      <Icon name="plus" size={16} />
+                                    )}
                                   </button>
                                 )}
                                 {!isVisitor && (
                                   <button
                                     type="button"
-                                    className="btn btn-ghost"
+                                    className="btn btn-ghost btn-icon"
                                     data-testid={`revise-answer-${msg.id}`}
                                     aria-label={t('reviseAnswer.actionLabel', {
                                       preview: msg.content.slice(0, 40),
@@ -1191,9 +1184,10 @@ export default function Sessions() {
                                     title={t('reviseAnswer.actionLabel', {
                                       preview: msg.content.slice(0, 40),
                                     })}
+                                    style={iconButtonStyle}
                                     onClick={() => openRevise(msg.content)}
                                   >
-                                    {t('reviseAnswer.action')}
+                                    <Icon name="edit" size={16} />
                                   </button>
                                 )}
                               </div>
@@ -1239,28 +1233,33 @@ export default function Sessions() {
                       />
                       <button
                         type="button"
-                        className="btn btn-primary"
+                        className="btn btn-primary btn-icon"
                         data-testid="session-reply-send"
+                        aria-label={t('handoff.sendReply')}
+                        title={t('handoff.sendReply')}
                         onClick={() => void handleReply()}
                         disabled={
                           pendingAction === 'reply' || !replyDraft.trim()
                         }
                       >
                         {pendingAction === 'reply' ? (
-                          <div className="spinner" />
+                          <div className="spinner" style={{ width: '14px', height: '14px' }} />
                         ) : (
-                          t('handoff.sendReply')
+                          <Icon name="send" size={16} />
                         )}
                       </button>
                       <button
                         type="button"
-                        className="btn btn-ghost"
+                        className="btn btn-ghost btn-icon"
+                        aria-label={t('buttons.cancel')}
+                        title={t('buttons.cancel')}
+                        style={iconButtonStyle}
                         onClick={() => {
                           setReplyOpen(false)
                           setReplyDraft('')
                         }}
                       >
-                        {t('buttons.cancel')}
+                        <Icon name="close" size={16} />
                       </button>
                     </div>
                   )}
@@ -1310,18 +1309,7 @@ export default function Sessions() {
                       ) : (
                         <>
                           {t('buttons.send')}
-                          <svg
-                            width="18"
-                            height="18"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            aria-hidden="true"
-                          >
-                            <line x1="22" y1="2" x2="11" y2="13" />
-                            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                          </svg>
+                          <Icon name="send" size={18} />
                         </>
                       )}
                     </button>
@@ -1516,10 +1504,12 @@ export default function Sessions() {
               <div className="sheet-footer">
                 <button
                   type="button"
-                  className="btn btn-ghost"
+                  className="btn btn-ghost btn-icon"
+                  aria-label={t('buttons.cancel')}
+                  title={t('buttons.cancel')}
                   onClick={closeRevise}
                 >
-                  {t('buttons.cancel')}
+                  <Icon name="close" size={16} />
                 </button>
                 <button
                   type="button"

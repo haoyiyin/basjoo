@@ -113,7 +113,7 @@ describe("Icon registry (R3)", () => {
 		for (const name of ["save", "unlink"]) {
 			expect(ICON_NAMES).toContain(name);
 		}
-		expect(ICON_NAMES).toHaveLength(19);
+		expect(ICON_NAMES).toHaveLength(43);
 	});
 });
 

@@ -75,6 +75,55 @@ beforeEach(() => {
 	mockedApi.importQaItems.mockResolvedValue({ created: 2, skipped: 0 });
 });
 
+describe("QaManagement #63 contrast + #65 icon controls", () => {
+	it("renders the fixed-facts-vs-Q&A contrast sentence in the panel", async () => {
+		renderPanel();
+
+		const contrast = await screen.findByTestId("qa-vs-fixed-facts");
+		expect(contrast).toHaveTextContent("qa.vsFixedFactsHint");
+	});
+
+	it("exposes edit and delete as labelled icon buttons, not word buttons", async () => {
+		renderPanel();
+
+		const row = await screen.findByTestId("qa-row-qa_1");
+		const edit = within(row).getByRole("button", {
+			name: `qa.editLabel|${JSON.stringify({ question: pair.question })}`,
+		});
+		const del = within(row).getByRole("button", {
+			name: `qa.deleteLabel|${JSON.stringify({ question: pair.question })}`,
+		});
+
+		// #65: the glyph carries the action; the label survives as aria-label and
+		// title, so a pointer user and a screen reader get the same string.
+		expect(edit).toHaveClass("btn-icon");
+		expect(edit).toHaveAttribute(
+			"title",
+			`qa.editLabel|${JSON.stringify({ question: pair.question })}`,
+		);
+		expect(edit).not.toHaveTextContent("buttons.edit");
+
+		expect(del).toHaveClass("btn-icon");
+		expect(del).toHaveClass("btn-danger");
+		expect(del).toHaveAttribute(
+			"title",
+			`qa.deleteLabel|${JSON.stringify({ question: pair.question })}`,
+		);
+	});
+
+	it("keeps the keyword tester a labelled icon button", async () => {
+		renderPanel();
+
+		await screen.findByTestId("qa-row-qa_1");
+
+		const tester = within(screen.getByTestId("qa-tester")).getByRole("button", {
+			name: "qa.testerSubmit",
+		});
+		expect(tester).toHaveClass("btn-icon");
+		expect(tester).toHaveAttribute("title", "qa.testerSubmit");
+	});
+});
+
 describe("QaManagement", () => {
 	it("lists the KB's pairs with hit stats and asks the KB route", async () => {
 		renderPanel();

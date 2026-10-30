@@ -1,525 +1,210 @@
-"""Issue #44 — a quota that degrades instead of stopping.
+"""Issue #62 — the daily message quota is GONE, and its absence is pinned.
 
-The rule the tests pin, restated because every assertion hangs off it:
+The rule the tests now pin, restated because every assertion hangs off it:
 
-    used_messages_today >= max_messages_per_day
-        → if the agent has a fallback model AND a usable key, answer with the
-          fallback and mark the turn degraded;
-        → else HTTP 429 / SSE `QUOTA_EXCEEDED`, exactly as before.
+    There is no daily message wall. A workspace can serve any number of
+    messages in a day; no code path answers `429` for a message-count reason;
+    `QUOTA_EXCEEDED` does not exist as an SSE error code; the #44 fallback
+    model and its `degraded` marker are gone.
 
-Only when both allowances are gone does the request stop, and "the fallback
-allowance is gone" means the fallback path cannot serve at all (no model, or no
-key on either path) — there is no second counter.
-
-Preview traffic:
-
-    preview=true + a valid admin bearer token → the counter is untouched.
-    preview=true without a token            → ignored, the turn is billed.
-
-The public endpoint is unauthenticated, so the flag is honoured only for an
-admin — otherwise `preview` would be a free LLM for anyone who reads the API.
+What the issue deliberately KEEPS is the other four workspace limits —
+`max_agents`, `max_urls`, `max_qa_items`, `max_total_text_mb` — because they
+are storage/abuse guards, not billing. The reverse assertions below prove the
+wall is gone AND that the guards still stand.
 """
 
-import json
-
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 import database
-from core.encryption import encrypt_api_key
-from models import Agent, ChatMessage, ChatSession, Workspace
-from services import quota as quota_service
-from tests.qa_fakes import fake_qa_index
+from models import Agent, WorkspaceQuota
 
-FALLBACK_MODEL = "cheap-fallback-model"
-# A distinct string so "the answer came from the fallback" is provable.
-FALLBACK_REPLY = "FALLBACK_PROVIDER_ANSWER 来自备用模型的真实回答。"
-PRIMARY_REPLY = "PRIMARY_PROVIDER_ANSWER 来自主模型的回答。"
+# A distinct marker so "the model answered" is provable.
+MOCK_REPLY_PIECE = None  # set lazily; the MockLLMService speaks for itself.
 
-# ------------------------------------------------------------------ helpers
+# ------------------------------------------------------------------ the model
 
-class _ModelAwareLLM:
-    """Provider stub: the reply depends on the model it was built with."""
+def test_workspace_quota_has_no_message_columns():
+    """The three daily-message columns are gone from the model."""
+    from models import WorkspaceQuota as Q
 
-    def __init__(self) -> None:
-        self.model = None
+    columns = {c.name for c in Q.__table__.columns}
+    for retired in (
+        "max_messages_per_day",
+        "used_messages_today",
+        "last_message_reset",
+    ):
+        assert retired not in columns, f"{retired} must be gone"
+    # The storage/abuse guards all stay.
+    for kept in (
+        "max_agents",
+        "max_urls",
+        "max_qa_items",
+        "max_total_text_mb",
+        "used_urls",
+        "used_qa_items",
+        "used_total_text_mb",
+    ):
+        assert kept in columns, f"{kept} must survive"
 
-    async def chat_completion(self, **kwargs):
-        text = FALLBACK_REPLY if self.model == FALLBACK_MODEL else PRIMARY_REPLY
-        for word in text.split():
-            yield word + " "
+def test_the_quota_service_module_is_deleted():
+    """`services/quota.py` existed only to weight the deleted counter."""
+    import importlib.util
+    import pathlib
 
-    def get_last_usage(self):
-        return None
+    module_path = pathlib.Path(__file__).resolve().parents[1] / "services" / "quota.py"
+    assert not module_path.exists(), "services/quota.py must be deleted"
 
-def _install_llm(monkeypatch, calls: list) -> None:
-    """Patch `get_llm_service`, recording every `model=` it was built with."""
+    spec = importlib.util.find_spec("services.quota")
+    # A deleted module is not importable; find_spec returning None is the proof.
+    assert spec is None, "services.quota must not be importable"
 
-    def factory(**kwargs):
-        calls.append(kwargs.get("model"))
-        llm = _ModelAwareLLM()
-        llm.model = kwargs.get("model")
-        return llm
 
-    monkeypatch.setattr("api.v1.endpoints.get_llm_service", factory)
+# ------------------------------------------------------------------ the wire
 
-def _parse_sse(body: str) -> list[tuple[str, dict]]:
-    events: list[tuple[str, dict]] = []
-    for raw_event in body.split("\n\n"):
-        if not raw_event.strip():
-            continue
-        name = None
-        payload: list[str] = []
-        for line in raw_event.splitlines():
-            if line.startswith("event:"):
-                name = line.split(":", 1)[1].strip()
-            elif line.startswith("data:"):
-                payload.append(line.split(":", 1)[1].strip())
-        if name is None:
-            continue
-        events.append((name, json.loads("\n".join(payload))))
-    return events
+@pytest.mark.asyncio
+async def test_the_quota_endpoint_reports_no_daily_counter(client, default_agent_id):
+    """`GET /api/v1/quota` keeps the four surviving limits and never carries
+    the daily-message fields."""
+    response = await client.get(f"/api/v1/quota?agent_id={default_agent_id}")
+    assert response.status_code == 200, response.text
+    quota = response.json()
 
-async def _used_today() -> int:
-    async with database.AsyncSessionLocal() as session:
-        workspace_id = await session.scalar(select(Workspace.id).limit(1))
-        assert workspace_id is not None
-        from models import WorkspaceQuota
+    for retired in (
+        "max_messages_per_day",
+        "used_messages_today",
+        "remaining_messages_today",
+    ):
+        assert retired not in quota, f"{retired} must be gone from the payload"
+    for kept in (
+        "max_agents",
+        "max_urls",
+        "max_files",
+        "max_total_text_mb",
+        "used_agents",
+        "used_urls",
+        "used_files",
+        "used_total_text_mb",
+        "remaining_urls",
+        "remaining_files",
+    ):
+        assert kept in quota, f"{kept} must stay on the payload"
 
-        quota = await session.scalar(
-            select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
+@pytest.mark.asyncio
+async def test_no_code_path_answers_429_for_a_message_count(
+    public_client, default_agent_id, monkeypatch
+):
+    """Many messages in a row, all answered 200: no 429 exists to hit.
+
+    The mock provider is fast, so this also exercises the old concurrency
+    serialization (`check_quota` held a row lock) that no longer runs at all.
+    """
+    from services.llm_service import MockLLMService
+
+    monkeypatch.setattr(
+        "api.v1.endpoints.get_llm_service",
+        lambda **kwargs: MockLLMService(model=kwargs.get("model") or "mock-model"),
+    )
+
+    for i in range(8):
+        response = await public_client.post(
+            "/api/v1/chat",
+            json={"agent_id": default_agent_id, "message": f"消息 {i}"},
         )
-        assert quota is not None, "the workspace must have a quota row"
-        return int(quota.used_messages_today or 0)
+        assert response.status_code == 200, (i, response.text)
+        body = response.json()
+        assert body["reply"], body
+        assert body.get("degraded") in (False, None), "no degraded marker exists"
 
-async def _set_used_today(value: int) -> None:
-    from datetime import datetime, timezone
+@pytest.mark.asyncio
+async def test_more_than_1500_messages_in_a_day_keeps_answering(
+    public_client, default_agent_id, monkeypatch
+):
+    """The test that would have died at the old 1500 wall: `used_messages_today`
+    is set far past the retired cap (by writing the column a legacy DB still
+    has — here via a raw row count far beyond the cap on the *live* schema is
+    impossible, so the honest proof is the counter's absence).
+
+    The counter does not exist any more, so "more than 1500" is expressed as:
+    the DB cannot even hold the number, and the turn still answers.
+    """
+    from services.llm_service import MockLLMService
 
     async with database.AsyncSessionLocal() as session:
-        from models import WorkspaceQuota
+        columns = {
+            c.name for c in WorkspaceQuota.__table__.columns
+        }
+        assert "used_messages_today" not in columns
+        assert "max_messages_per_day" not in columns
+        # The workspace row exists and answers nothing about message counts.
+        row = await session.scalar(select(WorkspaceQuota).limit(1))
+        assert row is not None
+
+    monkeypatch.setattr(
+        "api.v1.endpoints.get_llm_service",
+        lambda **kwargs: MockLLMService(model=kwargs.get("model") or "mock-model"),
+    )
+    response = await public_client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "第一千五百零一条消息。",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["reply"]
+
+# --------------------------------------------------- the other limits stand
+
+@pytest.mark.asyncio
+async def test_the_agent_limit_still_enforces(client, default_agent_id, monkeypatch):
+    """`max_agents` is a storage guard, not billing — it still rejects."""
+    async with database.AsyncSessionLocal() as session:
+        from models import Workspace
 
         workspace_id = await session.scalar(select(Workspace.id).limit(1))
-        await session.execute(
-            update(WorkspaceQuota)
-            .where(WorkspaceQuota.workspace_id == workspace_id)
-            .values(
-                used_messages_today=value,
-                last_message_reset=datetime.now(timezone.utc),
+        quota = await session.scalar(
+            select(WorkspaceQuota).where(
+                WorkspaceQuota.workspace_id == workspace_id
             )
-        )
-        await session.commit()
-
-async def _max_per_day() -> int:
-    from models import WorkspaceQuota
-
-    async with database.AsyncSessionLocal() as session:
-        workspace_id = await session.scalar(select(Workspace.id).limit(1))
-        quota = await session.scalar(
-            select(WorkspaceQuota).where(WorkspaceQuota.workspace_id == workspace_id)
         )
         assert quota is not None
-        return int(quota.max_messages_per_day or 0)
-
-async def _configure_agent(
-    agent_id: str,
-    *,
-    fallback_model: str | None = None,
-    fallback_key: str | None = None,
-    primary_key: str = "sk-primary-test",
-) -> None:
-    async with database.AsyncSessionLocal() as session:
-        agent = await session.get(Agent, agent_id)
-        assert agent is not None
-        agent.api_key = encrypt_api_key(primary_key) if primary_key else None
-        agent.fallback_model = fallback_model
-        agent.fallback_api_key = (
-            encrypt_api_key(fallback_key) if fallback_key else None
-        )
+        quota.max_agents = 1
         await session.commit()
 
-async def _last_assistant_message(session_public_id: str) -> ChatMessage:
+    created = await client.post(
+        "/api/v1/agents",
+        json={"name": "超出代理上限", "description": "should be rejected"},
+    )
+    assert created.status_code == 400, created.text
+    assert "limit reached" in created.json()["detail"], created.json()
+
+@pytest.mark.asyncio
+async def test_the_qa_item_limit_still_enforces(bound_kb_id):
+    """`max_qa_items` still reads its quota row: a cap of 0 means "reached"."""
+    from services.qa_service import QaService
+
+    from models import KnowledgeBase
+
     async with database.AsyncSessionLocal() as session:
-        message = await session.scalar(
-            select(ChatMessage)
-            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
-            .where(
-                ChatSession.session_id == session_public_id,
-                ChatMessage.role == "assistant",
+        kb = await session.get(KnowledgeBase, bound_kb_id)
+        assert kb is not None
+        quota = await session.scalar(
+            select(WorkspaceQuota).where(
+                WorkspaceQuota.workspace_id == kb.workspace_id
             )
-            .order_by(ChatMessage.id.desc())
-            .limit(1)
         )
-        assert message is not None, "the exchange must be persisted"
-        return message
+        assert quota is not None
+        quota.max_qa_items = 0
+        await session.commit()
 
-# ------------------------------------------------------- the weight hook
+        reached = await QaService().max_items_reached(kb.workspace_id, session)
+        assert reached is True, "the qa-item guard must still read its quota row"
 
-def test_every_model_costs_one_message_today():
-    """The hook exists so a deployment can set weights without touching chat.
-
-    Today it is a constant 1 — for a primary answer and for a degraded one,
-    because the operator already paid for the model they did not get.
-    """
-    assert quota_service.message_weight("gpt-4.1") == 1
-    assert quota_service.message_weight("mini") == 1
-    assert quota_service.message_weight(FALLBACK_MODEL) == 1
-    assert quota_service.message_weight("") == 1
-    assert quota_service.message_weight(None) == 1  # type: ignore[arg-type]
-    assert quota_service.DEFAULT_MESSAGE_WEIGHT == 1
-    assert quota_service.MODEL_WEIGHTS == {}
-
-def test_the_weight_hook_can_be_retuned_without_touching_the_chat_path(
-    monkeypatch,
-):
-    """A deployment that wants a 10× model only edits the map."""
-    monkeypatch.setitem(quota_service.MODEL_WEIGHTS, "gpt-4.1", 10)
-    assert quota_service.message_weight("gpt-4.1") == 10
-    assert quota_service.message_weight("mini") == 1
-
-# --------------------------------------------------------- the gate itself
-
-def test_no_fallback_model_means_no_degradation():
-    from api.v1.endpoints import resolve_llm_degradation
-
-    class Agent_:
-        id = "agent-unit-test"
-        fallback_model = None
-        fallback_api_key = None
-        api_key = "sk-x"
-        api_base = "https://api.example.com/v1"
-
-    assert resolve_llm_degradation(Agent_()) == {"degraded": False}
-
-def test_a_fallback_model_with_no_key_at_all_does_not_degrade():
-    from api.v1.endpoints import (
-        get_agent_fallback_plaintext_key,
-        resolve_llm_degradation,
-    )
-
-    class Agent_:
-        id = "agent-unit-test"
-        fallback_model = FALLBACK_MODEL
-        fallback_api_key = None
-        api_key = None
-        api_base = "https://api.example.com/v1"
-
-    agent = Agent_()
-    assert get_agent_fallback_plaintext_key(agent) is None
-    assert resolve_llm_degradation(agent) == {"degraded": False}
-
-def test_a_fallback_model_reuses_the_primary_key_when_it_has_none_of_its_own():
-    from core.encryption import encrypt_api_key
-
-    from api.v1.endpoints import resolve_llm_degradation
-
-    class Agent_:
-        id = "agent-unit-test"
-        fallback_model = FALLBACK_MODEL
-        fallback_api_key = None
-        api_key = encrypt_api_key("sk-primary")
-        api_base = "https://api.example.com/v1"
-
-    decision = resolve_llm_degradation(Agent_())
-    assert decision["degraded"] is True
-    assert decision["model"] == FALLBACK_MODEL
-    assert decision["api_key"] == "sk-primary"
-
-def test_the_fallback_key_is_read_by_its_own_helper():
-    from core.encryption import encrypt_api_key
-
-    from api.v1.endpoints import get_agent_fallback_plaintext_key
-
-    class Agent_:
-        id = "agent-unit-test"
-        fallback_model = FALLBACK_MODEL
-        fallback_api_key = encrypt_api_key("sk-fallback")
-        api_key = encrypt_api_key("sk-primary")
-
-    assert get_agent_fallback_plaintext_key(Agent_()) == "sk-fallback"
-
-# ----------------------------------- assertion 1: the visitor still gets an answer
-
-@pytest.mark.asyncio
-async def test_exhausted_allowance_answers_from_the_fallback_model(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """Assertion 1: a real answer, from the fallback, with `done.degraded` true."""
-    calls: list = []
-    _install_llm(monkeypatch, calls)
-    await _configure_agent(
-        default_agent_id, fallback_model=FALLBACK_MODEL, fallback_key="sk-fallback"
-    )
-    max_per_day = await _max_per_day()
-    await _set_used_today(max_per_day)
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={"agent_id": default_agent_id, "message": "退款窗口是多长时间呢？"},
-    )
-    assert response.status_code == 200, response.text
-
-    events = _parse_sse(response.text)
-    assert [name for name, _ in events].count("error") == 0, events
-    done = dict(events)["done"]
-
-    # The whole point of the issue: an answer, not a wall.
-    content = "".join(
-        payload["content"] for name, payload in events if name == "content"
-    )
-    assert FALLBACK_REPLY.split()[0] in content, content
-    assert PRIMARY_REPLY.split()[0] not in content
-    assert done["degraded"] is True
-    assert done["model"] == FALLBACK_MODEL
-    assert done["message_id"] is not None
-    # The LLM service really was built with the fallback model.
-    assert calls == [FALLBACK_MODEL], calls
-
-    message = await _last_assistant_message(done["session_id"])
-    assert FALLBACK_REPLY.split()[0] in (message.content or "")
-
-@pytest.mark.asyncio
-async def test_the_fallback_key_is_used_when_present(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """The fallback path authenticates with its own key, not the primary one."""
-    recorded: list = []
-
-    def factory(**kwargs):
-        recorded.append(kwargs)
-        llm = _ModelAwareLLM()
-        llm.model = kwargs.get("model")
-        return llm
-
-    monkeypatch.setattr("api.v1.endpoints.get_llm_service", factory)
-    await _configure_agent(
-        default_agent_id, fallback_model=FALLBACK_MODEL, fallback_key="sk-fallback"
-    )
-    max_per_day = await _max_per_day()
-    await _set_used_today(max_per_day)
-
-    response = await public_client.post(
-        "/api/v1/chat",
-        json={"agent_id": default_agent_id, "message": "备用品密钥是否生效？"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["degraded"] is True
-    assert body["model"] == FALLBACK_MODEL
-    assert recorded and recorded[0]["api_key"] == "sk-fallback", recorded
-
-# ------------------------------------- assertion 2: no fallback still stops at 429
-
-@pytest.mark.asyncio
-async def test_no_fallback_configured_still_answers_429(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """Assertion 2: today's behaviour is unchanged without a fallback model."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=None)
-    max_per_day = await _max_per_day()
-    await _set_used_today(max_per_day)
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={"agent_id": default_agent_id, "message": "额度用尽后会发生什么？"},
-    )
-    assert response.status_code == 200, response.text
-    events = _parse_sse(response.text)
-    error = dict(events).get("error")
-    assert error is not None, events
-    assert error["code"] == "QUOTA_EXCEEDED"
-    assert [name for name, _ in events].count("done") == 0
-
-    # The blocking route keeps its HTTP status: that is the regression guard.
-    blocking = await public_client.post(
-        "/api/v1/chat",
-        json={"agent_id": default_agent_id, "message": "额度用尽后会发生什么？"},
-    )
-    assert blocking.status_code == 429, blocking.text
-    assert blocking.json()["detail"] == "Daily message quota exceeded"
-
-@pytest.mark.asyncio
-async def test_a_fallback_model_without_any_key_still_answers_429(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """A fallback model the agent cannot authenticate is not a fallback."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(
-        default_agent_id,
-        fallback_model=FALLBACK_MODEL,
-        fallback_key=None,
-        primary_key=None,
-    )
-    max_per_day = await _max_per_day()
-    await _set_used_today(max_per_day)
-
-    blocking = await public_client.post(
-        "/api/v1/chat",
-        json={"agent_id": default_agent_id, "message": "没有密钥的备用模型会怎样？"},
-    )
-    assert blocking.status_code == 429, blocking.text
-
-# ------------------------- assertion 7: a degraded answer costs exactly one message
-
-@pytest.mark.asyncio
-async def test_a_degraded_answer_increments_the_counter_by_exactly_one(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """Assertion 7: a fallback answer costs 1 — the same as a primary one."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(
-        default_agent_id, fallback_model=FALLBACK_MODEL, fallback_key="sk-fallback"
-    )
-    max_per_day = await _max_per_day()
-    # At the cap, so the degrade path engages; the increment is still exactly 1.
-    await _set_used_today(max_per_day)
-    before = await _used_today()
-    assert before == max_per_day
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={"agent_id": default_agent_id, "message": "降级回答会消耗多少额度？"},
-    )
-    assert response.status_code == 200, response.text
-    events = _parse_sse(response.text)
-    done = dict(events)["done"]
-    assert done["degraded"] is True
-
-    after = await _used_today()
-    assert after == before + 1, "exactly one message, not zero and not two"
-    assert after == max_per_day + 1
-
-@pytest.mark.asyncio
-async def test_a_primary_answer_also_costs_exactly_one(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """The counter is a message counter: primary and degraded are both 1."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=FALLBACK_MODEL)
-    await _set_used_today(0)
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={"agent_id": default_agent_id, "message": "正常回答消耗多少额度？"},
-    )
-    assert response.status_code == 200, response.text
-    done = dict(_parse_sse(response.text))["done"]
-    assert done["degraded"] is False
-    assert done["model"] is not None
-    assert await _used_today() == 1
-
-# ------------------------------------------ assertions 5 and 6: preview traffic
-
-@pytest.mark.asyncio
-async def test_preview_traffic_leaves_the_counter_unchanged(
-    client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """Assertion 5: an admin's preview turn is free and still persists."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=None)
-    await _set_used_today(7)
-    assert await _used_today() == 7
-
-    response = await client.post(
-        "/api/v1/chat/stream",
-        json={
-            "agent_id": default_agent_id,
-            "message": "调试区的预览消息是否计费？",
-            "preview": True,
-        },
-    )
-    assert response.status_code == 200, response.text
-    events = _parse_sse(response.text)
-    done = dict(events)["done"]
-    assert done["message_id"] is not None, events
-
-    assert await _used_today() == 7, "the counter must be identical before/after"
-
-    message = await _last_assistant_message(done["session_id"])
-    assert message.content, "the answer still persisted"
-
-@pytest.mark.asyncio
-async def test_preview_still_answers_when_the_allowance_is_already_spent(
-    client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """A preview never hits the wall either: no 429, and no charge."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=None)
-    max_per_day = await _max_per_day()
-    await _set_used_today(max_per_day)
-
-    response = await client.post(
-        "/api/v1/chat",
-        json={
-            "agent_id": default_agent_id,
-            "message": "额度用尽后调试区还能测试吗？",
-            "preview": True,
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["reply"], "a preview is still a real turn"
-    assert await _used_today() == max_per_day
-
-@pytest.mark.asyncio
-async def test_preview_without_an_admin_token_is_ignored(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """Assertion 6: the public endpoint must not become a free LLM."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=None)
-    await _set_used_today(3)
-    assert await _used_today() == 3
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={
-            "agent_id": default_agent_id,
-            "message": "匿名请求声称是预览，会被计费吗？",
-            "preview": True,
-        },
-    )
-    assert response.status_code == 200, response.text
-    done = dict(_parse_sse(response.text))["done"]
-    assert done["message_id"] is not None
-
-    assert await _used_today() == 4, "the flag is ignored, the turn is billed"
-
-@pytest.mark.asyncio
-async def test_a_garbage_bearer_token_does_not_unlock_preview(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """A token that does not resolve to an admin is the same as no token."""
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=None)
-    await _set_used_today(5)
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={
-            "agent_id": default_agent_id,
-            "message": "伪造的 token 能免单吗？",
-            "preview": True,
-        },
-        headers={"Authorization": "Bearer not-a-real-token"},
-    )
-    assert response.status_code == 200, response.text
-    assert await _used_today() == 6
-
-@pytest.mark.asyncio
-async def test_preview_is_off_by_default_for_every_existing_caller(
-    public_client, default_agent_id, fake_qa_index, monkeypatch
-):
-    """The field defaults to False, so nobody opts in by accident."""
-    from api.v1.schemas import ChatRequest
-
-    assert ChatRequest(agent_id="a", message="hi").preview is False
-    _install_llm(monkeypatch, [])
-    await _configure_agent(default_agent_id, fallback_model=None)
-    await _set_used_today(0)
-
-    response = await public_client.post(
-        "/api/v1/chat/stream",
-        json={"agent_id": default_agent_id, "message": "默认请求会被计费吗？"},
-    )
-    assert response.status_code == 200, response.text
-    assert await _used_today() == 1
+        # And a generous cap still means "not reached".
+        quota.max_qa_items = 100
+        await session.commit()
+        reached_again = await QaService().max_items_reached(
+            kb.workspace_id, session
+        )
+        assert reached_again is False

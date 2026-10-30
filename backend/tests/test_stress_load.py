@@ -48,24 +48,28 @@ class TestStressLoad:
 
     @pytest.mark.asyncio
     async def test_quota_exceeding_behavior(self, client):
-        """Test system behavior when quota is exceeded"""
+        """#62: there is NO daily message wall — the endpoint reports the
+        storage guards only, and "exceeding" it is impossible by construction."""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Check current quota
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
+        assert response.status_code == 200, response.text
         quota = response.json()
-        remaining = quota["remaining_messages_today"]
 
-        # If remaining quota is high, we can't easily test this without modifying the quota
-        # So we'll just verify the quota endpoint works correctly
-        assert "max_messages_per_day" in quota
-        assert "used_messages_today" in quota
-        assert "remaining_messages_today" in quota
+        # The daily-message fields are gone, so no amount of chat traffic can
+        # push the workspace over a message quota.
+        for retired in (
+            "max_messages_per_day",
+            "used_messages_today",
+            "remaining_messages_today",
+        ):
+            assert retired not in quota, f"{retired} must be gone"
+        # The four storage/abuse guards are still reported.
+        for kept in ("max_urls", "max_files", "remaining_urls", "remaining_files"):
+            assert kept in quota, f"{kept} must stay"
 
-        print(f"\n✓ Quota Status:")
-        print(f"  - Used: {quota['used_messages_today']}/{quota['max_messages_per_day']}")
-        print(f"  - Remaining: {remaining}")
+        print("\n✓ Quota Status: no daily message cap")
     @pytest.mark.asyncio
     async def test_error_recovery(self, client):
         """Test system recovery from errors"""

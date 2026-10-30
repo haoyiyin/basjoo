@@ -206,12 +206,13 @@ def test_keyword_is_normalised_on_the_pair_side_too():
 
 # ---------------------------------------------------------- keyword_mode_enabled
 
-@pytest.mark.parametrize("mode", ["keyword", "llm_then_keyword", "KEYWORD"])
+@pytest.mark.parametrize("mode", ["keyword", "KEYWORD"])
 async def test_keyword_mode_enabled_for_keyword_modes(mode):
     assert await keyword_mode_enabled({"fallback_mode": mode}) is True
 
-@pytest.mark.parametrize("mode", ["off", "llm", "", "bogus", None])
+@pytest.mark.parametrize("mode", ["off", "llm", "llm_then_keyword", "", "bogus", None])
 async def test_keyword_mode_disabled_for_other_modes(mode):
+    """The retired #44 values read as `off` (#62 / D4)."""
     assert await keyword_mode_enabled({"fallback_mode": mode}) is False
 
 async def test_keyword_mode_disabled_for_missing_column():

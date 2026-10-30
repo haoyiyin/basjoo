@@ -59,14 +59,22 @@ class TestSystemObservability:
         assert response.status_code == 200
         quota = response.json()
 
-        # Verify all quota fields are present
+        # Verify all quota fields are present. #62 retired the daily message
+        # counter, so the four storage/abuse guards are the whole payload.
         required_fields = [
-            "max_urls", "max_files", "max_messages_per_day",
-            "used_urls", "used_files", "used_messages_today",
-            "remaining_urls", "remaining_files", "remaining_messages_today"
+            "max_urls", "max_files",
+            "used_urls", "used_files",
+            "remaining_urls", "remaining_files",
         ]
         for field in required_fields:
             assert field in quota, f"Missing quota field: {field}"
+        for retired in (
+            "max_messages_per_day",
+            "used_messages_today",
+            "remaining_messages_today",
+            "last_message_reset",
+        ):
+            assert retired not in quota, f"Retired quota field resurfaced: {retired}"
     @pytest.mark.asyncio
     async def test_agent_config_complete(self, client):
         """Test agent config endpoint provides complete information"""

@@ -26,14 +26,11 @@ NEW_COLUMNS = {
         "starters",
         "widget_cards",
         "traffic_percentage",
-        "escalation_rules",
         "business_hours",
         "away_message",
         "ai_disclosure",
         "prechat_mode",
         "fixed_facts",
-        "fallback_model",
-        "fallback_api_key",
         "identity_secret",
         # #47: outbound webhook endpoint + encrypted signing secret.
         "webhook_url",
@@ -52,18 +49,30 @@ NEW_COLUMNS = {
         "outcome",
         "ai_turn_count",
     ],
-    # #45: `degraded` persists the flag #44 already returned on the response.
     # #60: `mode` distinguishes a model answer from a keyword-matched one.
+    # (#62: `degraded` was dropped — the flag existed only for the retired
+    # #44 fallback model.)
     "chat_messages": [
         "confidence",
         "is_unanswered",
         "rating",
-        "degraded",
         "mode",
         "matched_by",
     ],
     # #47: the diffed-refetch key and the two-phase upload queue stage.
     "kb_documents": ["item_hash", "processing_stage"],
+}
+
+# Columns this change RETIRES. The migration must drop them from a database
+# that still carries them, and they must never come back (#62 / #64).
+RETIRED_COLUMNS = {
+    "agents": ["escalation_rules", "fallback_model", "fallback_api_key"],
+    "chat_messages": ["degraded"],
+    "workspace_quotas": [
+        "max_messages_per_day",
+        "used_messages_today",
+        "last_message_reset",
+    ],
 }
 
 NEW_TABLES = ["qa_items", "procedures", "leads", "webhooks", "webhook_deliveries"]
@@ -133,6 +142,12 @@ def _seed_and_strip(db_path: str) -> None:
         for table, cols in NEW_COLUMNS.items():
             for col in cols:
                 conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+        # Recreate the RETIRED columns so the fixture reproduces a database
+        # from before #62/#64: the migration must drop them (and keep every
+        # other column).
+        for table, cols in RETIRED_COLUMNS.items():
+            for col in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -154,6 +169,31 @@ def test_new_columns_restored(upgraded):
         actual = _columns(upgraded, table)
         missing = [c for c in cols if c not in actual]
         assert not missing, f"{table} missing after migration: {missing}"
+
+def test_retired_columns_dropped_and_never_back(upgraded):
+    """#62 / #64: the daily-message, fallback-model and escalation columns
+    are dropped by the migration and never re-added, while every other
+    column on those tables survives."""
+    for table, cols in RETIRED_COLUMNS.items():
+        actual = _columns(upgraded, table)
+        present = [c for c in cols if c in actual]
+        assert not present, f"{table} still carries retired columns: {present}"
+    # The other four limits survive on workspace_quotas.
+    quota_columns = _columns(upgraded, "workspace_quotas")
+    for col in (
+        "max_agents",
+        "max_urls",
+        "max_qa_items",
+        "max_total_text_mb",
+        "used_urls",
+        "used_qa_items",
+        "used_total_text_mb",
+    ):
+        assert col in quota_columns, f"workspace_quotas lost {col}"
+    # The rest of chat_messages survives too.
+    message_columns = _columns(upgraded, "chat_messages")
+    for col in ("confidence", "is_unanswered", "rating", "mode", "matched_by"):
+        assert col in message_columns, f"chat_messages lost {col}"
 
 
 def test_new_tables_created_empty(upgraded):

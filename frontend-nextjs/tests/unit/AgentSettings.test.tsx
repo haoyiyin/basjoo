@@ -139,8 +139,9 @@ describe('AgentSettings', () => {
         allowed_widget_origins: ['https://example.com'],
         rate_limit_per_minute: 10,
         restricted_reply: 'Custom restricted message',
-        // #43: the conversation-policy fields ride along on the same save.
-        escalation_rules: null,
+        // #43: business hours ride along on the same save. #64 removed
+        // `escalation_rules`, so the payload must no longer carry it at all —
+        // `toEqual` here is exact, which is the assertion.
         business_hours: null,
         away_message: null,
         // #40: the install surface rides the same PATCH.
@@ -197,12 +198,17 @@ describe('AgentSettings', () => {
     });
   });
 
-  it('saves escalation rules and a business-hours schedule (#43)', async () => {
+  it('saves a business-hours schedule and has no escalation-rules field (#43, #64)', async () => {
     const user = userEvent.setup();
     renderAgentSettings();
 
-    const rules = await screen.findByLabelText('escalation.label');
-    await user.type(rules, 'Refund dispute -> human');
+    // Wait for the agent to hydrate before asserting on the form.
+    await screen.findByTestId('agent-business-hours-card');
+
+    // #64 inverted this half of the test: the 升级规则 textarea is gone, so the
+    // label that used to be typed into no longer exists anywhere on the page.
+    expect(screen.queryByLabelText('escalation.label')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-escalation-textarea')).not.toBeInTheDocument();
 
     // No timezone selected yet: the schedule editor stays inert.
     expect(screen.getByTestId('business-hours-empty')).toBeInTheDocument();
@@ -230,7 +236,6 @@ describe('AgentSettings', () => {
       expect(mockedApi.updateAgent).toHaveBeenCalledWith(
         'agt_1',
         expect.objectContaining({
-          escalation_rules: 'Refund dispute -> human',
           business_hours: {
             timezone: 'Asia/Shanghai',
             schedule: [{ day: 0, start: 540, end: 1350 }],
@@ -242,6 +247,9 @@ describe('AgentSettings', () => {
   });
 
   it('round-trips a stored schedule into the editor (#43)', async () => {
+    // #64: a stale `escalation_rules` value in the payload must be ignored —
+    // there is no field left to hydrate it into, and it must not appear on the
+    // page as text either.
     mockedApi.getAgent.mockResolvedValue({
       ...agent,
       escalation_rules: 'Always escalate refunds',
@@ -253,9 +261,13 @@ describe('AgentSettings', () => {
     } as never);
     renderAgentSettings();
 
-    expect(await screen.findByLabelText('escalation.label')).toHaveValue(
-      'Always escalate refunds',
+    expect(await screen.findByLabelText('businessHours.timezone')).toHaveValue(
+      'Europe/London',
     );
+    expect(screen.queryByLabelText('escalation.label')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Always escalate refunds'),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText('businessHours.timezone')).toHaveValue('Europe/London');
     // 22:00 -> 02:00 wraps past midnight and is stored as-is.
     expect(screen.getByLabelText('businessHours.start 1')).toHaveValue('22:00');

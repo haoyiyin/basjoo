@@ -456,7 +456,7 @@ async def test_a_keyless_install_skips_a_model_backed_classifier_and_logs_once(
     # Make every agent keyless, the way a fresh install is.
     async with database.AsyncSessionLocal() as session:
         await session.execute(
-            update(Agent).values(api_key=None, fallback_api_key=None)
+            update(Agent).values(api_key=None)
         )
         await session.commit()
 

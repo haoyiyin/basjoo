@@ -112,7 +112,6 @@ from services.answer_quality import (
     is_real_question,
     looks_like_fallback,
 )
-from services.quota import message_weight
 from services.lead_service import (
     SOURCE_PRECHAT,
     release_transcript_claim,
@@ -222,52 +221,6 @@ def get_agent_plaintext_keys(agent: Agent) -> Optional[str]:
     return None
 
 
-def get_agent_fallback_plaintext_key(agent: Agent) -> Optional[str]:
-    """Decrypted `fallback_api_key` (#44) — a second helper, on purpose.
-
-    `get_agent_plaintext_keys` is the primary key's reader and its env fallback
-    is agent-specific, so it is left alone. This one is the fallback model's key
-    and has no env fallback: an operator who configures a fallback model without
-    a key gets the primary key instead (see `resolve_llm_degradation`), which is
-    the documented "same provider, cheaper model" case.
-    """
-    stored_key = decrypt_api_key(getattr(agent, "fallback_api_key", None))
-    if stored_key:
-        return stored_key
-    return None
-
-
-def resolve_llm_degradation(agent: Agent) -> Dict[str, Any]:
-    """Decide how to serve a message when the primary allowance is spent (#44).
-
-    Returns ``{"degraded": False}`` when there is nothing to fall back to — no
-    `fallback_model`, or no key at all (neither the fallback key nor the primary
-    one) — and the caller keeps today's HTTP 429 / SSE `QUOTA_EXCEEDED`.
-
-    Otherwise ``{"degraded": True, "model": <fallback model>, "api_key": ...,
-    "api_base": ...}``: the caller builds the LLM service from these values and
-    the visitor still gets a real answer. Only when both allowances are gone
-    does the request stop, and "the fallback allowance is gone" is exactly this
-    function returning `degraded: False` — there is no second counter.
-    """
-    fallback_model = (getattr(agent, "fallback_model", None) or "").strip()
-    if not fallback_model:
-        return {"degraded": False}
-
-    api_key = get_agent_fallback_plaintext_key(agent) or get_agent_plaintext_keys(agent)
-    if not api_key:
-        return {"degraded": False}
-
-    return {
-        "degraded": True,
-        "model": fallback_model,
-        "api_key": api_key,
-        # A fallback model frequently lives on the same provider, so the
-        # primary base is the right default; there is no separate fallback base.
-        "api_base": agent.api_base,
-    }
-
-
 def _non_empty_str(value: Any) -> Optional[str]:
     """A trimmed string, or None for blank/non-string — never `"   "`."""
     if not isinstance(value, str):
@@ -275,21 +228,12 @@ def _non_empty_str(value: Any) -> Optional[str]:
     stripped = value.strip()
     return stripped or None
 
-# #60 — the four answer-source modes. `off` is the upgrade-safe default: a row
-# written before the column existed (or a value the settings page does not
-# know) must keep today's behaviour byte for byte.
+# #60 — the two answer-source modes. `off` is the upgrade-safe default: a row
+# written before the column existed (or one still holding a retired #44 value)
+# must keep today's behaviour byte for byte.
 FALLBACK_MODE_OFF = "off"
-FALLBACK_MODE_LLM = "llm"
 FALLBACK_MODE_KEYWORD = "keyword"
-FALLBACK_MODE_LLM_THEN_KEYWORD = "llm_then_keyword"
-FALLBACK_MODES = frozenset(
-    {
-        FALLBACK_MODE_OFF,
-        FALLBACK_MODE_LLM,
-        FALLBACK_MODE_KEYWORD,
-        FALLBACK_MODE_LLM_THEN_KEYWORD,
-    }
-)
+FALLBACK_MODES = frozenset({FALLBACK_MODE_OFF, FALLBACK_MODE_KEYWORD})
 # #60: the marker a scripted turn carries on `ChatResponse`, the SSE `done`
 # event and the persisted assistant row. Text, not a model answer.
 SCRIPTED_MODE = "scripted"
@@ -298,11 +242,10 @@ SCRIPTED_MATCHED_BY = "keyword"
 def fallback_mode(agent: Any) -> str:
     """Read `agent.fallback_mode`, normalising anything unknown to `"off"`.
 
-    The thin reader the spec asks for: `resolve_llm_degradation` keeps its own
-    #44 semantics untouched, and every new decision in this file goes through
-    this one function. A NULL column (a row from before the migration ran), an
-    empty string and an unrecognised value all read as `off`, so enabling the
-    keyword path is always an explicit operator action.
+    The thin reader every decision in this file goes through. A NULL column (a
+    row from before the migration ran), an empty string, a retired #44 value
+    (`llm`, `llm_then_keyword`) and any unrecognised value all read as `off`,
+    so enabling the keyword path is always an explicit operator action.
     """
     raw = getattr(agent, "fallback_mode", None)
     if not isinstance(raw, str):
@@ -312,15 +255,14 @@ def fallback_mode(agent: Any) -> str:
 
 def _wants_keyword_fallback(agent: Any) -> bool:
     """True when `fallback_mode` lets the LLM-free keyword path answer."""
-    return fallback_mode(agent) in (
-        FALLBACK_MODE_KEYWORD,
-        FALLBACK_MODE_LLM_THEN_KEYWORD,
-    )
+    return fallback_mode(agent) == FALLBACK_MODE_KEYWORD
 
 async def _scripted_answer(
     agent: Agent,
     message: str,
     db: Optional[AsyncSession] = None,
+    *,
+    force: bool = False,
 ) -> Optional[KeywordHit]:
     """THE one place a scripted (keyword FAQ) answer is resolved (#60).
 
@@ -334,8 +276,13 @@ async def _scripted_answer(
     a `fallback_mode` that does not opt in. The row's `hits` counter is *not*
     bumped here: the caller does that only for the hit it actually serves, and
     only after it committed to serving it (see `record_scripted_hit`).
+
+    `force=True` skips the mode check. Exactly one caller uses it: the #66 key
+    gate, for an authenticated preview turn — the operator testing a bot in the
+    Playground before any model is configured. It is never reachable from a
+    public request (see the `preview` resolution in `prepare_chat_request`).
     """
-    if not _wants_keyword_fallback(agent):
+    if not force and not _wants_keyword_fallback(agent):
         return None
     kb_id = getattr(agent, "kb_id", None)
     if not kb_id:
@@ -352,6 +299,8 @@ async def _build_scripted_turn(
     agent: Agent,
     message: str,
     db: Optional[AsyncSession] = None,
+    *,
+    force: bool = False,
 ) -> Dict[str, Any]:
     """The payload of one scripted turn: the pair's answer, or a miss.
 
@@ -364,7 +313,7 @@ async def _build_scripted_turn(
     resolves this above the #19 key gate, and a keyless agent's 400 must not
     inflate a pair's `hits` for an answer nobody ever received.
     """
-    hit = await _scripted_answer(agent, message, db)
+    hit = await _scripted_answer(agent, message, db, force=force)
     if hit is not None:
         return {
             "qa_id": hit.qa_id,
@@ -491,19 +440,14 @@ def build_agent_config(
         "welcome_message": agent.welcome_message,
         "history_days": agent.history_days,
         "fixed_facts": getattr(agent, "fixed_facts", None),
-        # #43 conversation policy: the prompt block, the business-hours JSON and
-        # the away copy all round-trip through the agent payload.
-        "escalation_rules": getattr(agent, "escalation_rules", None),
+        # #43 conversation policy: the business-hours JSON and the away copy
+        # both round-trip through the agent payload.
         "business_hours": business_hours_config_payload(agent),
         "away_message": business_hours_away_message(agent),
         # #41: the disclosure line (verbatim, never translated server-side) and
         # the prechat policy both round-trip so the settings page can edit them.
         "ai_disclosure": getattr(agent, "ai_disclosure", None),
         "prechat_mode": getattr(agent, "prechat_mode", None) or "off",
-        # #44 quota degradation: the fallback model round-trips, its key does
-        # not — only a boolean, exactly like `api_key_set`.
-        "fallback_model": getattr(agent, "fallback_model", None),
-        "fallback_api_key_set": bool(get_agent_fallback_plaintext_key(agent)),
         # #60: the third answer source. Normalised through the same reader the
         # chat path uses, so the settings page can never show a value the
         # runtime does not honour (a NULL column round-trips as `off`).
@@ -782,61 +726,6 @@ async def get_current_agent(
     return agent
 
 
-async def check_quota(
-    agent: Agent,
-    db: AsyncSession,
-) -> WorkspaceQuota:
-    """检查配额（带并发安全）
-
-    Always acquires a row-level lock when checking the message counter so
-    that concurrent requests cannot both pass the quota check before either
-    one increments the counter.
-    """
-    from datetime import datetime, timezone
-    from sqlalchemy import select
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-    now = datetime.now(timezone.utc)
-
-    # Always use locked read so concurrent requests serialize on the row.
-    result = await db.execute(
-        select(WorkspaceQuota)
-        .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-        .with_for_update()
-    )
-    quota = result.scalar_one_or_none()
-
-    if not quota:
-        insert_stmt = sqlite_insert(WorkspaceQuota).values(
-            workspace_id=agent.workspace_id,
-            used_messages_today=0,
-            last_message_reset=now,
-        )
-        insert_stmt = insert_stmt.on_conflict_do_nothing(
-            index_elements=["workspace_id"]
-        )
-
-        await db.execute(insert_stmt)
-        await db.flush()
-
-        result = await db.execute(
-            select(WorkspaceQuota)
-            .where(WorkspaceQuota.workspace_id == agent.workspace_id)
-            .with_for_update()
-        )
-        quota = result.scalar_one_or_none()
-
-    # Reset daily quota if needed (still holding the lock).
-    if quota.last_message_reset is None or quota.last_message_reset.date() < now.date():
-        logger.info(f"Resetting daily message quota for workspace {agent.workspace_id}")
-        quota.used_messages_today = 0
-        quota.last_message_reset = now
-        quota.updated_at = now
-        await db.flush()
-
-    return quota
-
-
 def build_qa_prompt_block(qa_hits: List[Dict[str, Any]]) -> str:
     """Format curated Q&A hits as the prompt's highest-priority layer (#39).
 
@@ -875,21 +764,6 @@ def build_fixed_facts_block(raw: str) -> str:
     if not passages:
         return ""
     return FIXED_FACTS_HEADER + "\n" + "\n\n".join(passages)
-
-# `agent.escalation_rules` is plain-language operator copy appended to the system
-# prompt AFTER the procedures block (#43). It is a prompt, not a rule engine, so
-# it is passed through verbatim — only trimmed and length-capped.
-MAX_ESCALATION_RULES_CHARS = 2000
-ESCALATION_RULES_HEADER = "升级规则（当以下情形发生时，请主动建议转人工）："
-
-def build_escalation_rules_block(raw: Any) -> str:
-    """The escalation-rules prompt layer, or '' when the operator wrote nothing."""
-    if not isinstance(raw, str):
-        return ""
-    text = raw.strip()
-    if not text:
-        return ""
-    return ESCALATION_RULES_HEADER + "\n" + text[:MAX_ESCALATION_RULES_CHARS]
 
 # --- #40: host-page context slots ---------------------------------------------
 # The two slots are filled by `window.Basjoo.setContext({before, after})`, i.e.
@@ -1087,8 +961,8 @@ def get_stream_error_code(error: HTTPException) -> str:
     if error.status_code == status.HTTP_404_NOT_FOUND:
         return "NOT_FOUND"
     if error.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
-        if "Daily message quota exceeded" in detail:
-            return "QUOTA_EXCEEDED"
+        # #62: the daily message quota is gone; a 429 here is only the
+        # per-minute visitor rate limit.
         return "RATE_LIMITED"
     if error.status_code == status.HTTP_410_GONE:
         return "AGENT_DELETED"
@@ -1113,7 +987,6 @@ def get_safe_stream_error_message(code: str) -> str:
     """Return a client-safe stream error message."""
     messages = {
         "NOT_FOUND": "Requested resource was not found",
-        "QUOTA_EXCEEDED": "Daily message quota exceeded",
         "RATE_LIMITED": "Rate limit exceeded",
         WIDGET_ORIGIN_NOT_ALLOWED_CODE: WIDGET_ORIGIN_NOT_ALLOWED_DETAIL,
         # #46: a visitor-facing sentence, because the host page's mistake (a
@@ -1318,56 +1191,12 @@ async def prepare_chat_request(
 
     enforce_widget_origin_whitelist(agent, http_request, admin_user)
 
-    # #44: `preview: true` is a *request*, and the endpoint is public, so it is
+    # #66: `preview: true` is a *request*, and the endpoint is public, so it is
     # honoured only for an authenticated admin — the same guard that lets the
-    # admin dashboard bypass the widget origin whitelist. Without a token the
-    # flag is ignored and the turn is billed like any other, which keeps the
-    # public endpoint from becoming a free LLM.
+    # admin dashboard bypass the widget origin whitelist. Its one remaining job
+    # is to let a keyless agent serve the keyword path for this turn regardless
+    # of `fallback_mode` (it is the operator testing, not a visitor).
     preview = bool(getattr(request, "preview", False)) and admin_user is not None
-
-    quota = await check_quota(agent, db)
-    degradation = {"degraded": False}
-    # #60: resolved here (before the #19 key gate) but returned further down,
-    # once the session exists and every #43 gate has had its say. `None` means
-    # "the keyword path is not serving this turn".
-    scripted_context: Optional[Dict[str, Any]] = None
-    if quota.used_messages_today >= quota.max_messages_per_day:
-        # A preview turn never hits the wall and never pays for it.
-        if not preview:
-            if _wants_keyword_fallback(agent):
-                # `keyword` ignores `fallback_model` entirely; `llm_then_keyword`
-                # prefers #44 and only reaches the matcher when the degradation
-                # cannot serve (no fallback model, or no key for either path).
-                if fallback_mode(agent) == FALLBACK_MODE_LLM_THEN_KEYWORD:
-                    degradation = resolve_llm_degradation(agent)
-                if not degradation["degraded"]:
-                    # A miss is NOT a wall (#60 rule 2): the operator's
-                    # `restricted_reply` goes out as a normal 200 assistant
-                    # turn, so `scripted_context` is always built here.
-                    scripted_context = await _build_scripted_turn(
-                        agent, request.message, db
-                    )
-                    logger.info(
-                        "Daily quota spent for agent %s — serving scripted %s",
-                        agent.id,
-                        "hit" if scripted_context["qa_id"] else "restricted reply",
-                    )
-            else:
-                # `off` and `llm`: today's #44 behaviour, byte for byte.
-                degradation = resolve_llm_degradation(agent)
-                if not degradation["degraded"]:
-                    # No fallback model, or no key for either path: today's
-                    # behaviour, unchanged. Only when both allowances are gone does
-                    # the request stop.
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail="Daily message quota exceeded",
-                    )
-                logger.warning(
-                    "Daily quota spent for agent %s — degrading to fallback model %s",
-                    agent.id,
-                    degradation["model"],
-                )
 
     agent_id = agent.id
     agent_workspace_id = agent.workspace_id
@@ -1380,12 +1209,38 @@ async def prepare_chat_request(
     agent_api_key = get_agent_plaintext_keys(agent)
     agent_rate_limit_per_minute = agent.rate_limit_per_minute
     agent_restricted_reply = agent.restricted_reply
-    # #19: a missing key is a hard 400. Production must never serve Mock tokens.
+    # #19, now the #66 key gate (a serve site, not only a wall). A keyless
+    # agent still refuses public traffic — production must never serve Mock
+    # tokens (`use_mock_llm` stays False everywhere) — but it is no longer a
+    # bare `raise` when the keyword path can serve: the operator opted into
+    # `fallback_mode="keyword"`, or this is an authenticated preview turn (the
+    # Playground testing a bot before any model is configured).
+    # Resolved here but returned further down, once the session exists and
+    # every #43 gate has had its say. `None` means "the keyword path is not
+    # serving this turn".
+    scripted_context: Optional[Dict[str, Any]] = None
     if not agent_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Agent has no LLM API key configured",
-        )
+        if preview or _wants_keyword_fallback(agent):
+            # A miss is NOT a wall (#60 rule 2): the operator's
+            # `restricted_reply` goes out as a normal 200 assistant turn, so
+            # `scripted_context` is always built here. This resolver is
+            # deliberately pure-database: no provider, no `QaService.search`,
+            # no `KbRetrievalService.retrieve` — all three embed or call a
+            # provider, which is exactly what a keyless agent lacks.
+            scripted_context = await _build_scripted_turn(
+                agent, request.message, db, force=preview
+            )
+            logger.info(
+                "Agent %s has no LLM key — serving scripted %s",
+                agent.id,
+                "hit" if scripted_context["qa_id"] else "restricted reply",
+            )
+        else:
+            # No key and no opt-in: today's loud misconfiguration error.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Agent has no LLM API key configured",
+            )
     use_mock_llm = False
 
     session = await get_or_create_chat_session(agent, request, http_request, db)
@@ -1425,7 +1280,6 @@ async def prepare_chat_request(
             else None,
             "session": session,
             "workspace_id": agent_workspace_id,
-            "quota_id": quota.id,
         }
 
     if agent_rate_limit_per_minute > 0 and not admin_user:
@@ -1483,17 +1337,17 @@ async def prepare_chat_request(
                 "session": session,
             }
 
-    # #60: the quota gate decided this turn is served from a curated pair (or
-    # from `restricted_reply`). This is the short-circuit the whole feature
-    # rests on: it sits ABOVE the #19 key gate, `QaService.search` (which
-    # embeds the query) and `KbRetrievalService.retrieve` (same), so none of
-    # them runs and the provider is never contacted. Placed after the answer
-    # gate and the rate limit so a paused/taken-over/limited session keeps its
-    # existing no-answer semantics even when its allowance is spent.
+    # #60 / #66: the key gate decided this turn is served from a curated pair
+    # (or from `restricted_reply`). This is the short-circuit the whole feature
+    # rests on: it sits ABOVE `QaService.search` (which embeds the query) and
+    # `KbRetrievalService.retrieve` (same), so none of them runs and the
+    # provider is never contacted. Placed after the answer gate and the rate
+    # limit so a paused/taken-over/limited session keeps its existing
+    # no-answer semantics even when the keyword path is serving.
     if scripted_context is not None:
-        # The turn is about to be served for real (the #19 key gate above already
-        # passed), so this is the one place the hit is counted. Resolving it in
-        # the quota block without reaching here would be a hit nobody received.
+        # The turn is about to be served for real (this is the serve point the
+        # key gate committed to), so this is the one place the hit is counted.
+        # Resolving it without reaching here would be a hit nobody received.
         await record_scripted_hit(scripted_context["qa_id"], db)
         return {
             "mode": SCRIPTED_MODE,
@@ -1503,11 +1357,8 @@ async def prepare_chat_request(
             "matched_by": scripted_context["matched_by"],
             "session": session,
             "workspace_id": agent_workspace_id,
-            "quota_id": quota.id,
             "agent": agent,
-            # A scripted answer costs 0 tokens but is still an answered turn:
-            # the daily cap counts answers, not spend (`services/quota.py`).
-            "message_weight": 1,
+            # A scripted answer costs 0 tokens: no usage, no accounting.
             "preview": preview,
         }
 
@@ -1632,9 +1483,6 @@ async def prepare_chat_request(
     qa_block = build_qa_prompt_block(qa_hits)
     facts_block = build_fixed_facts_block(fixed_facts_text)
     procedure_block = await resolve_active_procedure(db, session, agent)
-    escalation_block = build_escalation_rules_block(
-        getattr(agent, "escalation_rules", None)
-    )
     # #40: the two host-page slots. `before` sits ahead of the instruction
     # block, `after` right behind the retrieval results.
     context_before_block = build_page_context_block(
@@ -1672,9 +1520,8 @@ async def prepare_chat_request(
             content += f"\n\n{context_after_block}"
         if procedure_block:
             content += f"\n\n{procedure_block}"
-        # #43: operator escalation copy is the LAST layer, after procedures.
-        if escalation_block:
-            content += f"\n\n{escalation_block}"
+        # The prompt ends here (#64): escalation_rules was retired as a prompt
+        # layer — identity/standing instructions live in the system prompt.
         return content
 
     messages: List[Dict[str, str]] = []
@@ -1695,44 +1542,24 @@ async def prepare_chat_request(
         messages.extend(conversation_history)
     messages.append({"role": "user", "content": request.message})
 
-    if degradation["degraded"]:
-        llm = get_llm_service(
-            use_mock=use_mock_llm,
-            api_key=degradation["api_key"],
-            api_base=degradation["api_base"],
-            model=degradation["model"],
-            provider_type=agent.provider_type,
-        )
-    else:
-        llm = get_llm_service(
-            use_mock=use_mock_llm,
-            api_key=agent_api_key,
-            api_base=agent.api_base,
-            model=agent.model,
-            provider_type=agent.provider_type,
-        )
+    llm = get_llm_service(
+        use_mock=use_mock_llm,
+        api_key=agent_api_key,
+        api_base=agent.api_base,
+        model=agent.model,
+        provider_type=agent.provider_type,
+    )
 
     return {
         "mode": "llm",
         "agent": agent,
         "session": session,
         "workspace_id": agent.workspace_id,
-        "quota_id": quota.id,
         "use_mock_llm": use_mock_llm,
         "llm": llm,
         "messages": messages,
-        # #44: what actually answers, so the SSE `done` event and the blocking
-        # `ChatResponse` can tell the visitor the fallback model was used.
-        "degraded": degradation["degraded"],
-        "model": degradation["model"] if degradation["degraded"] else agent.model,
-        # A preview turn is served normally but never increments the counter.
+        # A preview turn is the operator testing in the Playground (#66).
         "preview": preview,
-        # A degraded answer costs 1, exactly like a primary one (see
-        # `services/quota.py`): the operator already paid for the model they
-        # did not get.
-        "message_weight": message_weight(
-            degradation["model"] if degradation["degraded"] else agent.model
-        ),
         "sources": kb_sources,  # Include KB sources for SSE event
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -1831,7 +1658,6 @@ async def persist_chat_response(
     *,
     session: ChatSession,
     workspace_id: int,
-    quota_id: int,
     request: ChatRequest,
     reply: str,
     sources: List[Dict[str, Any]],
@@ -1839,10 +1665,7 @@ async def persist_chat_response(
     db: AsyncSession,
     retrieval_scores: Optional[Dict[str, List[float]]] = None,
     restricted_reply: Optional[str] = None,
-    preview: bool = False,
-    message_weight: int = 1,
     agent: Optional[Agent] = None,
-    degraded: bool = False,
     answer_mode: str = "ai",
     matched_by: Optional[str] = None,
 ) -> ChatMessage:
@@ -1853,20 +1676,14 @@ async def persist_chat_response(
     `is_unanswered` from the SiteGPT rule — a real question (≥15 non-whitespace
     chars) with nothing retrieved, or any answer that is the fallback sentence.
 
-    #44: the daily counter is incremented here and nowhere else, so `preview`
-    (skip it entirely) and `message_weight` (how much this model costs) have a
-    single place to act. `ai_turn_count` is the answered-turn counter the spam
-    sampler reads, and it advances once per *answered* turn.
-
     #60: `answer_mode` is the answer SOURCE (`ai` | `scripted`). A scripted turn
     is server-side text from the operator's own curated pairs, so it is never
-    "unanswered" and never degraded — the visitor got a real answer — but the
-    operator still needs to tell it apart from a model answer in the
-    transcript, so it is persisted on the row's `mode` column. `matched_by` is
-    what actually matched — `keyword` for a served pair, NULL for a miss — so
-    the transcript can say an FAQ hit answered instead of the apology; it is
-    clipped to the scripted path on purpose, keeping every `ai` row NULL.
-    Quota accounting is deliberately unchanged: 0 tokens, 1 answered turn.
+    "unanswered" — the visitor got a real answer — but the operator still needs
+    to tell it apart from a model answer in the transcript, so it is persisted
+    on the row's `mode` column. `matched_by` is what actually matched —
+    `keyword` for a served pair, NULL for a miss — so the transcript can say an
+    FAQ hit answered instead of the apology; it is clipped to the scripted path
+    on purpose, keeping every `ai` row NULL.
     """
     scripted = answer_mode == SCRIPTED_MODE
     scores = retrieval_scores or {}
@@ -1901,9 +1718,6 @@ async def persist_chat_response(
         sender_type="agent",
         confidence=confidence,
         is_unanswered=is_unanswered,
-        # #45: persist what #44 already reports on the response, so the
-        # dashboard can count degraded answers from rows rather than a counter.
-        degraded=bool(degraded) and not scripted,
         # #60: `ai` for every model answer, `scripted` for a keyword-matched
         # pair. Distinct from `ChatSession.mode`, which is about who answers.
         mode=SCRIPTED_MODE if scripted else "ai",
@@ -1946,22 +1760,7 @@ async def persist_chat_response(
             },
         )
 
-    from sqlalchemy import update
-
     try:
-        if not preview:
-            await db.execute(
-                update(WorkspaceQuota)
-                .where(
-                    WorkspaceQuota.workspace_id == workspace_id,
-                    WorkspaceQuota.id == quota_id,
-                )
-                .values(
-                    used_messages_today=WorkspaceQuota.used_messages_today
-                    + int(message_weight),
-                    updated_at=func.now(),
-                )
-            )
         await db.commit()
         await db.refresh(assistant_message)
     except OperationalError:
@@ -2034,16 +1833,14 @@ async def chat(
             )
 
         if chat_context["mode"] == SCRIPTED_MODE:
-            # #60: a curated pair (or `restricted_reply`) answered in the prepare
-            # phase, before the key gate and before any retrieval or provider
-            # call. Persist it as a normal answered turn and return 200 — a
-            # quota miss is never a 429 on the keyword path.
+            # #60 / #66: a curated pair (or `restricted_reply`) answered in the
+            # prepare phase — at the key gate — before any retrieval or provider
+            # call. Persist it as a normal answered turn and return 200.
             reply = chat_context["reply"]
             scripted_matched_by = chat_context.get("matched_by")
             assistant_message = await persist_chat_response(
                 session=session,
                 workspace_id=chat_context["workspace_id"],
-                quota_id=chat_context["quota_id"],
                 request=request,
                 reply=reply,
                 sources=[],
@@ -2052,8 +1849,6 @@ async def chat(
                 restricted_reply=getattr(
                     chat_context.get("agent"), "restricted_reply", None
                 ),
-                preview=bool(chat_context.get("preview")),
-                message_weight=int(chat_context.get("message_weight") or 1),
                 agent=chat_context.get("agent"),
                 answer_mode=SCRIPTED_MODE,
                 # #60: `keyword` for a served pair, NULL for a miss — what the
@@ -2098,7 +1893,6 @@ async def chat(
         session_db_id = session.id
         session_public_id = session.session_id
         workspace_id = chat_context["workspace_id"]
-        quota_id = chat_context["quota_id"]
         llm = chat_context["llm"]
         messages = chat_context["messages"]
         sources = chat_context["sources"]
@@ -2106,12 +1900,6 @@ async def chat(
         max_tokens = chat_context["max_tokens"]
         use_mock_llm = chat_context["use_mock_llm"]
         retrieval_scores = chat_context.get("retrieval_scores") or {}
-        # #44: degradation + preview travel from the prepare phase to the
-        # response so `ChatResponse` can say which model answered.
-        degraded = bool(chat_context.get("degraded"))
-        answered_model = chat_context.get("model")
-        preview = bool(chat_context.get("preview"))
-        weight = int(chat_context.get("message_weight") or 1)
 
         # Restricted reply config for graceful LLM failure fallback
         _agent = chat_context["agent"]
@@ -2150,7 +1938,6 @@ async def chat(
                 fallback_message = await persist_chat_response(
                     session=session_obj,
                     workspace_id=workspace_id,
-                    quota_id=quota_id,
                     request=request,
                     reply=fallback,
                     sources=sources,
@@ -2158,8 +1945,6 @@ async def chat(
                     db=persist_db,
                     retrieval_scores=retrieval_scores,
                     restricted_reply=_restricted_reply,
-                    preview=preview,
-                    message_weight=weight,
                     agent=_agent,
                     answer_mode=fallback_turn["mode"],
                     # #60: the provider-failure sites serve the same two shapes,
@@ -2220,7 +2005,6 @@ async def chat(
         assistant_message = await persist_chat_response(
             session=session_obj,
             workspace_id=workspace_id,
-            quota_id=quota_id,
             request=request,
             reply=reply,
             sources=sources,
@@ -2228,10 +2012,7 @@ async def chat(
             db=persist_db,
             retrieval_scores=retrieval_scores,
             restricted_reply=_restricted_reply,
-            preview=preview,
-            message_weight=weight,
             agent=_agent,
-            degraded=degraded and not answer_is_empty,
             answer_mode=empty_turn["mode"] if empty_turn else "ai",
             matched_by=empty_turn["matched_by"] if empty_turn else None,
         )
@@ -2243,8 +2024,6 @@ async def chat(
         usage=usage,
         session_id=session_public_id,
         message_id=assistant_message.id,
-        degraded=degraded and not answer_is_empty,
-        model=answered_model,
         mode=empty_turn["mode"] if empty_turn else "ai",
         matched_by=empty_turn["matched_by"] if empty_turn else None,
     )
@@ -2287,8 +2066,8 @@ async def chat_stream(
                     return
 
                 if chat_context["mode"] == SCRIPTED_MODE:
-                    # #60: the prepare phase already resolved a curated pair (or
-                    # `restricted_reply`) without touching the key gate, the
+                    # #60 / #66: the prepare phase already resolved a curated
+                    # pair (or `restricted_reply`) at the key gate, without the
                     # embedding paths or the provider. Persist it as a normal
                     # answered turn, then emit the same `sources` → `content` →
                     # `done` shape a model answer uses, with `mode="scripted"`.
@@ -2297,7 +2076,6 @@ async def chat_stream(
                     assistant_message = await persist_chat_response(
                         session=session,
                         workspace_id=chat_context["workspace_id"],
-                        quota_id=chat_context["quota_id"],
                         request=request,
                         reply=scripted_reply,
                         sources=[],
@@ -2305,10 +2083,6 @@ async def chat_stream(
                         db=prep_db,
                         restricted_reply=getattr(
                             chat_context.get("agent"), "restricted_reply", None
-                        ),
-                        preview=bool(chat_context.get("preview")),
-                        message_weight=int(
-                            chat_context.get("message_weight") or 1
                         ),
                         agent=chat_context.get("agent"),
                         answer_mode=SCRIPTED_MODE,
@@ -2367,7 +2141,6 @@ async def chat_stream(
                 session_db_id = session.id
                 session_public_id = session.session_id
                 workspace_id = chat_context["workspace_id"]
-                quota_id = chat_context["quota_id"]
                 llm = chat_context["llm"]
                 messages = chat_context["messages"]
                 sources = chat_context["sources"]
@@ -2375,12 +2148,6 @@ async def chat_stream(
                 max_tokens = chat_context["max_tokens"]
                 use_mock_llm = chat_context["use_mock_llm"]
                 retrieval_scores = chat_context.get("retrieval_scores") or {}
-                # #44: degradation + preview travel from the prepare phase to
-                # the `done` event so the client can say which model answered.
-                degraded = bool(chat_context.get("degraded"))
-                answered_model = chat_context.get("model")
-                preview = bool(chat_context.get("preview"))
-                weight = int(chat_context.get("message_weight") or 1)
 
                 # Restricted reply config for graceful LLM failure fallback
                 _agent = chat_context["agent"]
@@ -2578,7 +2345,6 @@ async def chat_stream(
                 assistant_message = await persist_chat_response(
                     session=session_obj,
                     workspace_id=workspace_id,
-                    quota_id=quota_id,
                     request=request,
                     reply=reply,
                     sources=sources,
@@ -2586,10 +2352,7 @@ async def chat_stream(
                     db=persist_db,
                     retrieval_scores=retrieval_scores,
                     restricted_reply=_restricted_reply,
-                    preview=preview,
-                    message_weight=weight,
                     agent=_agent,
-                    degraded=degraded and empty_stream_turn is None,
                     answer_mode=(
                         empty_stream_turn["mode"] if empty_stream_turn else "ai"
                     ),
@@ -2612,10 +2375,6 @@ async def chat_stream(
                             if empty_stream_turn
                             else "ai"
                         ),
-                        # #44: the visitor gets a real answer from the fallback
-                        # model, and the UI says so.
-                        "degraded": degraded and empty_stream_turn is None,
-                        "model": answered_model,
                         # #60: what matched a `scripted` answer.
                         "matched_by": (
                             empty_stream_turn["matched_by"]
@@ -3350,7 +3109,6 @@ async def update_agent(
         # stored value, exactly like the primary key.
         if field in (
             "api_key",
-            "fallback_api_key",
             "webhook_secret",
             # #46: the HMAC key is a credential like any other.
             "identity_secret",
@@ -3560,18 +3318,13 @@ async def get_quota(
         max_agents=quota.max_agents,
         max_urls=quota.max_urls,
         max_files=quota.max_qa_items,
-        max_messages_per_day=quota.max_messages_per_day,
         max_total_text_mb=quota.max_total_text_mb,
         used_agents=used_agents,
         used_urls=quota.used_urls,
         used_files=quota.used_qa_items,
-        used_messages_today=quota.used_messages_today,
         used_total_text_mb=quota.used_total_text_mb,
         remaining_urls=max(0, quota.max_urls - quota.used_urls),
         remaining_files=max(0, quota.max_qa_items - quota.used_qa_items),
-        remaining_messages_today=max(
-            0, quota.max_messages_per_day - quota.used_messages_today
-        ),
     )
 
 

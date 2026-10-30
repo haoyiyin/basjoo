@@ -122,7 +122,6 @@ function overviewFixture(): AnalyticsOverview {
 			leads: tile(2, 0, "new", null),
 			handoffs: tile(0, 0, "none", null),
 			unanswered: tile(6, 4, "pct", 50),
-			degraded: tile(1, 2, "pct", -50),
 			negative_feedback: tile(3, 1, "pct", 200),
 			positive_feedback_rate: tile(0.75, 0.5, "pct", 50),
 		},

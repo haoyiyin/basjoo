@@ -125,7 +125,7 @@ describe('BasjooWidget scripted FAQ notice (#60)', () => {
     await widget.init();
     await sendOne(widget);
 
-    const notice = document.querySelector('.basjoo-degraded') as HTMLElement;
+    const notice = document.querySelector('.basjoo-scripted') as HTMLElement;
     expect(notice).toBeTruthy();
     expect(notice.getAttribute('role')).toBe('status');
     expect(notice.textContent).toContain('saved FAQ');
@@ -148,7 +148,7 @@ describe('BasjooWidget scripted FAQ notice (#60)', () => {
     await widget.init();
     await sendOne(widget);
 
-    const notice = document.querySelector('.basjoo-degraded') as HTMLElement;
+    const notice = document.querySelector('.basjoo-scripted') as HTMLElement;
     expect(notice).toBeTruthy();
     expect(notice.textContent).toContain('常见问题');
 
@@ -167,7 +167,7 @@ describe('BasjooWidget scripted FAQ notice (#60)', () => {
     await widget.init();
     await sendOne(widget);
 
-    expect(document.querySelector('.basjoo-degraded')).toBeNull();
+    expect(document.querySelector('.basjoo-scripted')).toBeNull();
     // The apology itself still reached the visitor.
     expect(document.querySelector('.basjoo-messages')?.textContent).toContain(
       'Here is your answer.',
@@ -183,7 +183,7 @@ describe('BasjooWidget scripted FAQ notice (#60)', () => {
     await widget.init();
     await sendOne(widget);
 
-    expect(document.querySelector('.basjoo-degraded')).toBeNull();
+    expect(document.querySelector('.basjoo-scripted')).toBeNull();
 
     widget.destroy();
   });

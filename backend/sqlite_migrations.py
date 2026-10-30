@@ -79,6 +79,12 @@ def run_sqlite_migrations(database_url: str) -> None:
         # ── agents: drop the retired agent_type / channel_mode columns ─────
         _drop_retired_agent_columns(cursor)
 
+        # ── agents: drop the #62/#64 retired prompt/degradation columns ────
+        _drop_retired_agent_option_columns(cursor)
+
+        # ── workspace_quotas: drop the retired #44 daily-message columns ──
+        _drop_retired_quota_columns(cursor)
+
         # ── workspaces: built-in example seed lifecycle ────────────────────
         if _table_exists(cursor, "workspaces"):
             _migrate_workspaces(cursor)
@@ -172,11 +178,6 @@ def run_sqlite_migrations(database_url: str) -> None:
                     ("is_unanswered", "BOOLEAN DEFAULT 0"),
                     # #41 — thumbs vote (-1/0/+1).
                     ("rating", "INTEGER"),
-                    # #45 — the degraded flag #44 already returns on the
-                    # response, persisted so analytics can count it. Existing
-                    # rows read as 0 (a primary answer; the column did not
-                    # exist to be degraded before).
-                    ("degraded", "BOOLEAN DEFAULT 0"),
                     # #60 — `ai` | `scripted`. Every pre-existing row was a model
                     # answer, so the backfill below is the honest default.
                     ("mode", "VARCHAR(20) DEFAULT 'ai'"),
@@ -189,11 +190,11 @@ def run_sqlite_migrations(database_url: str) -> None:
                 ],
             )
             cursor.execute(
-                "UPDATE chat_messages SET degraded = 0 WHERE degraded IS NULL"
-            )
-            cursor.execute(
                 "UPDATE chat_messages SET mode = 'ai' WHERE mode IS NULL OR mode = ''"
             )
+            # #62 / D6: the retired `degraded` flag (#44/#45) is dropped from an
+            # existing database; the analytics `degraded` metric went with it.
+            _drop_retired_chat_message_columns(cursor)
 
 
         # ── uq_chat_sessions_active_session unique index ───────────────────
@@ -286,7 +287,7 @@ def run_sqlite_migrations(database_url: str) -> None:
                 # Ensure quota for this workspace
                 if _table_exists(cursor, "workspace_quotas"):
                     cursor.execute(
-                        "INSERT OR IGNORE INTO workspace_quotas (workspace_id, max_agents, max_urls, max_qa_items, max_messages_per_day, max_total_text_mb) VALUES (?, 10, 500, 100, 1500, 20)",
+                        "INSERT OR IGNORE INTO workspace_quotas (workspace_id, max_agents, max_urls, max_qa_items, max_total_text_mb) VALUES (?, 10, 500, 100, 20)",
                         (canonical_workspace_id,),
                     )
                     if cursor.rowcount > 0:
@@ -602,8 +603,8 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("starters", "TEXT"),
         ("widget_cards", "TEXT"),
         ("traffic_percentage", "INTEGER DEFAULT 100"),
-        # #43 / #41 — conversation policy.
-        ("escalation_rules", "TEXT"),
+        # #43 / #41 — conversation policy. `escalation_rules` is retired (#64):
+        # an existing column is dropped by `_drop_retired_agent_option_columns`.
         ("business_hours", "TEXT"),
         ("away_message", "TEXT"),
         ("ai_disclosure", "TEXT"),
@@ -611,15 +612,15 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("prechat_mode", "VARCHAR(20) DEFAULT 'off'"),
         # #39 — answer control.
         ("fixed_facts", "TEXT"),
-        # #44 — quota degradation.
-        ("fallback_model", "VARCHAR(100)"),
-        ("fallback_api_key", "VARCHAR(500)"),
+        # #62 — the #44 fallback-model columns are retired;
+        # `_drop_retired_agent_option_columns` drops them from an existing database.
         # #46 — signed visitor identity.
         ("identity_secret", "VARCHAR(500)"),
         # #47 — outbound webhooks: endpoint + Fernet-encrypted signing secret.
         ("webhook_url", "VARCHAR(1000)"),
         ("webhook_secret", "VARCHAR(500)"),
-        # #60 — scripted keyword fallback: off | llm | keyword | llm_then_keyword.
+        # #60 / D4 — scripted keyword fallback: off | keyword. The retired #44
+        # values (`llm`, `llm_then_keyword`) are rewritten to `off` below.
         ("fallback_mode", "VARCHAR(20) DEFAULT 'off'"),
     ]
 
@@ -676,6 +677,17 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         "UPDATE agents SET fallback_mode = 'off' "
         "WHERE fallback_mode IS NULL OR fallback_mode = ''"
     )
+    # D4 (#62): the retired #44 values (`llm`, `llm_then_keyword`) must read as
+    # `off`. The reader already normalises them; this rewrite makes the stored
+    # row honest and keeps the settings page from ever showing a dead option.
+    cursor.execute(
+        "UPDATE agents SET fallback_mode = 'off' "
+        "WHERE fallback_mode IN ('llm', 'llm_then_keyword')"
+    )
+    if cursor.rowcount > 0:
+        print(
+            f"✓ Normalised {cursor.rowcount} retired fallback_mode value(s) to 'off'"
+        )
 
 
 
@@ -997,6 +1009,108 @@ def _drop_retired_agent_columns(cursor: sqlite3.Cursor) -> None:
         cursor.execute(f"ALTER TABLE agents DROP COLUMN {column}")
         print(f"✓ Dropped retired agents.{column}")
         existing.discard(column)
+
+
+def _drop_retired_agent_option_columns(cursor: sqlite3.Cursor) -> None:
+    """Drop ``agents.escalation_rules`` (#64) and the #44 fallback-model pair
+    (``agents.fallback_model`` / ``agents.fallback_api_key``, #62).
+
+    Idempotent, same shape as ``_drop_retired_agent_columns``: a column that is
+    already gone is skipped, and any plain index that mentions the column is
+    dropped first because SQLite refuses to drop a column an index depends on.
+    A legacy ``escalation_rules`` value becomes inert simply by the column (and
+    therefore every reader of it) disappearing.
+    """
+    if not _table_exists(cursor, "agents"):
+        return
+
+    cursor.execute("PRAGMA table_info(agents)")
+    existing = {row[1] for row in cursor.fetchall()}
+
+    for column in ("escalation_rules", "fallback_model", "fallback_api_key"):
+        if column not in existing:
+            continue
+
+        cursor.execute("PRAGMA index_list(agents)")
+        for index_row in cursor.fetchall():
+            index_name = index_row[1]
+            if index_name.startswith("sqlite_autoindex_"):
+                continue
+            cursor.execute(f"PRAGMA index_info('{index_name}')")
+            indexed_columns = {row[2] for row in cursor.fetchall()}
+            if column in indexed_columns:
+                cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+        cursor.execute(f"ALTER TABLE agents DROP COLUMN {column}")
+        print(f"✓ Dropped retired agents.{column}")
+        existing.discard(column)
+
+
+def _drop_retired_quota_columns(cursor: sqlite3.Cursor) -> None:
+    """Drop the #44 daily-message columns from ``workspace_quotas`` (#62).
+
+    The daily wall (``max_messages_per_day`` / ``used_messages_today`` /
+    ``last_message_reset``) was a SaaS billing mechanism with no business in a
+    self-hosted deployment. Every other limit on the table — ``max_agents``,
+    ``max_urls``, ``max_qa_items``, ``max_total_text_mb``, ``used_urls``,
+    ``used_qa_items``, ``used_total_text_mb`` — is a storage/abuse guard and
+    stays. Idempotent; plain dependent indexes are dropped first.
+    """
+    if not _table_exists(cursor, "workspace_quotas"):
+        return
+
+    cursor.execute("PRAGMA table_info(workspace_quotas)")
+    existing = {row[1] for row in cursor.fetchall()}
+
+    for column in (
+        "max_messages_per_day",
+        "used_messages_today",
+        "last_message_reset",
+    ):
+        if column not in existing:
+            continue
+
+        cursor.execute("PRAGMA index_list(workspace_quotas)")
+        for index_row in cursor.fetchall():
+            index_name = index_row[1]
+            if index_name.startswith("sqlite_autoindex_"):
+                continue
+            cursor.execute(f"PRAGMA index_info('{index_name}')")
+            indexed_columns = {row[2] for row in cursor.fetchall()}
+            if column in indexed_columns:
+                cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+        cursor.execute(f"ALTER TABLE workspace_quotas DROP COLUMN {column}")
+        print(f"✓ Dropped retired workspace_quotas.{column}")
+        existing.discard(column)
+
+
+def _drop_retired_chat_message_columns(cursor: sqlite3.Cursor) -> None:
+    """Drop ``chat_messages.degraded`` (#62 / D6).
+
+    The flag existed only to count #44 fallback-model answers; with the
+    fallback model gone the column can simply disappear, rows included.
+    """
+    if not _table_exists(cursor, "chat_messages"):
+        return
+
+    cursor.execute("PRAGMA table_info(chat_messages)")
+    existing = {row[1] for row in cursor.fetchall()}
+    if "degraded" not in existing:
+        return
+
+    cursor.execute("PRAGMA index_list(chat_messages)")
+    for index_row in cursor.fetchall():
+        index_name = index_row[1]
+        if index_name.startswith("sqlite_autoindex_"):
+            continue
+        cursor.execute(f"PRAGMA index_info('{index_name}')")
+        indexed_columns = {row[2] for row in cursor.fetchall()}
+        if "degraded" in indexed_columns:
+            cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+    cursor.execute("ALTER TABLE chat_messages DROP COLUMN degraded")
+    print("✓ Dropped retired chat_messages.degraded")
 
 # ---- knowledge base migration ----------------------------------------------
 

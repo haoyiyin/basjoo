@@ -63,7 +63,6 @@ TILE_METRICS: tuple[str, ...] = (
     "leads",
     "handoffs",
     "unanswered",
-    "degraded",
     "negative_feedback",
     "positive_feedback_rate",
 )

@@ -147,8 +147,15 @@ describe("Sessions — revise answer", () => {
 		await waitFor(() =>
 			expect(document.body.textContent).toContain("How long is your refund"),
 		);
+		// #65: an icon button, with the same locale string as its accessible name.
 		const revise = await screen.findByTestId("revise-answer-2");
-		expect(revise).toHaveTextContent("reviseAnswer.action");
+		expect(revise).toHaveClass("btn-icon");
+		expect(revise.getAttribute("aria-label")).toMatch(
+			/^reviseAnswer\.actionLabel\|/,
+		);
+		expect(revise.getAttribute("title")).toBe(
+			revise.getAttribute("aria-label"),
+		);
 		expect(screen.queryByTestId("revise-answer-1")).toBeNull();
 	});
 

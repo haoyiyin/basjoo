@@ -858,7 +858,11 @@ async def test_reply_404s_on_an_unknown_session(client):
 
 @pytest.mark.asyncio
 async def test_agent_payload_round_trips_the_handoff_settings(client):
-    """The console edits these three fields; they must come back from the API."""
+    """The console edits these fields; they must come back from the API.
+
+    #64: `escalation_rules` is retired — a PUT carrying it is ignored (200) and
+    the field is absent from the payload.
+    """
     agent_response = await client.get("/api/v1/agent:default")
     agent_id = agent_response.json()["id"]
 
@@ -876,6 +880,6 @@ async def test_agent_payload_round_trips_the_handoff_settings(client):
     )
     assert updated.status_code == 200, updated.text
     payload = updated.json()
-    assert payload["escalation_rules"] == "如果用户要求人工，请建议转人工。"
+    assert "escalation_rules" not in payload, "the retired field must be gone"
     assert payload["business_hours"] == business_hours
     assert payload["away_message"] == "当前非服务时间。"

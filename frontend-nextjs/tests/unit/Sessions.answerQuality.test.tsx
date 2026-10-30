@@ -183,8 +183,16 @@ describe("Sessions — answer quality (#42)", () => {
 		await openTranscript(user);
 
 		// Only the unanswered assistant message offers the action.
+		// #65: the action is an icon button now; the accessible name still comes
+		// from the same locale key the text button printed.
 		const addToQa = await screen.findByTestId("add-to-qa-2");
-		expect(addToQa).toHaveTextContent("unanswered.addToQa");
+		expect(addToQa).toHaveClass("btn-icon");
+		expect(addToQa.getAttribute("aria-label")).toMatch(
+			/^unanswered\.addToQaLabel\|/,
+		);
+		expect(addToQa.getAttribute("title")).toBe(
+			addToQa.getAttribute("aria-label"),
+		);
 		expect(screen.queryByTestId("add-to-qa-4")).toBeNull();
 
 		await user.click(addToQa);

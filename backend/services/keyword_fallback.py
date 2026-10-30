@@ -1,8 +1,8 @@
 """Scripted keyword fallback (#60): answer a visitor from a curated pair, no LLM.
 
-The third answer source. `agent.fallback_model` (#44) still costs a provider
-round trip, and `restricted_reply` is a dead end; this one runs on the rows an
-operator already curated in `qa_items` and touches nothing but the database.
+The third answer source. `restricted_reply` is a dead end; this one runs on the
+rows an operator already curated in `qa_items` and touches nothing but the
+database.
 
 Deliberately excluded from the semantic path (`QaService.search`): that path
 *embeds the query*, which is exactly what is unavailable in the outage this
@@ -42,8 +42,9 @@ _WHITESPACE = re.compile(r"\s+")
 # contract is: reject it at write time, and never match on it here either.
 MIN_KEYWORD_LENGTH = 2
 
-# The two modes that make the keyword path reachable at all.
-KEYWORD_MODES = frozenset({"keyword", "llm_then_keyword"})
+# The one mode that makes the keyword path reachable at all. The retired #44
+# values read as `off` through the endpoint reader.
+KEYWORD_MODES = frozenset({"keyword"})
 
 @dataclass(frozen=True)
 class KeywordHit:

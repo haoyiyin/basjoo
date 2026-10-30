@@ -50,20 +50,15 @@ def _patched_chat_deps(agent: MagicMock):
     mock_result.scalar_one_or_none.return_value = agent
     mock_session.execute.return_value = mock_result
 
-    mock_quota = MagicMock()
-    mock_quota.used_messages_today = 0
-    mock_quota.max_messages_per_day = 1000
-    mock_quota.id = "quota_123"
-
+    # #62: there is no daily message quota to stub — `check_quota` is gone.
     mock_chat_session = MagicMock()
     mock_chat_session.id = "session_123"
     mock_chat_session.status = "active"
 
     mock_get_db = patch("api.v1.endpoints.get_db")
-    mock_check_quota = patch("api.v1.endpoints.check_quota", return_value=mock_quota)
     mock_session_fn = patch("api.v1.endpoints.get_or_create_chat_session")
 
-    return mock_session, mock_get_db, mock_check_quota, mock_session_fn, mock_chat_session
+    return mock_session, mock_get_db, mock_session_fn, mock_chat_session
 
 @pytest.mark.asyncio
 async def test_playground_chat_uses_kb_context_after_indexing():
@@ -87,14 +82,14 @@ async def test_playground_chat_uses_kb_context_after_indexing():
     mock_http_request = MagicMock()
     mock_http_request.headers.get.return_value = ""
 
-    mock_session, get_db_p, quota_p, session_p, chat_session = _patched_chat_deps(
+    mock_session, get_db_p, session_p, chat_session = _patched_chat_deps(
         mock_agent
     )
 
     with get_db_p as mock_get_db:
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
-        with quota_p, session_p as mock_session_fn:
+        with session_p as mock_session_fn:
             mock_session_fn.return_value = chat_session
             with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
                 mock_kb_svc = MagicMock()
@@ -314,14 +309,14 @@ async def test_kb_ingestion_to_retrieval_regression_path():
     mock_http_request = MagicMock()
     mock_http_request.headers.get.return_value = ""
 
-    mock_session, get_db_p, quota_p, session_p, chat_session = _patched_chat_deps(
+    mock_session, get_db_p, session_p, chat_session = _patched_chat_deps(
         mock_agent
     )
 
     with get_db_p as mock_get_db:
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
-        with quota_p, session_p as mock_session_fn:
+        with session_p as mock_session_fn:
             mock_session_fn.return_value = chat_session
             # Simulate KB retrieval returning content from a "ready" indexed document
             with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
@@ -401,14 +396,14 @@ async def test_chat_context_ignores_a_document_that_failed_ingestion():
     mock_http_request = MagicMock()
     mock_http_request.headers.get.return_value = ""
 
-    mock_session, get_db_p, quota_p, session_p, chat_session = _patched_chat_deps(
+    mock_session, get_db_p, session_p, chat_session = _patched_chat_deps(
         mock_agent
     )
 
     with get_db_p as mock_get_db:
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
-        with quota_p, session_p as mock_session_fn:
+        with session_p as mock_session_fn:
             mock_session_fn.return_value = chat_session
             with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
                 mock_kb_svc = MagicMock()

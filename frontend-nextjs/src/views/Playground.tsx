@@ -44,8 +44,9 @@ export default function Playground() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
-  // null = agent not loaded yet. `false` means the backend reports no LLM key,
-  // which blocks the SSE stream and the send control (issue #19).
+  // null = agent not loaded yet. `false` means the backend reports no LLM key.
+  // #66: that is no longer a gate — it drives the persistent "no model" banner
+  // above the transcript, and the keypath still answers.
   const [apiKeySet, setApiKeySet] = useState<boolean | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [chatParams, setChatParams] = useState<ChatParamOverrides>({
@@ -130,11 +131,6 @@ export default function Playground() {
       return t('errors.rateLimitExceeded');
     }
 
-    // Daily quota
-    if (errorMessage.includes('quota exceeded') || errorMessage.includes('daily')) {
-      return t('errors.dailyQuotaExceeded');
-    }
-
     // No API key configured
     if (errorMessage.includes('no api key') || errorMessage.includes('not configured')) {
       return t('errors.noApiKeyConfigured');
@@ -150,8 +146,9 @@ export default function Playground() {
 
   const handleSendMessage = useCallback(async () => {
     const effectiveAgentId = agentId || agent?.id || null;
-    // Hard gate: never open the SSE stream when no LLM API key is configured.
-    if (apiKeySet !== true) return;
+    // #66: a keyless agent is no longer a wall in the Playground. The backend
+    // serves the keyword path for an authenticated `preview: true` turn, so the
+    // send gate is gone; the missing-key banner explains what will answer.
     if (!input.trim() || isLoading || isSettingsSaving || !effectiveAgentId) return;
 
     streamAbortControllerRef.current?.abort();
@@ -239,10 +236,6 @@ export default function Playground() {
           usage: usage ?? meta?.usage ?? undefined,
           isStreaming: false,
           thinkingElapsed: undefined,
-          /* #44: the SSE `done` event carries the flag; ChatPanel renders the
-           * "answered with the fallback model" line from it. */
-          degraded: meta?.degraded ?? false,
-          model: meta?.model ?? null,
         };
         return next;
       });
@@ -265,9 +258,9 @@ export default function Playground() {
           temperature: chatParams.temperature,
           max_tokens: chatParams.max_tokens,
         },
-        /* #44: the Playground is the operator's own test surface, so its turns
-         * never consume the daily allowance. The backend ignores the flag
-         * without an admin token, so this cannot leak to the public widget. */
+        /* #66: the Playground is the operator's own test surface. The backend
+         * honours the flag only for an admin bearer token; for that turn a
+         * keyless agent serves the keyword path regardless of fallback_mode. */
         preview: true,
       };
 
@@ -341,7 +334,7 @@ export default function Playground() {
         setIsLoading(false);
       }
     }
-  }, [apiKeySet, input, isLoading, isSettingsSaving, agentId, agent?.id, chatParams, sessionId, i18n.language, getErrorMessage]);
+  }, [input, isLoading, isSettingsSaving, agentId, agent?.id, chatParams, sessionId, i18n.language, getErrorMessage]);
 
   const handleClearChat = useCallback(() => {
     if (confirm(t('playground.confirmClear'))) {
@@ -544,14 +537,35 @@ export default function Playground() {
                 </h2>
               </div>
             )}
-            {/* On the narrow (tabbed) layout the settings pane is not mounted,
-             * so the chat tab is the only place the missing-key warning can
-             * appear — keep it there. On the desktop two-pane layout the
-             * settings rail already shows it, and a second verbatim copy with
-             * no icon read as a different message saying the same thing. */}
-            {isNarrow && apiKeySet === false && (
-              <div role="alert" className="playground-warning">
-                {t('labels.pleaseConfigureApiKey')}
+            {/* #66: a keyless agent still answers here — the backend serves the
+             * keyword path for an authenticated `preview: true` turn — so the
+             * transcript carries a PERSISTENT banner saying what is answering,
+             * with a door to the model settings. It disappears the moment a key
+             * is saved, because `apiKeySet` is re-read from the save callback.
+             * This is not the old "configure a key first" warning: nothing is
+             * blocked, the copy explains real behaviour. */}
+            {apiKeySet === false && (
+              <div
+                role="status"
+                className="playground-warning"
+                data-testid="playground-no-model-banner"
+              >
+                <span>{t('playground.noModelBanner')}</span>
+                {/* A real link, not a styled button: the target is a URL
+                    (`?tab=settings`), so it can be opened in a new tab and its
+                    destination is visible. The click handler only avoids a full
+                    navigation on the tabbed layout. */}
+                <a
+                  className="btn btn-ghost"
+                  href="?tab=settings"
+                  data-testid="playground-no-model-banner-action"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    selectTab('settings');
+                  }}
+                >
+                  {t('playground.noModelBannerAction')}
+                </a>
               </div>
             )}
             <ChatPanel
@@ -560,7 +574,6 @@ export default function Playground() {
               isLoading={isLoading}
               isSettingsSaving={isSettingsSaving}
               agent={agent}
-              sendDisabled={apiKeySet !== true}
               onInputChange={handleInputChange}
               onSendMessage={handleSendMessage}
               onClearChat={handleClearChat}

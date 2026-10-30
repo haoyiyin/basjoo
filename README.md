@@ -29,7 +29,7 @@ Other distributions work too — **if Docker Engine with the Compose plugin, `gi
 installed**, the script skips package setup and deploys; otherwise it stops and tells you what to install.
 Prefer to drive Compose yourself? See [Docker Compose by hand](#docker-compose-by-hand).
 
-- **FastAPI backend** (`backend/`) — agents, knowledge bases, RAG retrieval, SSE chat, auth, quota, schedulers
+- **FastAPI backend** (`backend/`) — agents, knowledge bases, RAG retrieval, SSE chat, auth, workspace resource limits, schedulers
 - **Vite SPA admin console** (`frontend-nextjs/` — the directory name is left over from the former Next.js app)
 - **Embeddable chat widget** (`widget/`) — one `<script>` tag, talks to the backend over HTTP + SSE
 - **Retrieval stack** — Qdrant for vectors, SQLite for application data, Redis for rate limiting, and a
@@ -54,8 +54,9 @@ works before you own any API key. **No GPU is needed.**
   Gemini, xAI, DeepSeek, OpenRouter, z.ai, Volcengine, Moonshot, Alibaba Bailian, Tencent Cloud and
   SiliconFlow.
 - **Streaming chat over SSE** with source citations, a first-token keepalive, per-visitor rate limits and a
-  configurable restricted reply when a provider fails. Flip `fallback_mode` (default `off`) to `keyword` and
-  a curated Q&A pair with keywords answers instead, with no model call, marked `mode: "scripted"`.
+  configurable restricted reply when a provider fails. No provider key at all? Curate Q&A pairs with
+  keywords and flip `fallback_mode` (default `off`) to `keyword`: the bot answers matched questions with
+  **no model and no API key**, marked `mode: "scripted"`; a miss falls back to the restricted reply.
 - **Human takeover.** Operators watch live sessions in the console and jump in; the widget polls for the
   human reply and hands the conversation over.
 - **A widget that respects its host.** Per-agent origin whitelist, visitor/session persisted in
@@ -80,7 +81,8 @@ with their parsed chunk counts.
 ### Playground
 
 Provider, model and retrieval settings on the left; a live conversation on the right, through the same
-streaming path the widget uses.
+streaming path the widget uses. The Playground works **without a model**: a keyless agent is served by
+the curated keyword path, so you can test it before configuring any provider key.
 
 ![Playground](resource/screenshots/admin/en-US/playground.png)
 
@@ -122,7 +124,8 @@ Then open the console and register the first admin:
 - dev: `http://localhost:3000/`
 
 Add a provider key under **Playground → AI Settings** (or set `DEEPSEEK_API_KEY` for the default agent) and
-the bundled example agent becomes usable.
+the bundled example agent becomes usable — or leave the key empty and curate keyword Q&A pairs to try the
+scripted keyword path instead.
 
 ### Default ports
 
@@ -184,10 +187,12 @@ pointer — the KB, its documents, chunks and URL sources survive.
 ### Chat
 
 `POST /api/v1/chat/stream` runs in two phases on purpose: a short database phase (resolve agent → origin
-whitelist → quota → session → rate limit → load history → retrieve context), then a streaming phase that
+whitelist → session → rate limit → load history → retrieve context), then a streaming phase that
 holds no database connection while the provider generates. The event names are `sources`, `content`,
 `thinking_done`, `done` and `error`. A missing provider key is an explicit `400 API_KEY_MISSING`, never a
-silent mock answer. Session ids are enumerable, so the public endpoints require the visitor's own
+silent mock answer — unless the agent opts into the scripted keyword path (`fallback_mode="keyword"`),
+where a keyless agent answers matched questions with no model call and a miss falls back to the
+restricted reply. Session ids are enumerable, so the public endpoints require the visitor's own
 `visitor_id` and answer `404 Session not found` for anyone else.
 
 One gate decides whether the bot speaks: `services/session_state.answer_gate` requires `status="active"`,

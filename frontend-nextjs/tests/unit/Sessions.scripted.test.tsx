@@ -94,8 +94,11 @@ const messages = [
 	},
 ];
 
-/** The degraded message list: the scripted turn plus a #44 degraded turn. */
-const messagesWithDegraded = [
+/**
+ * A row that still carries the retired #44 `degraded` / `model` pair. The
+ * backend no longer writes it (#62), and the transcript must ignore it.
+ */
+const messagesWithLegacyDegradedFlag = [
 	...messages,
 	{
 		id: 5,
@@ -197,24 +200,29 @@ describe("Sessions — scripted answer notice (#60)", () => {
 		expect(screen.getAllByTestId(/^message-scripted-/)).toHaveLength(1);
 	});
 
-	it("never renders the scripted note together with a degraded note", async () => {
+	it("never renders the retired #44 degraded marker (#62)", async () => {
+		// #62 inverted the old assertion: the backend has no `degraded` field
+		// left, so the transcript renders no degraded note at all — not even on
+		// a legacy row that still carries the flag.
 		const user = userEvent.setup();
-		stubFetch(messagesWithDegraded);
+		stubFetch(messagesWithLegacyDegradedFlag);
 		renderSessions();
 		await openTranscript(user);
 
-		// The scripted turn gets exactly one note: the scripted one.
+		// The scripted turn keeps its own note (#60 stays).
 		const scripted = await screen.findByTestId("message-scripted-4");
 		expect(scripted).toHaveTextContent("chat.scriptedNotice");
 
-		// The degraded turn (6) keeps its own #44 note and gets no scripted one.
-		const degraded = await screen.findByTestId("message-degraded-6");
-		expect(degraded).toHaveTextContent("chat.degradedNotice");
-
-		expect(screen.queryByTestId("message-scripted-6")).toBeNull();
+		// The legacy degraded row renders as a plain answer: no note, and the
+		// retired copy is nowhere on the page.
+		expect(screen.queryByTestId("message-degraded-6")).toBeNull();
 		expect(screen.queryByTestId("message-degraded-4")).toBeNull();
+		expect(screen.queryAllByTestId(/^message-degraded-/)).toHaveLength(0);
+		expect(screen.queryByText("chat.degradedNotice")).toBeNull();
+		expect(screen.queryByText("chat.fallbackModelNote")).toBeNull();
+		// It also never picks up the FAQ label: only `matched_by` may do that.
+		expect(screen.queryByTestId("message-scripted-6")).toBeNull();
 		expect(screen.getAllByTestId(/^message-scripted-/)).toHaveLength(1);
-		expect(screen.getAllByTestId(/^message-degraded-/)).toHaveLength(1);
 	});
 
 	it("does not show the notice on a scripted MISS (matched_by: null)", async () => {
@@ -250,10 +258,10 @@ describe("Sessions — scripted answer notice (#60)", () => {
 		);
 	});
 
-	it("keeps both notices off a message that carries both flags", async () => {
-		// Defence in depth: the backend never persists a scripted turn as
-		// degraded, but if a row did arrive with both flags the operator still
-		// sees one note, not two.
+	it("keeps the FAQ note and drops the retired degraded flag on one row", async () => {
+		// A row carrying both the #60 marker and the retired #44 flag renders
+		// exactly one note: `matched_by` still decides the FAQ label, and the
+		// degraded marker no longer exists (#62).
 		const user = userEvent.setup();
 		stubFetch([
 			messages[0],

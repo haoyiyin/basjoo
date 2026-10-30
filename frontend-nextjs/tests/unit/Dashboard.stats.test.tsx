@@ -63,13 +63,19 @@ const agentFixture = {
 	active_session_count: 3,
 } as unknown as Awaited<ReturnType<typeof api.getAgent>>;
 
+// #62: `getQuota` stays in the mock surface on purpose — the daily message
+// allowance is gone, so the dashboard must never ask for it again.
 const quotaFixture = {
 	used_urls: 0,
 	max_urls: 100,
 	used_files: 0,
 	max_files: 100,
-	used_messages_today: 12,
-	max_messages_per_day: 100,
+	used_agents: 1,
+	max_agents: 5,
+	used_total_text_mb: 0,
+	max_total_text_mb: 50,
+	remaining_urls: 100,
+	remaining_files: 100,
 } as unknown as Awaited<ReturnType<typeof api.getQuota>>;
 
 beforeEach(() => {
@@ -269,9 +275,19 @@ describe("Dashboard statistics", () => {
 		await waitFor(() => {
 			expect(mockedApi.getAgent).toHaveBeenCalledWith("agt_1");
 		});
-		await waitFor(() => {
-			expect(mockedApi.getQuota).toHaveBeenCalledWith("agt_1");
-		});
 		expect(mockedApi.getSourcesSummary).not.toHaveBeenCalled();
+	});
+
+	it("never renders or fetches the daily message quota (#62)", async () => {
+		renderDashboard();
+
+		const identity = await screen.findByTestId("dashboard-identity");
+		// The row and its value are gone, not merely empty.
+		expect(screen.queryByTestId("dashboard-quota-row")).toBeNull();
+		expect(screen.queryByTestId("dashboard-quota")).toBeNull();
+		expect(within(identity).queryByText("labels.quotaInfo")).toBeNull();
+		expect(within(identity).queryByText("labels.messagesPerDay")).toBeNull();
+		// And nothing asks the API for it any more.
+		expect(mockedApi.getQuota).not.toHaveBeenCalled();
 	});
 });

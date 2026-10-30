@@ -1,30 +1,40 @@
-"""Issue #43 — `escalation_rules` as a prompt layer, and `config:public` online.
+"""Issue #64 — `agent.escalation_rules` is GONE, and its absence is pinned.
 
-Assertion 8: the operator's escalation copy appears in the assembled system
-prompt **after** the procedures block (#39), and an empty value adds no block at
-all. The assertions read the real prompt `prepare_chat_request` built — not a
-helper's return value.
+The field was a prompt layer appended after the procedures block (#43). It is a
+text hint, not a rule engine, so it bought nothing an operator cannot put in
+their persona; it cost a concept to learn. It is deleted end to end: column,
+migration entry, prompt builder, API payload, settings UI.
 
-Also covers the C2 half of the issue: `GET /api/v1/config:public` reports
-`online`, `business_hours` and `away_message`, computed on every request.
+The assertions here pin the removal three ways:
+
+1. the helper (`build_escalation_rules_block`, `ESCALATION_RULES_HEADER`,
+   `MAX_ESCALATION_RULES_CHARS`) no longer exists on `api.v1.endpoints`, and
+   neither does the column on the model;
+2. a legacy raw-SQL `escalation_rules` value still sitting in a database that
+   predates the drop produces NO escalation header in the assembled prompt —
+   the value is inert, not merely hidden — and the prompt ends at the
+   procedures block;
+3. `PUT /api/v1/agent` carrying the field answers 200 and the field is absent
+   from `GET` — ignored, never rejected with a 500.
+
+Human handoff (escalate / takeover / release / resolve / reopen) and business
+hours are separate features and are untouched (covered by test_handoff.py and
+test_business_hours.py).
 """
 
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 import database
-from models import Agent, ChatSession
+from models import Agent, ChatSession, Procedure
 from tests.qa_fakes import fake_qa_index, make_http_request
-
-RULES = "如果用户明确要求人工、表达强烈不满或提到退款纠纷，请主动建议转人工。"
 
 TWO_STEPS = [
     {"text": "先确认用户要办理的是退款还是换货。", "requires_action": None},
     {"text": "请用户提供订单号，并说明处理时效。", "requires_action": None},
 ]
+
+LEGACY_RULES = "如果用户明确要求人工，请主动建议转人工。"
 
 
 async def _prepare(agent_id: str, session_public_id: str, message: str):
@@ -42,166 +52,103 @@ async def _prepare(agent_id: str, session_public_id: str, message: str):
         return await prepare_chat_request(request, make_http_request(), db)
 
 
-async def _set_agent(agent_id: str, **fields) -> None:
+async def _set_agent_raw_sql(agent_id: str, escalation_rules: str) -> None:
+    """Write a legacy `escalation_rules` value straight into the table.
+
+    Raw SQL on purpose: the ORM model no longer has the column, so only a
+    hand-written statement (the shape an old database file is in) can produce
+    the legacy state. On a database created by the current `create_all` the
+    column is already gone, so the legacy shape is rebuilt first — the same
+    state a pre-#64 file is in after the upgrade's `ALTER TABLE ADD COLUMN`
+    predecessors but before the drop step.
+    """
     async with database.AsyncSessionLocal() as db:
-        agent = await db.scalar(select(Agent).where(Agent.id == agent_id))
-        assert agent is not None
-        for key, value in fields.items():
-            setattr(agent, key, value)
+        await db.execute(
+            text(
+                "ALTER TABLE agents ADD COLUMN escalation_rules TEXT"
+            )
+        )
+        await db.execute(
+            text("UPDATE agents SET escalation_rules = :value WHERE id = :id"),
+            {"value": escalation_rules, "id": agent_id},
+        )
         await db.commit()
 
 
-async def _agent_row(agent_id: str) -> Agent:
-    async with database.AsyncSessionLocal() as db:
-        agent = await db.scalar(select(Agent).where(Agent.id == agent_id))
-        assert agent is not None
-        return agent
-
-
-# ------------------------------------------------- 8. the prompt layer
-
-
-@pytest.mark.asyncio
-async def test_escalation_rules_appear_after_the_procedures_block(
-    client, default_agent_id, fake_qa_index
-):
-    """Assertion 8a: order is KB → procedures → escalation rules."""
+async def _seed_procedure(client, agent_id: str) -> None:
     created = await client.post(
-        f"/api/v1/agents/{default_agent_id}/procedures",
+        f"/api/v1/agents/{agent_id}/procedures",
         json={"name": "退款流程", "steps": TWO_STEPS},
     )
     assert created.status_code == 201, created.text
 
-    await client.put(
-        f"/api/v1/agents/{default_agent_id}/fixed-facts",
-        json={"fixed_facts": "固定事实：营业到 22:00。"},
-    )
-    await _set_agent(default_agent_id, escalation_rules=RULES)
 
-    result = await _prepare(default_agent_id, "sess_escalation_order", "我要退款。")
+# --------------------------------------------- 1. the helper is gone
+
+def test_the_escalation_prompt_builder_is_gone():
+    """`build_escalation_rules_block` and its constants no longer exist."""
+    import api.v1.endpoints as endpoints
+
+    assert not hasattr(endpoints, "build_escalation_rules_block")
+    assert not hasattr(endpoints, "ESCALATION_RULES_HEADER")
+    assert not hasattr(endpoints, "MAX_ESCALATION_RULES_CHARS")
+
+    from models import Agent
+
+    assert not hasattr(Agent, "escalation_rules")
+
+
+# ------------------------------- 2. the assembled prompt carries no layer
+
+@pytest.mark.asyncio
+async def test_a_legacy_escalation_rules_value_produces_no_header(
+    client, default_agent_id, fake_qa_index
+):
+    """A raw-SQL legacy value is inert: no header, no copy, prompt ends at
+    the procedures block."""
+    await _seed_procedure(client, default_agent_id)
+    await _set_agent_raw_sql(default_agent_id, LEGACY_RULES)
+
+    result = await _prepare(default_agent_id, "sess_escalation_absent", "我要退款。")
     system_content = result["messages"][0]["content"]
 
-    assert "升级规则（当以下情形发生时，请主动建议转人工）：" in system_content
-    assert RULES in system_content
+    assert "升级规则" not in system_content, system_content
+    assert "请主动建议转人工" not in system_content, system_content
+    assert LEGACY_RULES not in system_content, system_content
 
     procedure_marker = "当前流程「退款流程」"
     assert procedure_marker in system_content, "the procedure block is present"
-
-    assert system_content.index("固定事实：营业到 22:00。") < system_content.index(
-        procedure_marker
-    ), "fixed facts still come before the procedure"
-    assert system_content.index(procedure_marker) < system_content.index(RULES), (
-        "the escalation rules are appended AFTER the procedures block"
+    # The prompt ends at the procedures block: its last line is the procedure's
+    # last step, and NOTHING follows (#64 removed the layer that used to).
+    last_line = system_content.rstrip().splitlines()[-1]
+    assert last_line == f"2. {TWO_STEPS[-1]['text']}", (
+        f"unexpected content after the procedures block: {last_line!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_empty_escalation_rules_add_no_block(default_agent_id, fake_qa_index):
-    """Assertion 8b: an empty/absent value contributes nothing, not an empty header."""
-    from api.v1.endpoints import ESCALATION_RULES_HEADER
+async def test_an_empty_value_adds_nothing_either(client, default_agent_id, fake_qa_index):
+    """No legacy value at all — the prompt is unchanged from the #39 shape."""
+    result = await _prepare(default_agent_id, "sess_no_escalation", "你好。")
+    system_content = result["messages"][0]["content"]
+    assert "升级规则" not in system_content, system_content
 
-    for value in (None, "", "   \n\t "):
-        await _set_agent(default_agent_id, escalation_rules=value)
-        result = await _prepare(
-            default_agent_id, f"sess_no_escalation_{abs(hash(value or 'none'))}", "你好。"
-        )
-        system_content = result["messages"][0]["content"]
-        assert ESCALATION_RULES_HEADER not in system_content, value
 
+# --------------------------------------- 3. the API field is gone, PUT ignored
 
 @pytest.mark.asyncio
-async def test_escalation_rules_are_capped_at_2000_characters(default_agent_id):
-    """The issue caps the prompt block at 2000 characters."""
-    from api.v1.endpoints import MAX_ESCALATION_RULES_CHARS, build_escalation_rules_block
+async def test_put_carrying_escalation_rules_is_ignored_and_get_omits_it(client):
+    """A PUT that includes `escalation_rules` answers 200 (extra keys are
+    dropped by the schema), and the field is absent from the GET payload."""
+    agent_id = (await client.get("/api/v1/agent:default")).json()["id"]
 
-    assert MAX_ESCALATION_RULES_CHARS == 2000
-    block = build_escalation_rules_block("x" * 5000)
-    assert len(block.split("\n", 1)[1]) == 2000
-
-
-# ------------------------------------------------- config:public (C2)
-
-
-@pytest.mark.asyncio
-async def test_config_public_reports_online_business_hours_and_away_message(
-    public_client, default_agent_id
-):
-    """`online` is computed per request from the agent's business hours."""
-    await _set_agent(
-        default_agent_id,
-        business_hours={
-            "timezone": "Asia/Shanghai",
-            "schedule": [{"day": 0, "start": 540, "end": 1080}],
-        },
-        away_message="当前非服务时间，请留言。",
+    updated = await client.put(
+        f"/api/v1/agent?agent_id={agent_id}",
+        json={"escalation_rules": LEGACY_RULES},
     )
+    assert updated.status_code == 200, updated.text
+    assert "escalation_rules" not in updated.json(), updated.json()
 
-    response = await public_client.get(
-        f"/api/v1/config:public?agent_id={default_agent_id}"
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-
-    assert payload["business_hours"] == {
-        "timezone": "Asia/Shanghai",
-        "schedule": [{"day": 0, "start": 540, "end": 1080}],
-    }
-    assert payload["away_message"] == "当前非服务时间，请留言。"
-    assert isinstance(payload["online"], bool)
-
-
-@pytest.mark.asyncio
-async def test_config_public_is_online_without_business_hours(
-    public_client, default_agent_id
-):
-    """No hours configured → always online (today's behaviour)."""
-    await _set_agent(default_agent_id, business_hours=None, away_message=None)
-
-    response = await public_client.get(
-        f"/api/v1/config:public?agent_id={default_agent_id}"
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["online"] is True
-    assert payload["business_hours"] is None
-    assert payload["away_message"] is None
-
-
-@pytest.mark.asyncio
-async def test_config_public_flips_offline_when_the_schedule_excludes_now(
-    public_client, default_agent_id
-):
-    """A schedule that is never open reports `online: false` right now.
-
-    The endpoint computes the value per request, so no cache warm-up is needed:
-    the very next call after the config changes already reflects it.
-    """
-    now_local = datetime.now(ZoneInfo("Asia/Shanghai"))
-    # A one-minute window that has just passed: never contains "now".
-    minutes_now = now_local.hour * 60 + now_local.minute
-    closed_start = (minutes_now + 2) % (24 * 60)
-    await _set_agent(
-        default_agent_id,
-        business_hours={
-            "timezone": "Asia/Shanghai",
-            "schedule": [
-                {"day": 0, "start": closed_start, "end": closed_start + 1},
-            ],
-        },
-    )
-
-    response = await public_client.get(
-        f"/api/v1/config:public?agent_id={default_agent_id}"
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["online"] is False
-
-
-@pytest.mark.asyncio
-async def test_public_config_is_online_when_no_agent_exists(public_client):
-    """The unconfigured install must not report `offline` and hide the widget."""
-    response = await public_client.get("/api/v1/config:public?agent_id=does-not-exist")
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["online"] is True
-    assert payload["business_hours"] is None
+    fetched = await client.get(f"/api/v1/agent?agent_id={agent_id}")
+    assert fetched.status_code == 200, fetched.text
+    assert "escalation_rules" not in fetched.json(), fetched.json()

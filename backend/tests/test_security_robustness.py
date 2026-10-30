@@ -286,17 +286,12 @@ class TestSystemRobustness:
             assert response.status_code in [200, 422, 400]
 
     @pytest.mark.asyncio
-    async def test_concurrent_quota_depletion(self, client):
-        """Test quota depletion under concurrent load"""
+    async def test_concurrent_turns_never_deplete_a_quota(self, client):
+        """#62: the daily message quota is gone, so 20 concurrent turns can
+        never deplete it — every one is answered and no counter exists."""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Get initial quota
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota = response.json()
-        initial_messages = quota["used_messages_today"]
-
-        # Send 20 concurrent chat requests
         async def send_chat():
             return await client.post(
                 "/api/v1/chat",
@@ -306,12 +301,10 @@ class TestSystemRobustness:
         tasks = [send_chat() for _ in range(20)]
         results = await asyncio.gather(*tasks)
 
-        successful = sum(1 for r in results if r.status_code == 200)
+        assert all(r.status_code == 200 for r in results), [
+            r.status_code for r in results
+        ]
 
-        # Check quota increased correctly
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        new_quota = response.json()
-        messages_sent = new_quota["used_messages_today"] - initial_messages
-
-        # Should match successful requests
-        assert messages_sent == successful, f"Quota tracking mismatch: {messages_sent} vs {successful}"
+        quota = (await client.get(f"/api/v1/quota?agent_id={agent_id}")).json()
+        assert "used_messages_today" not in quota
+        assert "max_messages_per_day" not in quota
