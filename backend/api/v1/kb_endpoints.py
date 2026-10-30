@@ -862,10 +862,18 @@ async def list_kb_files(
     for doc in docs:
         doc_status = doc.status
         error_message = None
+        error_detail = None
         if doc_status == "error":
             doc_status = "failed"
+            # #47: the stored `error_message` is the real upstream cause
+            # (`401 Unauthorized from https://api.openai.com/v1/embeddings`). It
+            # travels verbatim so the row can show it; the localized generic
+            # sentence is only the fallback when the column is empty. The
+            # `error_message` key keeps its old friendly-message meaning so
+            # nothing that already reads it loses its localized text.
+            error_detail = getattr(doc, "error_message", None) or None
             error_message = get_localized_document_processing_error(
-                http_request, getattr(doc, "error_message", None)
+                http_request, error_detail
             )
         items.append(
             FileItem(
@@ -875,6 +883,8 @@ async def list_kb_files(
                 file_size=getattr(doc, "file_size", 0) or 0,
                 status=doc_status,
                 error_message=error_message,
+                error_detail=error_detail,
+                processing_stage=getattr(doc, "processing_stage", None),
                 created_at=str(doc.created_at) if doc.created_at else "",
             )
         )
@@ -886,11 +896,18 @@ async def list_kb_files(
 async def upload_kb_files(
     db: AsyncSession,
     kb: KnowledgeBase,
-    background_tasks: BackgroundTasks,
     files: list[UploadFile],
     source_agent_id: Optional[str] = None,
 ) -> FileUploadResponse:
-    """Store uploads and queue KB document processing (parse→chunk→embed→Qdrant)."""
+    """Phase 1 of the two-phase upload (#47): persist bytes + a queued row.
+
+    The request does **no** parsing, chunking or embedding. It writes the file to
+    disk, inserts the `kb_documents` row in the `uploaded` processing stage and
+    returns; `services.scheduler.process_pending_documents` drains the row
+    (`parsing` → `chunking` → `embedding` → `indexing` → `done`). A 20 MB upload
+    therefore costs one multipart read and one INSERT, and a concurrent
+    `GET /health` is never queued behind an embedding provider.
+    """
     from services.kb_document_processor import (
         KbDocumentProcessor,
         sanitise_upload_filename,
@@ -948,12 +965,19 @@ async def upload_kb_files(
                 source_agent_id=source_agent_id,
                 db=db,
             )
-            storage_path = processor.save_uploaded_file(doc, content, ext)
+            # Written off the event loop: a blocking 20 MB write would stall
+            # every other request, which is exactly what #47 fixes.
+            storage_path = await processor.save_uploaded_file_async(doc, content, ext)
             object.__setattr__(doc, "storage_path", storage_path)
             object.__setattr__(doc, "file_type", ext)
+            # Two-phase upload (#47): the bytes are on disk and the row is
+            # accepted, so the document is `processing` (stage `uploaded`) from
+            # the moment the response is written. The request itself never
+            # parses, chunks or embeds — `document_processing_scheduler` does.
+            object.__setattr__(doc, "status", "processing")
+            object.__setattr__(doc, "processing_stage", "uploaded")
 
             doc_id = str(getattr(doc, "id", ""))
-            background_tasks.add_task(processor.process_document, doc_id, kb_id)
 
             items.append(
                 FileItem(
@@ -961,7 +985,8 @@ async def upload_kb_files(
                     filename=filename,
                     file_type=EXT_TO_MIME.get(ext, ext),
                     file_size=len(content),
-                    status="pending",
+                    status="processing",
+                    processing_stage="uploaded",
                     created_at=str(getattr(doc, "created_at", "")),
                 )
             )
@@ -1369,15 +1394,17 @@ async def list_kb_files_endpoint(
 @router.post("/knowledge-bases/{kb_id}/files:upload", response_model=FileUploadResponse)
 async def upload_kb_files_endpoint(
     kb_id: str,
-    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload files into an unbound KB and queue their processing."""
+    """Upload files into an unbound KB and queue their processing.
+
+    #47: the heavy work is picked up by the scheduler, never awaited here.
+    """
     require_super_admin(current_user)
     kb = await _load_kb_in_workspace(db, kb_id, current_user)
-    return await upload_kb_files(db, kb, background_tasks, files)
+    return await upload_kb_files(db, kb, files)
 
 @router.delete("/knowledge-bases/{kb_id}/files:delete")
 async def delete_kb_file_endpoint(

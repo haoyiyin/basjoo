@@ -1,7 +1,7 @@
 // @ts-nocheck
 // @vitest-environment jsdom
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +24,15 @@ vi.mock('../../src/services/api', () => ({
     getAgent: vi.fn(),
     getDefaultAgent: vi.fn(),
     updateAgent: vi.fn(),
+    // #39: fixed facts and procedures are their own endpoints, not agent PATCH.
+    updateFixedFacts: vi.fn(),
+    listProcedures: vi.fn(),
+    createProcedure: vi.fn(),
+    updateProcedure: vi.fn(),
+    deleteProcedure: vi.fn(),
+    // #40: the embed snippet's origin comes from the server, never from
+    // `window.location.origin`.
+    getPublicOrigin: vi.fn(),
   },
 }));
 
@@ -72,6 +81,11 @@ beforeEach(() => {
   mockedApi.getAgent.mockResolvedValue(agent as never);
   mockedApi.getDefaultAgent.mockResolvedValue(agent as never);
   mockedApi.updateAgent.mockResolvedValue(agent as never);
+  mockedApi.listProcedures.mockResolvedValue({ items: [], total: 0 } as never);
+  mockedApi.updateFixedFacts.mockResolvedValue({ fixed_facts: null } as never);
+  // A dashboard opened on http://localhost:3000 must still hand out the public
+  // host: the origin is the server's answer, not the browser's.
+  mockedApi.getPublicOrigin.mockResolvedValue('https://api.example.com' as never);
 });
 
 describe('AgentSettings', () => {
@@ -87,7 +101,10 @@ describe('AgentSettings', () => {
     expect(screen.getByLabelText('labels.welcomeMessage')).toHaveValue('Hello there');
     expect(screen.getByLabelText('labels.historyRetention')).toHaveValue(30);
     expect(screen.getByLabelText('labels.embedWhitelist')).toHaveValue('https://example.com');
-    expect(screen.getByText(/sdk\.js\?agent_id=agt_1/)).toBeInTheDocument();
+    // #40: one script tag pointing at the server-rendered loader on the public host.
+    expect(screen.getByTestId('install-embed-code').textContent).toBe(
+      '<script src="https://api.example.com/api/v1/agents/agt_1/embed.js" async></script>',
+    );
   });
 
   it('blocks save and shows invalid origin message for malformed whitelist entries', async () => {
@@ -122,8 +139,128 @@ describe('AgentSettings', () => {
         allowed_widget_origins: ['https://example.com'],
         rate_limit_per_minute: 10,
         restricted_reply: 'Custom restricted message',
+        // #43: the conversation-policy fields ride along on the same save.
+        escalation_rules: null,
+        business_hours: null,
+        away_message: null,
+        // #40: the install surface rides the same PATCH.
+        display_mode: 'bubble',
+        inline_container: null,
+        excluded_paths: [],
+        traffic_percentage: 100,
+        starters: [],
+        widget_cards: [],
+        // #47: an empty webhook URL means "no endpoint"; the secret field is
+        // omitted so an untouched signing secret survives the save.
+        webhook_url: null,
       });
     });
+  });
+
+  // #47: the endpoint is editable, the secret is write-only and masked.
+  it('edits the webhook endpoint and never reads the stored secret back', async () => {
+    const user = userEvent.setup();
+    mockedApi.getAgent.mockResolvedValue({
+      ...agent,
+      webhook_url: 'https://hooks.example.com/basjoo',
+      webhook_secret_set: true,
+    } as never);
+    renderAgentSettings();
+
+    const urlInput = await screen.findByLabelText('webhooks.urlLabel');
+    expect(urlInput).toHaveValue('https://hooks.example.com/basjoo');
+
+    const secretInput = screen.getByLabelText('webhooks.secretLabel');
+    // The secret is never in the payload, so the field starts empty and shows
+    // the masked placeholder instead of a value.
+    expect(secretInput).toHaveValue('');
+    expect(secretInput).toHaveAttribute('type', 'password');
+    expect(secretInput).toHaveAttribute(
+      'placeholder',
+      'webhooks.secretMasked',
+    );
+
+    await user.clear(urlInput);
+    await user.type(urlInput, 'https://hooks.example.com/v2');
+    await user.clear(secretInput);
+    await user.type(secretInput, 'rotated-secret');
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({
+          webhook_url: 'https://hooks.example.com/v2',
+          webhook_secret: 'rotated-secret',
+        }),
+      );
+    });
+  });
+
+  it('saves escalation rules and a business-hours schedule (#43)', async () => {
+    const user = userEvent.setup();
+    renderAgentSettings();
+
+    const rules = await screen.findByLabelText('escalation.label');
+    await user.type(rules, 'Refund dispute -> human');
+
+    // No timezone selected yet: the schedule editor stays inert.
+    expect(screen.getByTestId('business-hours-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('business-hours-add')).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText('businessHours.timezone'), 'Asia/Shanghai');
+    await user.click(screen.getByTestId('business-hours-add'));
+
+    expect(screen.getByTestId('business-hours-ranges')).toBeInTheDocument();
+
+    // Defaults are 09:00-18:00 on Monday (day 0).
+    expect(screen.getByLabelText('businessHours.start 1')).toHaveValue('09:00');
+    expect(screen.getByLabelText('businessHours.end 1')).toHaveValue('18:00');
+
+    // A `time` input is replaced atomically — typing character by character
+    // would drive the editor through meaningless intermediate values.
+    fireEvent.change(screen.getByLabelText('businessHours.end 1'), {
+      target: { value: '22:30' },
+    });
+    await user.type(screen.getByLabelText('businessHours.awayMessage'), 'We are away.');
+
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({
+          escalation_rules: 'Refund dispute -> human',
+          business_hours: {
+            timezone: 'Asia/Shanghai',
+            schedule: [{ day: 0, start: 540, end: 1350 }],
+          },
+          away_message: 'We are away.',
+        }),
+      );
+    });
+  });
+
+  it('round-trips a stored schedule into the editor (#43)', async () => {
+    mockedApi.getAgent.mockResolvedValue({
+      ...agent,
+      escalation_rules: 'Always escalate refunds',
+      business_hours: {
+        timezone: 'Europe/London',
+        schedule: [{ day: 5, start: 1320, end: 120 }],
+      },
+      away_message: 'Back Monday.',
+    } as never);
+    renderAgentSettings();
+
+    expect(await screen.findByLabelText('escalation.label')).toHaveValue(
+      'Always escalate refunds',
+    );
+    expect(screen.getByLabelText('businessHours.timezone')).toHaveValue('Europe/London');
+    // 22:00 -> 02:00 wraps past midnight and is stored as-is.
+    expect(screen.getByLabelText('businessHours.start 1')).toHaveValue('22:00');
+    expect(screen.getByLabelText('businessHours.end 1')).toHaveValue('02:00');
+    expect(screen.getByLabelText('businessHours.awayMessage')).toHaveValue('Back Monday.');
   });
 
   it('renders rate_limit_per_minute from agent fixture and allows changing it', async () => {
@@ -170,6 +307,43 @@ describe('AgentSettings', () => {
         expect.objectContaining({ restricted_reply: 'New restricted reply' }),
       );
     });
+  });
+
+  it('renders the fixed-facts card and saves through its own endpoint', async () => {
+    const user = userEvent.setup();
+    mockedApi.getAgent.mockResolvedValue({
+      ...agent,
+      fixed_facts: 'Address: 3F, 100 Hengshan Road.',
+    } as never);
+    mockedApi.updateFixedFacts.mockResolvedValue({
+      fixed_facts: 'Address: 3F, 100 Hengshan Road.\n\nBooking: https://b.example.com',
+    } as never);
+
+    renderAgentSettings();
+
+    const textarea = await screen.findByLabelText('fixedFacts.label');
+    expect(textarea).toHaveValue('Address: 3F, 100 Hengshan Road.');
+
+    await user.type(textarea, '\n\nBooking: https://b.example.com');
+    await user.click(screen.getByRole('button', { name: 'fixedFacts.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateFixedFacts).toHaveBeenCalledWith(
+        'agt_1',
+        'Address: 3F, 100 Hengshan Road.\n\nBooking: https://b.example.com',
+      );
+    });
+    // The general agent PATCH must not carry fixed facts.
+    expect(mockedApi.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('mounts the procedure editor for the route agent', async () => {
+    renderAgentSettings();
+
+    await waitFor(() =>
+      expect(mockedApi.listProcedures).toHaveBeenCalledWith('agt_1'),
+    );
+    expect(screen.getByTestId('agent-procedures-card')).toBeInTheDocument();
   });
 
   it('allows setting rate_limit_per_minute to 0 (no limit)', async () => {

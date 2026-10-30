@@ -12,6 +12,12 @@ export interface ChatRequest {
 		temperature?: number;
 		max_tokens?: number;
 	};
+	/**
+	 * #44: ask for a turn that does not consume the daily allowance. The
+	 * backend honours it only for an admin bearer token, so this is a hint, not
+	 * a grant — it is safe for the Playground to always send it.
+	 */
+	preview?: boolean;
 }
 
 export interface UsageInfo {
@@ -27,6 +33,12 @@ export interface ChatResponse {
 	session_id?: string;
 	message_id?: number;
 	taken_over?: boolean;
+	mode?: "ai" | "human";
+	no_answer_reason?: string | null;
+	/** #44: true when the fallback model answered. */
+	degraded?: boolean;
+	/** #44: the model that actually produced the reply. */
+	model?: string | null;
 }
 
 export interface StreamDoneMeta {
@@ -34,12 +46,22 @@ export interface StreamDoneMeta {
 	session_id?: string;
 	usage?: UsageInfo | null;
 	taken_over?: boolean;
+	/** #43: who answers next. `taken_over` implies `human`. */
+	mode?: "ai" | "human";
+	/** #43: machine token explaining why the bot stayed silent. */
+	no_answer_reason?: string | null;
+	/** #44: true when the fallback model answered (primary allowance spent). */
+	degraded?: boolean;
+	/** #44: the model that actually produced the answer. */
+	model?: string | null;
 }
 
 export interface Source {
-	type: "url" | "file";
+	/** `qa` marks a curated pair; it carries no url and no filename. */
+	type: "url" | "file" | "qa";
 	title?: string;
 	url?: string;
+	filename?: string;
 	snippet?: string;
 	question?: string;
 	id?: string;
@@ -73,6 +95,38 @@ export interface Agent {
 	description?: string;
 	avatar?: string | null;
 	system_prompt: string;
+	/** Operator-written facts that outrank retrieved chunks (#39). */
+	fixed_facts?: string | null;
+	/** Plain-language escalation prompt, appended after the procedures block (#43). */
+	escalation_rules?: string | null;
+	/** `{"timezone": IANA, "schedule": [{"day": 0-6, "start": min, "end": min}]}` (#43). */
+	business_hours?: BusinessHoursPayload | null;
+	/** Widget copy shown outside business hours (#43). */
+	away_message?: string | null;
+	/** #44: model that answers once the daily allowance is spent. */
+	fallback_model?: string | null;
+	/** Write-only: a typed value replaces the stored (encrypted) fallback key. */
+	fallback_api_key?: string;
+	/** #44: whether a fallback key is stored (the key itself is never returned). */
+	fallback_api_key_set?: boolean;
+	/** #40: regexes matched against `location.pathname`; a match renders nothing. */
+	excluded_paths?: string[] | null;
+	/** #40: bubble | inline | iframe. */
+	display_mode?: "bubble" | "inline" | "iframe" | null;
+	/** #40: CSS selector the inline/iframe modes mount into. */
+	inline_container?: string | null;
+	/** #40: `[{label, action, value, path}]` — `path` scopes a starter to a page. */
+	starters?: WidgetStarter[] | null;
+	/** #40: entry-screen cards — `[{logo, heading, text, chat|kb_search|form}]`. */
+	widget_cards?: WidgetCard[] | null;
+	/** #40: share of visitors that get the widget (0-100). */
+	traffic_percentage?: number | null;
+	/** #47: HTTPS endpoint that receives signed event deliveries. */
+	webhook_url?: string | null;
+	/** #47: write-only — a typed value replaces the stored (encrypted) secret. */
+	webhook_secret?: string;
+	/** #47: whether a signing secret is stored (the secret itself is never returned). */
+	webhook_secret_set?: boolean;
 	model: string;
 	temperature: number;
 	max_tokens: number;
@@ -122,6 +176,32 @@ export interface Agent {
 	visitor_count?: number;
 	created_at: string;
 	updated_at?: string;
+}
+
+/** Contract C6 business-hours JSON (#43). */
+export interface BusinessHoursPayload {
+	timezone: string;
+	schedule: Array<{ day: number; start: number; end: number }>;
+}
+
+/** #40: one starter chip. `path` is an optional regex scoping it to a page. */
+export interface WidgetStarter {
+	label: string;
+	action: "message" | "link";
+	/** Sent text for `message`, the URL for `link`. */
+	value?: string;
+	url?: string;
+	path?: string;
+}
+
+/** #40: one entry-screen card. */
+export interface WidgetCard {
+	logo?: string;
+	heading?: string;
+	text?: string;
+	chat?: string;
+	kb_search?: string;
+	form?: string;
 }
 
 /** Lifecycle state of a knowledge base, mirrored from `KnowledgeBase.status`. */
@@ -334,8 +414,14 @@ export interface FileItem {
 	status: "ready" | "processing" | "uploading" | "pending" | "failed";
 	created_at: string;
 	updated_at?: string;
-	// Processing error details
+	// Processing error details (localized, client-safe sentence)
 	error_message?: string;
+	/** #47: the stored upstream cause, verbatim (`401 Unauthorized from ...`).
+	 *  Never translated; the row shows it as the primary line and keeps
+	 *  `error_message` beneath it as the friendly explanation. */
+	error_detail?: string | null;
+	/** #47 two-phase upload: which ingest phase the row is in. */
+	processing_stage?: string | null;
 }
 
 export interface Quota {
@@ -361,6 +447,244 @@ export interface AgentCreateInput {
 	persona_type?: string;
 	widget_title?: string;
 	welcome_message?: string;
+}
+
+/**
+ * Curated question/answer pair (#39). Stored on the KB and embedded into a
+ * dedicated collection, so a hit outranks an ordinary chunk without a reindex.
+ */
+export interface QaItem {
+	id: string;
+	kb_id: string;
+	question: string;
+	answer: string;
+	enabled: boolean;
+	hits: number;
+	last_hit_at?: string | null;
+	/** manual | revise | unanswered — how the pair got here. */
+	source: string;
+	source_message_id?: number | null;
+	created_at?: string | null;
+	updated_at?: string | null;
+}
+
+export interface QaItemListResponse {
+	items: QaItem[];
+	total: number;
+}
+
+export interface QaItemCreateInput {
+	question: string;
+	answer: string;
+}
+
+export interface QaItemUpdateInput {
+	question?: string;
+	answer?: string;
+	enabled?: boolean;
+}
+
+export interface QaImportPair {
+	question: string;
+	answer: string;
+}
+
+export interface QaImportResponse {
+	created: number;
+	skipped: number;
+}
+
+export interface ReviseAnswerResponse {
+	qa_item: QaItem;
+	/** True when an existing pair for the same question was corrected. */
+	replaced: boolean;
+}
+
+export interface QaFromMessageResponse {
+	qa_item: QaItem;
+}
+
+/**
+ * One row of the #42 unanswered queue. `question` is the visitor's own message
+ * (not the answer), `occurrences` is how often the same normalised question was
+ * flagged unanswered for that agent.
+ */
+export interface UnansweredItem {
+	message_id: number;
+	session_id: string;
+	question: string;
+	answer: string;
+	/** null means "no retrieval signal" — render an em dash, never 0%. */
+	confidence: number | null;
+	created_at?: string | null;
+	occurrences: number;
+}
+
+export interface UnansweredList {
+	items: UnansweredItem[];
+	total: number;
+}
+
+/**
+ * #45: one tile of the dashboard. `delta_kind` says how to read the delta:
+ * `none` means the previous window had nothing to compare against and the value
+ * did not move, `new` means the metric did not exist before (never a percentage,
+ * because a percentage of zero is not a number an operator should ever see).
+ * `window_label` is the comparison window in words — it is not optional, so a
+ * tile can never be rendered as a bare number.
+ */
+export type DeltaKind = "none" | "new" | "pct";
+
+export interface AnalyticsTile {
+	value: number;
+	previous: number;
+	delta: number;
+	/** null when the delta is not a percentage (`delta_kind` is not `pct`). */
+	delta_pct: number | null;
+	delta_kind: DeltaKind;
+	/** e.g. "vs previous 7 days" / "vs 前 7 天". */
+	window_label: string;
+}
+
+export interface AnalyticsWindow {
+	from: string;
+	to: string;
+	previous_from: string;
+	previous_to: string;
+	days: number;
+	label: string;
+}
+
+export interface AnalyticsFunnel {
+	opens: number;
+	conversations: number;
+	leads: number;
+	conversation_rate: number;
+	lead_rate: number;
+}
+
+export interface OutcomeSplit {
+	resolved: number;
+	abandoned: number;
+	escalated: number;
+	"no-answer": number;
+	total: number;
+	classified: number;
+	unclassified: number;
+}
+
+/** A pointer to #42's triage queue, not a copy of it. */
+export interface TopUnansweredItem {
+	/** Grouped by the queue's own normaliser, so the two surfaces agree. */
+	question: string;
+	occurrences: number;
+	/** The queue's coordinates: deep-link target and "add to Q&A" handle. */
+	message_id: number | null;
+	last_seen?: string | null;
+}
+
+export interface AnalyticsOverview {
+	range: AnalyticsRange;
+	window: AnalyticsWindow;
+	tiles: Record<AnalyticsTileName, AnalyticsTile>;
+	funnel: AnalyticsFunnel;
+	outcome_split: OutcomeSplit;
+	top_unanswered: TopUnansweredItem[];
+}
+
+export type AnalyticsRange = "24h" | "7d" | "30d" | "90d";
+
+export type AnalyticsTileName =
+	| "sessions"
+	| "messages"
+	| "ai_replies"
+	| "visitors"
+	| "leads"
+	| "handoffs"
+	| "unanswered"
+	| "degraded"
+	| "negative_feedback"
+	| "positive_feedback_rate";
+
+export interface AnalyticsQuery {
+	range?: AnalyticsRange;
+	agent_id?: string;
+}
+
+export interface UnansweredQuery {
+	/** ISO-8601; the backend defaults to 30 days back. */
+	since?: string;
+	agent_id?: string;
+	skip?: number;
+	limit?: number;
+}
+
+/**
+ * One ordered step of a procedure. `requires_action` names a channel capability
+ * (`link`, `form`, or anything else); a step whose action is unavailable skips
+ * the whole procedure, so the value must round-trip freely.
+ */
+export interface ProcedureStep {
+	text: string;
+	requires_action?: string | null;
+}
+
+export interface Procedure {
+	id: string;
+	agent_id: string;
+	name: string;
+	steps: ProcedureStep[];
+	enabled: boolean;
+	created_at?: string | null;
+	updated_at?: string | null;
+}
+
+export interface ProcedureListResponse {
+	items: Procedure[];
+	total: number;
+}
+
+export interface ProcedureCreateInput {
+	name: string;
+	steps: ProcedureStep[];
+	enabled?: boolean;
+}
+
+export interface ProcedureUpdateInput {
+	name?: string;
+	steps?: ProcedureStep[];
+	enabled?: boolean;
+}
+
+export interface FixedFactsResponse {
+	fixed_facts?: string | null;
+}
+
+export interface DeleteResult {
+	deleted: boolean;
+	id: string;
+}
+
+/**
+ * #46: what a one-click visitor deletion removed.
+ *
+ * The console prints these counts back to the operator ("已删除 2 个会话、6 条
+ * 消息") rather than a bare "done", because "did it really erase everything?"
+ * is the whole question a GDPR-shaped request is asking.
+ */
+export interface VisitorDeletionCounts {
+	sessions: number;
+	messages: number;
+	leads: number;
+	/** Messages that carried a thumbs up/down (#41 feedback). */
+	feedback: number;
+}
+
+export interface VisitorDeletionResult {
+	success: boolean;
+	visitor_id: string;
+	deleted: VisitorDeletionCounts;
+	total: number;
 }
 
 export async function parseErrorResponse(response: Response): Promise<string> {
@@ -807,6 +1131,25 @@ class APIService {
 
 	async getQuota(agentId: string): Promise<Quota> {
 		return this.request<Quota>(`/api/v1/quota?agent_id=${agentId}`);
+	}
+
+	/**
+	 * #40: the server's own idea of its public address.
+	 *
+	 * The embed snippet must never be composed from `window.location.origin`: a
+	 * dashboard opened on `localhost` would hand out a `localhost` snippet. The
+	 * API answers with the forwarded host, so the copied tag is right everywhere.
+	 */
+	async getPublicOrigin(agentId: string): Promise<string | null> {
+		try {
+			const payload = await this.request<{ api_base?: string }>(
+				`/api/v1/config:public?agent_id=${encodeURIComponent(agentId)}`,
+			);
+			const origin = payload?.api_base?.trim();
+			return origin ? origin.replace(/\/$/, "") : null;
+		} catch {
+			return null;
+		}
 	}
 
 	// Knowledge base APIs (workspace-scoped, independent of any agent)
@@ -1375,6 +1718,225 @@ class APIService {
 
 	async getAdminSessionMessages(sessionId: string): Promise<any[]> {
 		return this.request(`/api/v1/admin/sessions/${sessionId}/messages`);
+	}
+
+	// ---------------------------------------------------------------- Q&A (#39)
+
+	async listQaItems(
+		kbId: string,
+		skip = 0,
+		limit = 100,
+	): Promise<QaItemListResponse> {
+		return this.request<QaItemListResponse>(
+			`${this.kbBase(kbId)}/qa-items?skip=${skip}&limit=${limit}`,
+		);
+	}
+
+	async createQaItem(kbId: string, input: QaItemCreateInput): Promise<QaItem> {
+		return this.request<QaItem>(`${this.kbBase(kbId)}/qa-items`, {
+			method: "POST",
+			body: JSON.stringify(input),
+		});
+	}
+
+	async updateQaItem(
+		kbId: string,
+		qaId: string,
+		input: QaItemUpdateInput,
+	): Promise<QaItem> {
+		return this.request<QaItem>(
+			`${this.kbBase(kbId)}/qa-items/${encodeURIComponent(qaId)}`,
+			{ method: "PUT", body: JSON.stringify(input) },
+		);
+	}
+
+	async deleteQaItem(kbId: string, qaId: string): Promise<void> {
+		await this.request(
+			`${this.kbBase(kbId)}/qa-items/${encodeURIComponent(qaId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	async importQaItems(
+		kbId: string,
+		items: QaImportPair[],
+	): Promise<QaImportResponse> {
+		return this.request<QaImportResponse>(
+			`${this.kbBase(kbId)}/qa-items:import`,
+			{ method: "POST", body: JSON.stringify({ items }) },
+		);
+	}
+
+	/**
+	 * Correct the last assistant answer in a session; the correction becomes a
+	 * curated pair on the agent's KB and is effective on the next message.
+	 */
+	async reviseAnswer(
+		sessionId: string,
+		answer: string,
+	): Promise<ReviseAnswerResponse> {
+		return this.request<ReviseAnswerResponse>(
+			`/api/v1/admin/sessions/${encodeURIComponent(sessionId)}/revise-answer`,
+			{ method: "POST", body: JSON.stringify({ answer }) },
+		);
+	}
+
+	/** Add an assistant message's turn to the agent's KB as a curated pair. */
+	async addQaFromMessage(
+		messageId: number,
+	): Promise<QaFromMessageResponse> {
+		return this.request<QaFromMessageResponse>(
+			`/api/v1/admin/qa/from-message/${messageId}`,
+			{ method: "POST" },
+		);
+	}
+
+	// --------------------------------------------------- unanswered (#42)
+
+	/** The triage queue of answers that did not really answer. */
+	async getUnanswered(
+		query: UnansweredQuery = {},
+	): Promise<UnansweredList> {
+		const params = new URLSearchParams();
+		if (query.since) params.set("since", query.since);
+		if (query.agent_id) params.set("agent_id", query.agent_id);
+		if (typeof query.skip === "number") params.set("skip", String(query.skip));
+		if (typeof query.limit === "number")
+			params.set("limit", String(query.limit));
+		const suffix = params.toString();
+		return this.request<UnansweredList>(
+			`/api/v1/admin/sessions/unanswered${suffix ? `?${suffix}` : ""}`,
+		);
+	}
+
+	// ------------------------------------------------------- analytics (#45)
+
+	/**
+	 * The dashboard's whole payload: tiles with deltas *and* the comparison
+	 * window in words, the outcome split and the top unanswered questions.
+	 *
+	 * One request rather than five so the tiles, the funnel and the export link
+	 * can never disagree about which window they describe.
+	 */
+	async getAnalyticsOverview(
+		query: AnalyticsQuery = {},
+	): Promise<AnalyticsOverview> {
+		const params = new URLSearchParams();
+		if (query.range) params.set("range", query.range);
+		if (query.agent_id) params.set("agent_id", query.agent_id);
+		const suffix = params.toString();
+		return this.request<AnalyticsOverview>(
+			`/api/v1/admin/stats/overview${suffix ? `?${suffix}` : ""}`,
+		);
+	}
+
+	/**
+	 * The CSV for the *same* filters the dashboard is showing.
+	 *
+	 * Returns the bytes rather than triggering the download here, so the caller
+	 * owns the object URL and can revoke it — a leaked blob URL per click is a
+	 * slow memory leak in a long-lived admin session.
+	 */
+	async exportStatsCsv(
+		query: AnalyticsQuery = {},
+	): Promise<{ blob: Blob; filename: string }> {
+		const params = new URLSearchParams();
+		if (query.range) params.set("range", query.range);
+		if (query.agent_id) params.set("agent_id", query.agent_id);
+		// The locale decides the window label the server stamps on the file, so
+		// the exported header matches the console's language.
+		params.set("locale", this.getLocale());
+		const url = new URL(
+			`${this.baseUrl}/api/v1/admin/stats/export.csv?${params.toString()}`,
+			window.location.origin,
+		);
+		const token = localStorage.getItem("token");
+		const response = await fetch(url.toString(), {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		if (!response.ok) {
+			throw new Error(await parseErrorResponse(response));
+		}
+		const disposition = response.headers.get("content-disposition") ?? "";
+		const match = /filename="?([^";]+)"?/.exec(disposition);
+		return {
+			blob: await response.blob(),
+			filename: match?.[1] ?? "basjoo-stats.csv",
+		};
+	}
+
+	/**
+	 * Take a triaged row out of the queue. The message stays in the transcript;
+	 * only `is_unanswered` is cleared.
+	 */
+	async dismissUnanswered(messageId: number): Promise<{ dismissed: boolean }> {
+		return this.request<{ dismissed: boolean }>(
+			`/api/v1/admin/sessions/unanswered/${messageId}:dismiss`,
+			{ method: "POST" },
+		);
+	}
+
+	/**
+	 * #46: erase one visitor's data in a single transaction.
+	 *
+	 * Admin-authenticated and workspace-scoped server-side: a visitor that only
+	 * exists in another workspace answers 404, exactly like the handoff routes.
+	 * `visitor_id` is URL-encoded because a signed identity is `email:hash`.
+	 */
+	async deleteVisitor(visitorId: string): Promise<VisitorDeletionResult> {
+		return this.request<VisitorDeletionResult>(
+			`/api/v1/admin/visitors/${encodeURIComponent(visitorId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	// ---------------------------------------------------------- procedures (#39)
+
+	async listProcedures(agentId: string): Promise<ProcedureListResponse> {
+		return this.request<ProcedureListResponse>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures`,
+		);
+	}
+
+	async createProcedure(
+		agentId: string,
+		input: ProcedureCreateInput,
+	): Promise<Procedure> {
+		return this.request<Procedure>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures`,
+			{ method: "POST", body: JSON.stringify(input) },
+		);
+	}
+
+	async updateProcedure(
+		agentId: string,
+		procedureId: string,
+		input: ProcedureUpdateInput,
+	): Promise<Procedure> {
+		return this.request<Procedure>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures/${encodeURIComponent(procedureId)}`,
+			{ method: "PUT", body: JSON.stringify(input) },
+		);
+	}
+
+	async deleteProcedure(
+		agentId: string,
+		procedureId: string,
+	): Promise<DeleteResult> {
+		return this.request<DeleteResult>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/procedures/${encodeURIComponent(procedureId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	async updateFixedFacts(
+		agentId: string,
+		fixedFacts: string | null,
+	): Promise<FixedFactsResponse> {
+		return this.request<FixedFactsResponse>(
+			`/api/v1/agents/${encodeURIComponent(agentId)}/fixed-facts`,
+			{ method: "PUT", body: JSON.stringify({ fixed_facts: fixedFacts }) },
+		);
 	}
 }
 

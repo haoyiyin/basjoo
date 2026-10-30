@@ -57,7 +57,12 @@ class TestFileUploadKbIngestion:
 
         file_item = data["files"][0]
         assert file_item["filename"] == "test_document.txt"
-        assert file_item["status"] == "pending"
+        # #47 two-phase upload: the row is handed to the scheduler, so the
+        # response says `processing` (never `ready`) and names the queue stage.
+        # Before #47 this was `pending` only because the bytes were about to be
+        # parsed inline by `BackgroundTasks`.
+        assert file_item["status"] == "processing"
+        assert file_item["processing_stage"] == "uploaded"
         assert "id" in file_item
 
         documents = await _uploads_for(bound_kb_id)

@@ -44,6 +44,7 @@ vi.mock("../../src/services/api", () => ({
 		testEmbeddingConfig: vi.fn(),
 		getKnowledgeBase: vi.fn(),
 		getKbSourcesSummary: vi.fn(),
+		listQaItems: vi.fn(),
 	},
 }));
 
@@ -441,6 +442,7 @@ describe("KnowledgeBaseDetail (§18 refresh removal)", () => {
 			files: { total: 1, ready: 1, processing: 0, total_size_kb: 5 },
 			has_pending: false,
 		});
+		mockedApi.listQaItems.mockResolvedValue({ items: [], total: 0 });
 	});
 
 	it("has no refresh button while still mounting both source panels", async () => {

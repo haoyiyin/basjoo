@@ -189,6 +189,13 @@ holds no database connection while the provider generates. The event names are `
 silent mock answer. Session ids are enumerable, so the public endpoints require the visitor's own
 `visitor_id` and answer `404 Session not found` for anyone else.
 
+One gate decides whether the bot speaks: `services/session_state.answer_gate` requires `status="active"`,
+`mode="ai"` **and** the agent's business hours to be open. Anything else still stores the visitor's message
+and answers nothing, reporting why in `done.no_answer_reason` (`taken_over`, `resolved`, `closed`, `paused`,
+`human` or `after_hours`). `after_hours` is the one case that leaves `mode` at `ai` and ships the operator's
+`away_message` as the visible reply — it is never written to the transcript, so the history does not claim a
+person wrote it. An agent with no business hours (or an unparsable config) is always online.
+
 ### Widget
 
 `widget/src/BasjooWidget.tsx` bootstraps from `<script src="…/sdk.js?agent_id=agt_…">` (it also accepts
@@ -275,7 +282,12 @@ most:
 - `POST /api/v1/knowledge-bases/{kb_id}/files:upload`, `POST …/index:rebuild`
 - `GET /api/v1/knowledge-bases/{kb_id}/sources:summary`, `…/index:status`
 - `POST /api/v1/chat/stream`, `GET /api/v1/chat/messages`
-- `GET /api/v1/admin/sessions`, `POST /api/v1/admin/sessions/{id}/takeover`, `POST /api/v1/admin/sessions/send`
+- `POST /api/v1/chat/escalate`, `POST /api/v1/chat/release` — the visitor side of handoff
+- `GET /api/v1/admin/sessions`, `POST /api/v1/admin/sessions/send`
+- `POST /api/v1/admin/sessions/{id}/takeover|release|reply|resolve|reopen` — `reopen` is the undo of
+  `resolve` (back to `active`/`ai`); it is not part of the original handoff ask, but the session centre
+  renders a Reopen action on resolved rows, so the route is kept and listed here rather than left as an
+  undocumented surface
 
 The agent-scoped `/api/v1/urls:*`, `/api/v1/files:*` and `/api/v1/index:*` routes still resolve, but they are
 one-release aliases that look the KB up through `agents.kb_id` and answer `409` when the agent is unbound.

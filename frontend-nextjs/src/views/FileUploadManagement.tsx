@@ -536,6 +536,22 @@ export default function FileUploadManagement() {
 																borderRadius: "var(--radius-sm)",
 															}}
 														>
+															{/* #47: the provider's own words first — an
+															    embedding 401 must read as "401 Unauthorized",
+															    not as "invalid file". The localized sentence
+															    beneath it is only a fallback. */}
+															{file.error_detail?.trim() && (
+																<span
+																	style={{
+																		display: "block",
+																		fontWeight: 600,
+																		marginBottom: "var(--space-1)",
+																		translate: "no",
+																	}}
+																>
+																	{file.error_detail}
+																</span>
+															)}
 															{file.error_message?.trim() ||
 																t("files.processingFailedFallback")}
 														</p>

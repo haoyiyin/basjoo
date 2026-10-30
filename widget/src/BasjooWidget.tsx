@@ -30,6 +30,71 @@ interface PublicWidgetConfig {
   welcome_message?: string | null;
   widget_color?: string | null;
   default_agent_id?: string | null;
+  /** #43: computed server-side from business_hours on every request. */
+  online?: boolean | null;
+  business_hours?: BusinessHoursConfig | null;
+  away_message?: string | null;
+  /** #46: this agent accepts only signed identities (HMAC over the email). */
+  identity_required?: boolean | null;
+}
+
+/**
+ * #46: the signed identity the host page computes server-side.
+ *
+ * `hash` is `hmac_sha256(identity_secret, email)` in hex. The secret never
+ * reaches the browser: the host application derives the value after login and
+ * hands this object to `window.Basjoo.identify()`. The widget only ever stores
+ * the resulting `email:hash` string, which is what `visitor_id` becomes.
+ */
+interface VisitorIdentity {
+  email?: string;
+  hash?: string;
+}
+
+/** Contract C6 shape: day 0 = Monday, minutes from local midnight. */
+interface BusinessHoursConfig {
+  timezone?: string;
+  schedule?: Array<{ day: number; start: number; end: number }>;
+}
+
+/** #40: a starter shown above the composer; `path` scopes it to one page. */
+interface WidgetStarter {
+  label?: string;
+  action?: 'message' | 'link';
+  /** The sent text when `action` is `message`, the URL when it is `link`. */
+  value?: string;
+  url?: string;
+  /** Optional regex; the starter renders only where `location.pathname` matches. */
+  path?: string;
+}
+
+/** #40: one card on the entry screen. Absent cards = today's welcome message. */
+interface WidgetCard {
+  logo?: string;
+  heading?: string;
+  text?: string;
+  chat?: boolean | string;
+  kb_search?: boolean | string;
+  form?: boolean | string;
+}
+
+/**
+ * #40: the literal the server bakes into `embed.js`.
+ *
+ * Every field is a constant for that host — the widget never re-derives an
+ * origin or an API base from `window.location` when this object is present,
+ * which is what makes the loader identical for every visitor.
+ */
+interface EmbedConfig {
+  agent_id?: string;
+  api_base?: string;
+  allowed_domains?: string[];
+  excluded_paths?: string[];
+  display_mode?: 'bubble' | 'inline' | 'iframe';
+  starters?: WidgetStarter[];
+  cards?: WidgetCard[];
+  traffic_percentage?: number;
+  inline_container?: string | null;
 }
 
 interface ChatMessage {
@@ -52,6 +117,13 @@ interface StreamDoneMeta {
   message_id?: number | null;
   session_id?: string;
   taken_over?: boolean;
+  /** #43: who answers next. `taken_over` implies `human`. */
+  mode?: 'ai' | 'human';
+  no_answer_reason?: string | null;
+  /** #44: true when the fallback model answered (primary allowance spent). */
+  degraded?: boolean;
+  /** #44: the model that actually produced the answer. */
+  model?: string | null;
 }
 
 interface StreamErrorPayload {
@@ -149,6 +221,148 @@ function buildDefaultLogoUrl(apiBase: string): string {
   }
 }
 
+// --- #40: install surface ----------------------------------------------------
+
+/** The default inline/iframe mount point when the operator set no selector. */
+const DEFAULT_INLINE_CONTAINER = '#basjoo-chat'
+/** A returning phone visitor must not be hit by a full-screen takeover. */
+const FINE_POINTER_QUERY = '(pointer: fine)'
+const OPEN_STATE_KEY_PREFIX = 'basjoo_open_'
+const ROLLOUT_KEY_PREFIX = 'basjoo_rollout_'
+
+/**
+ * The literal the server baked into `embed.js`.
+ *
+ * It is read once at module load so every widget on the page agrees, and it is
+ * the ONLY thing that can override `apiBase` — the widget never re-derives the
+ * origin from `window.location` when a server config is present.
+ */
+function readEmbedConfig(): EmbedConfig | null {
+  const raw = (window as Window & typeof globalThis & { __BASJOO_CONFIG__?: EmbedConfig }).__BASJOO_CONFIG__
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  return raw
+}
+
+/**
+ * #46: does this visitor id look like a signed `email:hash` identity?
+ *
+ * Matches the server's shape check (`services/visitor_identity.py`): one `:`
+ * separator and a 64-character hex digest. It is only used to decide whether a
+ * *persisted* value should be treated as signed after a reload — the signature
+ * itself is verified server-side and never here.
+ */
+function looksSigned(visitorId: string | null | undefined): boolean {
+  if (typeof visitorId !== 'string') {
+    return false
+  }
+  const separator = visitorId.lastIndexOf(':')
+  if (separator <= 0) {
+    return false
+  }
+  const digest = visitorId.slice(separator + 1)
+  return digest.length === 64 && /^[0-9a-f]{64}$/.test(digest)
+}
+
+/**
+ * #40: is the current page on the operator's excluded list?
+ *
+ * A pattern that does not compile is ignored with a warning — a bad regex must
+ * never break the host page, which is the whole reason this runs before any DOM
+ * is created.
+ */
+function isPathExcluded(pathname: string, patterns: readonly string[] | undefined): boolean {
+  if (!Array.isArray(patterns)) {
+    return false
+  }
+
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string' || !pattern) {
+      continue
+    }
+    try {
+      if (new RegExp(pattern).test(pathname)) {
+        return true
+      }
+    } catch {
+      console.warn(`[Basjoo Widget] Ignoring an invalid excluded_paths pattern: ${pattern}`)
+    }
+  }
+
+  return false
+}
+
+/** #40: does this starter render on the current page? An unparsable `path` is ignored. */
+function isStarterVisible(starter: WidgetStarter, pathname: string): boolean {
+  const scope = typeof starter.path === 'string' ? starter.path.trim() : ''
+  if (!scope) {
+    return true
+  }
+
+  try {
+    return new RegExp(scope).test(pathname)
+  } catch {
+    console.warn(`[Basjoo Widget] Ignoring an invalid starter path pattern: ${scope}`)
+    return true
+  }
+}
+
+/** The current page origin, normalised to `scheme://host` (no path, no trailing slash). */
+function currentOrigin(): string {
+  try {
+    return window.location.origin
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * #40: the sticky rollout decision.
+ *
+ * Decided ONCE per visitor and kept, so a visitor inside the percentage does
+ * not flicker in and out between page loads. Written only when the decision is
+ * made; a storage failure falls back to the fresh draw rather than blocking.
+ */
+function rolloutDecision(agentId: string, percentage: number, storage: StorageAdapter): boolean {
+  if (percentage >= 100) {
+    return true
+  }
+  if (percentage <= 0) {
+    return false
+  }
+
+  const key = `${ROLLOUT_KEY_PREFIX}${agentId}`
+  const stored = storage.getItem(key)
+  if (stored === 'in') {
+    return true
+  }
+  if (stored === 'out') {
+    return false
+  }
+
+  const included = Math.random() * 100 < percentage
+  storage.setItem(key, included ? 'in' : 'out')
+  return included
+}
+
+/** A safe URL for `href`/`src`; `javascript:` and friends are rejected outright. */
+function safeExternalUrl(value: string | undefined): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return ''
+  }
+  const trimmed = value.trim()
+  try {
+    const url = new URL(trimmed, window.location.href)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return ''
+    }
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
 // Storage adapter that safely wraps localStorage with try/catch and memory fallback
 class StorageAdapter {
   private memoryStore = new Map<string, string>();
@@ -220,6 +434,13 @@ class BasjooWidget {
   private readonly STORAGE_KEY: string;
   private readonly VISITOR_STORAGE_KEY = 'basjoo_visitor_id';
   private visitorId: string;
+  // #46: `true` once the host page has handed us a signed identity. The widget
+  // then sends `email:hash` as `visitor_id` and asks the server to resume the
+  // thread behind that person instead of the one in this browser's storage.
+  private identitySigned = false;
+  // #46: the agent refuses unsigned identities. Shown as a readable line in the
+  // composer area rather than a bare 403 in the network tab.
+  private identityRequired = false;
   private storage: StorageAdapter;
   private effectiveTheme: 'light' | 'dark' = 'light';
   private originalTitle: string = '';
@@ -237,19 +458,56 @@ class BasjooWidget {
   private thinkingTimerId: number | null = null;
   private currentStreamContent = '';
   private currentStreamSources: Source[] = [];
+  // #43 handoff: the session's answer mode, the operator's away copy and the
+  // business-hours flag from `config:public`.
+  private sessionMode: 'ai' | 'human' = 'ai';
+  private isOnline = true;
+  private awayMessage = '';
+  private humanNoticeBar: HTMLElement | null = null;
+  private headerHumanButton: HTMLButtonElement | null = null;
+  private onlineCheckIntervalId: number | null = null;
   // Track imperative event listeners for cleanup
   private _buttonClickListener: (() => void) | null = null;
   private _closeBtnClickListener: (() => void) | null = null;
   private _sendBtnClickListener: (() => void) | null = null;
   private _inputKeypressListener: ((e: KeyboardEvent) => void) | null = null;
+  private _humanBtnClickListener: (() => void) | null = null;
+  private _continueAiClickListener: (() => void) | null = null;
+  // #40 install surface: the server-baked literal, the resolved display mode
+  // and the container that inline/iframe modes mount into.
+  private embed: EmbedConfig | null;
+  private displayMode: 'bubble' | 'inline' | 'iframe' = 'bubble';
+  private mountTarget: HTMLElement | null = null;
+  private iframeElement: HTMLIFrameElement | null = null;
+  private cardsRendered = false;
+  private openStateStorageKey: string;
+  private _cardActionListeners: Array<() => void> = [];
+  private _starterClickListeners: Array<() => void> = [];
+  // #40: host-page context pushed through `window.Basjoo.setContext`.
+  private static pageContext: { before: string; after: string } = { before: '', after: '' }
+  // #46: instances alive on the page, so `window.Basjoo.identify()` reaches a
+  // widget the host page did not construct itself, and a pending identity
+  // survives the gap between the host calling `identify()` and the loader
+  // mounting (the server-rendered embed starts the widget on DOMContentLoaded).
+  private static instances: BasjooWidget[] = []
+  private static pendingIdentity: VisitorIdentity | null | undefined = undefined
 
   constructor(config: WidgetConfig) {
-    const apiBase = this.detectApiBase(config.apiBase);
+    // The server-rendered loader is authoritative: when it is present, its
+    // `api_base` is the API base and its `agent_id` fills an omitted one. Nothing
+    // here is ever derived from `window.location`, so the same bytes work on
+    // every page of the host.
+    this.embed = readEmbedConfig();
+    const embedAgentId = this.embed?.agent_id
+    const embedApiBase = this.embed?.api_base
+
+    const apiBase = this.detectApiBase(config.apiBase || embedApiBase);
+    const agentId = config.agentId || embedAgentId || '';
     this.hasTitleOverride = typeof config.title === 'string' && config.title.trim().length > 0;
     this.hasWelcomeMessageOverride = typeof config.welcomeMessage === 'string' && config.welcomeMessage.trim().length > 0;
 
     this.config = {
-      agentId: config.agentId,
+      agentId,
       apiBase,
       themeColor: config.themeColor || '',
       logoUrl: config.logoUrl || buildDefaultLogoUrl(apiBase),
@@ -261,11 +519,162 @@ class BasjooWidget {
     };
 
     this.STORAGE_KEY = `basjoo_session_${this.config.agentId}`;
+    this.openStateStorageKey = `${OPEN_STATE_KEY_PREFIX}${this.config.agentId}`;
     this.storage = new StorageAdapter();
     this.sessionId = this.storage.getItem(this.STORAGE_KEY);
     this.visitorId = this.storage.getItem(this.VISITOR_STORAGE_KEY) || this.generateVisitorId();
+    // #46: a persisted `email:hash` from an earlier page load is still a signed
+    // identity — the visitor never becomes anonymous merely by reloading.
+    this.identitySigned = looksSigned(this.visitorId);
+    BasjooWidget.instances.push(this);
+    if (BasjooWidget.pendingIdentity !== undefined) {
+      // Consumed once: the host identified the visitor before the loader
+      // mounted, so this first widget adopts it and no later one repeats it.
+      const pending = BasjooWidget.pendingIdentity
+      BasjooWidget.pendingIdentity = undefined
+      this.identify(pending)
+    }
+
+    const mode = this.embed?.display_mode
+    this.displayMode = mode === 'inline' || mode === 'iframe' ? mode : 'bubble';
 
     this.effectiveTheme = this.getEffectiveTheme();
+  }
+
+  /**
+   * #40: the host page pushes context into two prompt slots. The values are
+   * strings and are sent verbatim; the server wraps them in a labelled block
+   * and states that they are page context, not instructions.
+   */
+  static setContext(context: { before?: string; after?: string } | null): void {
+    const next = context && typeof context === 'object' ? context : {}
+    BasjooWidget.pageContext = {
+      before: typeof next.before === 'string' ? next.before : '',
+      after: typeof next.after === 'string' ? next.after : '',
+    }
+  }
+
+  /**
+   * #46: push an identity into every live widget, remembering it for any widget
+   * that mounts later. Public so `window.Basjoo.identify` can reach it without
+   * exporting the private instance list.
+   */
+  static applyIdentity(identity: VisitorIdentity | null | undefined): void {
+    // A widget whose container the host page has removed is no longer a live
+    // surface: pushing an identity into a detached tree would do nothing and,
+    // worse, would stop the value being remembered for the widget that mounts
+    // next. So prune those first.
+    BasjooWidget.instances = BasjooWidget.instances.filter(
+      (widget) => widget.container?.isConnected ?? false,
+    )
+    // Only a call with no live widget needs remembering — a mounted widget
+    // receives the identity directly, so a stale value can never be replayed
+    // into a later widget on the same page.
+    if (BasjooWidget.instances.length === 0) {
+      BasjooWidget.pendingIdentity = identity ?? null
+    }
+    for (const widget of BasjooWidget.instances.slice()) {
+      widget.identify(identity ?? null)
+    }
+  }
+
+  /**
+   * #46: adopt the signed identity the host page computed server-side.
+   *
+   * The host application knows the visitor's email after login and holds the
+   * agent's `identity_secret`; it sends both through here as
+   * `{ email, hash }` where `hash = hmac_sha256(secret, email)` in hex. The
+   * widget stores the resulting `email:hash` as its visitor id, which is what
+   * makes "the same email on a second device" the same visitor.
+   *
+   * Deliberately defensive: a missing field or a value that is not a string is
+   * ignored with a warning rather than sent to the server, because a malformed
+   * identity would only earn a 403. Calling it with `null` forgets the identity
+   * (a logout) and goes back to the anonymous visitor.
+   */
+  identify(identity: VisitorIdentity | null | undefined): void {
+    if (identity === null || identity === undefined) {
+      this.identitySigned = false;
+      const anonymous = this.generateVisitorId();
+      this.visitorId = anonymous;
+      this.clearSessionForIdentityChange();
+      this.applyBusinessHoursState();
+      this.renderModeNotice();
+      return;
+    }
+
+    const email = typeof identity.email === 'string' ? identity.email.trim().toLowerCase() : '';
+    const hash = typeof identity.hash === 'string' ? identity.hash.trim().toLowerCase() : '';
+    if (!email || !hash) {
+      console.warn('[Basjoo Widget] identify() needs both `email` and `hash`; ignoring.', identity);
+      return;
+    }
+
+    const signed = `${email}:${hash}`;
+    if (signed === this.visitorId) {
+      return;
+    }
+
+    this.visitorId = signed;
+    this.identitySigned = true;
+    // Persisted so a reload keeps the same visitor until the host page calls
+    // `identify()` again with the (possibly different) signed-in user.
+    this.storage.setItem(this.VISITOR_STORAGE_KEY, signed);
+    // A different person may be using this browser now, so the previous
+    // visitor's cached session id must never be reused.
+    this.clearSessionForIdentityChange();
+
+    // A composer that was closed for want of an identity can open now.
+    this.applyBusinessHoursState();
+    this.renderModeNotice();
+
+    if (this.chatWindow) {
+      void this.resumeIdentitySession();
+    }
+  }
+
+  /** Drop the cached session when the identity changes under the widget. */
+  private clearSessionForIdentityChange(): void {
+    this.sessionId = null;
+    this.lastMessageId = 0;
+    this.storage.removeItem(this.STORAGE_KEY);
+    this.stopPolling();
+  }
+
+  /**
+   * #46: ask the server which session belongs to this identity.
+   *
+   * This is the half of "same email, second device" that the browser cannot do
+   * on its own: `localStorage` is per device, so a returning visitor has no
+   * session id. The server answers one, scoped to the agent and the identity.
+   */
+  private async resumeIdentitySession(): Promise<boolean> {
+    if (!this.identitySigned || !this.visitorId) {
+      return false;
+    }
+
+    try {
+      const url = new URL(`${this.config.apiBase}/api/v1/chat/session:current`);
+      url.searchParams.set('agent_id', this.config.agentId);
+      url.searchParams.set('visitor_id', this.visitorId);
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        return false;
+      }
+
+      const payload = (await response.json()) as { session_id?: string | null };
+      if (!payload.session_id) {
+        return false;
+      }
+
+      this.sessionId = payload.session_id;
+      this.storage.setItem(this.STORAGE_KEY, payload.session_id);
+      await this.loadHistory();
+      return true;
+    } catch (error) {
+      console.warn('[Basjoo Widget] Could not resume the signed-in visitor history.', error);
+      return false;
+    }
   }
 
   private generateVisitorId(): string {
@@ -371,12 +780,70 @@ class BasjooWidget {
       if (!this.hasWelcomeMessageOverride) {
         this.config.welcomeMessage = data.welcome_message || '你好！有什么可以帮助您的吗？'
       }
+      // #43: the server decides `online` on every request; a config with no
+      // business hours answers `true`, which is today's behaviour.
+      this.isOnline = data.online !== false
+      this.awayMessage = (data.away_message || '').trim()
+      // #46: an agent that signs visitors only accepts `email:hash`. Remember
+      // it so the composer can say why nothing is sent until the host page
+      // identifies the visitor, instead of discovering it as a 403.
+      this.identityRequired = data.identity_required === true
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
       console.warn('[Basjoo Widget] Failed to load public config, using defaults.', error)
       if (error instanceof TypeError) {
         console.warn('[Basjoo Widget] Public config request may be blocked by CORS, network issues, or an incorrect apiBase:', this.config.apiBase)
       }
+    }
+  }
+
+  /**
+   * #40: the operator's domain allowlist, as one readable sentence.
+   *
+   * A disallowed page used to fail only as a bare 403 in the network tab. The
+   * widget now says which origin was rejected and what was allowed, so the
+   * operator debugging their install does not have to guess.
+   */
+  private isOriginAllowed(): boolean {
+    const allowed = (this.embed?.allowed_domains || []).filter(
+      (origin): origin is string => typeof origin === 'string' && origin.length > 0,
+    )
+    if (allowed.length === 0) {
+      return true
+    }
+
+    const origin = currentOrigin()
+    if (allowed.includes(origin)) {
+      return true
+    }
+
+    console.error(
+      `Basjoo: origin ${origin || '(unknown)'} is not allowed for this agent (allowed: ${allowed.join(', ')})`,
+    )
+    return false
+  }
+
+  /** #40: `true` when the visitor's device has a precise (mouse/trackpad) pointer. */
+  private hasFinePointer(): boolean {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return false
+    }
+    return window.matchMedia(FINE_POINTER_QUERY).matches
+  }
+
+  /**
+   * #40: the reopen asymmetry.
+   *
+   * A returning visitor's open state is restored ONLY on a fine pointer: a
+   * full-screen takeover greeting a phone visitor is hostile, so a touch device
+   * always starts closed.
+   */
+  private restoreOpenState(): void {
+    if (!this.hasFinePointer()) {
+      return
+    }
+    if (this.storage.getItem(this.openStateStorageKey) === 'open') {
+      this.open(true)
     }
   }
 
@@ -394,35 +861,283 @@ class BasjooWidget {
       return
     }
 
+    // #40: the install gates run BEFORE anything is created — no DOM, no
+    // request, no floating button. An excluded path or a visitor outside the
+    // rollout percentage must be invisible, not merely closed.
+    if (isPathExcluded(window.location.pathname, this.embed?.excluded_paths)) {
+      return
+    }
+    if (!this.isOriginAllowed()) {
+      return
+    }
+
+    const percentage = this.embed?.traffic_percentage
+    if (typeof percentage === 'number' && !rolloutDecision(this.config.agentId, percentage, this.storage)) {
+      return
+    }
+
     await this.loadPublicConfig()
 
     // 保存原始标题用于闪烁
     this.originalTitle = document.title;
 
     this.createStyles();
-    this.createContainer();
-    this.createButton();
-    this.createChatWindow();
 
-    // 显示打招呼气泡
-    this.showGreetingBubble();
+    // #40: `iframe` mode is a bare frame — no bubble and no chat DOM of its own.
+    if (this.displayMode === 'iframe') {
+      this.mountIframe()
+      return
+    }
 
-    // 页面加载时立即启动标题闪烁提醒，吸引用户打开聊天窗口
-    this.startTitleBlink();
+    // #40: `inline` mounts into the operator's container and creates NO floating
+    // button; `bubble` (the default) keeps today's behaviour.
+    if (this.displayMode === 'inline') {
+      if (!this.mountInline()) {
+        return
+      }
+    } else {
+      this.createContainer()
+      this.createButton()
+    }
+
+    this.createChatWindow()
+
+    if (this.displayMode === 'inline') {
+      // Inline has no launcher of its own, so it starts open and never blinks.
+      this.open(true)
+    } else {
+      // 显示打招呼气泡
+      this.showGreetingBubble()
+
+      // 页面加载时立即启动标题闪烁提醒，吸引用户打开聊天窗口
+      this.startTitleBlink()
+    }
+
+    // #43: `online` is computed server-side per request. The widget only reads
+    // `config:public` once, so a page left open across the closing time would
+    // otherwise keep an open composer forever. Re-reading the flag every minute
+    // is the cheaper correct design: the backend needs no scheduler job and no
+    // cache to keep in sync (see the report).
+    this.startOnlineWatcher();
 
     if (this.sessionId) {
       void this.loadHistory();
       return;
     }
 
-    // 欢迎消息
-    if (this.config.welcomeMessage) {
+    // #46: a signed visitor with no cached session is on a second device (or
+    // after a cleared storage). Ask the server which thread belongs to this
+    // identity before painting a greeting, so the transcript is not appended
+    // underneath a welcome message the visitor has already read before.
+    if (this.identitySigned && (await this.resumeIdentitySession())) {
+      this.restoreOpenState();
+      return;
+    }
+
+    // #40: the card entry screen replaces the plain welcome message when the
+    // operator configured cards; an absent list is today's behaviour.
+    if (!this.renderCards() && this.config.welcomeMessage) {
       this.addMessage({
         role: 'assistant',
         content: this.config.welcomeMessage,
         timestamp: new Date(),
       });
     }
+
+    this.renderStarters()
+    this.restoreOpenState()
+  }
+
+  /**
+   * #40: mount the chat window inside the operator's container.
+   *
+   * Returns false when the selector matches nothing — there is nowhere to put
+   * the widget, so nothing at all is created (and no stray bubble appears).
+   */
+  private mountInline(): boolean {
+    const selector = this.embed?.inline_container || DEFAULT_INLINE_CONTAINER
+    const target = this.resolveMountTarget(selector)
+    if (!target) {
+      console.warn(
+        `[Basjoo Widget] Inline mode found no container matching "${selector}". Add an element with that selector, or change the install setting.`,
+      )
+      return false
+    }
+
+    this.mountTarget = target
+    const host = document.createElement('div')
+    host.className = 'basjoo-inline-host'
+    target.appendChild(host)
+    this.container = host
+    return true
+  }
+
+  /** #40: `iframe` mode — a bare frame pointing at the widget demo surface. */
+  private mountIframe(): void {
+    const selector = this.embed?.inline_container || DEFAULT_INLINE_CONTAINER
+    const target = this.resolveMountTarget(selector)
+    if (!target) {
+      console.warn(
+        `[Basjoo Widget] iframe mode found no container matching "${selector}". Add an element with that selector, or change the install setting.`,
+      )
+      return
+    }
+
+    this.mountTarget = target
+    const host = document.createElement('div')
+    host.className = 'basjoo-inline-host'
+
+    const frame = document.createElement('iframe')
+    frame.className = 'basjoo-inline-frame'
+    frame.title = this.config.title
+    const src = new URL('/widget-demo', `${this.config.apiBase}/`)
+    src.searchParams.set('agent_id', this.config.agentId)
+    frame.src = src.toString()
+
+    host.appendChild(frame)
+    target.appendChild(host)
+    this.container = host
+    this.iframeElement = frame
+  }
+
+  /** A CSS selector that does not compile is reported, not thrown. */
+  private resolveMountTarget(selector: string): HTMLElement | null {
+    try {
+      return document.querySelector<HTMLElement>(selector)
+    } catch {
+      console.warn(`[Basjoo Widget] Ignoring an invalid container selector: ${selector}`)
+      return null
+    }
+  }
+
+  /**
+   * #40: the card-based entry screen.
+   *
+   * Returns true when cards were rendered so the caller falls back to the
+   * welcome message with one branch. Rendered at most once per widget.
+   */
+  private renderCards(): boolean {
+    const cards = (this.embed?.cards || []).filter(
+      (card): card is WidgetCard => Boolean(card) && typeof card === 'object',
+    )
+    if (cards.length === 0 || this.cardsRendered) {
+      return false
+    }
+
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null
+    if (!messagesContainer) {
+      return false
+    }
+
+    this.cardsRendered = true
+    const list = document.createElement('div')
+    list.className = 'basjoo-cards'
+
+    for (const card of cards) {
+      const item = document.createElement('div')
+      item.className = 'basjoo-card'
+
+      const logo = safeExternalUrl(card.logo)
+      if (logo) {
+        const logoImage = document.createElement('img')
+        logoImage.className = 'basjoo-card-logo'
+        logoImage.src = logo
+        logoImage.alt = ''
+        item.appendChild(logoImage)
+      }
+
+      const heading = typeof card.heading === 'string' ? card.heading.trim() : ''
+      if (heading) {
+        const headingNode = document.createElement('div')
+        headingNode.className = 'basjoo-card-heading'
+        headingNode.textContent = heading
+        item.appendChild(headingNode)
+      }
+
+      const text = typeof card.text === 'string' ? card.text.trim() : ''
+      if (text) {
+        const textNode = document.createElement('div')
+        textNode.className = 'basjoo-card-text'
+        textNode.textContent = text
+        item.appendChild(textNode)
+      }
+
+      // `chat`, `kb_search` and `form` all reduce to "seed the composer with
+      // this text" — the operator writes the opener, the bot answers it.
+      const seed = card.chat ?? card.kb_search ?? card.form
+      const seedText = typeof seed === 'string' ? seed.trim() : ''
+      if (seedText) {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.className = 'basjoo-card-action'
+        button.textContent = heading || seedText
+        const listener = () => {
+          void this.sendMessage(seedText)
+        }
+        this._cardActionListeners.push(listener)
+        button.addEventListener('click', listener)
+        item.appendChild(button)
+      }
+
+      list.appendChild(item)
+    }
+
+    messagesContainer.appendChild(list)
+    messagesContainer.scrollTop = messagesContainer.scrollHeight
+    return true
+  }
+
+  /** #40: starters above the composer, filtered by the current path. */
+  private renderStarters(): void {
+    const starters = (this.embed?.starters || []).filter(
+      (starter) => Boolean(starter) && typeof starter.label === 'string' && starter.label.trim().length > 0,
+    )
+    if (starters.length === 0) {
+      return
+    }
+
+    const visible = starters.filter((starter) => isStarterVisible(starter, window.location.pathname))
+    if (visible.length === 0) {
+      return
+    }
+
+    const inputArea = this.chatWindow?.querySelector('.basjoo-input-area') as HTMLElement | null
+    if (!inputArea) {
+      return
+    }
+
+    const row = document.createElement('div')
+    row.className = 'basjoo-starters'
+
+    for (const starter of visible) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'basjoo-starter'
+      button.textContent = starter.label || ''
+
+      let listener: () => void
+      if (starter.action === 'link') {
+        const href = safeExternalUrl(starter.url ?? starter.value)
+        listener = href
+          ? () => {
+              window.open(href, '_blank', 'noopener')
+            }
+          : () => {
+              console.warn(`[Basjoo Widget] Starter "${starter.label}" has no usable link target.`)
+            }
+      } else {
+        const text = (starter.value ?? starter.label ?? '').trim()
+        listener = () => {
+          void this.sendMessage(text)
+        }
+      }
+
+      this._starterClickListeners.push(listener)
+      button.addEventListener('click', listener)
+      row.appendChild(button)
+    }
+
+    inputArea.parentNode?.insertBefore(row, inputArea)
   }
 
   /**
@@ -458,6 +1173,12 @@ class BasjooWidget {
         `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&visitor_id=${encodeURIComponent(this.visitorId)}`
       );
       if (!response.ok) {
+        // #46: a stale or missing identity is not an expired session — clearing
+        // the id would silently discard the thread instead of telling the
+        // visitor to sign in again, and the next send would 403 anyway.
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
         throw new Error('Failed to load history');
       }
 
@@ -701,6 +1422,212 @@ class BasjooWidget {
 
       .basjoo-close:hover {
         background: ${this.hexToRgba(theme.accentContrast, 0.28)};
+      }
+
+      .basjoo-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      /* #43: "Talk to a human" — a labelled affordance, not icon-only. */
+      .basjoo-human {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 32px;
+        padding: 0 12px;
+        border: 1px solid ${this.hexToRgba(theme.accentContrast, 0.35)};
+        background: ${this.hexToRgba(theme.accentContrast, 0.15)};
+        border-radius: 16px;
+        cursor: pointer;
+        color: ${theme.accentContrast};
+        font-size: 13px;
+        font-weight: 500;
+        transition: background 0.2s;
+      }
+
+      .basjoo-human:hover {
+        background: ${this.hexToRgba(theme.accentContrast, 0.28)};
+      }
+
+      .basjoo-human[hidden] {
+        display: none;
+      }
+
+      .basjoo-human svg {
+        flex-shrink: 0;
+      }
+
+      /* #43: the human-mode notice bar sits above the transcript. */
+      .basjoo-notice {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 10px 16px;
+        background: ${theme.surfaceSunken};
+        border-bottom: 1px solid ${theme.border};
+        color: ${theme.textPrimary};
+        font-size: 13px;
+        line-height: 1.4;
+        flex-shrink: 0;
+      }
+
+      .basjoo-notice[hidden] {
+        display: none;
+      }
+
+      .basjoo-notice-text {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .basjoo-continue-ai {
+        min-height: 32px;
+        padding: 0 14px;
+        border: 1px solid ${this.config.themeColor};
+        background: transparent;
+        color: ${this.adjustColor(this.config.themeColor, -30)};
+        border-radius: 16px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .basjoo-continue-ai:hover {
+        background: ${this.hexToRgba(this.config.themeColor, 0.12)};
+      }
+
+      /* #44: the degraded notice — one small line, muted, no fill. */
+      .basjoo-degraded {
+        margin: -8px 0 0 0;
+        padding: 0 4px;
+        color: ${theme.textMuted};
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      /* #40: inline / iframe installs mount inside the host's own container,
+         so the chat window is a static block there, never a floating panel. */
+      .basjoo-inline-host {
+        display: block;
+        width: 100%;
+      }
+
+      .basjoo-inline-host #basjoo-chat-window {
+        position: static;
+        width: 100%;
+        height: 520px;
+        max-height: none;
+        transform: none;
+        transform-origin: center;
+      }
+
+      .basjoo-inline-host #basjoo-chat-window.closing {
+        transform: none;
+      }
+
+      .basjoo-inline-frame {
+        display: block;
+        width: 100%;
+        height: 520px;
+        border: 0;
+        border-radius: 20px;
+      }
+
+      /* #40: the card entry screen. */
+      .basjoo-cards {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 4px 0;
+      }
+
+      .basjoo-card {
+        padding: 12px 14px;
+        border: 1px solid ${theme.border};
+        border-radius: 12px;
+        background: ${theme.surfaceSunken};
+      }
+
+      .basjoo-card-logo {
+        width: 28px;
+        height: 28px;
+        margin-bottom: 8px;
+        border-radius: 6px;
+        object-fit: contain;
+      }
+
+      .basjoo-card-heading {
+        color: ${theme.textPrimary};
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .basjoo-card-text {
+        margin-top: 4px;
+        color: ${theme.textMuted};
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .basjoo-card-action {
+        margin-top: 8px;
+        padding: 6px 12px;
+        border: 1px solid ${theme.border};
+        border-radius: 999px;
+        background: transparent;
+        color: ${theme.textPrimary};
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .basjoo-card-action:hover {
+        background: ${this.hexToRgba(this.config.themeColor, 0.12)};
+      }
+
+      /* #40: starters sit between the transcript and the composer. */
+      .basjoo-starters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 16px;
+        border-top: 1px solid ${theme.border};
+        flex-shrink: 0;
+      }
+
+      .basjoo-starter {
+        padding: 6px 12px;
+        border: 1px solid ${theme.border};
+        border-radius: 999px;
+        background: ${theme.surfaceRaised};
+        color: ${theme.textPrimary};
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .basjoo-starter:hover {
+        border-color: ${this.config.themeColor};
+      }
+
+      /* #43: outside business hours the composer is replaced by this. */
+      .basjoo-away {
+        padding: 16px 20px 24px 20px;
+        border-top: 1px solid ${theme.border};
+        background: ${theme.surfaceRaised};
+        color: ${theme.textMuted};
+        font-size: 13px;
+        line-height: 1.5;
+        flex-shrink: 0;
+      }
+
+      .basjoo-input-area[hidden] {
+        display: none;
       }
 
       .basjoo-messages {
@@ -1134,6 +2061,7 @@ class BasjooWidget {
     const safeLogoUrl = this.config.logoUrl ? this.sanitizeUrlAttribute(this.config.logoUrl) : '';
     const safeTitle = this.escapeHtml(this.config.title);
     const safePlaceholder = this.escapeHtml(this.getText('inputPlaceholder'));
+    const safeHumanLabel = this.escapeHtml(this.getText('talkToHuman'));
 
     this.chatWindow.innerHTML = `
       <div class="basjoo-header">
@@ -1141,13 +2069,24 @@ class BasjooWidget {
           ${safeLogoUrl ? `<img src="${safeLogoUrl}" class="basjoo-header-logo" alt="">` : ''}
           <span>${safeTitle}</span>
         </div>
-        <button class="basjoo-close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+        <div class="basjoo-header-actions">
+          <button class="basjoo-human" type="button" aria-label="${safeHumanLabel}" title="${safeHumanLabel}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="8.5" cy="7" r="4"></circle>
+              <polyline points="17 11 19 13 23 9"></polyline>
+            </svg>
+            <span class="basjoo-human-label">${safeHumanLabel}</span>
+          </button>
+          <button class="basjoo-close" type="button" aria-label="${this.escapeHtml(this.getText('closeWindow'))}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
       </div>
+      <div class="basjoo-notice" hidden></div>
       <div class="basjoo-messages"></div>
       <div class="basjoo-input-area">
         <input type="text" class="basjoo-input" placeholder="${safePlaceholder}" maxlength="2000">
@@ -1188,7 +2127,279 @@ class BasjooWidget {
     };
     input.addEventListener('keypress', this._inputKeypressListener);
 
+    // #43: "Talk to a human" lives in the header. It is hidden outside business
+    // hours (no one is there to answer) and while the session is already in
+    // human mode.
+    this.headerHumanButton = this.chatWindow.querySelector(
+      '.basjoo-human'
+    ) as HTMLButtonElement | null;
+    this._humanBtnClickListener = () => {
+      void this.requestHumanHandoff();
+    };
+    this.headerHumanButton?.addEventListener('click', this._humanBtnClickListener);
+
     this.container!.appendChild(this.chatWindow);
+
+    this.applyBusinessHoursState();
+    this.renderModeNotice();
+  }
+
+  /**
+   * #43: re-read `online` every minute so a widget left open across the closing
+   * time flips within one minute instead of staying open until reload.
+   *
+   * Only the online/away fields are touched — the title, colour and welcome
+   * message the visitor already saw are never rewritten by a poll.
+   */
+  private startOnlineWatcher() {
+    if (this.onlineCheckIntervalId) return;
+
+    this.onlineCheckIntervalId = window.setInterval(() => {
+      void this.refreshOnlineState();
+    }, 60_000);
+  }
+
+  private stopOnlineWatcher() {
+    if (this.onlineCheckIntervalId) {
+      window.clearInterval(this.onlineCheckIntervalId);
+      this.onlineCheckIntervalId = null;
+    }
+  }
+
+  private async refreshOnlineState() {
+    if (!this.config.apiBase) return;
+
+    try {
+      const url = new URL(`${this.config.apiBase}/api/v1/config:public`);
+      if (this.config.agentId) {
+        url.searchParams.set('agent_id', this.config.agentId);
+      }
+      const response = await fetch(url.toString());
+      if (!response.ok) return;
+
+      const data = (await response.json()) as PublicWidgetConfig;
+      const nextOnline = data.online !== false;
+      const nextAway = (data.away_message || '').trim();
+      if (nextOnline === this.isOnline && nextAway === this.awayMessage) {
+        return;
+      }
+
+      this.isOnline = nextOnline;
+      this.awayMessage = nextAway;
+      this.applyBusinessHoursState();
+    } catch (error) {
+      // A transient failure must not close the composer the visitor is using.
+      console.warn('[Basjoo Widget] Could not refresh the business-hours state.', error);
+    }
+  }
+
+  /**
+   * #43: outside business hours the composer is replaced by the away message
+   * (falling back to a sensible default) and the human affordance is hidden.
+   *
+   * #46: the same placeholder carries the "sign in first" line for an agent
+   * that signs visitors, because the two reasons for a closed composer are
+   * mutually exclusive and look identical to the visitor. Without it a host
+   * page that never calls `Basjoo.identify()` would send a message, earn a 403
+   * and only then learn why — the sentence reads much better *before* the send.
+   */
+  private applyBusinessHoursState() {
+    if (!this.chatWindow) return;
+
+    const inputArea = this.chatWindow.querySelector('.basjoo-input-area') as HTMLElement | null;
+    const away = this.chatWindow.querySelector('.basjoo-away') as HTMLElement | null;
+
+    const signedIdentityMissing = this.identityRequired && !this.identitySigned;
+    const blockedMessage = !this.isOnline
+      ? this.awayMessage || this.getText('awayDefault')
+      : signedIdentityMissing
+        ? this.getText('identityRequired')
+        : null;
+
+    if (blockedMessage === null) {
+      if (inputArea) inputArea.hidden = false;
+      away?.remove();
+    } else {
+      if (inputArea) inputArea.hidden = true;
+      if (!away) {
+        const awayEl = document.createElement('div');
+        awayEl.className = 'basjoo-away';
+        awayEl.setAttribute('role', 'status');
+        awayEl.textContent = blockedMessage;
+        this.chatWindow.appendChild(awayEl);
+      } else {
+        away.textContent = blockedMessage;
+      }
+    }
+
+    if (this.headerHumanButton) {
+      this.headerHumanButton.hidden =
+        !this.isOnline || this.sessionMode === 'human' || signedIdentityMissing;
+    }
+  }
+
+  /**
+   * #43: the notice bar shown while a human is expected to answer, with the
+   * "Continue with AI" action that puts the session back into `ai` mode.
+   */
+  private renderModeNotice() {
+    if (!this.chatWindow) return;
+
+    const bar = this.chatWindow.querySelector('.basjoo-notice') as HTMLElement | null;
+    if (!bar) return;
+
+    if (this.sessionMode !== 'human') {
+      bar.hidden = true;
+      bar.textContent = '';
+      this.humanNoticeBar = null;
+      this._continueAiClickListener = null;
+      if (this.headerHumanButton) {
+        // #46: an unsigned visitor on a signing agent has no affordance either.
+        this.headerHumanButton.hidden =
+          !this.isOnline || (this.identityRequired && !this.identitySigned);
+      }
+      return;
+    }
+
+    if (this.headerHumanButton) {
+      this.headerHumanButton.hidden = true;
+    }
+
+    if (this.humanNoticeBar === bar) {
+      return;
+    }
+
+    bar.textContent = '';
+    bar.hidden = false;
+
+    const label = document.createElement('span');
+    label.className = 'basjoo-notice-text';
+    label.textContent = this.getText('takenOverNotice');
+
+    const continueButton = document.createElement('button');
+    continueButton.type = 'button';
+    continueButton.className = 'basjoo-continue-ai';
+    continueButton.textContent = this.getText('continueWithAi');
+    this._continueAiClickListener = () => {
+      void this.releaseToAi();
+    };
+    continueButton.addEventListener('click', this._continueAiClickListener);
+
+    bar.appendChild(label);
+    bar.appendChild(continueButton);
+    this.humanNoticeBar = bar;
+  }
+
+  private setSessionMode(mode: 'ai' | 'human') {
+    this.sessionMode = mode;
+    this.applyBusinessHoursState();
+    this.renderModeNotice();
+  }
+  /**
+   * #43: ask for a human. Sets `mode="human"` server-side; `status` is
+   * untouched, so the operator can still release the visitor back to the bot.
+   */
+  private async requestHumanHandoff() {
+    if (!this.sessionId) {
+      this.showError(this.getText('humanNeedsSession'));
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.config.apiBase}/api/v1/chat/escalate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: this.config.agentId,
+          session_id: this.sessionId,
+          visitor_id: this.visitorId,
+          reason: this.getText('talkToHuman'),
+        }),
+      });
+
+      if (!response.ok) {
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      this.setSessionMode('human');
+      this.addMessage({
+        role: 'assistant',
+        content: this.getText('takenOverNotice'),
+        timestamp: new Date(),
+      });
+      this.startPolling();
+    } catch (error) {
+      console.error('[Basjoo Widget] Failed to request a human handoff:', error);
+      this.showError(this.getText('humanFailed'));
+    }
+  }
+
+  /**
+   * #46: turn a rejected identity into a sentence in the chat window.
+   *
+   * `/chat/escalate`, `/chat/release` and `/chat/messages` answer a forged or
+   * missing identity with 403 `identity_mismatch`. Those routes are not the SSE
+   * surface, so the code arrives in a JSON `detail`; without this the visitor
+   * would get the route's generic fallback line ("Could not reach a human
+   * agent") for what is really "sign in again".
+   *
+   * Returns `true` when the response was an identity rejection and has been
+   * reported, so the caller can stop and not also show its own message.
+   */
+  private async reportIdentityRejection(response: Response): Promise<boolean> {
+    if (response.status !== 403) {
+      return false;
+    }
+
+    try {
+      const payload = (await response.json()) as {
+        detail?: string;
+        code?: string;
+      };
+      if (payload?.detail !== 'identity_mismatch' && payload?.code !== 'identity_mismatch') {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    this.showError(this.getText('identityMismatch'));
+    return true;
+  }
+
+  /**
+   * #43: "Continue with AI". The admin release route needs an operator token,
+   * so the widget calls the ownership-checked public counterpart.
+   */
+  private async releaseToAi() {
+    if (!this.sessionId) return;
+
+    try {
+      const response = await fetch(`${this.config.apiBase}/api/v1/chat/release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: this.config.agentId,
+          session_id: this.sessionId,
+          visitor_id: this.visitorId,
+        }),
+      });
+
+      if (!response.ok) {
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      this.setSessionMode('ai');
+    } catch (error) {
+      console.error('[Basjoo Widget] Failed to release the session to AI:', error);
+      this.showError(this.getText('humanFailed'));
+    }
   }
 
   /**
@@ -1202,15 +2413,24 @@ class BasjooWidget {
     this.open();
   }
 
-  private open() {
+  /**
+   * `restore` skips the focus side effect: restoring a remembered state must not
+   * steal focus from whatever the visitor was doing on the host page.
+   */
+  private open(restore = false) {
     this.isOpen = true;
     this.chatWindow?.classList.remove('closing');
     this.chatWindow?.classList.add('open');
+    this.persistOpenState();
     this.stopTitleBlink();
     this.updateUnreadBadge();
     const input = this.chatWindow?.querySelector('.basjoo-input') as HTMLInputElement | null;
     setTimeout(() => {
-      input?.focus();
+      // #43: outside business hours the composer is hidden, so there is nothing
+      // to focus (focusing a hidden input throws in some browsers).
+      if (input && !input.closest('.basjoo-input-area[hidden]') && !restore) {
+        input.focus();
+      }
     }, 300);
   }
 
@@ -1218,6 +2438,18 @@ class BasjooWidget {
     this.isOpen = false;
     this.chatWindow?.classList.remove('open');
     this.chatWindow?.classList.add('closing');
+    this.persistOpenState();
+  }
+
+  /**
+   * #40: the reopen asymmetry — the open state is only *written* on a fine
+   * pointer, so a phone visitor never comes back to a full-screen takeover.
+   */
+  private persistOpenState(): void {
+    if (!this.hasFinePointer()) {
+      return
+    }
+    this.storage.setItem(this.openStateStorageKey, this.isOpen ? 'open' : 'closed')
   }
 
   private getRequestLocale(): string {
@@ -1231,7 +2463,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice' | 'identityMismatch' | 'identityRequired'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -1243,6 +2475,15 @@ class BasjooWidget {
       newMessage: { 'en-US': 'New message', 'zh-CN': '新消息' },
       thinking: { 'en-US': 'Thinking...', 'zh-CN': '思考中...' },
       references: { 'en-US': 'References', 'zh-CN': '参考来源' },
+      talkToHuman: { 'en-US': 'Talk to a human', 'zh-CN': '转人工' },
+      continueWithAi: { 'en-US': 'Continue with AI', 'zh-CN': '继续由 AI 回答' },
+      awayDefault: { 'en-US': 'We are away right now. Leave a message and we will get back to you.', 'zh-CN': '当前非服务时间，请留言，我们会尽快回复。' },
+      closeWindow: { 'en-US': 'Close', 'zh-CN': '关闭' },
+      humanNeedsSession: { 'en-US': 'Send a message first, then you can ask for a human.', 'zh-CN': '请先发送一条消息，然后再转人工。' },
+      humanFailed: { 'en-US': 'Could not reach a human agent. Please try again.', 'zh-CN': '转人工失败，请稍后重试。' },
+      degradedNotice: { 'en-US': 'Quota reached — answering with the fallback model', 'zh-CN': '额度用尽，已使用备用模型' },
+      identityMismatch: { 'en-US': 'We could not verify your identity. Please refresh the page and sign in again.', 'zh-CN': '无法验证您的身份，请刷新页面并重新登录。' },
+      identityRequired: { 'en-US': 'Please sign in on this page to start chatting.', 'zh-CN': '请先在本页面登录，然后再开始对话。' },
     };
 
     const locale = this.getRequestLocale().toLowerCase()
@@ -1602,6 +2843,27 @@ class BasjooWidget {
   }
 
   /**
+   * #44: one line under an answer that came from the fallback model. The SSE
+   * `done` event carries the flag; the model name is appended when the backend
+   * sent one. Purely informational — it is not a message and is not persisted.
+   */
+  private showDegradedNotice(model?: string | null) {
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
+
+    const notice = document.createElement('div');
+    notice.className = 'basjoo-degraded';
+    notice.setAttribute('role', 'status');
+    notice.textContent = model
+      ? `${this.getText('degradedNotice')} · ${model}`
+      : this.getText('degradedNotice');
+    messagesContainer.appendChild(notice);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  /**
    * 开始轮询新消息（人工接管后管理员发送的消息）
    */
   private startPolling() {
@@ -1726,13 +2988,22 @@ class BasjooWidget {
           }
           if (donePayload.taken_over) {
             this.removeStreamingMessage();
+            this.setSessionMode('human');
             this.addMessage({
               role: 'assistant',
               content: this.getText('takenOverNotice'),
               timestamp: new Date(),
             });
           } else {
+            if (donePayload.mode === 'human') {
+              this.setSessionMode('human');
+            }
             this.finalizeStreamingMessage(this.currentStreamSources);
+            /* #44: the `done` event carries the flag; one small notice line so
+             * the visitor knows the answer came from the fallback model. */
+            if (donePayload.degraded) {
+              this.showDegradedNotice(donePayload.model);
+            }
             if (!this.isOpen) {
               this.startTitleBlink();
             }
@@ -1857,6 +3128,10 @@ class BasjooWidget {
             session_id: this.sessionId || undefined,
             visitor_id: this.visitorId,
             timezone: userTimezone,
+            // #40: the two page-context slots. Sent verbatim; the server wraps
+            // them in a labelled block and states they are not instructions.
+            context_before: BasjooWidget.pageContext.before || undefined,
+            context_after: BasjooWidget.pageContext.after || undefined,
           }),
         });
 
@@ -1935,6 +3210,12 @@ class BasjooWidget {
       } else if (error?.name === 'ORIGIN_NOT_ALLOWED' || errorText.toLowerCase().includes('widget origin not allowed')) {
         errorMessage = this.getText('sendFailed');
         consoleHint = 'Widget request was blocked because the current page origin is not on the allowed domain list.';
+      } else if (error?.name === 'identity_mismatch' || errorText.includes('identity_mismatch')) {
+        /* #46: the agent signs visitors and this one's hash did not verify —
+         * usually a stale hash in the host page, or `identify()` never called.
+         * A readable sentence, not a bare 403. */
+        errorMessage = this.getText('identityMismatch');
+        consoleHint = 'Signed visitor identity rejected: recompute hmac_sha256(identity_secret, email) for the signed-in visitor and pass it to Basjoo.identify({ email, hash }).';
       } else if (errorText.includes('401')) {
         consoleHint = 'Authentication failed. Please check the agent configuration and public API access.';
       }
@@ -1957,9 +3238,11 @@ class BasjooWidget {
    * 销毁Widget
    */
   destroy() {
+    BasjooWidget.instances = BasjooWidget.instances.filter((instance) => instance !== this);
     // 停止轮询和标题闪烁
     this.stopPolling();
     this.stopTitleBlink();
+    this.stopOnlineWatcher();
     this.hideThinkingIndicator();
     this.removeStreamingMessage();
 
@@ -1983,6 +3266,26 @@ class BasjooWidget {
       input.removeEventListener('keypress', this._inputKeypressListener);
     }
 
+    // #43 handoff affordances.
+    if (this.headerHumanButton && this._humanBtnClickListener) {
+      this.headerHumanButton.removeEventListener('click', this._humanBtnClickListener);
+    }
+    const continueButton = this.humanNoticeBar?.querySelector(
+      '.basjoo-continue-ai'
+    ) as HTMLButtonElement | null;
+    if (continueButton && this._continueAiClickListener) {
+      continueButton.removeEventListener('click', this._continueAiClickListener);
+    }
+    this.humanNoticeBar = null;
+    this.headerHumanButton = null;
+
+    // #40: the card and starter rows are destroyed with the container, but their
+    // closures outlive a re-render, so drop every reference explicitly.
+    this._cardActionListeners = [];
+    this._starterClickListeners = [];
+    this.iframeElement = null;
+    this.mountTarget = null;
+
     this.container?.remove();
     const styles = document.getElementById('basjoo-widget-styles');
     styles?.remove();
@@ -1991,6 +3294,30 @@ class BasjooWidget {
 
 // 导出到全局（不使用 export default，避免 ES Module 格式）
 (window as any).BasjooWidget = BasjooWidget;
+
+/**
+ * #40: `window.Basjoo` is the host page's handle — `setContext` pushes page
+ * context, `init` mounts a widget by hand. Exposed as a plain object because
+ * the IIFE bundle has no module exports.
+ *
+ * #46 adds `identify`: the host page computes `hmac_sha256(secret, email)` on
+ * its own server and hands `{ email, hash }` across. The secret never reaches
+ * the browser, and the widget never computes the digest.
+ */
+(window as any).Basjoo = {
+  Widget: BasjooWidget,
+  setContext: (context: { before?: string; after?: string } | null) => BasjooWidget.setContext(context),
+  identify: (identity: VisitorIdentity | null | undefined) => {
+    // Remember it for a widget that has not mounted yet, then fan out to every
+    // live instance (a page may hold more than one widget).
+    BasjooWidget.applyIdentity(identity)
+  },
+  init: (config: WidgetConfig) => {
+    const widget = new BasjooWidget(config)
+    void widget.init()
+    return widget
+  },
+};
 
 function getSearchParamValue(searchParams: URLSearchParams, keys: readonly string[]): string | null {
   for (const key of keys) {
@@ -2083,6 +3410,26 @@ function getAutoInitConfig(script: HTMLScriptElement): WidgetConfig | null {
 (function bootstrapBasjooWidget() {
   const globalWindow = window as Window & typeof globalThis & {
     __basjooWidgetAutoInitScheduled?: boolean
+  }
+
+  // #40: the server-rendered loader carries no `?agent_id=`, so it needs no
+  // script scan — the baked literal is the config and the widget starts itself.
+  const embedConfig = readEmbedConfig()
+  if (embedConfig && typeof embedConfig.agent_id === 'string' && embedConfig.agent_id) {
+    if (globalWindow.__basjooWidgetAutoInitScheduled) {
+      return
+    }
+    globalWindow.__basjooWidgetAutoInitScheduled = true
+
+    const startFromEmbed = () => {
+      void new BasjooWidget({ agentId: embedConfig.agent_id! }).init()
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', startFromEmbed, { once: true })
+      return
+    }
+    startFromEmbed()
+    return
   }
 
   const script = findAutoInitScript()

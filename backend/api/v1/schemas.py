@@ -6,6 +6,36 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 from services.url_safety import validate_url_safe
+from services.answer_quality import DEFAULT_RATE_LIMIT_REPLY
+
+# #41 — the offline-form field contract, in one place so the test can assert the
+# same numbers the schema enforces.
+LEAD_NAME_MAX_LENGTH = 100
+LEAD_MESSAGE_MAX_LENGTH = 2000
+
+
+def is_plausible_email(value: str) -> bool:
+    """A structural email check with the stdlib only.
+
+    `email-validator` is not installed and `pip install` is not available on the
+    request path, so this is the same shape a strict parser accepts: exactly one
+    `@`, a non-empty local part, a dotted domain, and no whitespace anywhere.
+    """
+    if not isinstance(value, str):
+        return False
+    if len(value) > 255 or any(char.isspace() for char in value):
+        return False
+    local, at, domain = value.partition("@")
+    if not at or not local or "@" in domain:
+        return False
+    if local.startswith(".") or local.endswith(".") or ".." in local:
+        return False
+    labels = domain.split(".")
+    if len(labels) < 2 or any(not label for label in labels):
+        return False
+    # A TLD of digits only (`a@b.123`) is not a domain.
+    return not labels[-1].isdigit() and len(labels[-1]) >= 2
+
 
 
 def normalize_widget_origin(origin: str) -> str:
@@ -26,6 +56,19 @@ def normalize_widget_origin(origin: str) -> str:
 # ========== Chat & Context Schemas ==========
 
 
+class PrechatSubmission(BaseModel):
+    """The visitor's identity, captured before the first turn (#41).
+
+    **Never prompt content.** These two fields exist to be written onto the
+    session and a lead row; the chat path must never append them to `messages`.
+    Deliberately *not* email-validated here: a typo in a prechat form must not
+    stop the visitor from asking their question (the widget validates as they
+    type, and `/leads` — where the address is the point — does enforce it).
+    """
+
+    name: Optional[str] = Field(None, max_length=LEAD_NAME_MAX_LENGTH)
+    email: Optional[str] = Field(None, max_length=255)
+
 class ChatRequest(BaseModel):
     """聊天请求"""
 
@@ -40,11 +83,41 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(
         None, max_length=200, description="会话ID（用于多轮对话）"
     )
-    visitor_id: Optional[str] = Field(None, max_length=100, description="访客标识")
+    # #46: a signed identity is `<email>:<64 hex>` (up to 319 characters), so the
+    # bound has to fit an address as well as the old anonymous random id.
+    visitor_id: Optional[str] = Field(
+        None, max_length=320, description="访客标识"
+    )
     # 客户端传送的地理信息（用于无法从IP获取的情况）
     timezone: Optional[str] = Field(None, description="客户端时区")
     params: Optional[Dict[str, Any]] = Field(
         None, description="推理参数（temperature, max_tokens等）"
+    )
+    # #44: a preview turn never consumes the daily allowance. The flag is a
+    # *request*, not a grant: the chat path accepts it only when the request
+    # carries a valid admin bearer token, so the public endpoint cannot be used
+    # as a free LLM. Default False — every existing caller is unchanged.
+    preview: bool = Field(
+        False,
+        description="Admin-only: run this turn without consuming the daily quota",
+    )
+    # #40: host-page context, pushed by `window.Basjoo.setContext({before, after})`.
+    # Untrusted text: capped and wrapped in a labelled block on the server, never
+    # treated as instructions.
+    context_before: Optional[str] = Field(
+        None,
+        max_length=4000,
+        description="Host-page context inserted before the instruction block (#40)",
+    )
+    context_after: Optional[str] = Field(
+        None,
+        max_length=4000,
+        description="Host-page context inserted after the retrieval results (#40)",
+    )
+    # #41: the prechat form's answers. Stored on the session (and as a lead),
+    # never included in the prompt — see `test_prechat_isolation.py`.
+    prechat: Optional[PrechatSubmission] = Field(
+        None, description="Visitor identity captured by the prechat form (#41)"
     )
 
 
@@ -75,6 +148,20 @@ class ChatResponse(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID")
     message_id: Optional[int] = Field(None, description="消息ID")
     taken_over: bool = Field(False, description="会话是否已被人工接管")
+    # #43: who is expected to answer. `mode="human"` alone (a single operator
+    # reply) is NOT a takeover — `taken_over` stays False.
+    mode: str = Field("ai", description="ai | human")
+    # #43: machine token explaining why the bot stayed silent
+    # (taken_over | resolved | closed | paused | human | after_hours). Null when
+    # it answered. `after_hours` means the schedule was closed and the session
+    # was otherwise answerable — `mode` stays `ai` in that case.
+    no_answer_reason: Optional[str] = Field(
+        None, description="Why the bot did not answer (contract C3)"
+    )
+    # #44: the primary allowance was spent, so this answer came from the
+    # agent's fallback model. `model` names what actually answered.
+    degraded: bool = Field(False, description="Answered by the fallback model")
+    model: Optional[str] = Field(None, description="Model that produced `reply`")
 
 
 class ContextRequest(BaseModel):
@@ -211,7 +298,16 @@ class FileItem(BaseModel):
     status: Literal["uploading", "processing", "ready", "failed", "pending"] = (
         "uploading"
     )
+    # Localized, client-safe sentence. Kept for existing readers.
     error_message: Optional[str] = None
+    # #47: the stored upstream cause, verbatim
+    # (`401 Unauthorized from https://api.openai.com/v1/embeddings`). Null when
+    # the processor did not record a cause, in which case the UI falls back to
+    # `error_message`. Deliberately not translated: it is the provider's words.
+    error_detail: Optional[str] = None
+    # #47 two-phase upload: which ingest phase the row is in
+    # (`uploaded` | `parsing` | `chunking` | `embedding` | `indexing` | `done`).
+    processing_stage: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -436,7 +532,7 @@ class AgentConfig(BaseModel):
         default=20, ge=0, description="Rate limit per minute (0 = unlimited)"
     )
     restricted_reply: Optional[str] = Field(
-        default="抱歉，当前服务受限，请稍后再试。",
+        default=DEFAULT_RATE_LIMIT_REPLY,
         description="Fallback reply when service is restricted (rate limit, AI failure, etc.)",
     )
     last_error_code: Optional[str] = None
@@ -469,6 +565,72 @@ class AgentConfig(BaseModel):
     kb_name: Optional[str] = Field(None, description="Name of the bound knowledge base")
     kb_status: Optional[str] = Field(
         None, description="Status of the bound knowledge base (active/resetting/error)"
+    )
+    fixed_facts: Optional[str] = Field(
+        None,
+        description="Operator-written facts injected on every message, above KB chunks (#39)",
+    )
+    escalation_rules: Optional[str] = Field(
+        None,
+        description="Plain-language escalation prompt appended after procedures (#43)",
+    )
+    business_hours: Optional[Dict[str, Any]] = Field(
+        None,
+        description="{\"timezone\": IANA, \"schedule\": [{\"day\": 0-6, \"start\": min, \"end\": min}]} (#43)",
+    )
+    away_message: Optional[str] = Field(
+        None, description="Widget copy shown outside business hours (#43)"
+    )
+    # #41 — disclosure and the prechat contract. `ai_disclosure` is shown
+    # verbatim by the widget; `prechat_mode` is off | optional | required.
+    ai_disclosure: Optional[str] = Field(
+        None, description="AI disclosure line rendered by the widget (#41)"
+    )
+    prechat_mode: str = Field(
+        "off", description="off | optional | required prechat form (#41)"
+    )
+    # #44 — quota degradation. `fallback_api_key` is never returned; the
+    # payload only says whether one is stored, like `api_key_set`.
+    fallback_model: Optional[str] = Field(
+        None, description="Model that answers once the daily allowance is spent"
+    )
+    fallback_api_key_set: bool = Field(
+        False, description="Whether a fallback API key is configured"
+    )
+    # --- #40: the install surface ------------------------------------------
+    # Regexes matched against `location.pathname`; a match renders nothing.
+    excluded_paths: List[str] = Field(
+        default_factory=list, description="Path regexes where the widget does not mount (#40)"
+    )
+    display_mode: str = Field(
+        "bubble", description="bubble | inline | iframe (#40)"
+    )
+    inline_container: Optional[str] = Field(
+        None, description="CSS selector the inline/iframe modes mount into (#40)"
+    )
+    starters: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="[{'label', 'action': 'message'|'link', 'value', 'path'}] (#40)",
+    )
+    widget_cards: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Entry-screen cards: [{'heading', 'text', 'chat'|'kb_search'|'form'}] (#40)",
+    )
+    traffic_percentage: int = Field(
+        100, ge=0, le=100, description="Share of visitors that get the widget (#40)"
+    )
+    # --- #47: outbound webhooks -------------------------------------------
+    webhook_url: Optional[str] = Field(
+        None, max_length=1000, description="Endpoint that receives integration events"
+    )
+    webhook_secret_set: bool = Field(
+        False,
+        description="Whether a signing secret is stored (the secret itself never is)",
+    )
+    # --- #46: signed visitor identity -------------------------------------
+    identity_secret_set: bool = Field(
+        False,
+        description="Whether an HMAC identity secret is stored (never returned)",
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -563,6 +725,85 @@ class AgentUpdateRequest(BaseModel):
     history_days: Optional[int] = Field(
         None, ge=1, le=365, description="Chat history retention days"
     )
+    fixed_facts: Optional[str] = Field(
+        None, description="Operator-written facts injected above KB chunks (#39)"
+    )
+    escalation_rules: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Plain-language escalation prompt, appended after procedures (#43)",
+    )
+    business_hours: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Business hours JSON: timezone + per-weekday minute ranges (#43)",
+    )
+    away_message: Optional[str] = Field(
+        None, description="Widget copy shown outside business hours (#43)"
+    )
+    # #41 — disclosure + prechat. An empty `ai_disclosure` clears it.
+    ai_disclosure: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="AI disclosure line rendered verbatim by the widget (#41)",
+    )
+    prechat_mode: Optional[Literal["off", "optional", "required"]] = Field(
+        None, description="Prechat form policy: off | optional | required (#41)"
+    )
+    # #44 — quota degradation. Both are optional; an empty string on
+    # `fallback_api_key` clears it (same convention as `api_key`).
+    fallback_model: Optional[str] = Field(
+        None, max_length=100, description="Model that answers once the daily allowance is spent"
+    )
+    fallback_api_key: Optional[str] = Field(
+        None, max_length=500, description="Key for the fallback model (encrypted at rest)"
+    )
+    # --- #40: the install surface ------------------------------------------
+    excluded_paths: Optional[List[str]] = Field(
+        None, description="Path regexes where the widget must not mount (#40)"
+    )
+    display_mode: Optional[Literal["bubble", "inline", "iframe"]] = Field(
+        None, description="bubble | inline | iframe (#40)"
+    )
+    inline_container: Optional[str] = Field(
+        None, max_length=200, description="CSS selector for the inline/iframe mount (#40)"
+    )
+    starters: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="[{'label', 'action': 'message'|'link', 'value', 'path'}] (#40)",
+    )
+    widget_cards: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Entry-screen cards: [{'heading', 'text', 'chat'|'kb_search'|'form'}] (#40)",
+    )
+    traffic_percentage: Optional[int] = Field(
+        None, ge=0, le=100, description="Share of visitors that get the widget (#40)"
+    )
+    # #47: the delivery endpoint and its HMAC signing secret (encrypted at rest).
+    webhook_url: Optional[str] = Field(
+        None, max_length=1000, description="Endpoint that receives integration events"
+    )
+    webhook_secret: Optional[str] = Field(
+        None, max_length=500, description="HMAC signing secret (encrypted at rest)"
+    )
+    # #46: the HMAC key the host page signs visitor emails with. Write-only —
+    # an empty string clears it (same convention as `api_key`), and the payload
+    # only ever says `identity_secret_set`. An absent secret keeps the anonymous
+    # visitor path exactly as it was.
+    identity_secret: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="HMAC secret for signed visitor identities (encrypted at rest)",
+    )
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, url: Optional[str]) -> Optional[str]:
+        if url is None:
+            return None
+        candidate = url.strip()
+        if not candidate:
+            return None
+        return _validate_safe_ingest_url(candidate)
 
     @field_validator("allowed_widget_origins")
     @classmethod
@@ -744,6 +985,10 @@ class SessionListItem(BaseModel):
     visitor_country: str | None = None
     visitor_city: str | None = None
     status: str = "active"
+    # #43: who is expected to answer. `taken_over` implies mode == "human", but
+    # mode == "human" alone (one operator reply) leaves `status` untouched.
+    mode: str = "ai"
+    human_replied_at: datetime | None = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime | None = None
@@ -843,3 +1088,295 @@ class SourcesSummaryResponse(BaseModel):
 
 # AgentConfig is declared after the KB schemas (KbBindResponse embeds it).
 KbBindResponse.model_rebuild()
+
+# ========== Curated Q&A + procedures (#39) ==========
+
+class QaItemPayload(BaseModel):
+    """One curated question/answer pair, as the admin API returns it."""
+
+    id: str
+    kb_id: str
+    question: str
+    answer: str
+    enabled: bool
+    hits: int
+    last_hit_at: Optional[datetime] = None
+    source: str
+    source_message_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class QaItemListResponse(BaseModel):
+    """`GET /knowledge-bases/{kb_id}/qa-items`."""
+
+    items: List[QaItemPayload] = Field(default_factory=list)
+    total: int = 0
+
+class QaItemCreateRequest(BaseModel):
+    """Create one pair. `question`/`answer` are required and non-blank."""
+
+    question: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class QaItemUpdateRequest(BaseModel):
+    """Partial update; only supplied fields are written."""
+
+    question: Optional[str] = Field(None, min_length=1)
+    answer: Optional[str] = Field(None, min_length=1)
+    enabled: Optional[bool] = None
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class QaImportPair(BaseModel):
+    """One row of a bulk import (CSV/paste box)."""
+
+    question: str = ""
+    answer: str = ""
+
+class QaImportRequest(BaseModel):
+    """`POST /knowledge-bases/{kb_id}/qa-items:import`."""
+
+    items: List[QaImportPair] = Field(default_factory=list)
+
+class QaImportResponse(BaseModel):
+    """Import result: duplicates and blank rows are skipped, never fatal."""
+
+    created: int = 0
+    skipped: int = 0
+
+class ReviseAnswerRequest(BaseModel):
+    """Operator-supplied correction for the session's last turn."""
+
+    answer: str = Field(..., min_length=1)
+
+    @field_validator("answer")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class ReviseAnswerResponse(BaseModel):
+    """`POST /admin/sessions/{session_id}/revise-answer`."""
+
+    qa_item: QaItemPayload
+    replaced: bool = False
+
+class QaFromMessageResponse(BaseModel):
+    """`POST /admin/qa/from-message/{message_id}` (#42 reuses it)."""
+
+    qa_item: QaItemPayload
+
+class UnansweredItem(BaseModel):
+    """One row of the #42 triage queue.
+
+    `question` is the visitor's own user message (not the answer, not the
+    assistant text) so the operator reads what was actually asked.
+    """
+
+    message_id: int
+    session_id: str
+    question: str
+    answer: str
+    confidence: Optional[float] = None
+    created_at: Optional[datetime] = None
+    occurrences: int = 1
+
+class UnansweredListResponse(BaseModel):
+    """`GET /admin/sessions/unanswered`."""
+
+    items: List[UnansweredItem] = Field(default_factory=list)
+    total: int = 0
+
+class ProcedureStep(BaseModel):
+    """One ordered step; `requires_action` names a channel capability.
+
+    Deliberately a free string, not a `Literal`: an operator can park a step that
+    needs `phone`, which no channel provides today. The runtime skips the whole
+    procedure rather than half-running it, and the value must survive a round
+    trip so that decision is visible instead of being rejected at write time.
+    """
+
+    text: str = Field(..., min_length=1)
+    requires_action: Optional[str] = None
+
+class ProcedurePayload(BaseModel):
+    """A procedure as stored and returned."""
+
+    id: str
+    agent_id: str
+    name: str
+    steps: List[ProcedureStep] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class ProcedureListResponse(BaseModel):
+    """`GET /agents/{agent_id}/procedures`."""
+
+    items: List[ProcedurePayload] = Field(default_factory=list)
+    total: int = 0
+
+class ProcedureCreateRequest(BaseModel):
+    """Create a procedure."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    steps: List[ProcedureStep] = Field(default_factory=list)
+    enabled: bool = True
+
+class ProcedureUpdateRequest(BaseModel):
+    """Partial procedure update."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    steps: Optional[List[ProcedureStep]] = None
+    enabled: Optional[bool] = None
+
+class FixedFactsResponse(BaseModel):
+    """`PUT /agents/{agent_id}/fixed-facts`."""
+
+    fixed_facts: Optional[str] = None
+
+class FixedFactsRequest(BaseModel):
+    """Operator-written facts that outrank retrieved chunks."""
+
+    fixed_facts: Optional[str] = None
+
+
+# ========== #41: lead capture, transcript email, thumbs feedback ==========
+
+
+class LeadSubmitRequest(BaseModel):
+    """`POST /api/v1/leads` — the widget's offline form.
+
+    The field rules are the acceptance contract: they exist so a bad submit is a
+    **field-level** 422 (`loc == ["body", "<field>"]`) that the widget can map
+    back onto its own input rather than a generic toast.
+    """
+
+    agent_id: str = Field(..., min_length=1, max_length=50)
+    session_id: Optional[str] = Field(None, max_length=200)
+    name: str = Field(..., min_length=1, max_length=LEAD_NAME_MAX_LENGTH)
+    email: str = Field(...)
+    message: Optional[str] = Field(None, max_length=LEAD_MESSAGE_MAX_LENGTH)
+    page_url: Optional[str] = Field(None, max_length=1000)
+    # offline-form (default) | prechat | trigger. `manual` is operator-only.
+    source: Literal["offline-form", "prechat", "trigger"] = "offline-form"
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        # max_length is enforced by Field; this only rejects "   ", which passes
+        # min_length but is not a name. A blank name must be a field-level 422.
+        stripped = (value or "").strip()
+        if not stripped:
+            raise ValueError("Name cannot be blank")
+        return stripped
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, value: str) -> str:
+        # `email-validator` is not a dependency and must not become one on a
+        # public request path, so this is the stdlib check: one `@`, a dotted
+        # domain, no whitespace and no display-name form. Anything that fails
+        # is a 422 whose `loc` names this field, which is what the widget maps
+        # back onto its own input.
+        cleaned = (value or "").strip()
+        if not is_plausible_email(cleaned):
+            raise ValueError("Enter a valid email address")
+        return cleaned
+
+
+class LeadPayload(BaseModel):
+    """One lead as the dashboard renders it."""
+
+    id: str
+    agent_id: str
+    session_id: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    message: Optional[str] = None
+    source: str = "offline-form"
+    page_url: Optional[str] = None
+    contacted: bool = False
+    contacted_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class LeadListResponse(BaseModel):
+    """`GET /api/v1/admin/leads`."""
+
+    items: List[LeadPayload] = Field(default_factory=list)
+    total: int = 0
+    uncontacted: int = 0
+
+
+class LeadContactedRequest(BaseModel):
+    """The dashboard's "contacted" toggle."""
+
+    contacted: bool
+
+
+class TranscriptEmailResponse(BaseModel):
+    """`POST /api/v1/admin/sessions/{id}/email-transcript`.
+
+    `sent` is false on the second call for the same session: the send is guarded
+    by a conditional UPDATE, so a double click / a second scheduler run is a
+    no-op that still answers 200 with the same stable body.
+    """
+
+    success: bool
+    sent: bool
+    already_sent: bool = False
+    recipient: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    message: Optional[str] = None
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Thumbs on one assistant turn: 1 = up, -1 = down, 0 = clear."""
+
+    value: int = Field(..., description="1 up, -1 down, 0 clear")
+
+
+class MessageFeedbackPayload(BaseModel):
+    """The vote as stored: `rating` on the *visitor's* message row.
+
+    `rating` is `-1 / 0 / +1` on the user turn the `assistant_message_id` was a
+    reply to (the spine's column, `chat_messages.rating`), which is what makes a
+    vote render in the transcript's own context.
+    """
+
+    message_id: int
+    assistant_message_id: int
+    session_id: str
+    rating: int
+    cleared: bool = False

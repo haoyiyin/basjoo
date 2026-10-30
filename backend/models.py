@@ -1,5 +1,7 @@
 import hashlib
+import re
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
@@ -41,6 +43,23 @@ def normalize_url(url: str) -> str:
 def compute_content_hash(content: str) -> str:
     """计算内容哈希（用于去重）"""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+def normalise_page_text(content: str | None) -> str:
+    """Normalise fetched page text before hashing it (#47, diffed refetch).
+
+    Conservative on purpose: every run of whitespace becomes one space and the
+    trailing newline is dropped, so a CMS that re-wraps or re-indents a page does
+    not trigger a full re-embed. Nothing else is touched — no case folding, no
+    punctuation stripping, no line reordering — because two pages that differ in
+    real text must never collide on the same hash.
+    """
+    return _WHITESPACE_RUN.sub(" ", str(content or "")).strip()
+
+def compute_item_hash(content: str | None) -> str:
+    """Stable hash of *normalised* page text, stored as ``KbDocument.item_hash``."""
+    return hashlib.sha256(normalise_page_text(content).encode("utf-8")).hexdigest()
 
 
 class Workspace(Base):
@@ -189,12 +208,67 @@ class Agent(Base):
 
     # Widget 配置
     widget_title = Column(String(100), nullable=True, default="AI 客服")
-    # One default, shared with the SPA and the widget (spec contract C1).
-    widget_color = Column(String(20), nullable=True, default=DEFAULT_WIDGET_COLOR)
+    # One default, defined once in constants.py: the console accent
+    # (hsl(48 96% 49%) == #F9CA02, frontend-nextjs/src/index.css).
+    widget_color = Column(
+        String(20), nullable=True, default=DEFAULT_WIDGET_COLOR
+    )
     welcome_message = Column(
         Text, nullable=True, default="您好！我是Basjoo助手，有什么可以帮您的吗？"
     )
     history_days = Column(Integer, nullable=False, default=30)
+
+    # --- Widget install surface (#40) --------------------------------------
+    # Regular expressions matched against location.pathname; a match means the
+    # widget renders nothing on that page.
+    excluded_paths = Column(JSON, nullable=True, default=None)
+    # bubble | inline | iframe
+    display_mode = Column(String(20), nullable=False, default="bubble")
+    # CSS selector the inline/iframe modes mount into. Null = the widget's own
+    # default (`#basjoo-chat`).
+    inline_container = Column(String(200), nullable=True, default=None)
+    # [{"label", "action": "message"|"link", "value", "path"}]  — `path` is an
+    # optional regex that scopes the starter to one page.
+    starters = Column(JSON, nullable=True, default=None)
+    # Home-screen cards: [{"heading", "text", "action": "chat"|"kb-search"|"link", "value"}]
+    widget_cards = Column(JSON, nullable=True, default=None)
+    # Percentage of visitors (0-100) that get the widget; sticky per visitor.
+    traffic_percentage = Column(Integer, nullable=False, default=100)
+
+    # --- Conversation policy (#43, #41) ------------------------------------
+    # Plain-language escalation rules appended to the prompt (a prompt, not a
+    # rule engine).
+    escalation_rules = Column(Text, nullable=True)
+    # {"timezone": "Asia/Shanghai", "schedule": [{"day": 0, "start": 540, "end": 1080}]}
+    # Absent = always online. Resolved with zoneinfo, never a fixed offset.
+    business_hours = Column(JSON, nullable=True, default=None)
+    away_message = Column(Text, nullable=True)
+    # One line rendered in the widget's conversation chrome, verbatim (the text
+    # is operator-authored and is never translated; only the label around it
+    # is). Absent = nothing rendered.
+    ai_disclosure = Column(Text, nullable=True)
+    # "off" | "optional" | "required" (#41). Anything else reads as "off".
+    prechat_mode = Column(String(20), nullable=False, default="off")
+
+    # --- Answer control (#39) ---------------------------------------------
+    # Operator-written facts that outrank retrieved chunks and are injected on
+    # every message, capped at 6 passages.
+    fixed_facts = Column(Text, nullable=True)
+
+    # --- Quota degradation (#44) ------------------------------------------
+    fallback_model = Column(String(100), nullable=True)
+    # Fernet-encrypted, same helper as api_key.
+    fallback_api_key = Column(String(500), nullable=True)
+
+    # --- Signed visitor identity (#46) ------------------------------------
+    # Fernet-encrypted HMAC secret. Absent = today's anonymous-only behaviour.
+    identity_secret = Column(String(500), nullable=True)
+
+    # --- Outbound webhooks (#47) ------------------------------------------
+    # Where integration events are POSTed. Absent = nothing is ever queued.
+    webhook_url = Column(String(1000), nullable=True)
+    # Fernet-encrypted HMAC secret used for `X-Basjoo-Signature`; never returned.
+    webhook_secret = Column(String(500), nullable=True)
 
     # 状态
     is_active = Column(Boolean, default=True)
@@ -327,15 +401,41 @@ class ChatSession(Base):
     locale = Column(String(10), nullable=True, default="zh-CN")
 
     # 访客信息
-    visitor_id = Column(String(100), nullable=True, index=True)  # 访客标识
+    # #46: a signed identity is `<email>:<hmac hex>` (254 + ':' + 64 <= 319), so
+    # the column has to hold an address as well as the old anonymous random id.
+    visitor_id = Column(String(320), nullable=True, index=True)  # 访客标识
     visitor_ip = Column(String(50), nullable=True)  # 访客 IP
     visitor_user_agent = Column(String(500), nullable=True)  # 访客浏览器信息
     visitor_country = Column(String(50), nullable=True)  # 访客国家
     visitor_region = Column(String(50), nullable=True)  # 访客省份/地区
     visitor_city = Column(String(50), nullable=True)  # 访客城市
 
-    # 会话状态: active-活跃, taken_over-已接管, closed-已关闭
+    # 会话状态: active-活跃, taken_over-已接管, resolved-已解决, closed-已关闭, paused-已暂停(垃圾消息)
     status = Column(String(20), nullable=False, default="active", index=True)
+    # Who is expected to answer: "ai" or "human". A single operator reply sets
+    # mode="human" without touching `status`, so "human answered, bot still
+    # available" is representable (#43).
+    mode = Column(String(10), nullable=False, default="ai")
+    # First human message time; NULL means the bot has answered everything.
+    human_replied_at = Column(DateTime(timezone=True), nullable=True)
+    # Set when a lead form was submitted from this session (#41). These are
+    # operator metadata captured by the widget's prechat/offline form and are
+    # NEVER part of the prompt handed to the model (asserted by
+    # tests/test_prechat_isolation.py on the assembled message array).
+    contact_email = Column(String(255), nullable=True)
+    contact_name = Column(String(100), nullable=True)
+    # Idempotency guard for the closing transcript email (#41).
+    transcript_sent_at = Column(DateTime(timezone=True), nullable=True)
+    # Active procedure + step pointer (#39).
+    active_procedure_id = Column(String(36), nullable=True)
+    procedure_step = Column(Integer, default=0)
+    # Async classification (#45): filled ~30 min after the session goes quiet.
+    topic = Column(String(100), nullable=True)
+    sentiment = Column(String(20), nullable=True)
+    outcome = Column(String(20), nullable=True)
+    # Number of messages in this session that got an AI answer (spam-check
+    # sampling counts turns, #44).
+    ai_turn_count = Column(Integer, default=0)
 
     # 统计
     message_count = Column(Integer, default=0)
@@ -384,6 +484,19 @@ class ChatMessage(Base):
     # 发送者信息（用于区分人工和 Agent）
     sender_type = Column(String(20), nullable=True)  # 'agent', 'human'
     sender_id = Column(String(50), nullable=True)  # 管理员ID（人工发送时）
+
+    # Answer quality (#42). Both nullable/defaulted so existing rows need no
+    # backfill: confidence 0..1 from the retrieval score, is_unanswered set when
+    # the answer was the fallback or nothing was retrieved for a real question.
+    confidence = Column(Float, nullable=True)
+    is_unanswered = Column(Boolean, nullable=False, default=False)
+    # #44 / #45: this answer came from the agent's fallback model because the
+    # primary allowance was spent. Persisted here so the dashboard can count
+    # degraded answers from its own rows instead of a counter column.
+    degraded = Column(Boolean, nullable=False, default=False)
+    # Thumbs vote (#41): -1 / 0 / +1, where 0 retracts. Stored on the visitor's
+    # own message so the vote renders in the transcript's own context.
+    rating = Column(Integer, nullable=True)
 
     # 引用来源
     sources = Column(
@@ -615,6 +728,14 @@ class KbDocument(Base):
     )
     chunk_count = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    # --- Ingestion bookkeeping (#47) --------------------------------------
+    # sha256 of the *normalised* source text. A refetch that produces the same
+    # hash re-uses the indexed chunks instead of re-embedding them.
+    item_hash = Column(String(64), nullable=True)
+    # Human-readable ingest phase shown to the operator while a two-phase upload
+    # is still being worked on (`uploaded` -> `parsing` -> `chunking` ->
+    # `embedding` -> `indexing` -> `done`/`failed`). Null on legacy rows.
+    processing_stage = Column(String(20), nullable=True)
     file_size = Column(Integer, nullable=True)
     storage_path = Column(String(1000), nullable=True)
     # Metadata for document source info (e.g., URL for crawled pages)
@@ -647,3 +768,133 @@ class KbChunk(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     document = relationship("KbDocument", back_populates="chunks")
+
+
+class QaItem(Base):
+    """A curated question/answer pair, embedded into a per-KB Q&A index.
+
+    Deliberately not a `KbDocument`: a pair is retrieved against the raw visitor
+    phrasing in its own collection, so a near-miss is not diluted by the rest of
+    the site's chunks (#39).
+    """
+
+    __tablename__ = "qa_items"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    kb_id = Column(
+        String(36), ForeignKey("knowledge_bases.id"), nullable=False, index=True
+    )
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    hits = Column(Integer, nullable=False, default=0)
+    last_hit_at = Column(DateTime(timezone=True), nullable=True)
+    # manual | revise | unanswered — provenance, so the UI can show how a pair
+    # got here. Not an enum: a new provenance value must not need a migration.
+    source = Column(String(20), nullable=False, default="manual")
+    # ChatMessage.id this pair was written back from. No FK on purpose: deleting
+    # a session must not cascade-delete a curated answer.
+    source_message_id = Column(Integer, nullable=True)
+    # sha256 of the embedded text; an unchanged pair is not re-embedded.
+    embedding_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("kb_id", "question", name="uq_qa_items_kb_question"),
+    )
+
+
+class Procedure(Base):
+    """An ordered, human-written list of steps the bot follows, one per turn."""
+
+    __tablename__ = "procedures"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    # [{"text": "...", "requires_action": "link" | "form" | null}]
+    steps = Column(JSON, nullable=False, default=list)
+    enabled = Column(Boolean, nullable=False, default=True)
+    # Microsecond precision on purpose: "the first enabled procedure" is ordered
+    # by `created_at`, and SQLite's CURRENT_TIMESTAMP only resolves to the second,
+    # so two procedures written in the same second would tie. The server default
+    # still covers raw-SQL inserts (migrations, fixtures).
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=func.now(),
+    )
+
+
+class Lead(Base):
+    """A captured visitor, from an offline form, a prechat form or a trigger."""
+
+    __tablename__ = "leads"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True, index=True)
+    session_id = Column(String(50), nullable=True, index=True)
+    name = Column(String(100), nullable=True)
+    email = Column(String(255), nullable=True, index=True)
+    phone = Column(String(50), nullable=True)
+    message = Column(Text, nullable=True)
+    # offline-form | prechat | trigger | manual
+    source = Column(String(20), nullable=False, default="offline-form")
+    # The page the visitor submitted from (#41). Visitor-supplied and therefore
+    # bounded, never fetched.
+    page_url = Column(String(1000), nullable=True)
+    # Operator triage: "contacted" is a manual checkbox, not a workflow (#41).
+    contacted = Column(Boolean, nullable=False, default=False)
+    contacted_at = Column(DateTime(timezone=True), nullable=True)
+    # A second submit from the same session updates this row instead of
+    # creating one, so the timestamp tracks the latest edit.
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Webhook(Base):
+    """A best-effort outbound webhook. One attempt, 5s timeout, logged only."""
+
+    __tablename__ = "webhooks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    url = Column(String(1000), nullable=False)
+    # Exact event names from SPEC.md C5.
+    events = Column(JSON, nullable=False, default=list)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebhookDelivery(Base):
+    """One queued outbound webhook, written in the domain's own transaction (#47).
+
+    The chat request (or the lead write, or the indexing commit) only ever
+    INSERTs here; the scheduler drains the queue. `payload` holds the serialised
+    body verbatim so every retry signs byte-identical JSON.
+    """
+
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    event = Column(String(50), nullable=False, index=True)
+    payload = Column(Text, nullable=False)
+    # pending | delivered | failed
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_webhook_deliveries_status_created", "status", "created_at"),
+    )

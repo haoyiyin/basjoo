@@ -87,3 +87,19 @@ msgstr "No readable text could be found. Please upload a document that contains 
 
 msgid "File content does not match the selected document type. Please upload a valid, readable document."
 msgstr "File content does not match the selected document type. Please upload a valid, readable document."
+
+# #41 — transcript email + lead form
+msgid "SMTP is not configured"
+msgstr "SMTP is not configured"
+
+msgid "Could not send the transcript email"
+msgstr "Could not send the transcript email"
+
+msgid "Transcript sent"
+msgstr "Transcript sent"
+
+msgid "Transcript was already sent"
+msgstr "Transcript was already sent"
+
+msgid "This session has no contact email"
+msgstr "This session has no contact email"

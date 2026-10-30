@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import enUS from "../../src/locales/en-US/common.json";
 import zhCN from "../../src/locales/zh-CN/common.json";
 
 function collectStrings(value: unknown): string[] {
@@ -42,5 +43,41 @@ describe("zh-CN debug area copy", () => {
 			"couldn't process",
 		);
 		expect(zhCN.files.processingFailedFallback).not.toContain("We couldn't");
+	});
+});
+
+describe("#47 webhook and ingestion-error copy", () => {
+	it("translates the webhook settings card in both locales", () => {
+		// Both catalogs must carry the card the settings page renders.
+		for (const catalog of [zhCN, enUS]) {
+			expect(Object.keys(catalog.webhooks).sort()).toEqual(
+				[
+					"description",
+					"secretHint",
+					"secretLabel",
+					"secretMasked",
+					"secretPlaceholder",
+					"secretSetHint",
+					"title",
+					"urlHint",
+					"urlLabel",
+					"urlPlaceholder",
+				].sort(),
+			);
+		}
+		// The Chinese copy is a translation, not the English string.
+		expect(zhCN.webhooks.title).not.toBe(enUS.webhooks.title);
+		expect(zhCN.webhooks.urlHint).not.toBe(enUS.webhooks.urlHint);
+		// Event names are wire format and stay untranslated in both.
+		for (const event of [
+			"session.created",
+			"message.created",
+			"handoff.requested",
+			"lead.created",
+			"document.indexed",
+		]) {
+			expect(zhCN.webhooks.urlHint).toContain(event);
+			expect(enUS.webhooks.urlHint).toContain(event);
+		}
 	});
 });

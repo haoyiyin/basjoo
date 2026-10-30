@@ -81,6 +81,71 @@ async def clear_all_urls(db: AsyncSession, kb_id: str) -> dict[str, bool]:
     await db.commit()
     return {"success": True}
 
+# ========== Diffed refetch helpers (#47) ==========
+
+def url_document_filename(url_id: int) -> str:
+    """The one name a URL-derived document ever gets for a given URL row."""
+    return f"url_{url_id}.txt"
+
+async def _url_document(session, kb_id: str, url_id: int):
+    """Most recent document produced by this URL row (None when never indexed)."""
+    from models import KbDocument
+
+    return (
+        await session.execute(
+            select(KbDocument)
+            .where(
+                KbDocument.kb_id == kb_id,
+                KbDocument.filename == url_document_filename(url_id),
+            )
+            .order_by(KbDocument.created_at.desc(), KbDocument.id.desc())
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+async def _drop_stale_url_documents(
+    session, kb_id: str, url_id: int, *, keep_doc_id: str
+) -> int:
+    """Delete every older document (chunks + vectors) for this URL row.
+
+    A changed page "replaces its chunks" rather than accumulating a new copy on
+    every refetch: without this, a daily refetch of a 300-page site left one
+    full duplicate per page per day in the collection.
+    """
+    from models import KbChunk, KbDocument
+    from services.qdrant_service import QdrantKbService
+
+    stale = list(
+        (
+            await session.execute(
+                select(KbDocument).where(
+                    KbDocument.kb_id == kb_id,
+                    KbDocument.filename == url_document_filename(url_id),
+                    KbDocument.id != keep_doc_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not stale:
+        return 0
+
+    qdrant = QdrantKbService()
+    for doc in stale:
+        try:
+            await qdrant.delete_points_by_doc_id(kb_id, str(doc.id))
+        except Exception as exc:  # the row must still go; log, never raise
+            logger.warning(
+                "[URL Refetch] Could not delete vectors for stale doc %s: %s",
+                doc.id,
+                exc,
+            )
+        await session.execute(delete(KbChunk).where(KbChunk.doc_id == doc.id))
+        await session.delete(doc)
+    return len(stale)
+
 # ========== Background Processing Functions ==========
 
 async def process_url_refetch(
@@ -180,6 +245,7 @@ async def process_url_refetch(
 
                 # Update status to fetching
                 from datetime import datetime, timezone
+                from models import KbDocument, compute_item_hash
 
                 try:
                     # Written INSIDE the try on purpose: a failure here used to
@@ -203,16 +269,29 @@ async def process_url_refetch(
                         await session.commit()
                         continue
 
-                    # Check content hash for duplicates (unless force=True)
+                    # #47 diffed refetch: key on the *normalised* text that was
+                    # actually indexed, not on the payload the fetcher returned.
+                    # An unchanged page bumps `last_fetched_at` and nothing else —
+                    # zero parse, zero chunk, zero embedding calls.
                     from models import compute_content_hash
 
                     content_hash = compute_content_hash(page_result.content or "")
-                    if not force and url_source.content_hash == content_hash:
+                    item_hash = compute_item_hash(page_result.content or "")
+                    previous_doc = await _url_document(session, kb_id, url_id)
+                    unchanged = (
+                        not force
+                        and previous_doc is not None
+                        and getattr(previous_doc, "status", None) == "ready"
+                        and getattr(previous_doc, "item_hash", None) == item_hash
+                    )
+                    if unchanged:
                         logger.info(
-                            f"[URL Refetch] Content unchanged for {url}, skipping"
+                            f"[URL Refetch] Content unchanged for {url}, skipping embed"
                         )
                         url_source.status = "success"
                         url_source.last_fetch_at = datetime.now(timezone.utc)
+                        url_source.is_indexed = True
+                        url_source.last_error = None
                         await session.commit()
                         continue
 
@@ -237,7 +316,7 @@ async def process_url_refetch(
                     doc = await processor.create_document_record(
                         workspace_id,
                         kb_id,
-                        filename=f"url_{url_id}.txt",
+                        filename=url_document_filename(url_id),
                         file_size=len(page_result.content or ""),
                         source_agent_id=source_agent_id,
                         db=session,
@@ -258,6 +337,11 @@ async def process_url_refetch(
                     })
                     await session.commit()
 
+                    # Stamp the diff key before indexing so a crash mid-embed
+                    # cannot leave "text stored, hash NULL" and re-embed forever.
+                    object.__setattr__(doc, "item_hash", item_hash)
+                    await session.commit()
+
                     # Process the document (chunk, embed, upsert to Qdrant)
                     await processor.process_document(str(doc.id), kb_id)
 
@@ -272,8 +356,6 @@ async def process_url_refetch(
                     # expire_on_commit=False, so the identity map would otherwise hand back
                     # the row as it was BEFORE process_document's own session wrote to it —
                     # which read as status="pending" and left every URL is_indexed=False.
-                    from models import KbDocument
-
                     doc_result = await session.execute(
                         select(KbDocument)
                         .where(KbDocument.id == doc.id, KbDocument.kb_id == kb_id)
@@ -284,6 +366,12 @@ async def process_url_refetch(
                     # Only mark as indexed if document processing succeeded
                     if updated_doc and getattr(updated_doc, "status", None) == "ready":
                         url_source.is_indexed = True
+                        # A changed page replaces its chunks: the old vector
+                        # points are gone before the new ones land, so retrieval
+                        # never mixes two versions of the same page.
+                        await _drop_stale_url_documents(
+                            session, kb_id, url_id, keep_doc_id=str(doc.id)
+                        )
                     else:
                         url_source.is_indexed = False
                         logger.warning(

@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import database
-from models import Agent, KnowledgeBase, KbChunk, KbDocument
+from models import Agent, KnowledgeBase, KbChunk, KbDocument, QaItem
 from services.qdrant_service import QdrantKbService, get_kb_collection_name, get_embedding_dimension
 from services.task_lock import TaskType, task_lock
 
@@ -293,9 +293,13 @@ class KbService:
                 raise HTTPException(409, "KB is bound to an agent. Unbind it first.")
 
             await self.qdrant.delete_collection(kb_id)
+            # The curated Q&A index is a second collection for the same KB (#39).
+            await self.qdrant.delete_qa_collection(kb_id)
 
             await session.execute(sa_delete(KbChunk).where(KbChunk.kb_id == kb_id))
             await session.execute(sa_delete(KbDocument).where(KbDocument.kb_id == kb_id))
+            # Curated pairs belong to the KB: they go with it (#39).
+            await session.execute(sa_delete(QaItem).where(QaItem.kb_id == kb_id))
 
             upload_dir = self._upload_dir(workspace_id, kb_id)
             if upload_dir.exists():
@@ -314,6 +318,32 @@ class KbService:
 
             await session.delete(kb)
             await session.commit()
+
+    async def _reindex_qa_items(self, kb_id: str) -> None:
+        """Re-embed a KB's curated pairs after its collection was dropped.
+
+        Best-effort on purpose: a reset must not fail because one pair's
+        embedding round trip did. `embedding_hash` is cleared first so the sync
+        cannot mistake a stale hash for a live vector.
+        """
+        from services.qa_service import QaService
+
+        try:
+            async with await self._get_session() as session:
+                items = (
+                    await session.execute(
+                        select(QaItem).where(
+                            QaItem.kb_id == kb_id, QaItem.enabled.is_(True)
+                        )
+                    )
+                ).scalars().all()
+                service = QaService()
+                for item in items:
+                    item.embedding_hash = None
+                    await service.sync_item(item, session)
+                await session.commit()
+        except Exception as error:
+            logger.warning(f"Q&A reindex after reset skipped for kb={kb_id}: {error}")
 
     async def reset_knowledge_base(
         self,
@@ -368,7 +398,9 @@ class KbService:
             # 1. Drop the collection, 2. recreate it at the new (measured) width.
             await self.qdrant.delete_collection(kb_id)
             await self.qdrant.ensure_collection(kb_id, embedding_dimension)
-
+            # The Q&A index was embedded at the OLD width, so it is rebuilt below
+            # from the same rows (a reset changes the KB's embedding config).
+            await self.qdrant.delete_qa_collection(kb_id)
             async with await self._get_session() as session:
                 await session.execute(sa_delete(KbChunk).where(KbChunk.kb_id == kb_id))
                 await session.execute(
@@ -397,6 +429,10 @@ class KbService:
                     select(KbDocument.id).where(KbDocument.kb_id == kb_id)
                 )
                 doc_ids = [row[0] for row in docs.all()]
+
+            # The Q&A collection was dropped with the KB collection: re-embed the
+            # curated pairs at the new width so they survive a reset (#39).
+            await self._reindex_qa_items(kb_id)
 
             return {"status": "active", "kb_id": kb_id, "doc_ids": doc_ids}
 

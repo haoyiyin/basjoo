@@ -15,13 +15,28 @@ from models import (
     AgentMember,
     ChatMessage,
     ChatSession,
+    KbDocument,
     KnowledgeFile,
     URLSource,
     Workspace,
     WorkspaceQuota,
 )
+from services.outcome_classifier import (
+    CLASSIFY_QUIET_MINUTES,
+    DEFAULT_CLASSIFIER,
+    OUTCOMES as OUTCOME_VALUES,
+    TOPIC_MAX_CHARS,
+    classify_candidates_query,
+    provider_configured,
+    requires_provider,
+    snapshot_from_rows,
+)
 from services.task_lock import task_lock, TaskType
 from services.url_service import process_url_refetch
+from services.webhook_service import (
+    drain_pending_webhooks,
+    enqueue_webhook_for_agent_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +180,16 @@ class URLFetchScheduler:
                 job_id=job_id,
                 source_agent_id=None,
             )
+            # #47: report what the diff skipped, so a quiet refetch is
+            # observable instead of looking like a no-op.
+            unchanged = await self.report_unchanged_urls(kb_id)
+            if unchanged:
+                logger.info(
+                    "%s: %s of %s URL(s) unchanged, no re-embed",
+                    context,
+                    len(unchanged),
+                    len(ids),
+                )
 
     async def fetch_agent_urls(self, db: AsyncSession, agent: Agent):
         """抓取特定Agent绑定KB的URL，读取列表后不再持有会话执行 HTTP 请求"""
@@ -206,6 +231,45 @@ class URLFetchScheduler:
 
         except Exception as e:
             logger.exception(f"Error in fetch_agent_urls for agent {agent.id}: {e}")
+
+    async def report_unchanged_urls(self, kb_id: str) -> list[int]:
+        """URL rows this KB's last refetch found text-identical (no re-embed).
+
+        Reads only the persisted state the refetch left behind: a `success` row
+        whose document is `ready` and whose `item_hash` still matches the stored
+        text *after normalisation*. Nothing here re-fetches or re-embeds, so it
+        is safe to call from the same scheduler tick that just refetched.
+        """
+        from models import compute_item_hash
+        from services.url_service import url_document_filename
+
+        async with AsyncSessionLocal() as db:
+            rows = list(
+                (
+                    await db.execute(
+                        select(URLSource).where(
+                            URLSource.kb_id == kb_id,
+                            URLSource.status == "success",
+                            URLSource.is_indexed == True,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            unchanged: list[int] = []
+            for row in rows:
+                doc = await db.scalar(
+                    select(KbDocument).where(
+                        KbDocument.kb_id == kb_id,
+                        KbDocument.filename == url_document_filename(row.id),
+                    )
+                )
+                if doc is None or getattr(doc, "status", None) != "ready":
+                    continue
+                if getattr(doc, "item_hash", None) == compute_item_hash(row.content):
+                    unchanged.append(row.id)
+            return unchanged
 
 # 全局实例
 url_fetch_scheduler = URLFetchScheduler()
@@ -376,6 +440,17 @@ class SessionAutoCloseScheduler:
                     if should_close:
                         session.status = "closed"
                         closed += 1
+                        # #47: contract C5 still names `session.closed`, so the
+                        # inactivity sweep queues it in the same transaction.
+                        await enqueue_webhook_for_agent_id(
+                            db,
+                            session.agent_id,
+                            "session.closed",
+                            {
+                                "session_id": session.session_id,
+                                "reason": "inactivity_timeout",
+                            },
+                        )
 
                 await db.commit()
                 if closed > 0:
@@ -451,3 +526,313 @@ class AgentPurgeScheduler:
 
 
 agent_purge_scheduler = AgentPurgeScheduler()
+
+class WebhookDeliveryScheduler:
+    """Drains `webhook_deliveries` (#47).
+
+    This is the other half of "a webhook failure must never delay or fail the
+    chat request": the request only INSERTs a `pending` row, and every actual
+    POST happens here, off the request path, in bounded batches.
+    """
+
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.running = False
+
+    def start(self):
+        if self.running:
+            return
+        self.scheduler.start()
+        self.running = True
+        self.scheduler.add_job(
+            self.deliver_pending_webhooks,
+            trigger=IntervalTrigger(seconds=30),
+            id="deliver_pending_webhooks",
+            name="Deliver queued webhook deliveries",
+            replace_existing=True,
+        )
+        logger.info("Webhook delivery scheduler started")
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("Webhook delivery scheduler stopped")
+
+    async def deliver_pending_webhooks(self) -> dict[str, int]:
+        """One bounded tick. Never raises: a dead subscriber is not an outage."""
+        try:
+            async with AsyncSessionLocal() as db:
+                stats = await drain_pending_webhooks(db)
+            if any(stats.values()):
+                logger.info("Webhook tick: %s", stats)
+            return stats
+        except Exception as exc:
+            logger.exception("Webhook delivery tick failed: %s", exc)
+            return {"delivered": 0, "retrying": 0, "failed": 0, "skipped": 0}
+
+webhook_delivery_scheduler = WebhookDeliveryScheduler()
+
+class DocumentProcessingScheduler:
+    """Drains uploaded `kb_documents` rows (#47, phase 2 of the two-phase upload).
+
+    `files:upload` only persists bytes and the row; parse → chunk → embed →
+    index runs here, so a 20 MB upload never occupies an API worker. Rows the
+    previous process left in `processing` are picked up too — that is the whole
+    point of persisting `processing_stage` instead of keeping the work in an
+    in-memory `BackgroundTasks` queue that dies with the request.
+    """
+
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.running = False
+        #: Bounded so one huge backlog cannot monopolise a tick.
+        self.batch_size = 10
+
+    def start(self):
+        if self.running:
+            return
+        self.scheduler.start()
+        self.running = True
+        self.scheduler.add_job(
+            self.process_pending_documents,
+            trigger=IntervalTrigger(seconds=15),
+            id="process_pending_documents",
+            name="Process uploaded KB documents",
+            replace_existing=True,
+        )
+        logger.info("Document processing scheduler started")
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("Document processing scheduler stopped")
+
+    async def process_pending_documents(self) -> int:
+        """Process at most `batch_size` queued rows. Returns how many ran."""
+        from services.kb_document_processor import KbDocumentProcessor
+
+        try:
+            async with AsyncSessionLocal() as db:
+                rows = list(
+                    (
+                        await db.execute(
+                            select(KbDocument.id, KbDocument.kb_id)
+                            .where(
+                                KbDocument.status.in_(["pending", "processing"]),
+                                KbDocument.storage_path.isnot(None),
+                                # `uploaded` is the queue marker the upload
+                                # endpoint writes, and the only value that means
+                                # "accepted, no worker owns this yet". Claiming
+                                # it flips the row to `parsing` on the first line
+                                # of `process_document`, so a row another path is
+                                # already processing (a reset re-queue through
+                                # `BackgroundTasks`, or the previous tick) is
+                                # never picked up a second time.
+                                KbDocument.processing_stage == "uploaded",
+                            )
+                            .order_by(KbDocument.created_at.asc())
+                            .limit(self.batch_size)
+                        )
+                    ).all()
+                )
+        except Exception as exc:
+            logger.exception("Could not list pending KB documents: %s", exc)
+            return 0
+
+        if not rows:
+            return 0
+
+        processor = KbDocumentProcessor()
+        processed = 0
+        for doc_id, kb_id in rows:
+            try:
+                await processor.process_document(str(doc_id), str(kb_id))
+                processed += 1
+            except Exception as exc:
+                # `process_document` already persists its own failure; this is
+                # the belt-and-braces case (e.g. the KB vanished mid-pass).
+                logger.exception("Background ingest failed for doc %s: %s", doc_id, exc)
+        if processed:
+            logger.info("Processed %s queued KB document(s)", processed)
+        return processed
+
+document_processing_scheduler = DocumentProcessingScheduler()
+
+class OutcomeClassifierScheduler:
+    """"What did those conversations actually end up as?" (#45).
+
+    The hard rule is the acceptance criterion: **a classifier failure must never
+    affect live chat**. Three properties make that true, and all three are
+    asserted by `tests/test_outcome_classifier.py`:
+
+    1. It is not on the request path. Nothing in `api/` calls this class; it only
+       runs from the scheduler, and it only ever *reads* `chat_sessions` rows
+       whose status is `closed`/`resolved` and which have been quiet for
+       `CLASSIFY_QUIET_MINUTES`.
+    2. It owns its transaction. Each batch opens its own `AsyncSessionLocal` and
+       commits at the end; an exception rolls that batch back as a unit, so a
+       half-classified batch is impossible and no chat write is ever in scope.
+    3. It swallows everything. `classify_pending` catches, logs, rolls back and
+       returns a count; the tick the job runner sees always returns normally.
+       There is no retry here and no retry inline — the next tick simply sees the
+       still-`NULL` rows again.
+
+    `classifier` is injected (a plain async callable), which is how a test makes
+    one that raises without touching a real model. Tests never call an LLM: the
+    shipped default is deterministic, and a model-backed classifier has to
+    declare `requires_provider = True`, in which case an agent with no provider
+    config is skipped with ONE log line rather than an exception per tick.
+    """
+
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.running = False
+        #: Bounded so one backlog cannot monopolise a tick or a transaction.
+        self.batch_size = 50
+        self.quiet_minutes = CLASSIFY_QUIET_MINUTES
+        #: Set once per process when a provider-gated classifier was skipped, so
+        #: a keyless install logs the reason once instead of every 5 minutes.
+        self._provider_skip_logged = False
+
+    def start(self):
+        if self.running:
+            return
+        self.scheduler.start()
+        self.running = True
+        self.scheduler.add_job(
+            self.classify_pending_sessions,
+            trigger=IntervalTrigger(minutes=5),
+            id="classify_pending_sessions",
+            name="Classify finished chat sessions",
+            replace_existing=True,
+        )
+        logger.info("Outcome classifier scheduler started")
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("Outcome classifier scheduler stopped")
+
+    async def classify_pending_sessions(
+        self, *, classifier: Optional[object] = None
+    ) -> dict[str, int]:
+        """One tick. Never raises: a broken classifier is not an outage.
+
+        Returns per-outcome counts plus ``skipped`` (provider-gated classifier
+        with no provider) and ``failed`` (the batch was rolled back), so a test
+        can assert containment on a real artefact instead of asserting that
+        nothing was thrown.
+        """
+        stats = {
+            "classified": 0,
+            "resolved": 0,
+            "abandoned": 0,
+            "escalated": 0,
+            "no-answer": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+        active_classifier = classifier or DEFAULT_CLASSIFIER
+
+        try:
+            if requires_provider(active_classifier):
+                if not await self._any_agent_has_provider():
+                    stats["skipped"] = 1
+                    if not self._provider_skip_logged:
+                        self._provider_skip_logged = True
+                        logger.info(
+                            "Outcome classification skipped: no agent has an LLM "
+                            "provider configured. Sessions keep outcome=NULL and "
+                            "will be classified once a key exists."
+                        )
+                    return stats
+            # Its OWN transaction, opened here and closed with the batch. If the
+            # block raises, `AsyncSessionLocal` rolls back everything this batch
+            # wrote and nothing else.
+            async with AsyncSessionLocal() as db:
+                stats.update(await self._classify_batch(db, active_classifier))
+        except Exception as exc:  # containment is the whole contract
+            stats["failed"] += 1
+            logger.warning(
+                "Outcome classification batch aborted and rolled back: %s", exc,
+                exc_info=True,
+            )
+        return stats
+
+    async def _any_agent_has_provider(self) -> bool:
+        async with AsyncSessionLocal() as db:
+            agents = list((await db.execute(select(Agent))).scalars().all())
+        return any(provider_configured(agent) for agent in agents)
+
+    async def _classify_batch(
+        self, db: AsyncSession, classifier
+    ) -> dict[str, int]:
+        """Read a batch, call the classifier per row, write the verdicts, commit."""
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=self.quiet_minutes)
+        rows = list(
+            (
+                await db.execute(
+                    classify_candidates_query(cutoff, self.batch_size)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        counts = {
+            "classified": 0,
+            "resolved": 0,
+            "abandoned": 0,
+            "escalated": 0,
+            "no-answer": 0,
+        }
+        if not rows:
+            return counts
+
+        for row in rows:
+            messages = list(
+                (
+                    await db.execute(
+                        select(ChatMessage)
+                        .where(ChatMessage.session_id == row.id)
+                        .order_by(ChatMessage.id.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            snapshot = snapshot_from_rows(row, messages)
+            # The classifier is called OUTSIDE any write: if it raises, the batch
+            # rolls back and no row was touched by this iteration either.
+            verdict = await classifier(snapshot)
+            if verdict is None:
+                continue
+            outcome = verdict.outcome
+            if outcome not in OUTCOME_VALUES:
+                logger.warning(
+                    "Classifier returned an unknown outcome %r for session %s; "
+                    "the row is left as it was",
+                    outcome,
+                    row.id,
+                )
+                continue
+            row.outcome = outcome
+            if verdict.topic:
+                row.topic = verdict.topic[:TOPIC_MAX_CHARS]
+            if verdict.sentiment:
+                row.sentiment = verdict.sentiment
+            counts["classified"] += 1
+            counts[outcome] = counts.get(outcome, 0) + 1
+
+        await db.commit()
+        if counts["classified"]:
+            logger.info(
+                "Classified %s finished session(s): %s",
+                counts["classified"],
+                {k: v for k, v in counts.items() if k != "classified" and v},
+            )
+        return counts
+
+outcome_classifier_scheduler = OutcomeClassifierScheduler()

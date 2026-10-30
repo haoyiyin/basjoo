@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import AdminLayout from '../components/AdminLayout'
 import HelpTooltip from '../components/HelpTooltip'
@@ -10,6 +10,7 @@ import { Icon } from '../components/Icon'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useIsMobile } from '../hooks/useMediaQuery'
 import { WS_BASE_URL } from '../lib/env'
+import { api } from '../services/api'
 import { formatAssistantMessageContent } from '../utils/citations'
 
 interface Session {
@@ -19,11 +20,20 @@ interface Session {
   visitor_country?: string
   visitor_city?: string
   status: string
+  /** #43: who answers next. `taken_over` implies `human`. */
+  mode?: 'ai' | 'human'
+  human_replied_at?: string | null
   message_count: number
   created_at: string
   updated_at?: string
   last_message?: string
 }
+
+/** #43: every state the backend may store, including the legacy `closed`. */
+type SessionStatus = 'active' | 'taken_over' | 'resolved' | 'closed' | 'paused'
+
+/** The four explicit actions plus reopen (#43). */
+type SessionAction = 'reply' | 'takeover' | 'release' | 'resolve' | 'reopen'
 
 interface Message {
   id: number
@@ -37,22 +47,68 @@ interface Message {
     question?: string
     id?: string
   }>
+  /** #42: retrieval signal 0..1, or null when nothing was retrieved. */
+  confidence?: number | null
+  /** #42: true when the answer did not really answer (see answer_quality.py). */
+  is_unanswered?: boolean
+  /** #44: true when the fallback model answered (primary allowance spent). */
+  degraded?: boolean
+  /** #44: the model that produced this answer. */
+  model?: string | null
   created_at: string
+}
+
+/** Below this an answer is weak enough to badge in the transcript (#42). */
+const LOW_CONFIDENCE_THRESHOLD = 0.5
+
+/** The confidence chip: a percentage in the mono face, or an em dash. */
+function confidenceLabel(confidence: number | null | undefined): string {
+  if (typeof confidence !== 'number') return '—'
+  return `${Math.round(confidence * 100)}%`
 }
 
 export default function Sessions() {
   const { t } = useTranslation('common')
   const { agentId } = useParams<{ agentId?: string }>()
+  const [searchParams] = useSearchParams()
   const { token } = useAuth()
   const isMobile = useIsMobile()
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedSession, setSelectedSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [filter, setFilter] = useState<'all' | 'active' | 'taken_over' | 'closed'>('all')
+  const [filter, setFilter] = useState<
+    'all' | 'active' | 'taken_over' | 'resolved' | 'closed'
+  >('all')
   const [keyword, setKeyword] = useState('')
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(false)
   const [sendingMessage, setSendingMessage] = useState(false)
+  // #43: the Reply composer is a separate, explicit action from Take over.
+  const [replyOpen, setReplyOpen] = useState(false)
+  const [replyDraft, setReplyDraft] = useState('')
+  const [pendingAction, setPendingAction] = useState<SessionAction | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  // Issue item 4: correct one assistant answer and turn it into a curated pair.
+  const [reviseOpen, setReviseOpen] = useState(false)
+  const [reviseDraft, setReviseDraft] = useState('')
+  const [reviseSaving, setReviseSaving] = useState(false)
+  const [reviseError, setReviseError] = useState<string | null>(null)
+  const [reviseSaved, setReviseSaved] = useState<string | null>(null)
+  // #42: the session-list quality filters and the "Add to Q&A" write-back.
+  // `?unanswered=1` is the dashboard tile's entry point into the same filter.
+  const [unansweredOnly, setUnansweredOnly] = useState(
+    searchParams.get('unanswered') === '1',
+  )
+  const [qaFromMessageSaving, setQaFromMessageSaving] = useState<number | null>(null)
+  const [qaFromMessageSaved, setQaFromMessageSaved] = useState<string | null>(null)
+  const [qaFromMessageError, setQaFromMessageError] = useState<string | null>(null)
+  // #46: one-click visitor deletion. `deletingVisitor` doubles as the guard so a
+  // double click cannot fire two DELETEs; the counts feed the confirmation line.
+  const [deletingVisitor, setDeletingVisitor] = useState(false)
+  const [visitorDeletionResult, setVisitorDeletionResult] = useState<string | null>(
+    null,
+  )
+  const [visitorDeletionError, setVisitorDeletionError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -88,9 +144,12 @@ export default function Sessions() {
     try {
       const statusParam = filter === 'all' ? '' : `&status=${filter}`
       const keywordParam = keyword ? `&keyword=${encodeURIComponent(keyword)}` : ''
+      // #42: "未答问题 / Unanswered" narrows the list to sessions with at
+      // least one assistant message the quality rule flagged.
+      const unansweredParam = unansweredOnly ? '&unanswered=true' : ''
 
       const response = await fetch(
-        `/api/v1/admin/sessions?skip=0&limit=50${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}`,
+        `/api/v1/admin/sessions?skip=0&limit=50${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}${unansweredParam}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -105,7 +164,7 @@ export default function Sessions() {
     } finally {
       setLoading(false)
     }
-  }, [filter, keyword, token])
+  }, [filter, keyword, token, unansweredOnly, agentId])
 
   const connectWebSocket = useCallback(() => {
     if (!token) return
@@ -194,32 +253,95 @@ export default function Sessions() {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
-  const handleTakeover = async (sessionId: string) => {
-    try {
-      const response = await fetch(`/api/v1/admin/sessions/${sessionId}/takeover`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      })
+  /**
+   * #43: the four explicit actions. Reply never changes `status`; takeover mutes
+   * the bot; release hands it back; resolve marks the conversation handled and
+   * is deliberately distinct from the inactivity `closed`.
+   */
+  const runSessionAction = useCallback(
+    async (sessionId: string, action: SessionAction, message?: string) => {
+      setPendingAction(action)
+      setActionError(null)
+      try {
+        let response: Response
+        if (action === 'reply') {
+          response = await fetch(`/api/v1/admin/sessions/${sessionId}/reply`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ message }),
+          })
+        } else if (action === 'takeover') {
+          response = await fetch(`/api/v1/admin/sessions/${sessionId}/takeover`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        } else {
+          response = await fetch(`/api/v1/admin/sessions/${sessionId}/${action}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        }
 
-      if (!response.ok) {
-        console.error('Failed to takeover session:', response.statusText)
-        alert(t('errors.takeoverFailed'))
-        return
-      }
+        if (!response.ok) {
+          setActionError(t(`handoff.errors.${action}`))
+          return false
+        }
 
-      await fetchSessions()
-      if (selectedSession && selectedSession.id === sessionId) {
-        setSelectedSession({ ...selectedSession, status: 'taken_over' })
+        const body = await response.json()
+        // Every action route returns the session, so the row re-renders from the
+        // response instead of guessing the new state.
+        const updated = body?.session
+        if (updated) {
+          setSelectedSession((current) =>
+            current && current.id === sessionId
+              ? {
+                  ...current,
+                  status: updated.status ?? current.status,
+                  mode: updated.mode ?? current.mode,
+                  human_replied_at:
+                    updated.human_replied_at ?? current.human_replied_at,
+                }
+              : current,
+          )
+        }
+
+        await fetchSessions()
+        if (action === 'reply') {
+          await fetchMessages(sessionId)
+          setReplyDraft('')
+          setReplyOpen(false)
+        }
+        if (action === 'resolve' || action === 'reopen') {
+          setReplyOpen(false)
+        }
+        return true
+      } catch (err) {
+        console.error(`Failed to ${action} session:`, err)
+        setActionError(t(`handoff.errors.${action}`))
+        return false
+      } finally {
+        setPendingAction(null)
       }
-    } catch (error) {
-      console.error('Failed to takeover session:', error)
-      alert(t('errors.takeoverFailed'))
-    }
+    },
+    [fetchMessages, fetchSessions, t, token],
+  )
+
+  const handleTakeover = (sessionId: string) => {
+    void runSessionAction(sessionId, 'takeover')
   }
 
+  const handleReply = async () => {
+    if (!replyDraft.trim() || !selectedSession) return
+    await runSessionAction(selectedSession.id, 'reply', replyDraft)
+  }
+
+  /**
+   * The in-transcript composer keeps using `/admin/sessions/send` (its route and
+   * response shape are unchanged); #43 only removed the forced takeover.
+   */
   const handleSend = async () => {
     if (!inputValue.trim() || !selectedSession) return
 
@@ -245,6 +367,7 @@ export default function Sessions() {
 
       setInputValue('')
       await fetchMessages(selectedSession.id)
+      await fetchSessions()
     } catch (error) {
       console.error('Failed to send message:', error)
       alert(t('errors.sendFailed'))
@@ -262,18 +385,178 @@ export default function Sessions() {
       minute: '2-digit',
     })
   }
+
+  /**
+   * Revise answer (issue item 4): the operator's correction is posted as a
+   * curated pair on the agent's bound KB, so the *next* identical question is
+   * answered from it with no reindex.
+   */
+  const openRevise = (content: string) => {
+    setReviseDraft(content)
+    setReviseError(null)
+    setReviseSaved(null)
+    setReviseOpen(true)
+  }
+
+  const closeRevise = () => {
+    setReviseOpen(false)
+    setReviseError(null)
+  }
+
+  const handleReviseSubmit = async () => {
+    if (!selectedSession || reviseSaving) return
+    const answer = reviseDraft.trim()
+    if (!answer) {
+      setReviseError(t('reviseAnswer.answerRequired'))
+      return
+    }
+    setReviseSaving(true)
+    setReviseError(null)
+    try {
+      const result = await api.reviseAnswer(selectedSession.id, answer)
+      setReviseOpen(false)
+      setReviseSaved(
+        result.replaced
+          ? t('reviseAnswer.savedReplaced')
+          : t('reviseAnswer.saved'),
+      )
+    } catch (err) {
+      setReviseError(
+        err instanceof Error ? err.message : t('reviseAnswer.errors.saveFailed'),
+      )
+    } finally {
+      setReviseSaving(false)
+    }
+  }
+
+  /**
+   * "Add to Q&A" (#42): one click turns a triaged answer into a curated pair.
+   * It calls the existing `POST /admin/qa/from-message/{id}` — the backend
+   * already derives the question from the preceding user message, so the action
+   * needs no input. Adding the pair *is* the triage decision, so the row is then
+   * dismissed out of the unanswered queue (the message itself is untouched).
+   */
+  const handleAddToQa = async (messageId: number) => {
+    if (qaFromMessageSaving !== null) return
+    setQaFromMessageSaving(messageId)
+    setQaFromMessageError(null)
+    setQaFromMessageSaved(null)
+    try {
+      const result = await api.addQaFromMessage(messageId)
+      setQaFromMessageSaved(result.qa_item.question)
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === messageId
+            ? { ...message, is_unanswered: false }
+            : message,
+        ),
+      )
+    } catch (err) {
+      setQaFromMessageError(
+        err instanceof Error
+          ? err.message
+          : t('unanswered.errors.addFailed'),
+      )
+      return
+    } finally {
+      setQaFromMessageSaving(null)
+    }
+
+    // The pair exists, so the queue row is done. A dismissal failure is
+    // cosmetic — the message stays answered and the operator can retry — so it
+    // is logged rather than turned into an error toast over a success.
+    try {
+      await api.dismissUnanswered(messageId)
+      void fetchSessions()
+    } catch (err) {
+      console.error('Failed to dismiss the unanswered row:', err)
+    }
+  }
+
+  /**
+   * #46: erase one visitor's data in a single click, after a confirm step.
+   *
+   * The action is scoped to a *visitor*, not a session: a signed-in customer may
+   * hold several sessions, and a GDPR-shaped request means all of them plus
+   * their leads and feedback. `window.confirm` is the confirm step — deliberately
+   * native, because a modal for a destructive admin action is not worth a new
+   * dependency, and the sentence names what will be erased.
+   *
+   * The response carries row counts, so the toast says exactly what went.
+   */
+  const handleDeleteVisitor = async (visitorId: string) => {
+    if (deletingVisitor || !visitorId) return
+    if (!window.confirm(t('visitorDeletion.confirm', { id: visitorId }))) return
+
+    setDeletingVisitor(true)
+    setVisitorDeletionResult(null)
+    setVisitorDeletionError(null)
+    try {
+      const result = await api.deleteVisitor(visitorId)
+      setVisitorDeletionResult(
+        t('visitorDeletion.deleted', {
+          sessions: result.deleted.sessions,
+          messages: result.deleted.messages,
+          leads: result.deleted.leads,
+        }),
+      )
+      // The row that was open is gone, so drop the selection and refetch the list.
+      if (selectedSession?.visitor_id === visitorId) {
+        setSelectedSession(null)
+        setMessages([])
+      }
+      await fetchSessions()
+    } catch (err) {
+      setVisitorDeletionError(
+        err instanceof Error
+          ? err.message
+          : t('visitorDeletion.errors.failed'),
+      )
+    } finally {
+      setDeletingVisitor(false)
+    }
+  }
+
   const rowStyle = isMobile
     ? { flexDirection: 'column' as const, alignItems: 'stretch' as const }
     : undefined
+
   const iconButtonStyle = isMobile
     ? { minWidth: 44, minHeight: 44 }
     : undefined
 
-  const statusBadgeClass = (status: string) =>
-    `badge ${status === 'active' ? 'badge-success' : status === 'taken_over' ? 'badge-warning' : 'badge-info'}`
+  /**
+   * #43: `resolved` reads differently from a timeout `closed` — a distinct
+   * design-system badge variant, never a colour literal. Unknown/legacy values
+   * fall back to the neutral variant so an old row still renders.
+   */
+  const statusBadgeClass = (status: string): string => {
+    switch (status) {
+      case 'active':
+        return 'badge badge-success'
+      case 'taken_over':
+        return 'badge badge-warning'
+      case 'resolved':
+        return 'badge badge-info'
+      case 'closed':
+        return 'badge badge-neutral'
+      case 'paused':
+        return 'badge badge-neutral'
+      default:
+        return 'badge badge-neutral'
+    }
+  }
 
-  const statusLabel = (status: string) =>
-    t(`status.${status === 'taken_over' ? 'takenOver' : status === 'closed' ? 'ended' : status}`)
+  const statusLabel = (status: string): string => {
+    const key: Record<string, string> = {
+      active: 'status.active',
+      taken_over: 'status.takenOver',
+      resolved: 'status.resolved',
+      closed: 'status.ended',
+      paused: 'status.paused',
+    }
+    return t(key[status] ?? 'status.unknown')
+  }
 
   return (
     <AdminLayout>
@@ -309,8 +592,10 @@ export default function Sessions() {
             </h1>
             <p className="page-subtitle">{t('settings.chatCenterDesc')}</p>
           </div>
-          <div className="page-actions">
-            {(['all', 'active', 'taken_over', 'closed'] as const).map((status) => (
+          <div className="page-actions" style={{ flexWrap: 'wrap' }}>
+            {(
+              ['all', 'active', 'taken_over', 'resolved', 'closed'] as const
+            ).map((status) => (
               <button
                 key={status}
                 type="button"
@@ -321,6 +606,17 @@ export default function Sessions() {
                 {statusLabel(status)}
               </button>
             ))}
+            {/* #42: the triage filter. A chip, not a status: it composes with
+             * the status buttons instead of replacing them. */}
+            <button
+              type="button"
+              className={unansweredOnly ? 'btn btn-primary' : 'btn btn-secondary'}
+              data-testid="sessions-filter-unanswered"
+              aria-pressed={unansweredOnly}
+              onClick={() => setUnansweredOnly((value) => !value)}
+            >
+              {t('unanswered.filter')}
+            </button>
           </div>
         </header>
 
@@ -535,27 +831,93 @@ export default function Sessions() {
                       </div>
                     </div>
                   </div>
-                  <div className="page-actions">
-                    {selectedSession.status === 'active' && (
+                  <div className="page-actions" style={{ flexWrap: 'wrap' }}>
+                    {/* #43: four explicit actions. Reply answers one question
+                     * without muting the bot; takeover mutes it; release hands
+                     * it back; resolve closes the question (not the session
+                     * timeout). A resolved row offers Reopen instead. */}
+                    {selectedSession.status !== 'resolved' &&
+                      selectedSession.status !== 'closed' && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            data-testid="session-action-reply"
+                            disabled={pendingAction !== null}
+                            onClick={() => {
+                              setReplyOpen((open) => !open)
+                              setActionError(null)
+                            }}
+                          >
+                            {t('handoff.reply')}
+                          </button>
+                          {selectedSession.status === 'active' &&
+                            selectedSession.mode !== 'human' && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                data-testid="session-action-takeover"
+                                disabled={pendingAction !== null}
+                                onClick={() => handleTakeover(selectedSession.id)}
+                              >
+                                {t('handoff.takeover')}
+                              </button>
+                            )}
+                          {selectedSession.mode === 'human' && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              data-testid="session-action-release"
+                              disabled={pendingAction !== null}
+                              onClick={() =>
+                                void runSessionAction(selectedSession.id, 'release')
+                              }
+                            >
+                              {t('handoff.release')}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            data-testid="session-action-resolve"
+                            disabled={pendingAction !== null}
+                            onClick={() =>
+                              void runSessionAction(selectedSession.id, 'resolve')
+                            }
+                          >
+                            {t('handoff.resolve')}
+                          </button>
+                        </>
+                      )}
+                    {selectedSession.status === 'resolved' && (
                       <button
                         type="button"
-                        className="btn btn-secondary"
-                        onClick={() => handleTakeover(selectedSession.id)}
+                        className="btn btn-primary"
+                        data-testid="session-action-reopen"
+                        disabled={pendingAction !== null}
+                        onClick={() =>
+                          void runSessionAction(selectedSession.id, 'reopen')
+                        }
                       >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          aria-hidden="true"
-                        >
-                          <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                          <circle cx="8.5" cy="7" r="4" />
-                          <polyline points="17 11 19 13 23 9" />
-                        </svg>
-                        {!isMobile && t('labels.takeoverSession')}
+                        {t('handoff.reopen')}
+                      </button>
+                    )}
+                    {/* #46: erase the whole visitor, not just this session —
+                     * their other sessions, messages, leads and feedback go in
+                     * the same transaction. Destructive, so it is the danger
+                     * variant and asks for confirmation first. */}
+                    {selectedSession.visitor_id && (
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        data-testid="session-action-delete-visitor"
+                        disabled={deletingVisitor}
+                        title={t('visitorDeletion.actionTitle')}
+                        onClick={() =>
+                          void handleDeleteVisitor(selectedSession.visitor_id!)
+                        }
+                      >
+                        {t('visitorDeletion.action')}
                       </button>
                     )}
                     {!isMobile && (
@@ -705,12 +1067,104 @@ export default function Sessions() {
                               </div>
                               <div
                                 style={{
-                                  fontSize: 'var(--text-xs)',
-                                  color: 'var(--fg-dim)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  flexWrap: 'wrap',
+                                  gap: 'var(--space-2)',
                                   marginTop: 'var(--space-2)',
                                 }}
                               >
-                                {formatTime(msg.created_at)}
+                                <span
+                                  style={{
+                                    fontSize: 'var(--text-xs)',
+                                    color: 'var(--fg-dim)',
+                                  }}
+                                >
+                                  {formatTime(msg.created_at)}
+                                </span>
+                                {/* #42: a weak answer carries its own percentage, in mono so the
+                                 * column of scores lines up. NULL means "no retrieval signal"
+                                 * and stays an em dash, never 0%. */}
+                                {!isVisitor &&
+                                  typeof msg.confidence === 'number' &&
+                                  msg.confidence < LOW_CONFIDENCE_THRESHOLD && (
+                                  <span
+                                    className="badge badge-warning"
+                                    data-testid={`message-confidence-${msg.id}`}
+                                    aria-label={t('unanswered.confidenceLabel', {
+                                      value: confidenceLabel(msg.confidence),
+                                    })}
+                                    title={t('unanswered.confidenceLabel', {
+                                      value: confidenceLabel(msg.confidence),
+                                    })}
+                                  >
+                                    <span className="mono">{confidenceLabel(msg.confidence)}</span>
+                                  </span>
+                                )}
+                                {/* #44: the daily allowance was spent and the fallback
+                                 * model answered. One small note in the meta row so the
+                                 * operator knows why the answer may be weaker. */}
+                                {!isVisitor && msg.degraded && (
+                                  <span
+                                    data-testid={`message-degraded-${msg.id}`}
+                                    title={
+                                      msg.model
+                                        ? t('chat.fallbackModelNote', { model: msg.model })
+                                        : t('chat.degradedNotice')
+                                    }
+                                    style={{
+                                      fontSize: 'var(--text-xs)',
+                                      color: 'var(--fg-dim)',
+                                    }}
+                                  >
+                                    {t('chat.degradedNotice')}
+                                    {msg.model ? ` · ${msg.model}` : ''}
+                                  </span>
+                                )}
+                                {/* #42: one click turns the turn into a curated pair. The
+                                 * backend derives the question from the preceding user
+                                 * message, so the action needs no input. */}
+                                {!isVisitor && msg.is_unanswered && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    data-testid={`add-to-qa-${msg.id}`}
+                                    aria-label={t('unanswered.addToQaLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    title={t('unanswered.addToQaLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    disabled={qaFromMessageSaving === msg.id}
+                                    aria-busy={qaFromMessageSaving === msg.id}
+                                    onClick={() => void handleAddToQa(msg.id)}
+                                  >
+                                    {qaFromMessageSaving === msg.id ? (
+                                      <div
+                                        className="spinner"
+                                        style={{ width: '14px', height: '14px' }}
+                                      />
+                                    ) : null}
+                                    {t('unanswered.addToQa')}
+                                  </button>
+                                )}
+                                {!isVisitor && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    data-testid={`revise-answer-${msg.id}`}
+                                    aria-label={t('reviseAnswer.actionLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    title={t('reviseAnswer.actionLabel', {
+                                      preview: msg.content.slice(0, 40),
+                                    })}
+                                    onClick={() => openRevise(msg.content)}
+                                  >
+                                    {t('reviseAnswer.action')}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -721,7 +1175,78 @@ export default function Sessions() {
                   )}
                 </div>
 
-                {selectedSession.status === 'taken_over' && (
+                {/* #43: the Reply composer — answering one question without a
+                 * takeover. It posts `/reply`, which sets mode="human" and
+                 * leaves `status` alone. */}
+                {replyOpen &&
+                  selectedSession.status !== 'resolved' &&
+                  selectedSession.status !== 'closed' && (
+                    <div
+                      data-testid="session-reply-composer"
+                      style={{
+                        display: 'flex',
+                        gap: 'var(--space-2)',
+                        alignItems: 'stretch',
+                        flexWrap: isMobile ? 'wrap' : 'nowrap',
+                        padding: 'var(--space-3) var(--space-4)',
+                        borderTop: '1px solid var(--color-border)',
+                        background: 'var(--color-bg-panel)',
+                      }}
+                    >
+                      <input
+                        className="input"
+                        type="text"
+                        aria-label={t('handoff.replyPlaceholder')}
+                        value={replyDraft}
+                        onChange={(e) => setReplyDraft(e.target.value)}
+                        onKeyPress={(e) => {
+                          if (e.key === 'Enter') void handleReply()
+                        }}
+                        placeholder={t('handoff.replyPlaceholder')}
+                        disabled={pendingAction === 'reply'}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        data-testid="session-reply-send"
+                        onClick={() => void handleReply()}
+                        disabled={
+                          pendingAction === 'reply' || !replyDraft.trim()
+                        }
+                      >
+                        {pendingAction === 'reply' ? (
+                          <div className="spinner" />
+                        ) : (
+                          t('handoff.sendReply')
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => {
+                          setReplyOpen(false)
+                          setReplyDraft('')
+                        }}
+                      >
+                        {t('buttons.cancel')}
+                      </button>
+                    </div>
+                  )}
+
+                {actionError && (
+                  <p
+                    role="alert"
+                    className="field-error"
+                    data-testid="session-action-error"
+                    style={{ margin: 0, padding: 'var(--space-2) var(--space-4)' }}
+                  >
+                    {actionError}
+                  </p>
+                )}
+
+                {(selectedSession.status === 'taken_over' ||
+                  selectedSession.mode === 'human') && (
                   <div
                     style={{
                       display: 'flex',
@@ -780,6 +1305,207 @@ export default function Sessions() {
             )}
           </section>
         </div>
+
+        {/* #42: the created pair is echoed inline — the backend derived the
+         * question from the preceding user message, so this is the confirmation
+         * that a real question landed in the index. */}
+        {(qaFromMessageSaved || qaFromMessageError) && (
+          <div
+            className={
+              qaFromMessageError ? 'toast toast-error' : 'toast toast-success'
+            }
+            role={qaFromMessageError ? 'alert' : 'status'}
+            aria-live="polite"
+            data-testid="add-to-qa-result"
+            style={{
+              position: 'fixed',
+              right: 'var(--space-6)',
+              bottom: 'var(--space-6)',
+              zIndex: 70,
+            }}
+          >
+            <span className="toast-description">
+              {qaFromMessageError ? (
+                qaFromMessageError
+              ) : (
+                <>
+                  {t('unanswered.addedToQa')}
+                  {qaFromMessageSaved ? (
+                    <span className="mono"> {qaFromMessageSaved}</span>
+                  ) : null}
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              aria-label={t('knowledgeBases.actions.close')}
+              title={t('knowledgeBases.actions.close')}
+              onClick={() => {
+                setQaFromMessageSaved(null)
+                setQaFromMessageError(null)
+              }}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* #46: what the deletion actually removed. Row counts, not a shrug —
+         * "did it erase everything?" is the question being asked. */}
+        {(visitorDeletionResult || visitorDeletionError) && (
+          <div
+            className={
+              visitorDeletionError ? 'toast toast-error' : 'toast toast-success'
+            }
+            role={visitorDeletionError ? 'alert' : 'status'}
+            aria-live="polite"
+            data-testid="visitor-deletion-result"
+            style={{
+              position: 'fixed',
+              right: 'var(--space-6)',
+              bottom: 'var(--space-6)',
+              zIndex: 70,
+            }}
+          >
+            <span className="toast-description">
+              {visitorDeletionError ?? visitorDeletionResult}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              aria-label={t('knowledgeBases.actions.close')}
+              title={t('knowledgeBases.actions.close')}
+              onClick={() => {
+                setVisitorDeletionResult(null)
+                setVisitorDeletionError(null)
+              }}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
+
+        {reviseSaved && (
+          <div
+            className="toast toast-success"
+            role="status"
+            aria-live="polite"
+            data-testid="revise-answer-saved"
+            style={{ position: 'fixed', right: 'var(--space-6)', bottom: 'var(--space-6)', zIndex: 70 }}
+          >
+            <span className="toast-description">{reviseSaved}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              aria-label={t('knowledgeBases.actions.close')}
+              title={t('knowledgeBases.actions.close')}
+              onClick={() => setReviseSaved(null)}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
+
+        {reviseOpen && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 'var(--space-4)',
+              overflowY: 'auto',
+            }}
+            onClick={closeRevise}
+          >
+            <div className="sheet-backdrop" aria-hidden="true" />
+            <div
+              className="sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="revise-answer-title"
+              data-testid="revise-answer-sheet"
+              style={{
+                position: 'relative',
+                maxWidth: '560px',
+                width: '100%',
+                minWidth: 0,
+                maxHeight: 'calc(100vh - var(--space-8))',
+                borderRadius: 'var(--radius-lg)',
+              }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="sheet-header">
+                <div style={{ minWidth: 0 }}>
+                  <h2 id="revise-answer-title" className="card-title">
+                    {t('reviseAnswer.title')}
+                  </h2>
+                  <p className="field-hint" style={{ marginTop: 'var(--space-1)' }}>
+                    {t('reviseAnswer.description')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-icon"
+                  aria-label={t('knowledgeBases.actions.close')}
+                  title={t('knowledgeBases.actions.close')}
+                  onClick={closeRevise}
+                >
+                  <Icon name="close" size={16} />
+                </button>
+              </div>
+
+              <div className="sheet-body">
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label className="field-label" htmlFor="revise-answer-text">
+                    {t('reviseAnswer.label')}
+                  </label>
+                  <textarea
+                    id="revise-answer-text"
+                    className="input textarea"
+                    value={reviseDraft}
+                    onChange={(event) => {
+                      setReviseDraft(event.target.value);
+                      setReviseError(null);
+                    }}
+                    rows={6}
+                    placeholder={t('reviseAnswer.placeholder')}
+                  />
+                  {reviseError && (
+                    <p role="alert" className="field-error">
+                      {reviseError}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="sheet-footer">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={closeRevise}
+                >
+                  {t('buttons.cancel')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleReviseSubmit}
+                  disabled={reviseSaving}
+                  aria-busy={reviseSaving}
+                >
+                  {reviseSaving ? (
+                    <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                  ) : null}
+                  {t('reviseAnswer.submit')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </AdminLayout>
   )
