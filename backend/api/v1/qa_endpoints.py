@@ -40,6 +40,8 @@ from api.v1.schemas import (
     QaItemListResponse,
     QaItemPayload,
     QaItemUpdateRequest,
+    QaMatchRequest,
+    QaMatchResponse,
     ReviseAnswerRequest,
     ReviseAnswerResponse,
     UnansweredItem,
@@ -57,6 +59,7 @@ from models import (
     QaItem,
 )
 from services.answer_quality import UNANSWERED_MIN_QUESTION_CHARS
+from services.keyword_fallback import MIN_KEYWORD_LENGTH, match_for_kb, normalize
 from services.qa_service import QaService
 
 logger = logging.getLogger(__name__)
@@ -66,6 +69,13 @@ router = APIRouter(prefix="/api/v1", tags=["qa"])
 # Issue #42's rule, reused here: a question shorter than this cannot be a real
 # visitor question, so it is never turned into a curated pair.
 MIN_QA_QUESTION_LENGTH = UNANSWERED_MIN_QUESTION_CHARS
+
+# #60 — the keyword-path limits the write endpoint enforces. The per-keyword
+# floor is `keyword_fallback.MIN_KEYWORD_LENGTH`: the same constant the matcher
+# uses to skip a keyword, so "rejected at write time" and "can never match"
+# cannot drift apart.
+MAX_QA_KEYWORDS = 20
+MAX_QA_KEYWORD_LENGTH = 40
 
 def _require_workspace(current_user: AdminUser) -> int:
     workspace_id = getattr(current_user, "workspace_id", None)
@@ -111,6 +121,53 @@ def _validate_question(question: str) -> str:
         )
     return text
 
+def _validate_keywords(keywords: Optional[list[str]]) -> list[str]:
+    """Normalise, reject, dedupe — the write-time half of the #60 contract.
+
+    `services.keyword_fallback.normalize` is the *same* function `match()` calls
+    on both sides, so a keyword this accepts is a keyword the matcher compares
+    exactly. A blank entry normalises to `""` and is therefore rejected by the
+    same length rule as a single character — never silently dropped, because a
+    silently dropped trigger is an operator believing a pair is reachable when
+    it is not.
+
+    Order is preserved on dedupe so the operator's own ordering is what the
+    admin API gives back.
+    """
+    if not keywords:
+        return []
+    normalised: list[str] = []
+    seen: set[str] = set()
+    for raw in keywords:
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"keyword_too_short: {raw}",
+            )
+        keyword = normalize(raw)
+        if len(keyword) < MIN_KEYWORD_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"keyword_too_short: {raw.strip()}",
+            )
+        if len(keyword) > MAX_QA_KEYWORD_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"keyword_too_long: {keyword}",
+            )
+        if keyword in seen:
+            continue
+        seen.add(keyword)
+        normalised.append(keyword)
+        if len(normalised) > MAX_QA_KEYWORDS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"too_many_keywords: {len(normalised)} > {MAX_QA_KEYWORDS}"
+                ),
+            )
+    return normalised
+
 async def _sync_best_effort(item: QaItem, db: AsyncSession) -> None:
     """Persist first, index second: an embedding outage must not lose the row."""
     try:
@@ -129,6 +186,7 @@ async def _create_qa_item(
     *,
     question: str,
     answer: str,
+    keywords: Optional[list[str]] = None,
     source: str = "manual",
     source_message_id: Optional[int] = None,
 ) -> tuple[QaItem, bool]:
@@ -137,6 +195,11 @@ async def _create_qa_item(
     Uniqueness is `(kb_id, question)`, so re-saving the same question *corrects*
     the answer instead of duplicating it — that is what makes `revise-answer`
     idempotent and what makes a corrected pair replace the old text in the prompt.
+
+    `keywords` is written on **both** branches: the create route owns the
+    operator's trigger words, and a corrected pair that kept stale keywords
+    would keep matching messages it no longer answers for. The transcript
+    write-back routes pass `None` and therefore leave whatever is stored alone.
     """
     existing = await db.scalar(
         select(QaItem).where(
@@ -147,6 +210,8 @@ async def _create_qa_item(
         existing.answer = answer
         existing.enabled = True
         existing.source = source
+        if keywords is not None:
+            existing.keywords = list(keywords)
         if source_message_id is not None:
             existing.source_message_id = source_message_id
         await db.commit()
@@ -164,6 +229,7 @@ async def _create_qa_item(
         question=question,
         answer=answer,
         enabled=True,
+        keywords=list(keywords) if keywords else None,
         source=source,
         source_message_id=source_message_id,
     )
@@ -223,6 +289,7 @@ async def create_qa_item(
     """Create a pair and index it immediately (no KB reindex needed)."""
     kb = await _load_kb_in_workspace(db, kb_id, current_user)
     question = _validate_question(payload.question)
+    keywords = _validate_keywords(payload.keywords)
     existing = await db.scalar(
         select(QaItem.id).where(QaItem.kb_id == kb.id, QaItem.question == question)
     )
@@ -232,7 +299,7 @@ async def create_qa_item(
             detail="Q&A item already exists",
         )
     item, _ = await _create_qa_item(
-        db, kb, question=question, answer=payload.answer
+        db, kb, question=question, answer=payload.answer, keywords=keywords
     )
     await _sync_best_effort(item, db)
     return QaItemPayload.model_validate(item)
@@ -271,6 +338,9 @@ async def update_qa_item(
     if payload.enabled is not None:
         # Disabling deletes the point; enabling re-embeds it.
         item.enabled = payload.enabled
+    if payload.keywords is not None:
+        # `[]` clears the trigger words; absent leaves them untouched.
+        item.keywords = _validate_keywords(payload.keywords) or None
     await db.commit()
     await db.refresh(item)
     await _sync_best_effort(item, db)
@@ -293,6 +363,43 @@ async def delete_qa_item(
     await db.commit()
     logger.info("Deleted Q&A item %s from kb %s", qa_id_value, kb_id_value)
     return {"deleted": True, "id": qa_id_value}
+
+@router.post(
+    "/knowledge-bases/{kb_id}/qa-items:match", response_model=QaMatchResponse
+)
+async def match_qa_items(
+    kb_id: str,
+    payload: QaMatchRequest,
+    current_user: AdminUser = Depends(require_admin_or_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ask the LLM-free keyword path what it would serve for one message (#60).
+
+    Read-only and hermetic: one `SELECT` over the KB's enabled pairs, no
+    embedding, no Qdrant, no provider. It is the operator's tester, so it must
+    answer exactly what a real outage would answer — it calls the same
+    `match_for_kb` the chat seam calls, never a reimplementation.
+
+    A miss is a `200` with `matched: null`: a miss is a normal answer in chat,
+    and turning it into an error here would make the tester lie about the path.
+    """
+    await _load_kb_in_workspace(db, kb_id, current_user)
+    hit = await match_for_kb(db, kb_id, payload.message)
+    if hit is None:
+        return QaMatchResponse(matched=None, score=None, matched_keywords=[])
+    # The full payload (hits, source, timestamps) lives on the row, so it is read
+    # back by the id the matcher returned. Scoped to the same KB: the tester can
+    # never surface a pair from another KB.
+    item = await db.scalar(
+        select(QaItem).where(QaItem.id == hit.qa_id, QaItem.kb_id == kb_id)
+    )
+    if item is None:
+        return QaMatchResponse(matched=None, score=None, matched_keywords=[])
+    return QaMatchResponse(
+        matched=QaItemPayload.model_validate(item),
+        score=hit.score,
+        matched_keywords=list(hit.matched),
+    )
 
 @router.post(
     "/knowledge-bases/{kb_id}/qa-items:import", response_model=QaImportResponse

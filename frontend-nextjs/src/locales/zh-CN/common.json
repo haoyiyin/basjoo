@@ -367,6 +367,13 @@
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
     "fallbackModel": "备用模型",
     "fallbackModelDesc": "每日额度用尽后，由这个模型继续回答访客。留空则额度用尽后直接停止回答。",
+    "fallbackMode": "额度用尽后的回答方式",
+    "fallbackModeDesc": "主模型无法回答时用什么顶上：备用模型、已保存的问答关键词，或先用模型再退到关键词。",
+    "fallbackModeOff": "关闭（保持现状）",
+    "fallbackModeLlm": "仅备用模型",
+    "fallbackModeKeyword": "仅关键词问答",
+    "fallbackModeLlmThenKeyword": "备用模型 → 关键词",
+    "fallbackModeMissHint": "此模式下，未命中任何关键词的消息会用你设置的自动回复正常作答，而不是返回额度超限错误。",
     "fallbackApiKey": "备用模型 API Key",
     "fallbackApiKeyDesc": "备用模型专用的密钥，加密存储；留空则复用上方的主密钥。",
     "fallbackConfigured": "已配置",
@@ -710,6 +717,7 @@
   },
   "chat": {
     "degradedNotice": "额度用尽，已使用备用模型",
+    "scriptedNotice": "由常见问题自动回答",
     "fallbackModelNote": "备用模型：{{model}}"
   },
   "citations": {
@@ -877,6 +885,10 @@
     "answer": "答案",
     "questionPlaceholder": "例如：你们的退款窗口是多长时间？",
     "answerPlaceholder": "例如：收货后 30 天内可无理由退款。",
+    "keywords": "关键词",
+    "keywordsPlaceholder": "例如：退款, 退货, refund",
+    "keywordsHint": "用逗号或空格分隔，最多 20 个，每个至少 2 个字符。命中任一个关键词，这条问答对就会在模型不可用时直接作答。",
+    "keywordsEmpty": "未配置关键词",
     "questionTooShort": "问题至少需要 15 个字符",
     "answerRequired": "请填写答案",
     "createSubmit": "保存问答",
@@ -908,11 +920,23 @@
     "importResult": "已导入 {{created}} 条，跳过 {{skipped}} 条",
     "importEmpty": "没有可导入的问答对",
     "showing": "显示 {{shown}} / {{total}} 条问答",
+    "testerTitle": "试试这句话匹配哪条",
+    "testerDescription": "不调用模型，只按关键词匹配：这就是模型不可用时访客会得到的答案。",
+    "testerPlaceholder": "例如：我要申请退款",
+    "testerSubmit": "试试匹配",
+    "testerMiss": "没有命中任何问答对。访客会收到限制回复。",
+    "testerQuestion": "命中的问题",
+    "testerAnswer": "将回答",
+    "testerScore": "得分 {{score}}",
+    "testerMatchedKeywords": "命中的关键词：{{keywords}}",
+    "testerFailed": "试匹配失败",
     "errors": {
       "loadFailed": "加载问答库失败",
       "saveFailed": "保存问答失败",
       "deleteFailed": "删除问答失败",
-      "importFailed": "导入问答失败"
+      "importFailed": "导入问答失败",
+      "tooManyKeywords": "最多只能设置 {{max}} 个关键词",
+      "keywordTooLong": "每个关键词最多 {{max}} 个字符"
     }
   },
   "fixedFacts": {

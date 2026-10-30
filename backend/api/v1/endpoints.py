@@ -89,6 +89,7 @@ from services.auth_service import AuthService
 from services.kb_retrieval_service import KbRetrievalService
 from services.kb_service import KbService
 from services.qa_service import QaService
+from services.keyword_fallback import KeywordHit, match_for_kb
 from services.procedure_service import resolve_active_procedure
 from services.session_state import (
     AFTER_HOURS,
@@ -274,6 +275,174 @@ def _non_empty_str(value: Any) -> Optional[str]:
     stripped = value.strip()
     return stripped or None
 
+# #60 — the four answer-source modes. `off` is the upgrade-safe default: a row
+# written before the column existed (or a value the settings page does not
+# know) must keep today's behaviour byte for byte.
+FALLBACK_MODE_OFF = "off"
+FALLBACK_MODE_LLM = "llm"
+FALLBACK_MODE_KEYWORD = "keyword"
+FALLBACK_MODE_LLM_THEN_KEYWORD = "llm_then_keyword"
+FALLBACK_MODES = frozenset(
+    {
+        FALLBACK_MODE_OFF,
+        FALLBACK_MODE_LLM,
+        FALLBACK_MODE_KEYWORD,
+        FALLBACK_MODE_LLM_THEN_KEYWORD,
+    }
+)
+# #60: the marker a scripted turn carries on `ChatResponse`, the SSE `done`
+# event and the persisted assistant row. Text, not a model answer.
+SCRIPTED_MODE = "scripted"
+SCRIPTED_MATCHED_BY = "keyword"
+
+def fallback_mode(agent: Any) -> str:
+    """Read `agent.fallback_mode`, normalising anything unknown to `"off"`.
+
+    The thin reader the spec asks for: `resolve_llm_degradation` keeps its own
+    #44 semantics untouched, and every new decision in this file goes through
+    this one function. A NULL column (a row from before the migration ran), an
+    empty string and an unrecognised value all read as `off`, so enabling the
+    keyword path is always an explicit operator action.
+    """
+    raw = getattr(agent, "fallback_mode", None)
+    if not isinstance(raw, str):
+        return FALLBACK_MODE_OFF
+    normalised = raw.strip().lower()
+    return normalised if normalised in FALLBACK_MODES else FALLBACK_MODE_OFF
+
+def _wants_keyword_fallback(agent: Any) -> bool:
+    """True when `fallback_mode` lets the LLM-free keyword path answer."""
+    return fallback_mode(agent) in (
+        FALLBACK_MODE_KEYWORD,
+        FALLBACK_MODE_LLM_THEN_KEYWORD,
+    )
+
+async def _scripted_answer(
+    agent: Agent,
+    message: str,
+    db: Optional[AsyncSession] = None,
+) -> Optional[KeywordHit]:
+    """THE one place a scripted (keyword FAQ) answer is resolved (#60).
+
+    Both endpoints and all five serve sites call this, so no site can drift on
+    "is the keyword path on" or "which KB do we search". It is deliberately
+    pure-database: no `get_llm_service`, no `QaService.search`, no
+    `KbRetrievalService.retrieve` — all three embed or call a provider, which is
+    exactly what is unavailable in the outage this feature exists for.
+
+    Returns ``None`` for a non-matching message, a disabled/nonexistent KB, or
+    a `fallback_mode` that does not opt in. The row's `hits` counter is *not*
+    bumped here: the caller does that only for the hit it actually serves, and
+    only after it committed to serving it (see `record_scripted_hit`).
+    """
+    if not _wants_keyword_fallback(agent):
+        return None
+    kb_id = getattr(agent, "kb_id", None)
+    if not kb_id:
+        return None
+    if db is not None:
+        return await match_for_kb(db, str(kb_id), message)
+    # No live session at the failure sites (the stream deliberately holds no
+    # connection while the provider runs): open a short one, exactly like
+    # `QaService.search` does, and close it before returning.
+    async with database.AsyncSessionLocal() as short_db:
+        return await match_for_kb(short_db, str(kb_id), message)
+
+async def _build_scripted_turn(
+    agent: Agent,
+    message: str,
+    db: Optional[AsyncSession] = None,
+) -> Dict[str, Any]:
+    """The payload of one scripted turn: the pair's answer, or a miss.
+
+    "A miss is an answer too" (#60 rule 2): when nothing matches, the operator's
+    `restricted_reply` (or the built-in one) is served as a normal turn with
+    `qa_id = None`. `matched_by` is set for the hit shape only.
+
+    This function only RESOLVES; the caller records the hit once it has actually
+    committed to serving the turn. That ordering matters: the prepare phase
+    resolves this above the #19 key gate, and a keyless agent's 400 must not
+    inflate a pair's `hits` for an answer nobody ever received.
+    """
+    hit = await _scripted_answer(agent, message, db)
+    if hit is not None:
+        return {
+            "qa_id": hit.qa_id,
+            "reply": hit.answer,
+            "score": hit.score,
+            "matched": list(hit.matched),
+            "matched_by": SCRIPTED_MATCHED_BY,
+        }
+    return {
+        "qa_id": None,
+        "reply": get_restricted_reply(
+            getattr(agent, "restricted_reply", None), DEFAULT_RESTRICTED_REPLY
+        ),
+        "score": None,
+        "matched": [],
+        # Nothing matched, so there is no source to name. `mode` still says
+        # `scripted`: no model produced this sentence either.
+        "matched_by": None,
+    }
+
+async def _failure_scripted_turn(
+    agent: Optional[Agent],
+    message: str,
+    restricted_reply: Optional[str],
+    default: str,
+    db: Optional[AsyncSession] = None,
+) -> Dict[str, Any]:
+    """The answer for one of the five provider-failure sites (#60).
+
+    The seam spec puts the keyword path "before the `restricted_reply`". If the
+    agent opted in and a pair matches, the visitor gets the operator's real FAQ
+    answer with `mode="scripted"`; otherwise the site keeps emitting exactly the
+    sentence it emits today (`default` / `restricted_reply`) — a scripted MISS is
+    the restricted reply, still a normal 200 turn. This helper is what keeps the
+    five sites from drifting: they all call it and all read the same dict.
+
+    `mode` is `scripted` whenever the keyword path served the turn — hit OR miss,
+    because in both cases no model produced the sentence. It is `ai` when the
+    agent did not opt in, which keeps `off`/`llm` byte-for-byte as before.
+
+    See `_scripted_answer` for why there is no DB session on this path.
+    """
+    opted_in = agent is not None and _wants_keyword_fallback(agent)
+    hit = await _scripted_answer(agent, message, db) if opted_in else None
+    if hit is not None:
+        await record_scripted_hit(hit.qa_id, db)
+        return {
+            "reply": hit.answer,
+            "mode": SCRIPTED_MODE,
+            "matched_by": SCRIPTED_MATCHED_BY,
+            "matched": list(hit.matched),
+            "score": hit.score,
+        }
+    return {
+        "reply": get_restricted_reply(restricted_reply, default),
+        "mode": SCRIPTED_MODE if opted_in else "ai",
+        "matched_by": None,
+        "matched": [],
+        "score": None,
+    }
+
+async def record_scripted_hit(qa_id: Optional[str], db: Optional[AsyncSession] = None) -> None:
+    """Count one served pair through the existing `QaService.record_hit`.
+
+    Same short-session rule as `_scripted_answer`; a failure here must never
+    take the answer down, because the visitor already has it.
+    """
+    if not qa_id:
+        return
+    try:
+        if db is not None:
+            await QaService().record_hit(qa_id, db)
+            return
+        async with database.AsyncSessionLocal() as short_db:
+            await QaService().record_hit(qa_id, short_db)
+    except Exception as error:  # counting must never break the answer
+        logger.warning("Scripted Q&A hit counter update skipped for %s: %s", qa_id, error)
+
 def build_agent_config(
     agent: Agent, *, kb_name: Optional[str] = None, kb_status: Optional[str] = None
 ) -> dict:
@@ -335,6 +504,10 @@ def build_agent_config(
         # not — only a boolean, exactly like `api_key_set`.
         "fallback_model": getattr(agent, "fallback_model", None),
         "fallback_api_key_set": bool(get_agent_fallback_plaintext_key(agent)),
+        # #60: the third answer source. Normalised through the same reader the
+        # chat path uses, so the settings page can never show a value the
+        # runtime does not honour (a NULL column round-trips as `off`).
+        "fallback_mode": fallback_mode(agent),
         # #47 webhooks: the endpoint round-trips; the signing secret is
         # write-only, so the payload only says whether one is stored.
         "webhook_url": getattr(agent, "webhook_url", None),
@@ -1154,23 +1327,47 @@ async def prepare_chat_request(
 
     quota = await check_quota(agent, db)
     degradation = {"degraded": False}
+    # #60: resolved here (before the #19 key gate) but returned further down,
+    # once the session exists and every #43 gate has had its say. `None` means
+    # "the keyword path is not serving this turn".
+    scripted_context: Optional[Dict[str, Any]] = None
     if quota.used_messages_today >= quota.max_messages_per_day:
         # A preview turn never hits the wall and never pays for it.
         if not preview:
-            degradation = resolve_llm_degradation(agent)
-            if not degradation["degraded"]:
-                # No fallback model, or no key for either path: today's
-                # behaviour, unchanged. Only when both allowances are gone does
-                # the request stop.
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Daily message quota exceeded",
+            if _wants_keyword_fallback(agent):
+                # `keyword` ignores `fallback_model` entirely; `llm_then_keyword`
+                # prefers #44 and only reaches the matcher when the degradation
+                # cannot serve (no fallback model, or no key for either path).
+                if fallback_mode(agent) == FALLBACK_MODE_LLM_THEN_KEYWORD:
+                    degradation = resolve_llm_degradation(agent)
+                if not degradation["degraded"]:
+                    # A miss is NOT a wall (#60 rule 2): the operator's
+                    # `restricted_reply` goes out as a normal 200 assistant
+                    # turn, so `scripted_context` is always built here.
+                    scripted_context = await _build_scripted_turn(
+                        agent, request.message, db
+                    )
+                    logger.info(
+                        "Daily quota spent for agent %s — serving scripted %s",
+                        agent.id,
+                        "hit" if scripted_context["qa_id"] else "restricted reply",
+                    )
+            else:
+                # `off` and `llm`: today's #44 behaviour, byte for byte.
+                degradation = resolve_llm_degradation(agent)
+                if not degradation["degraded"]:
+                    # No fallback model, or no key for either path: today's
+                    # behaviour, unchanged. Only when both allowances are gone does
+                    # the request stop.
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Daily message quota exceeded",
+                    )
+                logger.warning(
+                    "Daily quota spent for agent %s — degrading to fallback model %s",
+                    agent.id,
+                    degradation["model"],
                 )
-            logger.warning(
-                "Daily quota spent for agent %s — degrading to fallback model %s",
-                agent.id,
-                degradation["model"],
-            )
 
     agent_id = agent.id
     agent_workspace_id = agent.workspace_id
@@ -1285,6 +1482,34 @@ async def prepare_chat_request(
                 "reply": limit_reply,
                 "session": session,
             }
+
+    # #60: the quota gate decided this turn is served from a curated pair (or
+    # from `restricted_reply`). This is the short-circuit the whole feature
+    # rests on: it sits ABOVE the #19 key gate, `QaService.search` (which
+    # embeds the query) and `KbRetrievalService.retrieve` (same), so none of
+    # them runs and the provider is never contacted. Placed after the answer
+    # gate and the rate limit so a paused/taken-over/limited session keeps its
+    # existing no-answer semantics even when its allowance is spent.
+    if scripted_context is not None:
+        # The turn is about to be served for real (the #19 key gate above already
+        # passed), so this is the one place the hit is counted. Resolving it in
+        # the quota block without reaching here would be a hit nobody received.
+        await record_scripted_hit(scripted_context["qa_id"], db)
+        return {
+            "mode": SCRIPTED_MODE,
+            "reply": scripted_context["reply"],
+            "qa_id": scripted_context["qa_id"],
+            "score": scripted_context["score"],
+            "matched_by": scripted_context["matched_by"],
+            "session": session,
+            "workspace_id": agent_workspace_id,
+            "quota_id": quota.id,
+            "agent": agent,
+            # A scripted answer costs 0 tokens but is still an answered turn:
+            # the daily cap counts answers, not spend (`services/quota.py`).
+            "message_weight": 1,
+            "preview": preview,
+        }
 
     history_result = await db.execute(
         select(ChatMessage)
@@ -1618,6 +1843,8 @@ async def persist_chat_response(
     message_weight: int = 1,
     agent: Optional[Agent] = None,
     degraded: bool = False,
+    answer_mode: str = "ai",
+    matched_by: Optional[str] = None,
 ) -> ChatMessage:
     """Persist a completed user/assistant exchange.
 
@@ -1630,7 +1857,18 @@ async def persist_chat_response(
     (skip it entirely) and `message_weight` (how much this model costs) have a
     single place to act. `ai_turn_count` is the answered-turn counter the spam
     sampler reads, and it advances once per *answered* turn.
+
+    #60: `answer_mode` is the answer SOURCE (`ai` | `scripted`). A scripted turn
+    is server-side text from the operator's own curated pairs, so it is never
+    "unanswered" and never degraded — the visitor got a real answer — but the
+    operator still needs to tell it apart from a model answer in the
+    transcript, so it is persisted on the row's `mode` column. `matched_by` is
+    what actually matched — `keyword` for a served pair, NULL for a miss — so
+    the transcript can say an FAQ hit answered instead of the apology; it is
+    clipped to the scripted path on purpose, keeping every `ai` row NULL.
+    Quota accounting is deliberately unchanged: 0 tokens, 1 answered turn.
     """
+    scripted = answer_mode == SCRIPTED_MODE
     scores = retrieval_scores or {}
     confidence = compute_confidence(
         kb_scores=scores.get("kb_scores") or [],
@@ -1640,6 +1878,11 @@ async def persist_chat_response(
     is_unanswered = is_real_question(request.message) and (
         nothing_retrieved or looks_like_fallback(reply, restricted_reply)
     )
+    if scripted:
+        # #60: a curated pair (or the operator's own `restricted_reply`) spoke.
+        # It is not a model outcome, so the #42 quality signals do not describe
+        # it — the answer is known-good text the operator wrote.
+        is_unanswered = False
 
     user_message = ChatMessage(
         session_id=session.id,
@@ -1660,7 +1903,13 @@ async def persist_chat_response(
         is_unanswered=is_unanswered,
         # #45: persist what #44 already reports on the response, so the
         # dashboard can count degraded answers from rows rather than a counter.
-        degraded=bool(degraded),
+        degraded=bool(degraded) and not scripted,
+        # #60: `ai` for every model answer, `scripted` for a keyword-matched
+        # pair. Distinct from `ChatSession.mode`, which is about who answers.
+        mode=SCRIPTED_MODE if scripted else "ai",
+        # #60: `keyword` for a served pair, NULL for a miss. Binding it to
+        # `scripted` is what makes the column impossible to lie on an `ai` turn.
+        matched_by=matched_by if scripted else None,
     )
     db.add(assistant_message)
 
@@ -1784,6 +2033,44 @@ async def chat(
                 session_id=session.session_id,
             )
 
+        if chat_context["mode"] == SCRIPTED_MODE:
+            # #60: a curated pair (or `restricted_reply`) answered in the prepare
+            # phase, before the key gate and before any retrieval or provider
+            # call. Persist it as a normal answered turn and return 200 — a
+            # quota miss is never a 429 on the keyword path.
+            reply = chat_context["reply"]
+            scripted_matched_by = chat_context.get("matched_by")
+            assistant_message = await persist_chat_response(
+                session=session,
+                workspace_id=chat_context["workspace_id"],
+                quota_id=chat_context["quota_id"],
+                request=request,
+                reply=reply,
+                sources=[],
+                usage=None,
+                db=prep_db,
+                restricted_reply=getattr(
+                    chat_context.get("agent"), "restricted_reply", None
+                ),
+                preview=bool(chat_context.get("preview")),
+                message_weight=int(chat_context.get("message_weight") or 1),
+                agent=chat_context.get("agent"),
+                answer_mode=SCRIPTED_MODE,
+                # #60: `keyword` for a served pair, NULL for a miss — what the
+                # transcript reads to tell the FAQ answer from the apology.
+                matched_by=scripted_matched_by,
+            )
+            await publish_chat_response(session, request.message, reply)
+            return ChatResponse(
+                reply=reply,
+                sources=[],
+                usage=None,
+                session_id=session.session_id,
+                message_id=assistant_message.id,
+                mode=SCRIPTED_MODE,
+                matched_by=scripted_matched_by,
+            )
+
         if chat_context["mode"] == "no_answer":
             await handle_taken_over_chat(session, request, prep_db)
             await prep_db.commit()
@@ -1843,22 +2130,71 @@ async def chat(
             reply_parts.append(chunk)
     except Exception:
         logger.exception("LLM call failed in non-streaming chat")
-        fallback = get_restricted_reply(
-            _restricted_reply, DEFAULT_RESTRICTED_REPLY
+        # #60: the keyword path sits ahead of the restricted reply at every
+        # provider-failure site, so an outage still answers a curated pair.
+        fallback_turn = await _failure_scripted_turn(
+            _agent,
+            request.message,
+            _restricted_reply,
+            DEFAULT_RESTRICTED_REPLY,
         )
+        fallback = fallback_turn["reply"]
+        fallback_mode_value = fallback_turn["mode"]
+        usage = None
+        async with database.AsyncSessionLocal() as persist_db:
+            session_result = await persist_db.execute(
+                select(ChatSession).where(ChatSession.id == session_db_id)
+            )
+            session_obj = session_result.scalar_one_or_none()
+            if session_obj is not None:
+                fallback_message = await persist_chat_response(
+                    session=session_obj,
+                    workspace_id=workspace_id,
+                    quota_id=quota_id,
+                    request=request,
+                    reply=fallback,
+                    sources=sources,
+                    usage=None,
+                    db=persist_db,
+                    retrieval_scores=retrieval_scores,
+                    restricted_reply=_restricted_reply,
+                    preview=preview,
+                    message_weight=weight,
+                    agent=_agent,
+                    answer_mode=fallback_turn["mode"],
+                    # #60: the provider-failure sites serve the same two shapes,
+                    # so the row must say which one spoke (a hit is `keyword`,
+                    # a miss is NULL — the transcript note keys off it).
+                    matched_by=fallback_turn["matched_by"],
+                )
+                await publish_chat_response(session_obj, request.message, fallback)
+            else:
+                fallback_message = None
         return ChatResponse(
             reply=fallback,
             sources=sources,
-            usage=None,
+            usage=usage,
             session_id=session_public_id,
+            message_id=fallback_message.id if fallback_message else None,
+            mode=fallback_mode_value,
+            matched_by=fallback_turn["matched_by"],
         )
 
     reply = replace_source_placeholders("".join(reply_parts), sources)
-    if not reply or not reply.strip():
+    # #60: a provider that answered with whitespace is a failed answer, so the
+    # keyword path is consulted here too, ahead of the restricted reply.
+    answer_is_empty = not reply or not reply.strip()
+    if answer_is_empty:
         logger.warning("LLM returned empty response for session %s", session_public_id)
-        reply = get_restricted_reply(
-            _restricted_reply, DEFAULT_EMPTY_ANSWER_REPLY
+        empty_turn = await _failure_scripted_turn(
+            _agent,
+            request.message,
+            _restricted_reply,
+            DEFAULT_EMPTY_ANSWER_REPLY,
         )
+        reply = empty_turn["reply"]
+    else:
+        empty_turn = None
     real_usage = llm.get_last_usage()
     if real_usage:
         logger.info("chat usage from provider: %s", real_usage)
@@ -1895,7 +2231,9 @@ async def chat(
             preview=preview,
             message_weight=weight,
             agent=_agent,
-            degraded=degraded,
+            degraded=degraded and not answer_is_empty,
+            answer_mode=empty_turn["mode"] if empty_turn else "ai",
+            matched_by=empty_turn["matched_by"] if empty_turn else None,
         )
         await publish_chat_response(session_obj, request.message, reply)
 
@@ -1905,8 +2243,10 @@ async def chat(
         usage=usage,
         session_id=session_public_id,
         message_id=assistant_message.id,
-        degraded=degraded,
+        degraded=degraded and not answer_is_empty,
         model=answered_model,
+        mode=empty_turn["mode"] if empty_turn else "ai",
+        matched_by=empty_turn["matched_by"] if empty_turn else None,
     )
 
 
@@ -1942,6 +2282,53 @@ async def chat_stream(
                             "usage": None,
                             "taken_over": False,
                             "mode": "ai",
+                        },
+                    )
+                    return
+
+                if chat_context["mode"] == SCRIPTED_MODE:
+                    # #60: the prepare phase already resolved a curated pair (or
+                    # `restricted_reply`) without touching the key gate, the
+                    # embedding paths or the provider. Persist it as a normal
+                    # answered turn, then emit the same `sources` → `content` →
+                    # `done` shape a model answer uses, with `mode="scripted"`.
+                    scripted_reply = chat_context["reply"]
+                    scripted_matched_by = chat_context.get("matched_by")
+                    assistant_message = await persist_chat_response(
+                        session=session,
+                        workspace_id=chat_context["workspace_id"],
+                        quota_id=chat_context["quota_id"],
+                        request=request,
+                        reply=scripted_reply,
+                        sources=[],
+                        usage=None,
+                        db=prep_db,
+                        restricted_reply=getattr(
+                            chat_context.get("agent"), "restricted_reply", None
+                        ),
+                        preview=bool(chat_context.get("preview")),
+                        message_weight=int(
+                            chat_context.get("message_weight") or 1
+                        ),
+                        agent=chat_context.get("agent"),
+                        answer_mode=SCRIPTED_MODE,
+                        matched_by=scripted_matched_by,
+                    )
+                    session_public_id = session.session_id
+                    await publish_chat_response(
+                        session, request.message, scripted_reply
+                    )
+                    yield sse_event("sources", {"sources": []})
+                    yield sse_event("content", {"content": scripted_reply})
+                    yield sse_event(
+                        "done",
+                        {
+                            "message_id": assistant_message.id,
+                            "session_id": session_public_id,
+                            "usage": None,
+                            "taken_over": False,
+                            "mode": SCRIPTED_MODE,
+                            "matched_by": scripted_matched_by,
                         },
                     )
                     return
@@ -2050,9 +2437,15 @@ async def chat_stream(
                 elapsed = time.monotonic() - stream_start
                 if elapsed > STREAM_MAX_DURATION_SECONDS:
                     logger.warning("Stream timeout after %.0fs", elapsed)
-                    fallback = get_restricted_reply(
-                        _restricted_reply, DEFAULT_RESTRICTED_REPLY
+                    # #60: a timed-out stream is a failed answer, so the keyword
+                    # path gets the turn before the restricted reply does.
+                    timeout_turn = await _failure_scripted_turn(
+                        _agent,
+                        request.message,
+                        _restricted_reply,
+                        DEFAULT_RESTRICTED_REPLY,
                     )
+                    fallback = timeout_turn["reply"]
                     yield sse_event("content", {"content": fallback})
                     yield sse_event(
                         "done",
@@ -2061,7 +2454,8 @@ async def chat_stream(
                             "session_id": session_public_id,
                             "usage": None,
                             "taken_over": False,
-                            "mode": "ai",
+                            "mode": timeout_turn["mode"],
+                            "matched_by": timeout_turn["matched_by"],
                         },
                     )
                     return
@@ -2110,10 +2504,16 @@ async def chat_stream(
             raise
         except Exception:
             logger.exception("LLM streaming failed")
-            # Graceful fallback: return agent's restricted reply instead of a technical error
-            fallback = get_restricted_reply(
-                _restricted_reply, DEFAULT_RESTRICTED_REPLY
+            # Graceful fallback: return agent's restricted reply instead of a technical error.
+            # #60: ...unless a curated pair matches, in which case the visitor
+            # gets the operator's real answer with `mode="scripted"`.
+            error_turn = await _failure_scripted_turn(
+                _agent,
+                request.message,
+                _restricted_reply,
+                DEFAULT_RESTRICTED_REPLY,
             )
+            fallback = error_turn["reply"]
             yield sse_event("content", {"content": fallback})
             yield sse_event(
                 "done",
@@ -2122,7 +2522,8 @@ async def chat_stream(
                     "session_id": session_public_id,
                     "usage": None,
                     "taken_over": False,
-                    "mode": "ai",
+                    "mode": error_turn["mode"],
+                    "matched_by": error_turn["matched_by"],
                 },
             )
             return
@@ -2131,13 +2532,20 @@ async def chat_stream(
                 pending_next.cancel()
 
         reply = replace_source_placeholders("".join(reply_parts), sources)
+        # #60: whitespace-only output is a failed answer; the keyword path gets
+        # the turn ahead of the restricted reply, exactly like the other sites.
+        empty_stream_turn = None
         if not reply or not reply.strip():
             logger.warning(
                 "LLM returned empty stream response for session %s", session_public_id
             )
-            reply = get_restricted_reply(
-                _restricted_reply, DEFAULT_EMPTY_ANSWER_REPLY
+            empty_stream_turn = await _failure_scripted_turn(
+                _agent,
+                request.message,
+                _restricted_reply,
+                DEFAULT_EMPTY_ANSWER_REPLY,
             )
+            reply = empty_stream_turn["reply"]
             yield sse_event("content", {"content": reply})
         real_usage = llm.get_last_usage()
         if real_usage:
@@ -2181,7 +2589,15 @@ async def chat_stream(
                     preview=preview,
                     message_weight=weight,
                     agent=_agent,
-                    degraded=degraded,
+                    degraded=degraded and empty_stream_turn is None,
+                    answer_mode=(
+                        empty_stream_turn["mode"] if empty_stream_turn else "ai"
+                    ),
+                    matched_by=(
+                        empty_stream_turn["matched_by"]
+                        if empty_stream_turn
+                        else None
+                    ),
                 )
                 await publish_chat_response(session_obj, request.message, reply)
                 yield sse_event(
@@ -2191,11 +2607,21 @@ async def chat_stream(
                         "session_id": session_public_id,
                         "usage": usage,
                         "taken_over": False,
-                        "mode": "ai",
+                        "mode": (
+                            empty_stream_turn["mode"]
+                            if empty_stream_turn
+                            else "ai"
+                        ),
                         # #44: the visitor gets a real answer from the fallback
                         # model, and the UI says so.
-                        "degraded": degraded,
+                        "degraded": degraded and empty_stream_turn is None,
                         "model": answered_model,
+                        # #60: what matched a `scripted` answer.
+                        "matched_by": (
+                            empty_stream_turn["matched_by"]
+                            if empty_stream_turn
+                            else None
+                        ),
                     },
                 )
             except OperationalError as error:
@@ -3734,6 +4160,13 @@ async def get_session_messages(
             # ("no signal", shown as an em dash), never 0.0.
             "confidence": msg.confidence,
             "is_unanswered": bool(msg.is_unanswered),
+            # #60: the answer source. `ai` | `scripted` — Lane D's transcript
+            # note keys off this, so it must travel with the row.
+            "mode": msg.mode or "ai",
+            # #60: `keyword` only when a curated pair actually answered. NULL is
+            # a scripted MISS (the operator's apology) or any `ai` turn, so the
+            # transcript never calls an apology an FAQ answer.
+            "matched_by": msg.matched_by,
             # #41: the thumbs state rides along so the session view renders the
             # operator's own votes without a second request per message.
             "rating": msg.rating if msg.rating is not None else 0,

@@ -5,7 +5,7 @@ import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Icon } from "./Icon";
 import { api } from "../services/api";
-import type { QaImportPair, QaItem } from "../services/api";
+import type { QaImportPair, QaItem, QaMatchResponse } from "../services/api";
 
 /**
  * Curated Q&A panel for one knowledge base (#39).
@@ -21,6 +21,29 @@ import type { QaImportPair, QaItem } from "../services/api";
 
 /** Mirrors the backend's `MIN_QA_QUESTION_LENGTH` (issue #42's rule). */
 const MIN_QUESTION_LENGTH = 15;
+
+/**
+ * Mirrors `api.v1.qa_endpoints`' keyword limits (#60). Kept in the UI so an
+ * over-long paste is caught before a round trip; the backend is still the only
+ * authority, and its `keyword_too_short: …` detail is what the form shows.
+ */
+const MAX_KEYWORDS = 20;
+const MAX_KEYWORD_LENGTH = 40;
+
+/**
+ * Turn the operator's comma/space-separated string into the array the API wants.
+ *
+ * Splitting on both separators means `退款, 退货` and `退款 退货` behave the same,
+ * which matters for a Chinese IME where a comma may arrive full-width. Blank
+ * entries are dropped here (a trailing comma is not an error); the backend still
+ * rejects a genuinely unusable keyword with a message worth showing.
+ */
+export function parseKeywords(raw: string): string[] {
+	return raw
+		.split(/[,，、\s]+/)
+		.map((keyword) => keyword.trim())
+		.filter((keyword) => keyword.length > 0);
+}
 
 const sourceBadgeClass: Record<string, string> = {
 	manual: "badge badge-neutral",
@@ -86,8 +109,15 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [question, setQuestion] = useState("");
 	const [answer, setAnswer] = useState("");
+	const [keywordsText, setKeywordsText] = useState("");
 	const [formError, setFormError] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
+
+	// #60 — the read-only tester: what the keyword path would serve right now.
+	const [testerMessage, setTesterMessage] = useState("");
+	const [testerResult, setTesterResult] = useState<QaMatchResponse | null>(null);
+	const [testerError, setTesterError] = useState<string | null>(null);
+	const [testing, setTesting] = useState(false);
 
 	const [importOpen, setImportOpen] = useState(false);
 	const [importText, setImportText] = useState("");
@@ -122,6 +152,7 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 		setEditingId(null);
 		setQuestion("");
 		setAnswer("");
+		setKeywordsText("");
 		setFormError(null);
 	};
 
@@ -130,6 +161,7 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 		setEditingId(null);
 		setQuestion("");
 		setAnswer("");
+		setKeywordsText("");
 		setFormError(null);
 	};
 
@@ -138,6 +170,7 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 		setEditingId(item.id);
 		setQuestion(item.question);
 		setAnswer(item.answer);
+		setKeywordsText((item.keywords ?? []).join(", "));
 		setFormError(null);
 	};
 
@@ -145,6 +178,7 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 		if (!kbId || saving) return;
 		const trimmedQuestion = question.trim();
 		const trimmedAnswer = answer.trim();
+		const keywords = parseKeywords(keywordsText);
 		if (trimmedQuestion.length < MIN_QUESTION_LENGTH) {
 			setFormError(t("qa.questionTooShort"));
 			return;
@@ -153,23 +187,41 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 			setFormError(t("qa.answerRequired"));
 			return;
 		}
+		if (keywords.length > MAX_KEYWORDS) {
+			setFormError(t("qa.errors.tooManyKeywords", { max: MAX_KEYWORDS }));
+			return;
+		}
+		if (keywords.some((keyword) => keyword.length > MAX_KEYWORD_LENGTH)) {
+			setFormError(
+				t("qa.errors.keywordTooLong", { max: MAX_KEYWORD_LENGTH }),
+			);
+			return;
+		}
 		setFormError(null);
 		setSaving(true);
 		try {
 			if (formMode === "edit" && editingId) {
+				// Always sent on an edit: `[]` is how "clear the trigger words" is
+				// expressed, and omitting the field means "leave them alone".
 				await api.updateQaItem(kbId, editingId, {
 					question: trimmedQuestion,
 					answer: trimmedAnswer,
+					keywords,
 				});
 			} else {
 				await api.createQaItem(kbId, {
 					question: trimmedQuestion,
 					answer: trimmedAnswer,
+					// Omitted when empty: the backend's default is already `[]`, and a
+					// pair without trigger words is the pre-#60 shape.
+					...(keywords.length > 0 ? { keywords } : {}),
 				});
 			}
 			closeForm();
 			await load();
 		} catch (err) {
+			// The backend's `keyword_too_short: <kw>` detail is the useful message,
+			// so it is shown verbatim rather than replaced by a generic copy.
 			setFormError(
 				err instanceof Error ? err.message : t("qa.errors.saveFailed"),
 			);
@@ -213,6 +265,24 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 			);
 		} finally {
 			setBusyId(null);
+		}
+	};
+
+	const handleTest = async () => {
+		if (!kbId || testing) return;
+		const message = testerMessage.trim();
+		if (!message) return;
+		setTesting(true);
+		setTesterError(null);
+		try {
+			setTesterResult(await api.testQaMatch(kbId, message));
+		} catch (err) {
+			setTesterResult(null);
+			setTesterError(
+				err instanceof Error ? err.message : t("qa.testerFailed"),
+			);
+		} finally {
+			setTesting(false);
 		}
 	};
 
@@ -287,6 +357,86 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 						{error}
 					</p>
 				)}
+
+				{/* #60 — the tester: what the keyword path would answer right now. */}
+				<div className="field" data-testid="qa-tester">
+					<label className="field-label" htmlFor="qa-tester-input">
+						{t("qa.testerTitle")}
+					</label>
+					<p className="field-hint">{t("qa.testerDescription")}</p>
+					<div className="page-actions page-actions-start">
+						<input
+							id="qa-tester-input"
+							className="input"
+							type="text"
+							value={testerMessage}
+							onChange={(event) => setTesterMessage(event.target.value)}
+							placeholder={t("qa.testerPlaceholder")}
+						/>
+						<button
+							type="button"
+							className="btn btn-secondary"
+							onClick={() => void handleTest()}
+							disabled={testing}
+							aria-busy={testing}
+						>
+							{testing ? (
+								<div
+									className="spinner"
+									style={{ width: "14px", height: "14px" }}
+								/>
+							) : null}
+							{t("qa.testerSubmit")}
+						</button>
+					</div>
+					{testerError && (
+						<p
+							role="alert"
+							className="field-error"
+							data-testid="qa-tester-error"
+						>
+							{testerError}
+						</p>
+					)}
+					{testerResult?.matched ? (
+						<div className="list-row" data-testid="qa-tester-hit">
+							<div className="list-row-main">
+								<span className="list-row-title">
+									{t("qa.testerQuestion")}: {testerResult.matched.question}
+								</span>
+								<span className="list-row-description">
+									{t("qa.testerAnswer")}: {testerResult.matched.answer}
+								</span>
+								<span
+									className="list-row-meta"
+									style={{ flexWrap: "wrap" }}
+								>
+									<span className="mono" data-testid="qa-tester-score">
+										{t("qa.testerScore", {
+											score: (testerResult.score ?? 0).toFixed(2),
+										})}
+									</span>
+									{/* The keywords that fired, verbatim from the matcher. */}
+									{testerResult.matched_keywords.length > 0 && (
+										<span className="mono" data-testid="qa-tester-keywords">
+											{t("qa.testerMatchedKeywords", {
+												keywords: testerResult.matched_keywords.join(", "),
+											})}
+										</span>
+									)}
+								</span>
+							</div>
+						</div>
+					) : testerResult ? (
+						<p
+							role="status"
+							className="field-hint"
+							data-testid="qa-tester-miss"
+						>
+							{t("qa.testerMiss")}
+						</p>
+					) : null}
+				</div>
 
 				{importOpen && (
 					<div className="field" data-testid="qa-import-form">
@@ -370,6 +520,18 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 							rows={4}
 							placeholder={t("qa.answerPlaceholder")}
 						/>
+						<label className="field-label" htmlFor="qa-keywords">
+							{t("qa.keywords")}
+						</label>
+						<input
+							id="qa-keywords"
+							className="input"
+							type="text"
+							value={keywordsText}
+							onChange={(event) => setKeywordsText(event.target.value)}
+							placeholder={t("qa.keywordsPlaceholder")}
+						/>
+						<p className="field-hint">{t("qa.keywordsHint")}</p>
 						{formError && (
 							<p role="alert" className="field-error">
 								{formError}
@@ -462,6 +624,25 @@ export default function QaManagement({ kbId: kbIdProp }: QaManagementProps) {
 											{hitAt && (
 												<span className="mono">
 													{t("qa.lastHit", { date: hitAt })}
+												</span>
+											)}
+											{/* #60 — the pair's trigger words as chips. */}
+											{(item.keywords ?? []).length > 0 ? (
+												(item.keywords ?? []).map((keyword) => (
+													<span
+														key={keyword}
+														className="badge badge-info"
+														data-testid={`qa-keyword-${item.id}-${keyword}`}
+													>
+														{keyword}
+													</span>
+												))
+											) : (
+												<span
+													className="mono"
+													data-testid={`qa-keywords-empty-${item.id}`}
+												>
+													{t("qa.keywordsEmpty")}
 												</span>
 											)}
 											{!item.enabled && (

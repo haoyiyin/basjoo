@@ -54,7 +54,8 @@ works before you own any API key. **No GPU is needed.**
   Gemini, xAI, DeepSeek, OpenRouter, z.ai, Volcengine, Moonshot, Alibaba Bailian, Tencent Cloud and
   SiliconFlow.
 - **Streaming chat over SSE** with source citations, a first-token keepalive, per-visitor rate limits and a
-  configurable restricted reply when a provider fails.
+  configurable restricted reply when a provider fails. Flip `fallback_mode` (default `off`) to `keyword` and
+  a curated Q&A pair with keywords answers instead, with no model call, marked `mode: "scripted"`.
 - **Human takeover.** Operators watch live sessions in the console and jump in; the widget polls for the
   human reply and hands the conversation over.
 - **A widget that respects its host.** Per-agent origin whitelist, visitor/session persisted in

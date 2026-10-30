@@ -177,10 +177,22 @@ def run_sqlite_migrations(database_url: str) -> None:
                     # rows read as 0 (a primary answer; the column did not
                     # exist to be degraded before).
                     ("degraded", "BOOLEAN DEFAULT 0"),
+                    # #60 — `ai` | `scripted`. Every pre-existing row was a model
+                    # answer, so the backfill below is the honest default.
+                    ("mode", "VARCHAR(20) DEFAULT 'ai'"),
+                    # #60 — what matched the `scripted` answer: `keyword`, or
+                    # NULL for a miss. No backfill UPDATE on purpose: NULL is
+                    # the honest value for every pre-existing row (the column
+                    # did not exist, so nothing recorded what matched), and an
+                    # `ai` turn is NULL by definition too.
+                    ("matched_by", "VARCHAR(20)"),
                 ],
             )
             cursor.execute(
                 "UPDATE chat_messages SET degraded = 0 WHERE degraded IS NULL"
+            )
+            cursor.execute(
+                "UPDATE chat_messages SET mode = 'ai' WHERE mode IS NULL OR mode = ''"
             )
 
 
@@ -393,6 +405,13 @@ def _create_feature_tables(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS ix_qa_items_kb_id ON qa_items(kb_id)"
         )
+        # #60 — operator-curated keyword triggers for the scripted fallback.
+        # JSON text; absent means "never served by the keyword path".
+        _ensure_columns(
+            cursor,
+            "qa_items",
+            [("keywords", "TEXT")],
+        )
 
     if _table_exists(cursor, "agents"):
         cursor.execute(
@@ -600,6 +619,8 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         # #47 — outbound webhooks: endpoint + Fernet-encrypted signing secret.
         ("webhook_url", "VARCHAR(1000)"),
         ("webhook_secret", "VARCHAR(500)"),
+        # #60 — scripted keyword fallback: off | llm | keyword | llm_then_keyword.
+        ("fallback_mode", "VARCHAR(20) DEFAULT 'off'"),
     ]
 
     # Handle the old column-name migration before we report existing columns
@@ -648,6 +669,12 @@ def _migrate_agents(cursor: sqlite3.Cursor):
     cursor.execute(
         "UPDATE agents SET prechat_mode = 'off' "
         "WHERE prechat_mode IS NULL OR prechat_mode = ''"
+    )
+    # #60: an agent that predates the column keeps today's behaviour byte for
+    # byte — "off" ignores both new switches.
+    cursor.execute(
+        "UPDATE agents SET fallback_mode = 'off' "
+        "WHERE fallback_mode IS NULL OR fallback_mode = ''"
     )
 
 

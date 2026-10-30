@@ -117,13 +117,18 @@ interface StreamDoneMeta {
   message_id?: number | null;
   session_id?: string;
   taken_over?: boolean;
-  /** #43: who answers next. `taken_over` implies `human`. */
-  mode?: 'ai' | 'human';
+  /**
+   * #43: who answers next. `taken_over` implies `human`.
+   * #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
+   */
+  mode?: 'ai' | 'human' | 'scripted';
   no_answer_reason?: string | null;
   /** #44: true when the fallback model answered (primary allowance spent). */
   degraded?: boolean;
   /** #44: the model that actually produced the answer. */
   model?: string | null;
+  /** #60: what matched a `scripted` answer — today always `keyword`. */
+  matched_by?: string | null;
 }
 
 interface StreamErrorPayload {
@@ -2463,7 +2468,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice' | 'identityMismatch' | 'identityRequired'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice' | 'scriptedNotice' | 'identityMismatch' | 'identityRequired'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -2482,6 +2487,7 @@ class BasjooWidget {
       humanNeedsSession: { 'en-US': 'Send a message first, then you can ask for a human.', 'zh-CN': '请先发送一条消息，然后再转人工。' },
       humanFailed: { 'en-US': 'Could not reach a human agent. Please try again.', 'zh-CN': '转人工失败，请稍后重试。' },
       degradedNotice: { 'en-US': 'Quota reached — answering with the fallback model', 'zh-CN': '额度用尽，已使用备用模型' },
+      scriptedNotice: { 'en-US': 'Answered from a saved FAQ', 'zh-CN': '由常见问题自动回答' },
       identityMismatch: { 'en-US': 'We could not verify your identity. Please refresh the page and sign in again.', 'zh-CN': '无法验证您的身份，请刷新页面并重新登录。' },
       identityRequired: { 'en-US': 'Please sign in on this page to start chatting.', 'zh-CN': '请先在本页面登录，然后再开始对话。' },
     };
@@ -2864,6 +2870,26 @@ class BasjooWidget {
   }
 
   /**
+   * #60: one line under an answer that a keyword-matched FAQ pair produced. The
+   * SSE `done` event carries `mode: 'scripted'`; this reuses the #44 notice
+   * treatment (`.basjoo-degraded`) so the visitor is not told a model answered.
+   * Purely informational — it is not a message and is not persisted.
+   */
+  private showScriptedNotice() {
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
+
+    const notice = document.createElement('div');
+    notice.className = 'basjoo-degraded';
+    notice.setAttribute('role', 'status');
+    notice.textContent = this.getText('scriptedNotice');
+    messagesContainer.appendChild(notice);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  /**
    * 开始轮询新消息（人工接管后管理员发送的消息）
    */
   private startPolling() {
@@ -2999,9 +3025,19 @@ class BasjooWidget {
               this.setSessionMode('human');
             }
             this.finalizeStreamingMessage(this.currentStreamSources);
-            /* #44: the `done` event carries the flag; one small notice line so
-             * the visitor knows the answer came from the fallback model. */
-            if (donePayload.degraded) {
+            /* #60: a keyword-matched FAQ pair answered, so no model was called.
+             * Exactly one notice per answer: the scripted line wins, because a
+             * scripted turn is never a degraded (fallback-model) turn.
+             *
+             * `matched_by` is the discriminator, not `mode`: a MISS is also
+             * `mode: 'scripted'` but its text is the operator's `restricted_reply`
+             * — an apology, not an answer from the FAQ. Showing "answered from a
+             * saved FAQ" over an apology would be a lie to the visitor. */
+            if (donePayload.mode === 'scripted' && donePayload.matched_by) {
+              this.showScriptedNotice();
+            } else if (donePayload.degraded) {
+              /* #44: the `done` event carries the flag; one small notice line so
+               * the visitor knows the answer came from the fallback model. */
               this.showDegradedNotice(donePayload.model);
             }
             if (!this.isOpen) {

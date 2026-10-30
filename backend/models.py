@@ -260,6 +260,11 @@ class Agent(Base):
     # Fernet-encrypted, same helper as api_key.
     fallback_api_key = Column(String(500), nullable=True)
 
+    # --- Scripted keyword fallback (#60) ----------------------------------
+    # "off" | "llm" | "keyword" | "llm_then_keyword". Default "off" so an
+    # upgrade changes nothing. Anything unrecognised reads as "off".
+    fallback_mode = Column(String(20), nullable=False, default="off")
+
     # --- Signed visitor identity (#46) ------------------------------------
     # Fernet-encrypted HMAC secret. Absent = today's anonymous-only behaviour.
     identity_secret = Column(String(500), nullable=True)
@@ -497,6 +502,14 @@ class ChatMessage(Base):
     # Thumbs vote (#41): -1 / 0 / +1, where 0 retracts. Stored on the visitor's
     # own message so the vote renders in the transcript's own context.
     rating = Column(Integer, nullable=True)
+    # #60: how this answer was produced. `ai` for every model answer (today's
+    # only value), `scripted` for a keyword-matched curated pair. Distinct from
+    # `ChatSession.mode`, which says who is *expected* to answer.
+    mode = Column(String(20), nullable=False, default="ai")
+    # #60: what matched a `scripted` answer: `keyword`, or NULL for a miss / for
+    # every `ai` turn. The transcript needs it to tell an FAQ hit from the
+    # operator's apology — both are `mode="scripted"` and only one is an answer.
+    matched_by = Column(String(20), nullable=True)
 
     # 引用来源
     sources = Column(
@@ -789,6 +802,10 @@ class QaItem(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     hits = Column(Integer, nullable=False, default=0)
     last_hit_at = Column(DateTime(timezone=True), nullable=True)
+    # #60 — operator-curated trigger words for the LLM-free keyword matcher.
+    # Already normalised at write time; absent/empty means the pair is never
+    # served by the keyword path (the semantic path still sees it).
+    keywords = Column(JSON, nullable=True, default=None)
     # manual | revise | unanswered — provenance, so the UI can show how a pair
     # got here. Not an enum: a new provenance value must not need a migration.
     source = Column(String(20), nullable=False, default="manual")

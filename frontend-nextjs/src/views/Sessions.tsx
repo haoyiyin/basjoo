@@ -55,6 +55,13 @@ interface Message {
   degraded?: boolean
   /** #44: the model that produced this answer. */
   model?: string | null
+  /**
+   * #60: how this answer was produced. `scripted` means a keyword-matched FAQ
+   * pair answered, with no model call at all.
+   */
+  mode?: 'ai' | 'human' | 'scripted'
+  /** #60: what matched a `scripted` answer — today always `keyword`. */
+  matched_by?: string | null
   created_at: string
 }
 
@@ -1102,10 +1109,34 @@ export default function Sessions() {
                                     <span className="mono">{confidenceLabel(msg.confidence)}</span>
                                   </span>
                                 )}
+                                {/* #60: a keyword-matched FAQ pair answered with no
+                                 * model call. One note beside the #44 one — and never
+                                 * both, because a scripted turn is not a degraded one.
+                                 * A scripted MISS carries the same `mode` but no
+                                 * `matched_by`: its text is the operator's apology, so
+                                 * calling it `由常见问题自动回答` would be a lie. Only a
+                                 * hit gets the note. */}
+                                {!isVisitor &&
+                                  msg.mode === 'scripted' &&
+                                  msg.matched_by && (
+                                  <span
+                                    data-testid={`message-scripted-${msg.id}`}
+                                    title={t('chat.scriptedNotice')}
+                                    style={{
+                                      fontSize: 'var(--text-xs)',
+                                      color: 'var(--fg-dim)',
+                                    }}
+                                  >
+                                    {t('chat.scriptedNotice')}
+                                  </span>
+                                )}
                                 {/* #44: the daily allowance was spent and the fallback
                                  * model answered. One small note in the meta row so the
-                                 * operator knows why the answer may be weaker. */}
-                                {!isVisitor && msg.degraded && (
+                                 * operator knows why the answer may be weaker. A scripted
+                                 * turn is mutually exclusive with this one: the backend
+                                 * persists `degraded=False` for it, and the guard here
+                                 * keeps the two notes from ever stacking. */}
+                                {!isVisitor && msg.degraded && msg.mode !== 'scripted' && (
                                   <span
                                     data-testid={`message-degraded-${msg.id}`}
                                     title={
