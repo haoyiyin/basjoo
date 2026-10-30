@@ -247,7 +247,16 @@ class FileItem(BaseModel):
     status: Literal["uploading", "processing", "ready", "failed", "pending"] = (
         "uploading"
     )
+    # Localized, client-safe sentence. Kept for existing readers.
     error_message: Optional[str] = None
+    # #47: the stored upstream cause, verbatim
+    # (`401 Unauthorized from https://api.openai.com/v1/embeddings`). Null when
+    # the processor did not record a cause, in which case the UI falls back to
+    # `error_message`. Deliberately not translated: it is the provider's words.
+    error_detail: Optional[str] = None
+    # #47 two-phase upload: which ingest phase the row is in
+    # (`uploaded` | `parsing` | `chunking` | `embedding` | `indexing` | `done`).
+    processing_stage: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -551,6 +560,14 @@ class AgentConfig(BaseModel):
     traffic_percentage: int = Field(
         100, ge=0, le=100, description="Share of visitors that get the widget (#40)"
     )
+    # --- #47: outbound webhooks -------------------------------------------
+    webhook_url: Optional[str] = Field(
+        None, max_length=1000, description="Endpoint that receives integration events"
+    )
+    webhook_secret_set: bool = Field(
+        False,
+        description="Whether a signing secret is stored (the secret itself never is)",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -688,6 +705,23 @@ class AgentUpdateRequest(BaseModel):
     traffic_percentage: Optional[int] = Field(
         None, ge=0, le=100, description="Share of visitors that get the widget (#40)"
     )
+    # #47: the delivery endpoint and its HMAC signing secret (encrypted at rest).
+    webhook_url: Optional[str] = Field(
+        None, max_length=1000, description="Endpoint that receives integration events"
+    )
+    webhook_secret: Optional[str] = Field(
+        None, max_length=500, description="HMAC signing secret (encrypted at rest)"
+    )
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, url: Optional[str]) -> Optional[str]:
+        if url is None:
+            return None
+        candidate = url.strip()
+        if not candidate:
+            return None
+        return _validate_safe_ingest_url(candidate)
 
     @field_validator("allowed_widget_origins")
     @classmethod

@@ -34,6 +34,9 @@ NEW_COLUMNS = {
         "fallback_model",
         "fallback_api_key",
         "identity_secret",
+        # #47: outbound webhook endpoint + encrypted signing secret.
+        "webhook_url",
+        "webhook_secret",
     ],
     "chat_sessions": [
         "mode",
@@ -49,9 +52,11 @@ NEW_COLUMNS = {
         "ai_turn_count",
     ],
     "chat_messages": ["confidence", "is_unanswered", "rating"],
+    # #47: the diffed-refetch key and the two-phase upload queue stage.
+    "kb_documents": ["item_hash", "processing_stage"],
 }
 
-NEW_TABLES = ["qa_items", "procedures", "leads", "webhooks"]
+NEW_TABLES = ["qa_items", "procedures", "leads", "webhooks", "webhook_deliveries"]
 
 
 def _columns(db_path: str, table: str) -> set[str]:

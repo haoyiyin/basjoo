@@ -14,9 +14,11 @@ from api.v1 import kb_endpoints as v1_kb_endpoints
 from api.v1 import qa_endpoints as v1_qa_endpoints
 from services.scheduler import (
     agent_purge_scheduler,
+    document_processing_scheduler,
     url_fetch_scheduler,
     history_cleanup_scheduler,
     session_auto_close_scheduler,
+    webhook_delivery_scheduler,
 )
 from services.redis_service import get_redis, close_redis
 from middleware import RateLimitMiddleware, apply_cors_headers, get_request_client_ip
@@ -67,6 +69,16 @@ async def lifespan(app: FastAPI):
         await agent_purge_scheduler.purge_expired_agents()
         agent_purge_scheduler.start()
         logger.info("智能体清理调度器已启动")
+
+        # #47: the two halves that keep the request path thin — queued KB
+        # document ingestion and queued webhook delivery.
+        logger.info("启动文档处理调度器...")
+        document_processing_scheduler.start()
+        logger.info("文档处理调度器已启动")
+
+        logger.info("启动Webhook投递调度器...")
+        webhook_delivery_scheduler.start()
+        logger.info("Webhook投递调度器已启动")
     else:
         logger.info("测试模式已启用，跳过 Redis 和调度器启动")
 
@@ -88,6 +100,14 @@ async def lifespan(app: FastAPI):
         logger.info("停止智能体清理调度器...")
         agent_purge_scheduler.stop()
         logger.info("智能体清理调度器已停止")
+
+        logger.info("停止文档处理调度器...")
+        document_processing_scheduler.stop()
+        logger.info("文档处理调度器已停止")
+
+        logger.info("停止Webhook投递调度器...")
+        webhook_delivery_scheduler.stop()
+        logger.info("Webhook投递调度器已停止")
 
         # 关闭 Redis 连接
         logger.info("关闭 Redis 连接...")

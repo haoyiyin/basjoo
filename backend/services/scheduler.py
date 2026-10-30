@@ -15,6 +15,7 @@ from models import (
     AgentMember,
     ChatMessage,
     ChatSession,
+    KbDocument,
     KnowledgeFile,
     URLSource,
     Workspace,
@@ -22,6 +23,10 @@ from models import (
 )
 from services.task_lock import task_lock, TaskType
 from services.url_service import process_url_refetch
+from services.webhook_service import (
+    drain_pending_webhooks,
+    enqueue_webhook_for_agent_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +170,16 @@ class URLFetchScheduler:
                 job_id=job_id,
                 source_agent_id=None,
             )
+            # #47: report what the diff skipped, so a quiet refetch is
+            # observable instead of looking like a no-op.
+            unchanged = await self.report_unchanged_urls(kb_id)
+            if unchanged:
+                logger.info(
+                    "%s: %s of %s URL(s) unchanged, no re-embed",
+                    context,
+                    len(unchanged),
+                    len(ids),
+                )
 
     async def fetch_agent_urls(self, db: AsyncSession, agent: Agent):
         """抓取特定Agent绑定KB的URL，读取列表后不再持有会话执行 HTTP 请求"""
@@ -206,6 +221,45 @@ class URLFetchScheduler:
 
         except Exception as e:
             logger.exception(f"Error in fetch_agent_urls for agent {agent.id}: {e}")
+
+    async def report_unchanged_urls(self, kb_id: str) -> list[int]:
+        """URL rows this KB's last refetch found text-identical (no re-embed).
+
+        Reads only the persisted state the refetch left behind: a `success` row
+        whose document is `ready` and whose `item_hash` still matches the stored
+        text *after normalisation*. Nothing here re-fetches or re-embeds, so it
+        is safe to call from the same scheduler tick that just refetched.
+        """
+        from models import compute_item_hash
+        from services.url_service import url_document_filename
+
+        async with AsyncSessionLocal() as db:
+            rows = list(
+                (
+                    await db.execute(
+                        select(URLSource).where(
+                            URLSource.kb_id == kb_id,
+                            URLSource.status == "success",
+                            URLSource.is_indexed == True,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            unchanged: list[int] = []
+            for row in rows:
+                doc = await db.scalar(
+                    select(KbDocument).where(
+                        KbDocument.kb_id == kb_id,
+                        KbDocument.filename == url_document_filename(row.id),
+                    )
+                )
+                if doc is None or getattr(doc, "status", None) != "ready":
+                    continue
+                if getattr(doc, "item_hash", None) == compute_item_hash(row.content):
+                    unchanged.append(row.id)
+            return unchanged
 
 # 全局实例
 url_fetch_scheduler = URLFetchScheduler()
@@ -376,6 +430,17 @@ class SessionAutoCloseScheduler:
                     if should_close:
                         session.status = "closed"
                         closed += 1
+                        # #47: contract C5 still names `session.closed`, so the
+                        # inactivity sweep queues it in the same transaction.
+                        await enqueue_webhook_for_agent_id(
+                            db,
+                            session.agent_id,
+                            "session.closed",
+                            {
+                                "session_id": session.session_id,
+                                "reason": "inactivity_timeout",
+                            },
+                        )
 
                 await db.commit()
                 if closed > 0:
@@ -451,3 +516,136 @@ class AgentPurgeScheduler:
 
 
 agent_purge_scheduler = AgentPurgeScheduler()
+
+class WebhookDeliveryScheduler:
+    """Drains `webhook_deliveries` (#47).
+
+    This is the other half of "a webhook failure must never delay or fail the
+    chat request": the request only INSERTs a `pending` row, and every actual
+    POST happens here, off the request path, in bounded batches.
+    """
+
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.running = False
+
+    def start(self):
+        if self.running:
+            return
+        self.scheduler.start()
+        self.running = True
+        self.scheduler.add_job(
+            self.deliver_pending_webhooks,
+            trigger=IntervalTrigger(seconds=30),
+            id="deliver_pending_webhooks",
+            name="Deliver queued webhook deliveries",
+            replace_existing=True,
+        )
+        logger.info("Webhook delivery scheduler started")
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("Webhook delivery scheduler stopped")
+
+    async def deliver_pending_webhooks(self) -> dict[str, int]:
+        """One bounded tick. Never raises: a dead subscriber is not an outage."""
+        try:
+            async with AsyncSessionLocal() as db:
+                stats = await drain_pending_webhooks(db)
+            if any(stats.values()):
+                logger.info("Webhook tick: %s", stats)
+            return stats
+        except Exception as exc:
+            logger.exception("Webhook delivery tick failed: %s", exc)
+            return {"delivered": 0, "retrying": 0, "failed": 0, "skipped": 0}
+
+webhook_delivery_scheduler = WebhookDeliveryScheduler()
+
+class DocumentProcessingScheduler:
+    """Drains uploaded `kb_documents` rows (#47, phase 2 of the two-phase upload).
+
+    `files:upload` only persists bytes and the row; parse → chunk → embed →
+    index runs here, so a 20 MB upload never occupies an API worker. Rows the
+    previous process left in `processing` are picked up too — that is the whole
+    point of persisting `processing_stage` instead of keeping the work in an
+    in-memory `BackgroundTasks` queue that dies with the request.
+    """
+
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.running = False
+        #: Bounded so one huge backlog cannot monopolise a tick.
+        self.batch_size = 10
+
+    def start(self):
+        if self.running:
+            return
+        self.scheduler.start()
+        self.running = True
+        self.scheduler.add_job(
+            self.process_pending_documents,
+            trigger=IntervalTrigger(seconds=15),
+            id="process_pending_documents",
+            name="Process uploaded KB documents",
+            replace_existing=True,
+        )
+        logger.info("Document processing scheduler started")
+
+    def stop(self):
+        if self.running:
+            self.scheduler.shutdown()
+            self.running = False
+            logger.info("Document processing scheduler stopped")
+
+    async def process_pending_documents(self) -> int:
+        """Process at most `batch_size` queued rows. Returns how many ran."""
+        from services.kb_document_processor import KbDocumentProcessor
+
+        try:
+            async with AsyncSessionLocal() as db:
+                rows = list(
+                    (
+                        await db.execute(
+                            select(KbDocument.id, KbDocument.kb_id)
+                            .where(
+                                KbDocument.status.in_(["pending", "processing"]),
+                                KbDocument.storage_path.isnot(None),
+                                # `uploaded` is the queue marker the upload
+                                # endpoint writes, and the only value that means
+                                # "accepted, no worker owns this yet". Claiming
+                                # it flips the row to `parsing` on the first line
+                                # of `process_document`, so a row another path is
+                                # already processing (a reset re-queue through
+                                # `BackgroundTasks`, or the previous tick) is
+                                # never picked up a second time.
+                                KbDocument.processing_stage == "uploaded",
+                            )
+                            .order_by(KbDocument.created_at.asc())
+                            .limit(self.batch_size)
+                        )
+                    ).all()
+                )
+        except Exception as exc:
+            logger.exception("Could not list pending KB documents: %s", exc)
+            return 0
+
+        if not rows:
+            return 0
+
+        processor = KbDocumentProcessor()
+        processed = 0
+        for doc_id, kb_id in rows:
+            try:
+                await processor.process_document(str(doc_id), str(kb_id))
+                processed += 1
+            except Exception as exc:
+                # `process_document` already persists its own failure; this is
+                # the belt-and-braces case (e.g. the KB vanished mid-pass).
+                logger.exception("Background ingest failed for doc %s: %s", doc_id, exc)
+        if processed:
+            logger.info("Processed %s queued KB document(s)", processed)
+        return processed
+
+document_processing_scheduler = DocumentProcessingScheduler()

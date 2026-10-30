@@ -92,6 +92,46 @@ describe("FileUploadManagement file status polling", () => {
 		return { ...view, router };
 	}
 
+	// #47: a failed row shows the provider's own words, and the generic
+	// `files.processingFailedFallback` sentence only when nothing was recorded.
+	it("renders the upstream ingestion error instead of the generic fallback", async () => {
+		const failedFile = createMockFile("failed", {
+			error_detail:
+				"401 Unauthorized from https://api.openai.com/v1/embeddings",
+			error_message: "Document processing failed. Please upload a valid, readable document.",
+		});
+
+		renderComponent([failedFile]);
+
+		await waitFor(() => {
+			expect(screen.getByText(failedFile.filename)).toBeInTheDocument();
+		});
+
+		// The provider's message is the primary line...
+		expect(
+			screen.getByText("401 Unauthorized from https://api.openai.com/v1/embeddings"),
+		).toBeInTheDocument();
+		// ...and the generic fallback key is never rendered while detail exists.
+		expect(
+			screen.queryByText("files.processingFailedFallback"),
+		).not.toBeInTheDocument();
+	});
+
+	it("falls back to the generic sentence when no upstream cause was stored", async () => {
+		const failedFile = createMockFile("failed", {
+			error_detail: null,
+			error_message: undefined,
+		});
+
+		renderComponent([failedFile]);
+
+		await waitFor(() => {
+			expect(screen.getByText(failedFile.filename)).toBeInTheDocument();
+		});
+
+		expect(screen.getByText("files.processingFailedFallback")).toBeInTheDocument();
+	});
+
 	it("should start polling when there are processing files", async () => {
 		const processingFiles = [createMockFile("processing")];
 		mockedApi.listKbFiles.mockResolvedValue({

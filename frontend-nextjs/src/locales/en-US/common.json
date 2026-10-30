@@ -1087,5 +1087,17 @@
     "starterValue": "Message text / link URL",
     "starterPath": "Path scope (regex, optional)",
     "starterPathPlaceholder": "^/pricing$"
+  },
+  "webhooks": {
+    "title": "Webhooks",
+    "description": "Receive a signed HTTP POST when something happens in this agent. Deliveries are queued with the change itself and sent in the background, so a slow or broken endpoint never delays a visitor.",
+    "urlLabel": "Endpoint URL",
+    "urlPlaceholder": "https://example.com/basjoo/webhook",
+    "urlHint": "Leave empty to disable deliveries. Events: session.created, session.closed, message.created, message.unanswered, handoff.requested, lead.created, document.indexed.",
+    "secretLabel": "Signing secret",
+    "secretPlaceholder": "Paste a signing secret",
+    "secretMasked": "•••••••• (stored — type to replace)",
+    "secretHint": "Used for the X-Basjoo-Signature: sha256=<hmac> header. Stored encrypted.",
+    "secretSetHint": "A secret is stored. Leave this field empty to keep it, or type a new one to replace it."
   }
 }

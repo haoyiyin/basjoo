@@ -150,7 +150,50 @@ describe('AgentSettings', () => {
         traffic_percentage: 100,
         starters: [],
         widget_cards: [],
+        // #47: an empty webhook URL means "no endpoint"; the secret field is
+        // omitted so an untouched signing secret survives the save.
+        webhook_url: null,
       });
+    });
+  });
+
+  // #47: the endpoint is editable, the secret is write-only and masked.
+  it('edits the webhook endpoint and never reads the stored secret back', async () => {
+    const user = userEvent.setup();
+    mockedApi.getAgent.mockResolvedValue({
+      ...agent,
+      webhook_url: 'https://hooks.example.com/basjoo',
+      webhook_secret_set: true,
+    } as never);
+    renderAgentSettings();
+
+    const urlInput = await screen.findByLabelText('webhooks.urlLabel');
+    expect(urlInput).toHaveValue('https://hooks.example.com/basjoo');
+
+    const secretInput = screen.getByLabelText('webhooks.secretLabel');
+    // The secret is never in the payload, so the field starts empty and shows
+    // the masked placeholder instead of a value.
+    expect(secretInput).toHaveValue('');
+    expect(secretInput).toHaveAttribute('type', 'password');
+    expect(secretInput).toHaveAttribute(
+      'placeholder',
+      'webhooks.secretMasked',
+    );
+
+    await user.clear(urlInput);
+    await user.type(urlInput, 'https://hooks.example.com/v2');
+    await user.clear(secretInput);
+    await user.type(secretInput, 'rotated-secret');
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({
+          webhook_url: 'https://hooks.example.com/v2',
+          webhook_secret: 'rotated-secret',
+        }),
+      );
     });
   });
 

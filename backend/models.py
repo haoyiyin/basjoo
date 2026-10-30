@@ -1,4 +1,5 @@
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -42,6 +43,23 @@ def normalize_url(url: str) -> str:
 def compute_content_hash(content: str) -> str:
     """计算内容哈希（用于去重）"""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+def normalise_page_text(content: str | None) -> str:
+    """Normalise fetched page text before hashing it (#47, diffed refetch).
+
+    Conservative on purpose: every run of whitespace becomes one space and the
+    trailing newline is dropped, so a CMS that re-wraps or re-indents a page does
+    not trigger a full re-embed. Nothing else is touched — no case folding, no
+    punctuation stripping, no line reordering — because two pages that differ in
+    real text must never collide on the same hash.
+    """
+    return _WHITESPACE_RUN.sub(" ", str(content or "")).strip()
+
+def compute_item_hash(content: str | None) -> str:
+    """Stable hash of *normalised* page text, stored as ``KbDocument.item_hash``."""
+    return hashlib.sha256(normalise_page_text(content).encode("utf-8")).hexdigest()
 
 
 class Workspace(Base):
@@ -241,6 +259,12 @@ class Agent(Base):
     # --- Signed visitor identity (#46) ------------------------------------
     # Fernet-encrypted HMAC secret. Absent = today's anonymous-only behaviour.
     identity_secret = Column(String(500), nullable=True)
+
+    # --- Outbound webhooks (#47) ------------------------------------------
+    # Where integration events are POSTed. Absent = nothing is ever queued.
+    webhook_url = Column(String(1000), nullable=True)
+    # Fernet-encrypted HMAC secret used for `X-Basjoo-Signature`; never returned.
+    webhook_secret = Column(String(500), nullable=True)
 
     # 状态
     is_active = Column(Boolean, default=True)
@@ -691,6 +715,14 @@ class KbDocument(Base):
     )
     chunk_count = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    # --- Ingestion bookkeeping (#47) --------------------------------------
+    # sha256 of the *normalised* source text. A refetch that produces the same
+    # hash re-uses the indexed chunks instead of re-embedding them.
+    item_hash = Column(String(64), nullable=True)
+    # Human-readable ingest phase shown to the operator while a two-phase upload
+    # is still being worked on (`uploaded` -> `parsing` -> `chunking` ->
+    # `embedding` -> `indexing` -> `done`/`failed`). Null on legacy rows.
+    processing_stage = Column(String(20), nullable=True)
     file_size = Column(Integer, nullable=True)
     storage_path = Column(String(1000), nullable=True)
     # Metadata for document source info (e.g., URL for crawled pages)
@@ -817,3 +849,30 @@ class Webhook(Base):
     events = Column(JSON, nullable=False, default=list)
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebhookDelivery(Base):
+    """One queued outbound webhook, written in the domain's own transaction (#47).
+
+    The chat request (or the lead write, or the indexing commit) only ever
+    INSERTs here; the scheduler drains the queue. `payload` holds the serialised
+    body verbatim so every retry signs byte-identical JSON.
+    """
+
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id = Column(String(50), ForeignKey("agents.id"), nullable=False, index=True)
+    event = Column(String(50), nullable=False, index=True)
+    payload = Column(Text, nullable=False)
+    # pending | delivered | failed
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_webhook_deliveries_status_created", "status", "created_at"),
+    )
