@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "predev": "node scripts/sync-widget-theme.mjs",
     "build": "tsc --noEmit && vite build",
+    "prebuild": "node scripts/sync-widget-theme.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
