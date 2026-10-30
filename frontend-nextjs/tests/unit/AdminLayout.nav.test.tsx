@@ -295,7 +295,9 @@ describe("§13 agent knowledge route (KnowledgeBaseSetup)", () => {
 				expect(router.state.location.pathname).toBe("/knowledge-bases");
 			});
 			expect(router.state.location.search).toBe("?bindAgent=agt_1");
-			expect(screen.getByText("kb-list")).toBeInTheDocument();
+			// `router.state` flips on `navigate()`, before React commits the new
+			// route, so the destination element must be awaited or this races.
+			expect(await screen.findByText("kb-list")).toBeInTheDocument();
 			cleanup();
 		}
 	});
@@ -312,7 +314,9 @@ describe("§13 agent knowledge route (KnowledgeBaseSetup)", () => {
 			await waitFor(() => {
 				expect(router.state.location.pathname).toBe("/knowledge-bases/kb_1");
 			});
-			expect(screen.getByText("kb-detail")).toBeInTheDocument();
+			// Same race as above: the router state is updated synchronously, the
+			// committed DOM is not.
+			expect(await screen.findByText("kb-detail")).toBeInTheDocument();
 			expect(mockedApi.kbStatus).toHaveBeenCalledWith("agt_1");
 			cleanup();
 		}

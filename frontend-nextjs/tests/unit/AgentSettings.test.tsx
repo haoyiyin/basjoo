@@ -1,7 +1,7 @@
 // @ts-nocheck
 // @vitest-environment jsdom
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -130,8 +130,78 @@ describe('AgentSettings', () => {
         allowed_widget_origins: ['https://example.com'],
         rate_limit_per_minute: 10,
         restricted_reply: 'Custom restricted message',
+        // #43: the conversation-policy fields ride along on the same save.
+        escalation_rules: null,
+        business_hours: null,
+        away_message: null,
       });
     });
+  });
+
+  it('saves escalation rules and a business-hours schedule (#43)', async () => {
+    const user = userEvent.setup();
+    renderAgentSettings();
+
+    const rules = await screen.findByLabelText('escalation.label');
+    await user.type(rules, 'Refund dispute -> human');
+
+    // No timezone selected yet: the schedule editor stays inert.
+    expect(screen.getByTestId('business-hours-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('business-hours-add')).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText('businessHours.timezone'), 'Asia/Shanghai');
+    await user.click(screen.getByTestId('business-hours-add'));
+
+    expect(screen.getByTestId('business-hours-ranges')).toBeInTheDocument();
+
+    // Defaults are 09:00-18:00 on Monday (day 0).
+    expect(screen.getByLabelText('businessHours.start 1')).toHaveValue('09:00');
+    expect(screen.getByLabelText('businessHours.end 1')).toHaveValue('18:00');
+
+    // A `time` input is replaced atomically — typing character by character
+    // would drive the editor through meaningless intermediate values.
+    fireEvent.change(screen.getByLabelText('businessHours.end 1'), {
+      target: { value: '22:30' },
+    });
+    await user.type(screen.getByLabelText('businessHours.awayMessage'), 'We are away.');
+
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => {
+      expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+        'agt_1',
+        expect.objectContaining({
+          escalation_rules: 'Refund dispute -> human',
+          business_hours: {
+            timezone: 'Asia/Shanghai',
+            schedule: [{ day: 0, start: 540, end: 1350 }],
+          },
+          away_message: 'We are away.',
+        }),
+      );
+    });
+  });
+
+  it('round-trips a stored schedule into the editor (#43)', async () => {
+    mockedApi.getAgent.mockResolvedValue({
+      ...agent,
+      escalation_rules: 'Always escalate refunds',
+      business_hours: {
+        timezone: 'Europe/London',
+        schedule: [{ day: 5, start: 1320, end: 120 }],
+      },
+      away_message: 'Back Monday.',
+    } as never);
+    renderAgentSettings();
+
+    expect(await screen.findByLabelText('escalation.label')).toHaveValue(
+      'Always escalate refunds',
+    );
+    expect(screen.getByLabelText('businessHours.timezone')).toHaveValue('Europe/London');
+    // 22:00 -> 02:00 wraps past midnight and is stored as-is.
+    expect(screen.getByLabelText('businessHours.start 1')).toHaveValue('22:00');
+    expect(screen.getByLabelText('businessHours.end 1')).toHaveValue('02:00');
+    expect(screen.getByLabelText('businessHours.awayMessage')).toHaveValue('Back Monday.');
   });
 
   it('renders rate_limit_per_minute from agent fixture and allows changing it', async () => {

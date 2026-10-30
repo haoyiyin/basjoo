@@ -77,6 +77,12 @@ export interface Agent {
 	system_prompt: string;
 	/** Operator-written facts that outrank retrieved chunks (#39). */
 	fixed_facts?: string | null;
+	/** Plain-language escalation prompt, appended after the procedures block (#43). */
+	escalation_rules?: string | null;
+	/** `{"timezone": IANA, "schedule": [{"day": 0-6, "start": min, "end": min}]}` (#43). */
+	business_hours?: BusinessHoursPayload | null;
+	/** Widget copy shown outside business hours (#43). */
+	away_message?: string | null;
 	model: string;
 	temperature: number;
 	max_tokens: number;
@@ -126,6 +132,12 @@ export interface Agent {
 	visitor_count?: number;
 	created_at: string;
 	updated_at?: string;
+}
+
+/** Contract C6 business-hours JSON (#43). */
+export interface BusinessHoursPayload {
+	timezone: string;
+	schedule: Array<{ day: number; start: number; end: number }>;
 }
 
 /** Lifecycle state of a knowledge base, mirrored from `KnowledgeBase.status`. */

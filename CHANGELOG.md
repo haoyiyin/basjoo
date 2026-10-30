@@ -8,6 +8,8 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ### Added
 
+- Human handoff (#43): one answer gate (`services/session_state.answer_gate`) decides whether the bot speaks, so `/chat` and `/chat/stream` cannot drift. Operator `reply` mutes the bot without a takeover, `release` hands it back, and `resolve` is distinct from the timeout `closed`. The reason travels as `done.no_answer_reason` (`taken_over`, `resolved`, `closed`, `paused`, `human`, `after_hours`).
+- Business hours (#43): `business_hours` (IANA timezone + weekday/minute ranges, `zoneinfo`, wrap-past-midnight and DST) now actually gates the answer instead of only round-tripping through the console. A closed schedule stores the visitor message, answers nothing, reports `after_hours` with `mode` unchanged, and ships the operator's `away_message` as the visible reply without writing it to the transcript. No config, an empty schedule, or an unparsable one stays always-online.
 - One-command production installer/deployer (`install-deploy.sh`): auto-installs Docker/Compose, clones/syncs repository, deploys production profile via `deploy.sh`, and verifies container health checks.
 - `deploy.sh` now supports `BASJOO_DOCKER_BIN` environment variable for custom Docker binary invocation (e.g., `sudo docker`).
 - SSRF protection for URL ingestion (`backend/services/url_safety.py`): blocks localhost, direct IP literals, embedded credentials, and hostnames resolving to private/special-use IPs.

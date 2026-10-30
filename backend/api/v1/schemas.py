@@ -76,6 +76,16 @@ class ChatResponse(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID")
     message_id: Optional[int] = Field(None, description="消息ID")
     taken_over: bool = Field(False, description="会话是否已被人工接管")
+    # #43: who is expected to answer. `mode="human"` alone (a single operator
+    # reply) is NOT a takeover — `taken_over` stays False.
+    mode: str = Field("ai", description="ai | human")
+    # #43: machine token explaining why the bot stayed silent
+    # (taken_over | resolved | closed | paused | human | after_hours). Null when
+    # it answered. `after_hours` means the schedule was closed and the session
+    # was otherwise answerable — `mode` stays `ai` in that case.
+    no_answer_reason: Optional[str] = Field(
+        None, description="Why the bot did not answer (contract C3)"
+    )
 
 
 class ContextRequest(BaseModel):
@@ -475,6 +485,17 @@ class AgentConfig(BaseModel):
         None,
         description="Operator-written facts injected on every message, above KB chunks (#39)",
     )
+    escalation_rules: Optional[str] = Field(
+        None,
+        description="Plain-language escalation prompt appended after procedures (#43)",
+    )
+    business_hours: Optional[Dict[str, Any]] = Field(
+        None,
+        description="{\"timezone\": IANA, \"schedule\": [{\"day\": 0-6, \"start\": min, \"end\": min}]} (#43)",
+    )
+    away_message: Optional[str] = Field(
+        None, description="Widget copy shown outside business hours (#43)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -570,6 +591,18 @@ class AgentUpdateRequest(BaseModel):
     )
     fixed_facts: Optional[str] = Field(
         None, description="Operator-written facts injected above KB chunks (#39)"
+    )
+    escalation_rules: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Plain-language escalation prompt, appended after procedures (#43)",
+    )
+    business_hours: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Business hours JSON: timezone + per-weekday minute ranges (#43)",
+    )
+    away_message: Optional[str] = Field(
+        None, description="Widget copy shown outside business hours (#43)"
     )
 
     @field_validator("allowed_widget_origins")
@@ -752,6 +785,10 @@ class SessionListItem(BaseModel):
     visitor_country: str | None = None
     visitor_city: str | None = None
     status: str = "active"
+    # #43: who is expected to answer. `taken_over` implies mode == "human", but
+    # mode == "human" alone (one operator reply) leaves `status` untouched.
+    mode: str = "ai"
+    human_replied_at: datetime | None = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime | None = None
