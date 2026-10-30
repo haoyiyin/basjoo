@@ -51,6 +51,10 @@ interface Message {
   confidence?: number | null
   /** #42: true when the answer did not really answer (see answer_quality.py). */
   is_unanswered?: boolean
+  /** #44: true when the fallback model answered (primary allowance spent). */
+  degraded?: boolean
+  /** #44: the model that produced this answer. */
+  model?: string | null
   created_at: string
 }
 
@@ -1027,6 +1031,26 @@ export default function Sessions() {
                                     })}
                                   >
                                     <span className="mono">{confidenceLabel(msg.confidence)}</span>
+                                  </span>
+                                )}
+                                {/* #44: the daily allowance was spent and the fallback
+                                 * model answered. One small note in the meta row so the
+                                 * operator knows why the answer may be weaker. */}
+                                {!isVisitor && msg.degraded && (
+                                  <span
+                                    data-testid={`message-degraded-${msg.id}`}
+                                    title={
+                                      msg.model
+                                        ? t('chat.fallbackModelNote', { model: msg.model })
+                                        : t('chat.degradedNotice')
+                                    }
+                                    style={{
+                                      fontSize: 'var(--text-xs)',
+                                      color: 'var(--fg-dim)',
+                                    }}
+                                  >
+                                    {t('chat.degradedNotice')}
+                                    {msg.model ? ` · ${msg.model}` : ''}
                                   </span>
                                 )}
                                 {/* #42: one click turns the turn into a curated pair. The

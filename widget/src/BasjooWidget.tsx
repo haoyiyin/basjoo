@@ -65,6 +65,10 @@ interface StreamDoneMeta {
   /** #43: who answers next. `taken_over` implies `human`. */
   mode?: 'ai' | 'human';
   no_answer_reason?: string | null;
+  /** #44: true when the fallback model answered (primary allowance spent). */
+  degraded?: boolean;
+  /** #44: the model that actually produced the answer. */
+  model?: string | null;
 }
 
 interface StreamErrorPayload {
@@ -812,6 +816,15 @@ class BasjooWidget {
 
       .basjoo-continue-ai:hover {
         background: ${this.hexToRgba(this.config.themeColor, 0.12)};
+      }
+
+      /* #44: the degraded notice — one small line, muted, no fill. */
+      .basjoo-degraded {
+        margin: -8px 0 0 0;
+        padding: 0 4px;
+        color: ${mutedColor};
+        font-size: 12px;
+        line-height: 1.5;
       }
 
       /* #43: outside business hours the composer is replaced by this. */
@@ -1591,7 +1604,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -1609,6 +1622,7 @@ class BasjooWidget {
       closeWindow: { 'en-US': 'Close', 'zh-CN': '关闭' },
       humanNeedsSession: { 'en-US': 'Send a message first, then you can ask for a human.', 'zh-CN': '请先发送一条消息，然后再转人工。' },
       humanFailed: { 'en-US': 'Could not reach a human agent. Please try again.', 'zh-CN': '转人工失败，请稍后重试。' },
+      degradedNotice: { 'en-US': 'Quota reached — answering with the fallback model', 'zh-CN': '额度用尽，已使用备用模型' },
     };
 
     const locale = this.getRequestLocale().toLowerCase()
@@ -1968,6 +1982,27 @@ class BasjooWidget {
   }
 
   /**
+   * #44: one line under an answer that came from the fallback model. The SSE
+   * `done` event carries the flag; the model name is appended when the backend
+   * sent one. Purely informational — it is not a message and is not persisted.
+   */
+  private showDegradedNotice(model?: string | null) {
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (!messagesContainer) {
+      return;
+    }
+
+    const notice = document.createElement('div');
+    notice.className = 'basjoo-degraded';
+    notice.setAttribute('role', 'status');
+    notice.textContent = model
+      ? `${this.getText('degradedNotice')} · ${model}`
+      : this.getText('degradedNotice');
+    messagesContainer.appendChild(notice);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  /**
    * 开始轮询新消息（人工接管后管理员发送的消息）
    */
   private startPolling() {
@@ -2103,6 +2138,11 @@ class BasjooWidget {
               this.setSessionMode('human');
             }
             this.finalizeStreamingMessage(this.currentStreamSources);
+            /* #44: the `done` event carries the flag; one small notice line so
+             * the visitor knows the answer came from the fallback model. */
+            if (donePayload.degraded) {
+              this.showDegradedNotice(donePayload.model);
+            }
             if (!this.isOpen) {
               this.startTitleBlink();
             }

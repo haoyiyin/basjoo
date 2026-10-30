@@ -365,6 +365,11 @@
     "apiBase": "API 基础地址",
     "modelName": "模型名称",
     "modelNameDesc": "指定使用的LLM模型，如deepseek-chat、gpt-4等。",
+    "fallbackModel": "备用模型",
+    "fallbackModelDesc": "每日额度用尽后，由这个模型继续回答访客。留空则额度用尽后直接停止回答。",
+    "fallbackApiKey": "备用模型 API Key",
+    "fallbackApiKeyDesc": "备用模型专用的密钥，加密存储；留空则复用上方的主密钥。",
+    "fallbackConfigured": "已配置",
     "modelNamePreferNonThinking": "建议优先配置非思考模型，通常更稳定，也更容易控制最终输出。",
     "modelNameThinkingAdvice": "如需使用自带思考模型，请先在调试区中充分测试后再用于正式场景。",
     "modelNameTip1": "不同模型有不同的性能和成本特点。",
@@ -702,6 +707,10 @@
     "clearSuccess": "已成功删除 {{count}} 个文件",
     "clearFailed": "清空失败",
     "processingFailedFallback": "无法处理此文件。请上传有效的、可读的 PDF、TXT、MD、HTML、DOCX 或 XLSX 文档。"
+  },
+  "chat": {
+    "degradedNotice": "额度用尽，已使用备用模型",
+    "fallbackModelNote": "备用模型：{{model}}"
   },
   "citations": {
     "references": "参考来源"

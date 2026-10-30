@@ -365,6 +365,11 @@
     "apiBase": "API Base URL",
     "modelName": "Model Name",
     "modelNameDesc": "Specify the LLM model to use, such as deepseek-chat, gpt-4, etc.",
+    "fallbackModel": "Fallback model",
+    "fallbackModelDesc": "Answers visitors once the daily allowance is spent. Leave it empty and chat stops at the limit instead.",
+    "fallbackApiKey": "Fallback API key",
+    "fallbackApiKeyDesc": "Key for the fallback model, stored encrypted. Leave it empty to reuse the primary key above.",
+    "fallbackConfigured": "Configured",
     "modelNamePreferNonThinking": "We recommend configuring a non-thinking model first, as it is usually more stable and easier to control in final output.",
     "modelNameThinkingAdvice": "If you plan to use a built-in thinking model, test it thoroughly in Playground before using it in production scenarios.",
     "modelNameTip1": "Different models have different performance and cost characteristics.",
@@ -702,6 +707,10 @@
     "clearSuccess": "Successfully deleted {{count}} file(s)",
     "clearFailed": "Failed to clear files",
     "processingFailedFallback": "We couldn't process this file. Please upload a valid, readable PDF, TXT, MD, HTML, DOCX, or XLSX document."
+  },
+  "chat": {
+    "degradedNotice": "Quota reached — answering with the fallback model",
+    "fallbackModelNote": "Fallback model: {{model}}"
   },
   "citations": {
     "references": "References"

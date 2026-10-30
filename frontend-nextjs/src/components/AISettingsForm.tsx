@@ -65,6 +65,9 @@ export default function AISettingsForm({
 		enable_context: false,
 		rate_limit_per_minute: 20,
 		restricted_reply: "",
+		// #44: the model that answers once the daily allowance is spent.
+		fallback_model: "",
+		fallback_api_key: "",
 	});
 	const [personaError, setPersonaError] = useState(false);
 
@@ -122,6 +125,10 @@ export default function AISettingsForm({
 					20,
 				restricted_reply:
 					agentData.restricted_reply ?? t("labels.restrictedReplyPlaceholder"),
+				// The fallback key is never returned; only a boolean, so the
+				// input starts empty and a typed value replaces the stored one.
+				fallback_model: agentData.fallback_model ?? "",
+				fallback_api_key: "",
 			});
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("errors.loadFailed"));
@@ -197,6 +204,14 @@ export default function AISettingsForm({
 				updateData.api_key = formData.api_key;
 			}
 
+			// #44: the fallback model round-trips unconditionally (an empty
+			// string clears it); its key is only written when one was typed,
+			// exactly like the primary key.
+			updateData.fallback_model = formData.fallback_model;
+			if (formData.fallback_api_key.trim()) {
+				updateData.fallback_api_key = formData.fallback_api_key;
+			}
+
 			if (formData.api_key.trim()) {
 				const aiTestResult = await api.testAIApi(agent.id, updateData);
 				if (!aiTestResult.success) {
@@ -211,6 +226,7 @@ export default function AISettingsForm({
 			setFormData((prev) => ({
 				...prev,
 				api_key: "",
+				fallback_api_key: "",
 			}));
 			onSave?.(updatedAgent);
 		} catch (err) {
@@ -283,6 +299,8 @@ export default function AISettingsForm({
 		formData.rate_limit_per_minute,
 		formData.restricted_reply,
 		formData.api_key,
+		formData.fallback_model,
+		formData.fallback_api_key,
 		handleSave,
 	]);
 
@@ -806,6 +824,88 @@ export default function AISettingsForm({
 						}
 						placeholder={getDefaultModel(formData.provider_type)}
 					/>
+				</div>
+
+				{/* #44 — quota degradation. Two fields on the same two-column grid
+				    as the primary key, so the pair reads as one setting. */}
+				<div
+					style={{
+						display: "grid",
+						gridTemplateColumns: "1fr 1fr",
+						gap: "var(--space-4)",
+					}}
+				>
+					<div className="field">
+						<span className="field-label">
+							{t("labels.fallbackModel")}
+							<HelpTooltip
+								title={t("labels.fallbackModel")}
+								content={[t("labels.fallbackModelDesc")]}
+								position="top"
+								size="xs"
+							/>
+						</span>
+						<input
+							className="input"
+							type="text"
+							aria-label={t("labels.fallbackModel")}
+							value={formData.fallback_model}
+							onChange={(e) =>
+								setFormData({
+									...formData,
+									fallback_model: e.target.value,
+								})
+							}
+							placeholder={getDefaultModel(formData.provider_type)}
+						/>
+						<span className="field-hint">
+							{t("labels.fallbackModelDesc")}
+						</span>
+					</div>
+
+					<div className="field">
+						<span
+							className="field-label"
+							style={{
+								display: "flex",
+								justifyContent: "space-between",
+								alignItems: "center",
+								gap: "var(--space-2)",
+							}}
+						>
+							<span>{t("labels.fallbackApiKey")}</span>
+							{agent?.fallback_api_key_set && (
+								<span
+									style={{
+										color: "var(--color-success)",
+										fontSize: "var(--text-xs)",
+									}}
+								>
+									✓ {t("labels.fallbackConfigured")}
+								</span>
+							)}
+						</span>
+						<input
+							className="input"
+							type="password"
+							aria-label={t("labels.fallbackApiKey")}
+							value={formData.fallback_api_key}
+							onChange={(e) =>
+								setFormData({
+									...formData,
+									fallback_api_key: e.target.value,
+								})
+							}
+							placeholder={
+								agent?.fallback_api_key_set
+									? t("placeholders.enterNewApiKey")
+									: "sk-..."
+							}
+						/>
+						<span className="field-hint">
+							{t("labels.fallbackApiKeyDesc")}
+						</span>
+					</div>
 				</div>
 
 				<div
