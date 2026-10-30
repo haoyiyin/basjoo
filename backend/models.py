@@ -236,9 +236,6 @@ class Agent(Base):
     traffic_percentage = Column(Integer, nullable=False, default=100)
 
     # --- Conversation policy (#43, #41) ------------------------------------
-    # Plain-language escalation rules appended to the prompt (a prompt, not a
-    # rule engine).
-    escalation_rules = Column(Text, nullable=True)
     # {"timezone": "Asia/Shanghai", "schedule": [{"day": 0, "start": 540, "end": 1080}]}
     # Absent = always online. Resolved with zoneinfo, never a fixed offset.
     business_hours = Column(JSON, nullable=True, default=None)
@@ -255,14 +252,9 @@ class Agent(Base):
     # every message, capped at 6 passages.
     fixed_facts = Column(Text, nullable=True)
 
-    # --- Quota degradation (#44) ------------------------------------------
-    fallback_model = Column(String(100), nullable=True)
-    # Fernet-encrypted, same helper as api_key.
-    fallback_api_key = Column(String(500), nullable=True)
-
     # --- Scripted keyword fallback (#60) ----------------------------------
-    # "off" | "llm" | "keyword" | "llm_then_keyword". Default "off" so an
-    # upgrade changes nothing. Anything unrecognised reads as "off".
+    # "off" | "keyword". Default "off" so an upgrade changes nothing. Anything
+    # unrecognised (including the retired #44 values) reads as "off".
     fallback_mode = Column(String(20), nullable=False, default="off")
 
     # --- Signed visitor identity (#46) ------------------------------------
@@ -495,10 +487,6 @@ class ChatMessage(Base):
     # the answer was the fallback or nothing was retrieved for a real question.
     confidence = Column(Float, nullable=True)
     is_unanswered = Column(Boolean, nullable=False, default=False)
-    # #44 / #45: this answer came from the agent's fallback model because the
-    # primary allowance was spent. Persisted here so the dashboard can count
-    # degraded answers from its own rows instead of a counter column.
-    degraded = Column(Boolean, nullable=False, default=False)
     # Thumbs vote (#41): -1 / 0 / +1, where 0 retracts. Stored on the visitor's
     # own message so the vote renders in the transcript's own context.
     rating = Column(Integer, nullable=True)
@@ -542,21 +530,16 @@ class WorkspaceQuota(Base):
         Integer, ForeignKey("workspaces.id"), nullable=False, unique=True, index=True
     )
 
-    # 配额限制
+    # 配额限制（存储/滥用保护，不是计费）
     max_agents = Column(Integer, default=10)
     max_urls = Column(Integer, default=500)
     max_qa_items = Column(Integer, default=100)
-    max_messages_per_day = Column(Integer, default=1500)
     max_total_text_mb = Column(Integer, default=20)  # 最大文本量MB
 
     # 当前使用量
     used_urls = Column(Integer, default=0)
     used_qa_items = Column(Integer, default=0)
-    used_messages_today = Column(Integer, default=0)
     used_total_text_mb = Column(Float, default=0.0)
-
-    # 重置时间
-    last_message_reset = Column(DateTime(timezone=True), nullable=True)
 
     # 时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())

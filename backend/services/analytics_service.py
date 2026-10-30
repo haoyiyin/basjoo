@@ -23,10 +23,7 @@ JavaScript client renders ``+Infinity%`` as garbage.
 
 Every number is computed from existing rows — ``chat_sessions``,
 ``chat_messages`` and ``leads`` — with no counter column a background job would
-have to keep in sync (spec ground rule). The one addition is
-``chat_messages.degraded``, which simply *persists* the flag #44 already returns
-on `ChatResponse.degraded` / the SSE `done` event; without it "how many answers
-came from the fallback model" is not answerable from the database at all.
+have to keep in sync (spec ground rule).
 """
 
 from __future__ import annotations
@@ -64,7 +61,6 @@ CSV_COLUMNS: tuple[str, ...] = (
     "messages",
     "answered",
     "unanswered",
-    "degraded",
     "leads",
     "negative_feedback",
     "avg_confidence",
@@ -320,7 +316,6 @@ async def collect_metrics(
     )
     answered = await _message_count(assistant, ChatMessage.is_unanswered.is_(False))
     unanswered = await _message_count(assistant, ChatMessage.is_unanswered.is_(True))
-    degraded = await _message_count(assistant, ChatMessage.degraded.is_(True))
     negative_feedback = await _message_count(ChatMessage.rating == -1)
     positive_feedback = await _message_count(ChatMessage.rating == 1)
     rated = await _message_count(ChatMessage.rating.in_((1, -1)))
@@ -357,7 +352,6 @@ async def collect_metrics(
         "ai_replies": ai_replies,
         "answered": answered,
         "unanswered": unanswered,
-        "degraded": degraded,
         "handoffs": handoffs,
         "leads": leads,
         "negative_feedback": negative_feedback,
@@ -417,7 +411,6 @@ async def daily_series(
     messages_by_day: dict[str, int] = {}
     answered_by_day: dict[str, int] = {}
     unanswered_by_day: dict[str, int] = {}
-    degraded_by_day: dict[str, int] = {}
     negative_by_day: dict[str, int] = {}
     confidence_by_day: dict[str, Optional[float]] = {}
     for row in (
@@ -426,7 +419,6 @@ async def daily_series(
                 day(ChatMessage.created_at),
                 func.count(ChatMessage.id),
                 func.sum(ChatMessage.is_unanswered.is_(True)),
-                func.sum(ChatMessage.degraded.is_(True)),
                 func.sum(ChatMessage.rating == -1),
                 func.avg(ChatMessage.confidence),
             )
@@ -443,10 +435,9 @@ async def daily_series(
         key = str(row[0])
         messages_by_day[key] = int(row[1] or 0)
         unanswered_by_day[key] = int(row[2] or 0)
-        degraded_by_day[key] = int(row[3] or 0)
-        negative_by_day[key] = int(row[4] or 0)
+        negative_by_day[key] = int(row[3] or 0)
         confidence_by_day[key] = (
-            round(float(row[5]), 4) if row[5] is not None else None
+            round(float(row[4]), 4) if row[4] is not None else None
         )
     # "answered" is its own grouped query rather than `messages - unanswered`,
     # because `messages` counts visitor turns too; keeping them separate means
@@ -480,7 +471,6 @@ async def daily_series(
                 "messages": messages_by_day.get(key, 0),
                 "answered": answered_by_day.get(key, 0),
                 "unanswered": unanswered_by_day.get(key, 0),
-                "degraded": degraded_by_day.get(key, 0),
                 "leads": leads_by_day.get(key, 0),
                 "negative_feedback": negative_by_day.get(key, 0),
                 "avg_confidence": confidence_by_day.get(key),

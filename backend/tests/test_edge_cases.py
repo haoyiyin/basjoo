@@ -65,21 +65,24 @@ class TestEdgeCases:
         assert response.status_code == 200
         quota = response.json()
 
-        # Verify quota values are reasonable
+        # Verify quota values are reasonable. #62 retired the daily message
+        # counter: the four storage/abuse guards are all that remain.
         assert quota["max_urls"] > 0
         assert quota["max_files"] > 0
-        assert quota["max_messages_per_day"] > 0
         assert quota["used_urls"] >= 0
         assert quota["used_files"] >= 0
-        assert quota["used_messages_today"] >= 0
         assert quota["remaining_urls"] >= 0
         assert quota["remaining_files"] >= 0
-        assert quota["remaining_messages_today"] >= 0
+        for retired in (
+            "max_messages_per_day",
+            "used_messages_today",
+            "remaining_messages_today",
+        ):
+            assert retired not in quota, f"{retired} must be gone"
 
         # Verify consistency
         assert quota["used_urls"] <= quota["max_urls"]
         assert quota["used_files"] <= quota["max_files"]
-        assert quota["used_messages_today"] <= quota["max_messages_per_day"]
 
     @pytest.mark.asyncio
     async def test_session_id_variations(self, client):
@@ -203,11 +206,12 @@ class TestEdgeCases:
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Send many concurrent quota check requests
-        async def check_quota():
+        # Send many concurrent quota read requests (the retired `check_quota`
+        # spent a row lock here; reading the quota needs none).
+        async def read_quota():
             return await client.get(f"/api/v1/quota?agent_id={agent_id}")
 
-        tasks = [check_quota() for _ in range(20)]
+        tasks = [read_quota() for _ in range(20)]
         results = await asyncio.gather(*tasks)
 
         # All should succeed

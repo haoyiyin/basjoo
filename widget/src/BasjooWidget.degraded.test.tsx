@@ -1,10 +1,18 @@
 /**
- * #44 — the widget shows a notice when the fallback model answered.
+ * #62 — the widget has NO degraded / fallback-model notice any more.
  *
- * The SSE `done` event carries `degraded` (and the model name); the widget
- * renders one small informational line under the answer. It is not a message
- * and is never persisted — the visitor just learns why the answer may be
- * weaker than usual.
+ * This file used to pin the #44 behaviour: the SSE `done` event carried
+ * `degraded: true` (plus the fallback model's name) and the widget rendered a
+ * "Quota reached — answering with the fallback model" line under the answer.
+ * The daily quota and the #44 fallback model were both deleted, so the reverse
+ * is now the contract:
+ *
+ *   - a `done` payload that still carries `degraded` / `model` is ignored;
+ *   - no notice element of any kind is rendered over a normal model answer;
+ *   - the retired copy never reaches the visitor, in either locale.
+ *
+ * The #60 scripted notice (`BasjooWidget.scripted.test.tsx`) is a different
+ * feature and stays exactly as it was.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -26,6 +34,9 @@ const CONFIG = {
   online: true,
 };
 
+/** Every class the widget ever used for an informational answer notice. */
+const NOTICE_SELECTORS = ['.basjoo-degraded', '.basjoo-scripted'];
+
 function jsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -35,7 +46,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
-/** A canned SSE body: sources → content → done (with the #44 flags). */
+/** A canned SSE body: sources → content → done (carrying the retired flags). */
 function sseResponse(events: string[]): Response {
   const body = events.map((event) => `${event}\n\n`).join('');
   const encoder = new TextEncoder();
@@ -91,7 +102,13 @@ async function sendOne(widget: WidgetLike) {
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
-describe('BasjooWidget degraded fallback notice (#44)', () => {
+function expectNoNotice(): void {
+  for (const selector of NOTICE_SELECTORS) {
+    expect(document.querySelector(selector)).toBeNull();
+  }
+}
+
+describe('BasjooWidget has no degraded notice (#62 removed #44)', () => {
   beforeEach(() => {
     document.documentElement.innerHTML = '<html><head></head><body></body></html>';
     window.localStorage.clear();
@@ -103,7 +120,7 @@ describe('BasjooWidget degraded fallback notice (#44)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows the notice with the model name when the done event is degraded', async () => {
+  it('ignores a done payload that still carries degraded + model', async () => {
     installFetch({
       message_id: 1,
       session_id: 'sess_1',
@@ -115,12 +132,42 @@ describe('BasjooWidget degraded fallback notice (#44)', () => {
     await widget.init();
     await sendOne(widget);
 
-    const notice = document.querySelector('.basjoo-degraded') as HTMLElement;
-    expect(notice).toBeTruthy();
-    expect(notice.getAttribute('role')).toBe('status');
-    expect(notice.textContent).toContain('Quota reached');
-    expect(notice.textContent).toContain('cheap-fallback-model');
-    // The answer itself is still rendered — degrading is not failing.
+    expectNoNotice();
+    // The answer itself is still rendered — the flag is simply dead.
+    const transcript = document.querySelector('.basjoo-messages')?.textContent || '';
+    expect(transcript).toContain('Here is your answer.');
+    expect(transcript).not.toContain('Quota reached');
+    expect(transcript).not.toContain('fallback model');
+    // The retired model name is not echoed anywhere either.
+    expect(transcript).not.toContain('cheap-fallback-model');
+
+    widget.destroy();
+  });
+
+  it('renders no notice for the retired Chinese copy in zh-CN', async () => {
+    installFetch({ message_id: 2, session_id: 'sess_2', degraded: true, model: null });
+
+    const widget = makeWidget('zh-CN');
+    await widget.init();
+    await sendOne(widget);
+
+    expectNoNotice();
+    const transcript = document.querySelector('.basjoo-messages')?.textContent || '';
+    expect(transcript).toContain('Here is your answer.');
+    expect(transcript).not.toContain('额度用尽');
+    expect(transcript).not.toContain('备用模型');
+
+    widget.destroy();
+  });
+
+  it('renders no notice on a normal answer that carries no flags', async () => {
+    installFetch({ message_id: 3, session_id: 'sess_3' });
+
+    const widget = makeWidget('en-US');
+    await widget.init();
+    await sendOne(widget);
+
+    expectNoNotice();
     expect(document.querySelector('.basjoo-messages')?.textContent).toContain(
       'Here is your answer.',
     );
@@ -128,30 +175,18 @@ describe('BasjooWidget degraded fallback notice (#44)', () => {
     widget.destroy();
   });
 
-  it('shows the Chinese copy in zh-CN', async () => {
-    installFetch({ message_id: 2, session_id: 'sess_2', degraded: true, model: null });
-
-    const widget = makeWidget('zh-CN');
-    await widget.init();
-    await sendOne(widget);
-
-    const notice = document.querySelector('.basjoo-degraded') as HTMLElement;
-    expect(notice).toBeTruthy();
-    expect(notice.textContent).toContain('额度用尽');
-    // No model name was sent, so none is appended.
-    expect(notice.textContent).not.toContain('·');
-
-    widget.destroy();
-  });
-
-  it('renders no notice at all on a normal answer', async () => {
-    installFetch({ message_id: 3, session_id: 'sess_3', degraded: false, model: 'primary' });
+  it('never ships the retired degraded styles or copy', async () => {
+    installFetch({ message_id: 4, session_id: 'sess_4' });
 
     const widget = makeWidget('en-US');
     await widget.init();
     await sendOne(widget);
 
-    expect(document.querySelector('.basjoo-degraded')).toBeNull();
+    const styles = document.querySelector('#basjoo-widget-styles')?.textContent || '';
+    expect(styles).not.toBe('');
+    expect(styles).not.toContain('.basjoo-degraded');
+    // The #60 notice is a separate feature and keeps its own (renamed) style.
+    expect(styles).toContain('.basjoo-scripted');
 
     widget.destroy();
   });

@@ -132,17 +132,12 @@ class TestExtremeStress:
         assert all(r == 3 for r in results), "Session isolation failed under load"
 
     @pytest.mark.asyncio
-    async def test_quota_accuracy_under_concurrent_load(self, client):
-        """Test quota tracking remains accurate under concurrent load"""
+    async def test_no_message_quota_under_concurrent_load(self, client):
+        """#62: 20 concurrent turns are all answered — there is no counter to
+        keep accurate, so nothing can drift and nothing can 429."""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Get initial quota
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        initial_quota = response.json()
-        initial_messages = initial_quota["used_messages_today"]
-
-        # Send 20 concurrent chat requests
         tasks = [
             client.post(
                 "/api/v1/chat",
@@ -152,14 +147,13 @@ class TestExtremeStress:
         ]
         results = await asyncio.gather(*tasks)
 
-        successful = sum(1 for r in results if r.status_code == 200)
+        assert all(r.status_code == 200 for r in results), [
+            r.status_code for r in results
+        ]
 
-        # Check quota increased by exactly the number of successful requests
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        new_quota = response.json()
-        messages_sent = new_quota["used_messages_today"] - initial_messages
-
-        assert messages_sent == successful, f"Quota tracking inaccurate: {messages_sent} vs {successful}"
+        quota = (await client.get(f"/api/v1/quota?agent_id={agent_id}")).json()
+        assert "used_messages_today" not in quota
+        assert "max_messages_per_day" not in quota
 
     @pytest.mark.asyncio
     async def test_error_recovery_under_stress(self, client):

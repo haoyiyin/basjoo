@@ -224,7 +224,8 @@ async def test_tiles_count_the_current_and_previous_windows_from_real_rows(
         default_agent_id, "sess_old_a", too_old, visitor_id="visitor_d"
     )
 
-    # Session A: a good, degraded answer and a thumbs-up on the visitor turn.
+    # Session A: a good answer and a thumbs-up on the visitor turn. (#62: the
+    # `degraded` flag is retired — no message carries it any more.)
     await _insert_message(
         first, "user", current_day, content="你们的退款窗口是多长时间？", rating=1
     )
@@ -235,7 +236,6 @@ async def test_tiles_count_the_current_and_previous_windows_from_real_rows(
         content="退款窗口为收货后 30 天。",
         confidence=0.8,
         is_unanswered=False,
-        degraded=True,
     )
     # Session B: a thumbs-down and an answer flagged unanswered.
     await _insert_message(
@@ -248,7 +248,6 @@ async def test_tiles_count_the_current_and_previous_windows_from_real_rows(
         content="抱歉，我无法回答。",
         confidence=0.4,
         is_unanswered=True,
-        degraded=False,
     )
     # The previous window has one session and one message pair of its own.
     previous_session = await _insert_session(
@@ -280,7 +279,8 @@ async def test_tiles_count_the_current_and_previous_windows_from_real_rows(
     assert tiles["visitors"]["value"] == 2
     assert tiles["leads"]["value"] == 1
     assert tiles["unanswered"]["value"] == 1
-    assert tiles["degraded"]["value"] == 1
+    # #62 / D6: the `degraded` tile is retired and absent from the payload.
+    assert "degraded" not in tiles
     assert tiles["negative_feedback"]["value"] == 1
     # One up, one down: the positive share of the rated turns is exactly half.
     assert tiles["positive_feedback_rate"]["value"] == 0.5

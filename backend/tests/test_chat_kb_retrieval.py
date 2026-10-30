@@ -47,12 +47,6 @@ async def test_chat_calls_kb_retrieval_with_agent_threshold():
     mock_result.scalar_one_or_none.return_value = mock_agent
     mock_session.execute.return_value = mock_result
 
-    # Mock quota check
-    mock_quota = MagicMock()
-    mock_quota.used_messages_today = 0
-    mock_quota.max_messages_per_day = 100
-    mock_quota.id = "quota_123"
-
     chat_request = ChatRequest(
         agent_id="agent_123",
         message="test query about unique content XYZ123TEST",
@@ -67,29 +61,28 @@ async def test_chat_calls_kb_retrieval_with_agent_threshold():
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("api.v1.endpoints.check_quota", return_value=mock_quota):
-            with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
-                mock_chat_session = MagicMock()
-                mock_chat_session.id = "session_123"
-                mock_chat_session.status = "active"
-                mock_session_fn.return_value = mock_chat_session
+        with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
+            mock_chat_session = MagicMock()
+            mock_chat_session.id = "session_123"
+            mock_chat_session.status = "active"
+            mock_session_fn.return_value = mock_chat_session
 
-                with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
-                    mock_kb_svc = MagicMock()
-                    mock_kb_svc.retrieve = AsyncMock(return_value=[
-                        {"text": "This contains XYZ123TEST unique phrase", "doc_id": "doc1", "chunk_index": 0, "score": 0.045, "filename": "test.txt"}
-                    ])
-                    mock_kb_svc_cls.return_value = mock_kb_svc
+            with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
+                mock_kb_svc = MagicMock()
+                mock_kb_svc.retrieve = AsyncMock(return_value=[
+                    {"text": "This contains XYZ123TEST unique phrase", "doc_id": "doc1", "chunk_index": 0, "score": 0.045, "filename": "test.txt"}
+                ])
+                mock_kb_svc_cls.return_value = mock_kb_svc
 
-                    # Call prepare_chat_request
-                    result = await prepare_chat_request(chat_request, mock_http_request, mock_session)
+                # Call prepare_chat_request
+                result = await prepare_chat_request(chat_request, mock_http_request, mock_session)
 
-                    # Verify KbRetrievalService.retrieve was called with agent's threshold
-                    mock_kb_svc.retrieve.assert_called_once()
-                    call_kwargs = mock_kb_svc.retrieve.call_args[1]
-                    assert call_kwargs["agent_id"] == "agent_123"
-                    assert call_kwargs["top_k"] == 5
-                    assert call_kwargs["threshold"] == 0.03
+                # Verify KbRetrievalService.retrieve was called with agent's threshold
+                mock_kb_svc.retrieve.assert_called_once()
+                call_kwargs = mock_kb_svc.retrieve.call_args[1]
+                assert call_kwargs["agent_id"] == "agent_123"
+                assert call_kwargs["top_k"] == 5
+                assert call_kwargs["threshold"] == 0.03
 
 
 @pytest.mark.asyncio
@@ -120,10 +113,6 @@ async def test_chat_system_message_includes_kb_context():
     mock_result.scalar_one_or_none.return_value = mock_agent
     mock_session.execute.return_value = mock_result
 
-    mock_quota = MagicMock()
-    mock_quota.used_messages_today = 0
-    mock_quota.max_messages_per_day = 100
-    mock_quota.id = "quota_123"
 
     chat_request = ChatRequest(
         agent_id="agent_123",
@@ -139,33 +128,32 @@ async def test_chat_system_message_includes_kb_context():
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("api.v1.endpoints.check_quota", return_value=mock_quota):
-            with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
-                mock_chat_session = MagicMock()
-                mock_chat_session.id = "session_123"
-                mock_chat_session.status = "active"
-                mock_session_fn.return_value = mock_chat_session
+        with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
+            mock_chat_session = MagicMock()
+            mock_chat_session.id = "session_123"
+            mock_chat_session.status = "active"
+            mock_session_fn.return_value = mock_chat_session
 
-                with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
-                    mock_kb_svc = MagicMock()
-                    # Return KB results with a unique phrase
-                    mock_kb_svc.retrieve = AsyncMock(return_value=[
-                        {"text": "The BasjooKB2024TEST answer is 42", "doc_id": "doc1", "chunk_index": 0, "score": 0.045, "filename": "knowledge.txt"}
-                    ])
-                    mock_kb_svc_cls.return_value = mock_kb_svc
+            with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
+                mock_kb_svc = MagicMock()
+                # Return KB results with a unique phrase
+                mock_kb_svc.retrieve = AsyncMock(return_value=[
+                    {"text": "The BasjooKB2024TEST answer is 42", "doc_id": "doc1", "chunk_index": 0, "score": 0.045, "filename": "knowledge.txt"}
+                ])
+                mock_kb_svc_cls.return_value = mock_kb_svc
 
-                    result = await prepare_chat_request(chat_request, mock_http_request, mock_session)
+                result = await prepare_chat_request(chat_request, mock_http_request, mock_session)
 
-                    # Verify system message contains KB context
-                    messages = result.get("messages", [])
-                    system_msg = next((m for m in messages if m.get("role") == "system"), None)
-                    assert system_msg is not None
-                    system_content = system_msg.get("content", "")
+                # Verify system message contains KB context
+                messages = result.get("messages", [])
+                system_msg = next((m for m in messages if m.get("role") == "system"), None)
+                assert system_msg is not None
+                system_content = system_msg.get("content", "")
 
-                    # Should contain the KB context marker
-                    assert "背景资料" in system_content or "relevant information" in system_content.lower()
-                    # Should contain the retrieved text
-                    assert "BasjooKB2024TEST" in system_content
+                # Should contain the KB context marker
+                assert "背景资料" in system_content or "relevant information" in system_content.lower()
+                # Should contain the retrieved text
+                assert "BasjooKB2024TEST" in system_content
 
 
 @pytest.mark.asyncio
@@ -196,10 +184,6 @@ async def test_chat_kb_retrieval_without_kb_id_returns_no_context():
     mock_result.scalar_one_or_none.return_value = mock_agent
     mock_session.execute.return_value = mock_result
 
-    mock_quota = MagicMock()
-    mock_quota.used_messages_today = 0
-    mock_quota.max_messages_per_day = 100
-    mock_quota.id = "quota_123"
 
     chat_request = ChatRequest(
         agent_id="agent_no_kb",
@@ -217,30 +201,29 @@ async def test_chat_kb_retrieval_without_kb_id_returns_no_context():
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("api.v1.endpoints.check_quota", return_value=mock_quota):
-            with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
-                mock_chat_session = MagicMock()
-                mock_chat_session.id = "session_123"
-                mock_chat_session.status = "active"
-                mock_session_fn.return_value = mock_chat_session
+        with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
+            mock_chat_session = MagicMock()
+            mock_chat_session.id = "session_123"
+            mock_chat_session.status = "active"
+            mock_session_fn.return_value = mock_chat_session
 
-                with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
-                    mock_kb_svc = MagicMock()
-                    mock_kb_svc.retrieve = AsyncMock(return_value=[])
-                    mock_kb_svc_cls.return_value = mock_kb_svc
+            with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
+                mock_kb_svc = MagicMock()
+                mock_kb_svc.retrieve = AsyncMock(return_value=[])
+                mock_kb_svc_cls.return_value = mock_kb_svc
 
-                    result = await prepare_chat_request(chat_request, mock_http_request, mock_session)
+                result = await prepare_chat_request(chat_request, mock_http_request, mock_session)
 
-                    # KB retrieval should not be called when agent has no kb_id
-                    # (based on current implementation: if getattr(agent, "kb_id", None): ...)
-                    mock_kb_svc.retrieve.assert_not_called()
+                # KB retrieval should not be called when agent has no kb_id
+                # (based on current implementation: if getattr(agent, "kb_id", None): ...)
+                mock_kb_svc.retrieve.assert_not_called()
 
-                    # System message should indicate no KB
-                    messages = result.get("messages", [])
-                    system_msg = next((m for m in messages if m.get("role") == "system"), None)
-                    assert system_msg is not None
-                    system_content = system_msg.get("content", "")
-                    assert "No relevant information" in system_content or "no relevant information" in system_content.lower()
+                # System message should indicate no KB
+                messages = result.get("messages", [])
+                system_msg = next((m for m in messages if m.get("role") == "system"), None)
+                assert system_msg is not None
+                system_content = system_msg.get("content", "")
+                assert "No relevant information" in system_content or "no relevant information" in system_content.lower()
 
 
 DIMENSION = 4
@@ -394,10 +377,6 @@ async def test_ready_kb_content_with_unique_phrase_passed_to_chat_context():
     mock_result.scalar_one_or_none.return_value = mock_agent
     mock_session.execute.return_value = mock_result
 
-    mock_quota = MagicMock()
-    mock_quota.used_messages_today = 0
-    mock_quota.max_messages_per_day = 1000
-    mock_quota.id = "quota_123"
 
     # Use a unique test phrase that would only come from indexed content
     unique_phrase = "UNIQUE_VERIFICATION_PHRASE_2024_READY_TEST"
@@ -416,56 +395,55 @@ async def test_ready_kb_content_with_unique_phrase_passed_to_chat_context():
         mock_get_db.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_get_db.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("api.v1.endpoints.check_quota", return_value=mock_quota):
-            with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
-                mock_chat_session = MagicMock()
-                mock_chat_session.id = "session_ready_123"
-                mock_chat_session.status = "active"
-                mock_session_fn.return_value = mock_chat_session
+        with patch("api.v1.endpoints.get_or_create_chat_session") as mock_session_fn:
+            mock_chat_session = MagicMock()
+            mock_chat_session.id = "session_ready_123"
+            mock_chat_session.status = "active"
+            mock_session_fn.return_value = mock_chat_session
 
-                # Mock KB retrieval returning content from a "ready" document
-                with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
-                    mock_kb_svc = MagicMock()
-                    # Simulate retrieval returning content from a ready/indexed document
-                    mock_kb_svc.retrieve = AsyncMock(return_value=[
-                        {
-                            "text": f"This is the document content containing {unique_phrase} which proves KB retrieval works.",
-                            "doc_id": "doc_ready_001",
-                            "chunk_index": 0,
-                            "score": 0.065,
-                            "filename": "ready_document.txt"
-                        }
-                    ])
-                    mock_kb_svc_cls.return_value = mock_kb_svc
+            # Mock KB retrieval returning content from a "ready" document
+            with patch("api.v1.endpoints.KbRetrievalService") as mock_kb_svc_cls:
+                mock_kb_svc = MagicMock()
+                # Simulate retrieval returning content from a ready/indexed document
+                mock_kb_svc.retrieve = AsyncMock(return_value=[
+                    {
+                        "text": f"This is the document content containing {unique_phrase} which proves KB retrieval works.",
+                        "doc_id": "doc_ready_001",
+                        "chunk_index": 0,
+                        "score": 0.065,
+                        "filename": "ready_document.txt"
+                    }
+                ])
+                mock_kb_svc_cls.return_value = mock_kb_svc
 
-                    result = await prepare_chat_request(
-                        chat_request, mock_http_request, mock_session
-                    )
+                result = await prepare_chat_request(
+                    chat_request, mock_http_request, mock_session
+                )
 
-                    # Verify retrieval was called
-                    mock_kb_svc.retrieve.assert_called_once()
+                # Verify retrieval was called
+                mock_kb_svc.retrieve.assert_called_once()
 
-                    # Verify system message contains the unique phrase from the ready document
-                    messages = result.get("messages", [])
-                    assert len(messages) > 0, "Messages should not be empty"
+                # Verify system message contains the unique phrase from the ready document
+                messages = result.get("messages", [])
+                assert len(messages) > 0, "Messages should not be empty"
 
-                    system_msg = messages[0]
-                    assert system_msg["role"] == "system", "First message should be system prompt"
+                system_msg = messages[0]
+                assert system_msg["role"] == "system", "First message should be system prompt"
 
-                    system_content = system_msg["content"]
+                system_content = system_msg["content"]
 
-                    # The unique phrase from the ready KB document must be in the system message
-                    assert unique_phrase in system_content, (
-                        f"Unique phrase '{unique_phrase}' from ready KB document "
-                        f"should be present in system message. Got: {system_content[:200]}..."
-                    )
+                # The unique phrase from the ready KB document must be in the system message
+                assert unique_phrase in system_content, (
+                    f"Unique phrase '{unique_phrase}' from ready KB document "
+                    f"should be present in system message. Got: {system_content[:200]}..."
+                )
 
-                    # Verify the content structure indicates KB context injection
-                    assert "背景资料" in system_content or "relevant information" in system_content.lower(), (
-                        "System message should contain KB context marker"
-                    )
+                # Verify the content structure indicates KB context injection
+                assert "背景资料" in system_content or "relevant information" in system_content.lower(), (
+                    "System message should contain KB context marker"
+                )
 
-                    # Verify source filename is included
-                    assert "ready_document.txt" in system_content, (
-                        "Source filename should be in KB context"
-                    )
+                # Verify source filename is included
+                assert "ready_document.txt" in system_content, (
+                    "Source filename should be in KB context"
+                )

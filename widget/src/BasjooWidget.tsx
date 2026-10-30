@@ -123,10 +123,6 @@ interface StreamDoneMeta {
    */
   mode?: 'ai' | 'human' | 'scripted';
   no_answer_reason?: string | null;
-  /** #44: true when the fallback model answered (primary allowance spent). */
-  degraded?: boolean;
-  /** #44: the model that actually produced the answer. */
-  model?: string | null;
   /** #60: what matched a `scripted` answer — today always `keyword`. */
   matched_by?: string | null;
 }
@@ -1506,8 +1502,8 @@ class BasjooWidget {
         background: ${this.hexToRgba(this.config.themeColor, 0.12)};
       }
 
-      /* #44: the degraded notice — one small line, muted, no fill. */
-      .basjoo-degraded {
+      /* #60: the scripted-answer notice — one small line, muted, no fill. */
+      .basjoo-scripted {
         margin: -8px 0 0 0;
         padding: 0 4px;
         color: ${theme.textMuted};
@@ -2468,11 +2464,10 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice' | 'scriptedNotice' | 'identityMismatch' | 'identityRequired'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'scriptedNotice' | 'identityMismatch' | 'identityRequired'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
-      quotaExceeded: { 'en-US': 'Daily message limit reached', 'zh-CN': '今日消息已达上限' },
       takenOverNotice: { 'en-US': 'Your conversation has been transferred to a human agent. Please wait for their reply.', 'zh-CN': '已转接人工客服，请等待回复。' },
       inputPlaceholder: { 'en-US': 'Type your question...', 'zh-CN': '输入您的问题...' },
       messageTooLong: { 'en-US': 'Message too long (max 2000 characters)', 'zh-CN': '消息过长（最多2000字符）' },
@@ -2486,7 +2481,6 @@ class BasjooWidget {
       closeWindow: { 'en-US': 'Close', 'zh-CN': '关闭' },
       humanNeedsSession: { 'en-US': 'Send a message first, then you can ask for a human.', 'zh-CN': '请先发送一条消息，然后再转人工。' },
       humanFailed: { 'en-US': 'Could not reach a human agent. Please try again.', 'zh-CN': '转人工失败，请稍后重试。' },
-      degradedNotice: { 'en-US': 'Quota reached — answering with the fallback model', 'zh-CN': '额度用尽，已使用备用模型' },
       scriptedNotice: { 'en-US': 'Answered from a saved FAQ', 'zh-CN': '由常见问题自动回答' },
       identityMismatch: { 'en-US': 'We could not verify your identity. Please refresh the page and sign in again.', 'zh-CN': '无法验证您的身份，请刷新页面并重新登录。' },
       identityRequired: { 'en-US': 'Please sign in on this page to start chatting.', 'zh-CN': '请先在本页面登录，然后再开始对话。' },
@@ -2849,31 +2843,10 @@ class BasjooWidget {
   }
 
   /**
-   * #44: one line under an answer that came from the fallback model. The SSE
-   * `done` event carries the flag; the model name is appended when the backend
-   * sent one. Purely informational — it is not a message and is not persisted.
-   */
-  private showDegradedNotice(model?: string | null) {
-    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
-    if (!messagesContainer) {
-      return;
-    }
-
-    const notice = document.createElement('div');
-    notice.className = 'basjoo-degraded';
-    notice.setAttribute('role', 'status');
-    notice.textContent = model
-      ? `${this.getText('degradedNotice')} · ${model}`
-      : this.getText('degradedNotice');
-    messagesContainer.appendChild(notice);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  }
-
-  /**
    * #60: one line under an answer that a keyword-matched FAQ pair produced. The
-   * SSE `done` event carries `mode: 'scripted'`; this reuses the #44 notice
-   * treatment (`.basjoo-degraded`) so the visitor is not told a model answered.
-   * Purely informational — it is not a message and is not persisted.
+   * SSE `done` event carries `mode: 'scripted'` and `matched_by`; the notice is
+   * what tells the visitor no model answered. Purely informational — it is not
+   * a message and is not persisted.
    */
   private showScriptedNotice() {
     const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
@@ -2882,7 +2855,7 @@ class BasjooWidget {
     }
 
     const notice = document.createElement('div');
-    notice.className = 'basjoo-degraded';
+    notice.className = 'basjoo-scripted';
     notice.setAttribute('role', 'status');
     notice.textContent = this.getText('scriptedNotice');
     messagesContainer.appendChild(notice);
@@ -3026,8 +2999,6 @@ class BasjooWidget {
             }
             this.finalizeStreamingMessage(this.currentStreamSources);
             /* #60: a keyword-matched FAQ pair answered, so no model was called.
-             * Exactly one notice per answer: the scripted line wins, because a
-             * scripted turn is never a degraded (fallback-model) turn.
              *
              * `matched_by` is the discriminator, not `mode`: a MISS is also
              * `mode: 'scripted'` but its text is the operator's `restricted_reply`
@@ -3035,10 +3006,6 @@ class BasjooWidget {
              * saved FAQ" over an apology would be a lie to the visitor. */
             if (donePayload.mode === 'scripted' && donePayload.matched_by) {
               this.showScriptedNotice();
-            } else if (donePayload.degraded) {
-              /* #44: the `done` event carries the flag; one small notice line so
-               * the visitor knows the answer came from the fallback model. */
-              this.showDegradedNotice(donePayload.model);
             }
             if (!this.isOpen) {
               this.startTitleBlink();
@@ -3241,8 +3208,6 @@ class BasjooWidget {
       if (error instanceof TypeError || errorText.includes('fetch')) {
         errorMessage = this.getText('networkError');
         consoleHint = `Request may be blocked by CORS, network connectivity, or an incorrect apiBase. Current apiBase: ${this.config.apiBase || '(not set)'}`;
-      } else if (errorText.includes('429') || errorText.toLowerCase().includes('quota')) {
-        errorMessage = this.getText('quotaExceeded');
       } else if (error?.name === 'ORIGIN_NOT_ALLOWED' || errorText.toLowerCase().includes('widget origin not allowed')) {
         errorMessage = this.getText('sendFailed');
         consoleHint = 'Widget request was blocked because the current page origin is not on the allowed domain list.';

@@ -150,7 +150,7 @@ def provider_configured(agent: Optional[Agent]) -> bool:
     """
     if agent is None:
         return False
-    if not (getattr(agent, "api_key", None) or getattr(agent, "fallback_api_key", None)):
+    if not getattr(agent, "api_key", None):
         return False
     return bool(getattr(agent, "model", None))
 

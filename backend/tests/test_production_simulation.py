@@ -49,17 +49,12 @@ class TestProductionSimulation:
         )
 
     @pytest.mark.asyncio
-    async def test_quota_concurrent_safety(self, client):
-        """Test quota management under concurrent load"""
+    async def test_no_message_quota_under_concurrent_load(self, client):
+        """#62: concurrent turns never contend on a message counter — there is
+        none. Every request is answered; the quota payload has no daily fields."""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Set a low quota
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        quota_data = response.json()
-        initial_quota = quota_data["used_messages_today"]
-
-        # Send multiple concurrent requests
         async def send_request():
             try:
                 return await client.post(
@@ -73,20 +68,16 @@ class TestProductionSimulation:
             except Exception:
                 return None
 
-        # Send 5 concurrent requests
         tasks = [send_request() for _ in range(5)]
         responses = await asyncio.gather(*tasks)
 
-        # Count successful requests
-        successful = sum(1 for r in responses if r and r.status_code == 200)
+        assert all(r is not None and r.status_code == 200 for r in responses), [
+            None if r is None else r.status_code for r in responses
+        ]
 
-        # Verify quota increased correctly
-        response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
-        final_quota = response.json()["used_messages_today"]
-
-        assert final_quota == initial_quota + successful, (
-            "Quota tracking failed under load"
-        )
+        quota = (await client.get(f"/api/v1/quota?agent_id={agent_id}")).json()
+        assert "used_messages_today" not in quota
+        assert "max_messages_per_day" not in quota
 
     @pytest.mark.asyncio
     async def test_error_handling_invalid_agent(self, client):
@@ -155,21 +146,17 @@ class TestProductionSimulation:
         # Note: This would require a session list endpoint to fully verify
 
     @pytest.mark.asyncio
-    async def test_quota_daily_reset(self, client):
-        """Test quota reset mechanism (simulated)"""
+    async def test_there_is_no_daily_message_reset(self, client):
+        """#62: nothing resets daily any more — the counter and its timestamp
+        are gone from the payload entirely."""
         response = await client.get("/api/v1/agent:default")
         agent_id = response.json()["id"]
 
-        # Get current quota
         response = await client.get(f"/api/v1/quota?agent_id={agent_id}")
         assert response.status_code == 200
         quota = response.json()
-        reset_date = quota.get("last_message_reset")
-
-        # Verify reset_date exists and is valid
-        if reset_date:
-            reset_datetime = datetime.fromisoformat(reset_date.replace("Z", "+00:00"))
-            assert reset_datetime <= datetime.now(timezone.utc)
+        assert "last_message_reset" not in quota
+        assert "used_messages_today" not in quota
 
     @pytest.mark.asyncio
     async def test_long_message_handling(self, client):
