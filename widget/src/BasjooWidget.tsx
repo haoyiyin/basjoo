@@ -780,9 +780,9 @@ class BasjooWidget {
         gap: 12px;
         flex-wrap: wrap;
         padding: 10px 16px;
-        background: ${isDark ? 'rgba(148, 163, 184, 0.16)' : '#f1f5f9'};
-        border-bottom: 1px solid ${borderColor};
-        color: ${textColor};
+        background: ${theme.surfaceSunken};
+        border-bottom: 1px solid ${theme.border};
+        color: ${theme.textPrimary};
         font-size: 13px;
         line-height: 1.4;
         flex-shrink: 0;
@@ -802,7 +802,7 @@ class BasjooWidget {
         padding: 0 14px;
         border: 1px solid ${this.config.themeColor};
         background: transparent;
-        color: ${isDark ? textColor : this.adjustColor(this.config.themeColor, -30)};
+        color: ${this.adjustColor(this.config.themeColor, -30)};
         border-radius: 16px;
         cursor: pointer;
         font-size: 13px;
@@ -817,9 +817,9 @@ class BasjooWidget {
       /* #43: outside business hours the composer is replaced by this. */
       .basjoo-away {
         padding: 16px 20px 24px 20px;
-        border-top: 1px solid ${borderColor};
-        background: ${bgColor};
-        color: ${mutedColor};
+        border-top: 1px solid ${theme.border};
+        background: ${theme.surfaceRaised};
+        color: ${theme.textMuted};
         font-size: 13px;
         line-height: 1.5;
         flex-shrink: 0;
