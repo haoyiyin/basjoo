@@ -110,6 +110,7 @@ from services.answer_quality import (
 )
 from services.quota import message_weight
 from services.spam_check import screen_answered_turn
+from services.webhook_service import enqueue_webhook
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -290,6 +291,12 @@ def build_agent_config(
         # not — only a boolean, exactly like `api_key_set`.
         "fallback_model": getattr(agent, "fallback_model", None),
         "fallback_api_key_set": bool(get_agent_fallback_plaintext_key(agent)),
+        # #47 webhooks: the endpoint round-trips; the signing secret is
+        # write-only, so the payload only says whether one is stored.
+        "webhook_url": getattr(agent, "webhook_url", None),
+        "webhook_secret_set": bool(
+            decrypt_api_key(getattr(agent, "webhook_secret", None))
+        ),
         # #40: the install surface round-trips so the settings page can edit it.
         "excluded_paths": list(getattr(agent, "excluded_paths", None) or []),
         "display_mode": getattr(agent, "display_mode", None) or "bubble",
@@ -938,6 +945,19 @@ async def get_or_create_chat_session(
         visitor_country=country,
     )
     db.add(session)
+    # #47: registered in the SAME transaction as the row, so "the session
+    # exists" and "a delivery is queued" can never disagree. This is an INSERT
+    # only — the POST happens in the scheduler, never on the chat request.
+    enqueue_webhook(
+        db,
+        agent,
+        "session.created",
+        {
+            "session_id": requested_session_id,
+            "visitor_id": request.visitor_id,
+            "locale": request.locale,
+        },
+    )
     try:
         await db.commit()
         await db.refresh(session)
@@ -1459,6 +1479,7 @@ async def persist_chat_response(
     restricted_reply: Optional[str] = None,
     preview: bool = False,
     message_weight: int = 1,
+    agent: Optional[Agent] = None,
 ) -> ChatMessage:
     """Persist a completed user/assistant exchange.
 
@@ -1509,6 +1530,31 @@ async def persist_chat_response(
     if usage:
         session.total_tokens += usage.get("total_tokens", 0)
     session.updated_at = func.now()
+
+    # #47: the delivery rows land in this very transaction (INSERT only), so a
+    # chat turn can never wait on — or fail because of — a subscriber's server.
+    enqueue_webhook(
+        db,
+        agent,
+        "message.created",
+        {
+            "session_id": session.session_id,
+            "message_id": assistant_message.id,
+            "role": "assistant",
+            "content": reply[:500],
+        },
+    )
+    if is_unanswered:
+        enqueue_webhook(
+            db,
+            agent,
+            "message.unanswered",
+            {
+                "session_id": session.session_id,
+                "message_id": assistant_message.id,
+                "question": request.message[:500],
+            },
+        )
 
     from sqlalchemy import update
 
@@ -1707,6 +1753,7 @@ async def chat(
             restricted_reply=_restricted_reply,
             preview=preview,
             message_weight=weight,
+            agent=_agent,
         )
         await publish_chat_response(session_obj, request.message, reply)
 
@@ -1991,6 +2038,7 @@ async def chat_stream(
                     restricted_reply=_restricted_reply,
                     preview=preview,
                     message_weight=weight,
+                    agent=_agent,
                 )
                 await publish_chat_response(session_obj, request.message, reply)
                 yield sse_event(
@@ -2098,6 +2146,20 @@ async def escalate_chat(
     db.add(message)
     session.message_count = (session.message_count or 0) + 1
     session.updated_at = func.now()
+    # #47: `handoff.requested` is the integration signal for "a human is
+    # expected now". Registered in THIS transaction — an INSERT only — so the
+    # escalation and its event can never disagree, and no subscriber's server is
+    # ever contacted here: delivery is the scheduler's job.
+    enqueue_webhook(
+        db,
+        agent,
+        "handoff.requested",
+        {
+            "session_id": session.session_id,
+            "reason": reason or None,
+            "visitor_id": visitor_id,
+        },
+    )
     await db.commit()
     await db.refresh(message)
 
@@ -2108,9 +2170,6 @@ async def escalate_chat(
         reason,
     )
 
-    # TODO(#47): deliver a `session.escalated` webhook once
-    # `services/webhook_service.py` exists. Not built here on purpose — #43 must
-    # not invent a second delivery path.
     try:
         from services.websocket_service import manager
 
@@ -2567,9 +2626,11 @@ async def update_agent(
         update_data["system_prompt"] = PERSONA_PRESETS[persona_type]
 
     for field, value in update_data.items():
-        # Both keys are Fernet-encrypted at rest; an empty string clears the
+        # Every secret is Fernet-encrypted at rest; an empty string clears the
         # stored value, exactly like the primary key.
-        if field in ("api_key", "fallback_api_key") and isinstance(value, str):
+        if field in ("api_key", "fallback_api_key", "webhook_secret") and isinstance(
+            value, str
+        ):
             value = value.strip()
             if value:
                 value = encrypt_api_key(value)
@@ -3679,7 +3740,6 @@ async def list_files(
 @router.post("/files:upload", response_model=FileUploadResponse)
 async def upload_files(
     agent_id: str,
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     current_user: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
@@ -3693,9 +3753,8 @@ async def upload_files(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found"
         )
-    return await upload_kb_files(
-        db, kb, background_tasks, files, source_agent_id=agent_id
-    )
+    # #47: processing is the scheduler's job, not this request's.
+    return await upload_kb_files(db, kb, files, source_agent_id=agent_id)
 
 @router.delete("/files:delete")
 async def delete_file(

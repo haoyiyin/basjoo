@@ -4,6 +4,7 @@ The KB owns its embedding config (provider/model/base URL/encrypted key) since t
 KB-decoupling change; nothing here reads agent-side embedding columns.
 """
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -19,6 +20,7 @@ from core.encryption import decrypt_api_key
 from models import KbChunk, KbDocument, KnowledgeBase
 from services.document_parser import DocumentParser, INVALID_TEXT_EMPTY_MESSAGE
 from services.qdrant_service import QdrantKbService
+from services.webhook_service import enqueue_webhook_for_agent_id
 
 logger = logging.getLogger(__name__)
 
@@ -142,18 +144,41 @@ class KbDocumentProcessor:
             f.write(content)
         return str(path)
 
+    async def save_uploaded_file_async(
+        self, doc: KbDocument, content: bytes, ext: str
+    ) -> str:
+        """``save_uploaded_file`` off the event loop (#47).
+
+        Writing 20 MB with a blocking ``open()/write()`` holds the loop for the
+        whole transfer, which queues every other request behind the upload — the
+        exact "uploads occupy the API worker" complaint. The blocking variant
+        stays for the background paths (URL refetch, tests); the request path
+        must use this one.
+        """
+        return await asyncio.to_thread(self.save_uploaded_file, doc, content, ext)
+
     async def process_document(self, doc_id: str, kb_id: str):
-        """Background task entrypoint. Updates status, parses, chunks, embeds, upserts."""
+        """Background task entrypoint. Updates status, parses, chunks, embeds, upserts.
+
+        Never runs on the upload request path (#47): `upload_kb_files` persists
+        the bytes and the row, then the scheduler picks the row up. A second
+        caller may legitimately re-run a row that is already `processing` (the
+        scheduler retries an interrupted pass), which is why `pending` is not the
+        only accepted status — but a `ready` row is never re-embedded here.
+        """
         async with database.AsyncSessionLocal() as session:
             stmt = select(KbDocument).where(
                 KbDocument.id == doc_id, KbDocument.kb_id == kb_id
             )
             res = await session.execute(stmt)
             doc = res.scalar_one_or_none()
-            if not doc or getattr(doc, "status", None) != "pending":
+            if not doc:
+                return
+            if getattr(doc, "status", None) not in ("pending", "processing"):
                 return
 
             object.__setattr__(doc, "status", "processing")
+            object.__setattr__(doc, "processing_stage", "parsing")
             await session.commit()
 
             try:
@@ -171,6 +196,9 @@ class KbDocumentProcessor:
                 if not text.strip():
                     raise RuntimeError(INVALID_TEXT_EMPTY_MESSAGE)
 
+                object.__setattr__(doc, "processing_stage", "chunking")
+                await session.commit()
+
                 # chunk (use getattr + cast to satisfy static type checker on SA models)
                 chunk_size = cast(int, getattr(kb, "chunk_size", 512))
                 chunk_overlap = cast(int, getattr(kb, "chunk_overlap", 64))
@@ -181,6 +209,9 @@ class KbDocumentProcessor:
                 model = cast(str, getattr(kb, "embedding_model", "BAAI/bge-m3"))
                 base_url = cast(str | None, getattr(kb, "embedding_base_url", None))
                 api_key = get_embedding_api_key(kb)
+
+                object.__setattr__(doc, "processing_stage", "embedding")
+                await session.commit()
 
                 embeddings = await self.parser.embed_texts(
                     chunks, model, base_url, api_key=api_key
@@ -227,16 +258,35 @@ class KbDocumentProcessor:
                     )
                     chunk_records.append(ch)
 
+                object.__setattr__(doc, "processing_stage", "indexing")
+                await session.commit()
+
                 # batch upsert (≤100)
                 await self.qdrant.batch_upsert_points(kb_id, points, batch_size=100)
 
                 # insert chunks
                 session.add_all(chunk_records)
                 object.__setattr__(doc, "status", "ready")
+                object.__setattr__(doc, "processing_stage", "done")
                 object.__setattr__(doc, "chunk_count", len(chunks))
+                object.__setattr__(doc, "error_message", None)
                 # Lock KB embedding config after first successful index
                 if not bool(getattr(kb, "is_locked", False)):
                     object.__setattr__(kb, "is_locked", True)
+
+                # #47 `document.indexed`: queued in this same transaction, so the
+                # event is emitted exactly when the index is. The delivery row is
+                # an INSERT — the HTTP POST belongs to the scheduler.
+                await enqueue_webhook_for_agent_id(
+                    session,
+                    getattr(doc, "source_agent_id", None),
+                    "document.indexed",
+                    {
+                        "document_id": doc_id,
+                        "filename": getattr(doc, "filename", ""),
+                        "chunk_count": len(chunks),
+                    },
+                )
                 await session.commit()
                 logger.info(f"Doc {doc_id} indexed: {len(chunks)} chunks")
 
@@ -245,6 +295,7 @@ class KbDocumentProcessor:
                 # Caller must check doc.status to determine success/failure.
                 logger.error(f"Processing failed for doc {doc_id}: {e}", exc_info=True)
                 object.__setattr__(doc, "status", "error")
+                object.__setattr__(doc, "processing_stage", "failed")
                 object.__setattr__(
                     doc, "error_message", _format_processing_error_message(e)
                 )
@@ -259,7 +310,10 @@ class KbDocumentProcessor:
         return {
             "status": getattr(doc, "status", None),
             "chunk_count": getattr(doc, "chunk_count", 0),
+            # #47: the stored upstream cause, verbatim. The UI decides how to
+            # present it; nothing in this layer rewrites it.
             "error_message": getattr(doc, "error_message", None),
+            "processing_stage": getattr(doc, "processing_stage", None),
         }
 
     async def delete_document(self, kb_id: str, doc_id: str, db: AsyncSession):

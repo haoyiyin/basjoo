@@ -121,6 +121,12 @@ export interface Agent {
 	widget_cards?: WidgetCard[] | null;
 	/** #40: share of visitors that get the widget (0-100). */
 	traffic_percentage?: number | null;
+	/** #47: HTTPS endpoint that receives signed event deliveries. */
+	webhook_url?: string | null;
+	/** #47: write-only — a typed value replaces the stored (encrypted) secret. */
+	webhook_secret?: string;
+	/** #47: whether a signing secret is stored (the secret itself is never returned). */
+	webhook_secret_set?: boolean;
 	model: string;
 	temperature: number;
 	max_tokens: number;
@@ -408,8 +414,14 @@ export interface FileItem {
 	status: "ready" | "processing" | "uploading" | "pending" | "failed";
 	created_at: string;
 	updated_at?: string;
-	// Processing error details
+	// Processing error details (localized, client-safe sentence)
 	error_message?: string;
+	/** #47: the stored upstream cause, verbatim (`401 Unauthorized from ...`).
+	 *  Never translated; the row shows it as the primary line and keeps
+	 *  `error_message` beneath it as the friendly explanation. */
+	error_detail?: string | null;
+	/** #47 two-phase upload: which ingest phase the row is in. */
+	processing_stage?: string | null;
 }
 
 export interface Quota {

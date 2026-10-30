@@ -433,6 +433,38 @@ def _create_feature_tables(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS ix_webhooks_agent_id ON webhooks(agent_id)"
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+                event VARCHAR(50) NOT NULL,
+                payload TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                next_attempt_at DATETIME,
+                delivered_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_deliveries_agent_id "
+            "ON webhook_deliveries(agent_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_deliveries_event "
+            "ON webhook_deliveries(event)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_deliveries_status "
+            "ON webhook_deliveries(status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_deliveries_status_created "
+            "ON webhook_deliveries(status, created_at)"
+        )
 
 
 def _table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
@@ -533,6 +565,9 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         ("fallback_api_key", "VARCHAR(500)"),
         # #46 — signed visitor identity.
         ("identity_secret", "VARCHAR(500)"),
+        # #47 — outbound webhooks: endpoint + Fernet-encrypted signing secret.
+        ("webhook_url", "VARCHAR(1000)"),
+        ("webhook_secret", "VARCHAR(500)"),
     ]
 
     # Handle the old column-name migration before we report existing columns
@@ -944,7 +979,16 @@ def _migrate_knowledge_bases(cursor: sqlite3.Cursor) -> None:
         print(f"✓ Added {added} column(s) to knowledge_bases")
 
     if _table_exists(cursor, "kb_documents"):
-        added = _ensure_columns(cursor, "kb_documents", [("source_agent_id", "TEXT")])
+        # #47 — diffed refetch key + two-phase upload stage.
+        added = _ensure_columns(
+            cursor,
+            "kb_documents",
+            [
+                ("source_agent_id", "TEXT"),
+                ("item_hash", "VARCHAR(64)"),
+                ("processing_stage", "VARCHAR(20)"),
+            ],
+        )
         if added:
             print(f"✓ Added {added} column(s) to kb_documents")
 

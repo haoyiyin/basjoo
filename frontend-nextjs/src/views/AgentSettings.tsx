@@ -256,6 +256,12 @@ export default function AgentSettings() {
   );
   const [starterRows, setStarterRows] = useState<StarterRow[]>([]);
   const [cardRows, setCardRows] = useState<CardRow[]>([]);
+  // #47 outbound webhooks. The secret is write-only: the API returns only
+  // `webhook_secret_set`, so the input starts empty and an untouched field means
+  // "keep the stored secret".
+  const [webhookUrl, setWebhookUrl] = useState<string>('');
+  const [webhookSecret, setWebhookSecret] = useState<string>('');
+  const [webhookSecretSet, setWebhookSecretSet] = useState<boolean>(false);
   const timezoneOptions = useMemo(() => supportedTimezones(), []);
   // `businessHours.days` is an array in both locale files; i18next hands back
   // the raw value with `returnObjects`.
@@ -307,6 +313,10 @@ export default function AgentSettings() {
       );
       setStarterRows(startersFromAgent(loadedAgent));
       setCardRows(cardsFromAgent(loadedAgent));
+      // #47 webhooks: URL is readable, the secret is not.
+      setWebhookUrl(loadedAgent.webhook_url ?? '');
+      setWebhookSecret('');
+      setWebhookSecretSet(Boolean(loadedAgent.webhook_secret_set));
 
       // The embed code must come from the SERVER, never from
       // `window.location.origin`: a dashboard opened on localhost would hand
@@ -418,6 +428,10 @@ export default function AgentSettings() {
         traffic_percentage: trafficPercentage,
         starters: starters,
         widget_cards: cards,
+        // #47: `null` clears the endpoint; an untouched secret field is omitted
+        // so the stored (encrypted) secret survives an unrelated save.
+        webhook_url: webhookUrl.trim() ? webhookUrl.trim() : null,
+        ...(webhookSecret.trim() ? { webhook_secret: webhookSecret.trim() } : {}),
       };
       const updatedAgent = await api.updateAgent(agent.id, updates);
       setAgent(updatedAgent);
@@ -429,6 +443,9 @@ export default function AgentSettings() {
       setStarterRows(startersFromAgent(updatedAgent));
       setCardRows(cardsFromAgent(updatedAgent));
       setExcludedPathsText((updatedAgent.excluded_paths ?? []).join('\n'));
+      setWebhookUrl(updatedAgent.webhook_url ?? '');
+      setWebhookSecret('');
+      setWebhookSecretSet(Boolean(updatedAgent.webhook_secret_set));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -871,6 +888,59 @@ export default function AgentSettings() {
             <p className="field-hint">{t('escalation.hint')}</p>
             <p className="field-hint">
               {escalationRules.length} / 2000
+            </p>
+          </div>
+        </section>
+
+        {/* #47 outbound webhooks: endpoint + signing secret, saved with the form */}
+        <section className="card" data-testid="agent-webhook-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('webhooks.title')}</h2>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('webhooks.description')}
+          </p>
+
+          <div className="field">
+            <label className="field-label" htmlFor="webhook_url">
+              {t('webhooks.urlLabel')}
+            </label>
+            <input
+              id="webhook_url"
+              className="input"
+              type="url"
+              inputMode="url"
+              value={webhookUrl}
+              onChange={(event) => setWebhookUrl(event.target.value)}
+              placeholder={t('webhooks.urlPlaceholder')}
+              maxLength={1000}
+              spellCheck={false}
+            />
+            <p className="field-hint">{t('webhooks.urlHint')}</p>
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="webhook_secret">
+              {t('webhooks.secretLabel')}
+            </label>
+            <input
+              id="webhook_secret"
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={webhookSecret}
+              onChange={(event) => setWebhookSecret(event.target.value)}
+              /* Masked: the stored secret never leaves the server, so the field
+                 is empty until the operator types a replacement. */
+              placeholder={
+                webhookSecretSet ? t('webhooks.secretMasked') : t('webhooks.secretPlaceholder')
+              }
+              maxLength={200}
+              spellCheck={false}
+            />
+            <p className="field-hint">
+              {webhookSecretSet ? t('webhooks.secretSetHint') : t('webhooks.secretHint')}
             </p>
           </div>
         </section>

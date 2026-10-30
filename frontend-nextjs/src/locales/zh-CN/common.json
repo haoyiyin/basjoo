@@ -1082,5 +1082,17 @@
     "starterValue": "消息内容 / 链接地址",
     "starterPath": "生效路径（正则，可选）",
     "starterPathPlaceholder": "^/pricing$"
+  },
+  "webhooks": {
+    "title": "Webhook",
+    "description": "当该智能体发生事件时，向你的地址发送带签名的 HTTP POST。投递任务与业务变更在同一事务中入队，由后台发送，因此响应缓慢或失败的接口不会拖慢访客。",
+    "urlLabel": "回调地址",
+    "urlPlaceholder": "https://example.com/basjoo/webhook",
+    "urlHint": "留空即关闭投递。事件：session.created、session.closed、message.created、message.unanswered、handoff.requested、lead.created、document.indexed。",
+    "secretLabel": "签名密钥",
+    "secretPlaceholder": "粘贴签名密钥",
+    "secretMasked": "••••••••（已保存，输入可替换）",
+    "secretHint": "用于生成 X-Basjoo-Signature: sha256=<hmac> 请求头。密钥加密存储。",
+    "secretSetHint": "已保存签名密钥。留空表示保持不变，输入新值则替换。"
   }
 }
