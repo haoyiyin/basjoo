@@ -5,7 +5,7 @@ This is the primary reference for AI coding agents (Pi, Claude, Cursor, Aider, e
 
 ## Project overview
 Docker-oriented AI customer support platform:
-- FastAPI backend with workspace-scoped knowledge bases (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, quotas.
+- FastAPI backend with workspace-scoped knowledge bases (Qdrant-backed RAG), streaming chat (SSE), knowledge ingestion, admin auth, workspace resource limits.
 - Vite SPA admin dashboard in `frontend-nextjs/` (React 18 + react-router 7; the directory name is a leftover from the former Next.js app).
 - Embeddable TypeScript widget in `widget/` (localStorage sessions, SSE, human takeover).
 - Supporting: crawl4ai fetcher service (headless Chromium — container `basjoo-crawler`), Qdrant (vector DB), Redis, nginx.
@@ -68,20 +68,20 @@ Docker-oriented AI customer support platform:
 
 ## Chat request flow (`POST /api/v1/chat/stream`)
 Two phases on purpose — never hold a DB connection while the LLM streams:
-1. Short-lived DB session: resolve agent → widget origin whitelist → daily quota → get/create `ChatSession` → if `taken_over`, persist the message and finish → per-minute rate limit (returns `restricted_reply`; keyed on the session when `session_id` is sent, otherwise on the visitor identity — `visitor_id`, else `visitor_ip` — because omitting `session_id` mints a fresh session per request) → **reject empty LLM key with HTTP 400 `detail="Agent has no LLM API key configured"` (SSE code `API_KEY_MISSING`; never set `use_mock_llm=True`)** → load history → KB retrieval → build messages. Session closes here.
+1. Short-lived DB session: resolve agent → widget origin whitelist → get/create `ChatSession` → if `taken_over`, persist the message and finish → per-minute rate limit (returns `restricted_reply`; keyed on the session when `session_id` is sent, otherwise on the visitor identity — `visitor_id`, else `visitor_ip` — because omitting `session_id` mints a fresh session per request) → **the #19/#66 key gate: a keyless agent with no keyword opt-in and no authenticated preview turn is rejected with HTTP 400 `detail="Agent has no LLM API key configured"` (SSE code `API_KEY_MISSING`; never set `use_mock_llm=True`); with a keyword opt-in or an authenticated preview turn the gate instead builds `scripted_context` and the short-circuit below serves the turn** → load history → KB retrieval → build messages. Session closes here.
 2. No DB connection: emit `sources`, stream `content` deltas (plus `thinking_done` when the provider supports it), then `done` with `message_id`/`session_id`/`usage`/`taken_over`. LLM failure falls back to `agent.restricted_reply`. Hard cap 300s. `get_llm_service` returns `MockLLMService` **only** when `use_mock=True` (tests). Missing key + `use_mock=False` raises `ValueError("api_key required")`.
 
 **The provider read runs in its own task; the idle watchdog (`asyncio.wait`, never `asyncio.wait_for`) only emits `: keepalive` + `thinking` and then awaits the SAME task again.** `asyncio.wait_for` on timeout cancels the awaited `__anext__`, which ends the provider generator: the loop breaks with no content and the user silently gets the restricted fallback ~15s in. Constants `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_MAX_DURATION_SECONDS` are module-level so tests can patch them. Only a client disconnect (a `CancelledError`) may cancel the pending read.
 
 SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anything else is a bug — the widget parser ignores unknown events.
 
-**A third answer source, with no model call (`agent.fallback_mode`, #60).** Four values decide who answers once the primary model cannot: `off` (the default — today's behaviour, `restricted_reply` at the failure sites and the 429 at the quota gate), `llm` (the #44 `fallback_model` path, the matcher is never consulted), `keyword` (a curated `qa_items` pair only, `fallback_model` ignored) and `llm_then_keyword` (`fallback_model` when it can serve, the matcher when it has no key or its own call raised). The reader is `fallback_mode(agent)` in `backend/api/v1/endpoints.py`; an unknown or NULL value reads as `off`, so an upgrade changes nothing until an operator opts in. A miss is a normal 200 assistant turn carrying `restricted_reply` — never a 429 — and the keyless-agent 400 (`API_KEY_MISSING`) is unchanged in every mode.
+**A second answer source, with no model call (`agent.fallback_mode`, #60).** Two values decide who answers once the primary model cannot: `off` (the default — today's behaviour, `restricted_reply` at the provider-failure sites, and the key gate stays a hard `400 API_KEY_MISSING` when there is no opt-in) and `keyword` (the curated `qa_items` matcher answers with no model and no API key). The `llm` / `llm_then_keyword` values and the #44 `fallback_model` path behind them are retired — the reader is `fallback_mode(agent)` in `backend/api/v1/endpoints.py`, and an unknown or NULL value reads as `off`, so an upgrade changes nothing until an operator opts in. A miss is a normal 200 assistant turn carrying `restricted_reply` — never a 429 — and when the keyword path is opted in, the #66 key gate serves it for a keyless agent (or for an authenticated preview turn) instead of raising.
 
 **Matching is stdlib-only.** `backend/services/keyword_fallback.py` touches no provider, no embedding and no Qdrant: both sides are normalised once (NFKC → lowercase → non-word to space → collapse) and a keyword hits as a whole token or as a ≥2-character substring. `enabled=False` and empty-`keywords` rows never match; the score is 1.0 per matched keyword, ties broken by `hits` desc then `id` asc, so the same message always picks the same pair. `qa_items.keywords` is a JSON list normalised at write time — under 2 characters is rejected with `400 keyword_too_short: <kw>`, capped at 20 keywords × 40 characters — and `POST /api/v1/knowledge-bases/{kb_id}/qa-items:match` is the operator's read-only tester for exactly this path.
 
 **The turn is marked, not disguised.** `mode: "scripted"` + `matched_by: "keyword"` travel on the blocking `ChatResponse` and the SSE `done` event; `mode="scripted"` **and** `matched_by` are persisted on the assistant `chat_messages` row and echoed by `/api/v1/admin/sessions/{id}/messages`; it renders as a note in `Sessions.tsx` and one muted line in the widget (由常见问题自动回答 / Answered from a saved FAQ). A scripted hit bumps `hits` / `last_hit_at` through `QaService.record_hit`, costs 0 tokens, and still counts as one answered turn. **`matched_by` is the discriminator, not `mode`**: a MISS is also `scripted` but its text is the operator's `restricted_reply` — an apology, not a FAQ answer — so both operator surfaces require a non-NULL `matched_by` before showing the FAQ label. A miss persisted `mode="scripted"` / `matched_by=NULL` is the expected row shape.
 
-**Never embed or call a provider on this path.** `_scripted_answer` resolves from one short DB session (a single `SELECT` over the KB's enabled pairs), and at the quota gate it short-circuits `prepare_chat_request` **above** the #19 key gate, `QaService.search` and `KbRetrievalService.retrieve` — both of which embed the query, which is the one thing this feature exists to survive. There are six serve sites — the quota gate plus the five provider-failure sites (non-stream exception, non-stream empty answer, stream max-duration, stream exception, stream empty answer) — and they all go through that one resolver and the payload builders beside it, so no site can drift or re-implement the check.
+**Never embed or call a provider on this path.** `_scripted_answer` resolves from one short DB session (a single `SELECT` over the KB's enabled pairs), and at the #19/#66 key gate it short-circuits `prepare_chat_request` **above** `QaService.search` and `KbRetrievalService.retrieve` — both of which embed the query, which is the one thing this feature exists to survive. There are six serve sites — the key gate (which builds `scripted_context` for a keyless agent with a keyword opt-in or an authenticated preview turn) plus the five provider-failure sites (non-stream exception, non-stream empty answer, stream max-duration, stream exception, stream empty answer) — and they all go through that one resolver and the payload builders beside it, so no site can drift or re-implement the check.
 
 **Session identity is enforced on the public surface.** `GET /api/v1/chat/messages` requires the owning `visitor_id` (missing or foreign answers `404 Session not found` — the same shape as an unknown session, so existence is never confirmed); `POST /chat/stream` never adopts a `session_id` whose `visitor_id` differs, it mints a fresh public id instead. Session ids are `sess_<agent>_<12 hex>` and the agent id is public in the embed, so they are enumerable: the widget/SDK must send `visitor_id` on the stream AND on both `chat/messages` calls. Admins use the token-protected `/api/v1/admin/sessions*` surface.
 
@@ -92,7 +92,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - **KB create/bind UX**: KBs are created and bound **outside** the agent. Home card (`AgentPanel`): bound `kb_id` → `/knowledge-bases/${kb_id}` (source management); unbound → `/knowledge-bases?bindAgent=`. The agent list still offers bind / create / skip. Agent sidebar group `navigation.knowledge` (网站管理 / 文件上传) is gone — sources live on the KB page (`KnowledgeBaseDetail` composes `URLManagement` + `FileUploadManagement` with `kbId` from `useParams`). `KBSetupWizard` no longer exists. `Agent.agent_type` and `Agent.channel_mode` are gone; create-agent is name + optional description only.
 - **KB status is derived**: `GET /api/v1/agent:kb-status?agent_id=` computes `kb_setup_completed` from the binding plus `KnowledgeBase.status`. `Agent.kb_setup_completed` is a dead column; never read it, and don't put the flag back on the `/api/v1/agent` payload.
 - **Chat streaming issues**: inspect SSE in `backend/api/v1/endpoints.py`, `sse_utils.py`, the widget parser, and the error middleware.
-- **Scripted / FAQ answers (#60)**: the matcher is `backend/services/keyword_fallback.py`; the six serve sites — the quota gate inside `prepare_chat_request` plus the five provider-failure sites — all go through `_scripted_answer` + the `_build_scripted_turn` / `_failure_scripted_turn` payload builders in `backend/api/v1/endpoints.py`. A seventh site must call those, never re-read `fallback_mode` itself, and must keep the path free of embedding and provider calls.
+- **Scripted / FAQ answers (#60)**: the matcher is `backend/services/keyword_fallback.py`; the six serve sites — the #19/#66 key gate inside `prepare_chat_request` plus the five provider-failure sites — all go through `_scripted_answer` + the `_build_scripted_turn` / `_failure_scripted_turn` payload builders in `backend/api/v1/endpoints.py`. A new site must call those, never re-read `fallback_mode` itself, and must keep the path free of embedding and provider calls.
 - **Indexing/retrieval problems**: check `kb_retrieval_service.py`, `qdrant_service.py`, threshold, `is_indexed` on `URLSource`, and `sources:summary` / `index:status`.
 - **Large exploration/analysis**: use `rg`/`search_files` and read targeted ranges rather than dumping whole files (`endpoints.py` is ~2.8k lines after the source-route move).
 
@@ -166,10 +166,13 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   `KnowledgeBaseSetup.tsx` and `KnowledgeBases.tsx` — keep both ends working.
 - The agent-dashboard KB row links to the KB source page and carries **no** rebind control (the `swap`
   icon was removed). Every icon-only control takes its accessible name from the locale files plus a
-  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 19). The
+  `title`, never the glyph. Registry: `src/components/Icon.tsx` (`ICON_NAMES`, currently 43). The
   two unbind controls (KB list + agent list) use `unlink` — a split-chain glyph meaning "break the
   binding" — never `close` (a panel ×).
-  Destructive **confirm** primaries keep their words.
+  Destructive **confirm** primaries keep their words. Per #63/#65, the pattern for
+  row-level actions is ONE text button per view (the primary action) plus icon
+  controls (`btn-icon` with an `aria-label` and a `title` from the locale
+  files) for everything else.
 - **Rebinding is unbind-then-bind**: detach from either list (the unbind icon beside the bound KB name
   on `/agents`, or beside the bound agent name on `/knowledge-bases`), then use the dashboard's
   `dashboard-kb-bind` (unbound state only). Both icons go through `bindAgentKnowledgeBase(id, null)`.
@@ -200,10 +203,12 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
 - The agent dashboard (`/agents/:id/dashboard`) shows API status, agent name, user count, session
   count and one status region. It must not render knowledge-base parameters (index size, URL/file
   counts, chunk counts) — those belong to the KB page. Its lower block is a titled section
-  (`card-title`, "智能体信息") and the quota is a row of that same label/value list, not a
-  floating line under it.
-- Playground: if `!agent.api_key_set`, do not open the SSE stream; disable send; keep the
-  configure-key banner. Two layouts driven by the same 1025px boundary: from 1025px both panes are
+  (`card-title`, "智能体信息") rendered as a label/value definition list, not a
+  floating block under it.
+- Playground: a keyless agent still answers — the backend serves the keyword
+  path for an authenticated `preview: true` turn, so the send gate is gone and
+  the transcript carries a persistent "what is answering" banner (with a door
+  to the model settings) instead of a blocking configure-key wall. Two layouts driven by the same 1025px boundary: from 1025px both panes are
   mounted side by side (settings left in the first grid track, 320px floor / 480px ceiling, chat
   right, each its own scroll, plain `region`s labelled by their heading) and the tab strip is
   hidden; at ≤1024px the tab strip is the only layout and exactly one pane is mounted
@@ -220,7 +225,7 @@ SSE event names are `sources`, `content`, `thinking_done`, `done`, `error`. Anyt
   must be inside the first screen with no page scroll.
 - The configure-key banner appears ONCE per layout: the settings rail shows it on desktop (the pane
   that owns the field), the chat tab shows it at ≤1024px (the only pane mounted then). Never both
-  on desktop.
+  on desktop. It is an explainer, not a blocker — sending is allowed while it is visible.
 - Chat is transparent: `ChatPanel`'s messages node paints no background, so the page surface shows
   through. Bubbles, the composer, the meta chips and the empty-state icon tile keep their own fills.
 - Page chrome is transparent everywhere: `.admin-page` is the shared surface and no route adds a
@@ -277,4 +282,4 @@ Left over from the Next.js → Vite migration. Removing these is a separate clea
 
 **This is living documentation. Update when patterns change.**
 
-Last updated: 2026-10-30 (#60 adds a fourth answer source: `agent.fallback_mode` + keyword-matched `qa_items.keywords` served as `mode="scripted"` with no provider call). Previous, 2026-10-28 (UI direction C: warm single-accent shell keyed to the logo's yellow, the accent-rail signature mark across nav/rows/tabs, page-header hairline removed, cards at the content radius, filled labelled primary actions, numeric columns right-aligned; playground two-column rebuilt as a viewport-pinned grid so the composer stays on screen, and the configure-key banner appears once per layout; `unlink` glyph replaces × on both unbind controls; crawler container renamed `basjoo-crawler`)
+Last updated: 2026-10-30 (#62–#66: fallback_model and the degraded marker retired, escalation rules and the daily message quota retired, agent settings grouped into ordered sections, row-level controls converted to icon buttons on a 43-glyph ICON_NAMES registry, keyless keyword path — the Playground works without a model). Previous, 2026-10-28 (UI direction C: warm single-accent shell keyed to the logo's yellow, the accent-rail signature mark across nav/rows/tabs, page-header hairline removed, cards at the content radius, filled labelled primary actions, numeric columns right-aligned; playground two-column rebuilt as a viewport-pinned grid so the composer stays on screen, and the configure-key banner appears once per layout; `unlink` glyph replaces × on both unbind controls; crawler container renamed `basjoo-crawler`)

@@ -41,7 +41,7 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 - **每个知识库两条入库路径。** 抓单页、整站抓取（可设深度与页数上限），或上传文件（`txt`、`md`、`html`、`pdf`、`docx`、`xlsx`；单次最多 5 个文件、单文件 20 MB）。可选自动重抓，让网页来源按周期保持最新。
 - **每个知识库独立配置 Embedding。** `local`（自带 TEI 容器）、`jina`、`siliconflow`，或任意 `custom` OpenAI 兼容端点。创建知识库时会用一次真实 embedding 调用测出向量维度，集合与服务商不可能悄悄不匹配。
 - **13 家 LLM 服务商**，同一份智能体配置里切换：OpenAI 兼容、OpenAI 原生、Anthropic、Google Gemini、xAI、DeepSeek、OpenRouter、z.ai、火山引擎、Moonshot、阿里百炼、腾讯云、硅基流动。
-- **SSE 流式聊天**，带来源引用、首字保活、按访客限流，以及服务商异常时可配置的兜底回复。把 `fallback_mode`（默认 `off`）设为 `keyword`，配了关键词的问答对就能直接作答、不调用任何模型，回复标记为 `mode: "scripted"`。
+- **SSE 流式聊天**，带来源引用、首字保活、按访客限流，以及服务商异常时可配置的兜底回复。没配任何服务商密钥？把关键词整理成问答对，并把 `fallback_mode`（默认 `off`）设为 `keyword`：机器人就能在**不调用任何模型、不需要任何 API 密钥**的情况下回答命中的问题，回复标记为 `mode: "scripted"`；未命中则回落到受限回复。
 - **人工接管。** 运营在后台实时查看会话并接过去；组件侧轮询人工回复并完成交接。
 - **不越界的组件。** 按智能体配置来源白名单，访客与会话存在 `localStorage`，文案随访客语言切换（中文 / 英文），90 秒流式超时并自动重试一次。
 - **中英双语后台**，暖色单强调色设计系统，375 px 宽度下布局不破。
@@ -62,7 +62,7 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 
 ### 调试区
 
-左边调服务商、模型与检索参数，右边直接对话——走的是和组件完全相同的流式链路。
+左边调服务商、模型与检索参数，右边直接对话——走的是和组件完全相同的流式链路。调试区**不配模型也能用**：未配置密钥的智能体由策划好的关键词路径接答，可以先测再配服务商。
 
 ![调试区](resource/screenshots/admin/zh-CN/playground.png)
 
@@ -101,7 +101,7 @@ docker compose --profile dev up --watch # 前端 :3000，后端 :8000
 - prod：`http://localhost/`
 - dev：`http://localhost:3000/`
 
-到 **调试区 → AI 设置** 填一个服务商密钥（或给默认智能体设 `DEEPSEEK_API_KEY`），自带的示例智能体就能对话了。
+到 **调试区 → AI 设置** 填一个服务商密钥（或给默认智能体设 `DEEPSEEK_API_KEY`），自带的示例智能体就能对话了——或者干脆先不填密钥，整理几条关键词问答对，直接体验脚本化关键词路径。
 
 ### 默认端口
 
@@ -156,9 +156,11 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 
 ### 聊天
 
-`POST /api/v1/chat/stream` 刻意分两段：先是短数据库阶段（解析智能体 → 来源白名单 → 配额 → 会话 → 限流 →
+`POST /api/v1/chat/stream` 刻意分两段：先是短数据库阶段（解析智能体 → 来源白名单 → 会话 → 限流 →
 读取历史 → 检索上下文），随后是**不持有数据库连接**的流式阶段。事件名只有 `sources`、`content`、
-`thinking_done`、`done`、`error`。没配服务商密钥会明确返回 `400 API_KEY_MISSING`，绝不用 mock 蒙过去。
+`thinking_done`、`done`、`error`。没配服务商密钥会明确返回 `400 API_KEY_MISSING`，绝不用 mock 蒙过去——
+除非智能体选择了脚本化关键词路径（`fallback_mode="keyword"`）：此时未配密钥的智能体用无模型调用的方式
+回答命中的问题，未命中则回落到受限回复。
 会话 ID 可枚举，所以公开接口要求调用方带自己的 `visitor_id`，别人的会话一律 `404 Session not found`。
 
 机器人是否开口只由一道闸门决定：`services/session_state.answer_gate` 要求 `status="active"`、
