@@ -83,7 +83,11 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(
         None, max_length=200, description="会话ID（用于多轮对话）"
     )
-    visitor_id: Optional[str] = Field(None, max_length=100, description="访客标识")
+    # #46: a signed identity is `<email>:<64 hex>` (up to 319 characters), so the
+    # bound has to fit an address as well as the old anonymous random id.
+    visitor_id: Optional[str] = Field(
+        None, max_length=320, description="访客标识"
+    )
     # 客户端传送的地理信息（用于无法从IP获取的情况）
     timezone: Optional[str] = Field(None, description="客户端时区")
     params: Optional[Dict[str, Any]] = Field(
@@ -623,6 +627,11 @@ class AgentConfig(BaseModel):
         False,
         description="Whether a signing secret is stored (the secret itself never is)",
     )
+    # --- #46: signed visitor identity -------------------------------------
+    identity_secret_set: bool = Field(
+        False,
+        description="Whether an HMAC identity secret is stored (never returned)",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -775,6 +784,15 @@ class AgentUpdateRequest(BaseModel):
     )
     webhook_secret: Optional[str] = Field(
         None, max_length=500, description="HMAC signing secret (encrypted at rest)"
+    )
+    # #46: the HMAC key the host page signs visitor emails with. Write-only —
+    # an empty string clears it (same convention as `api_key`), and the payload
+    # only ever says `identity_secret_set`. An absent secret keeps the anonymous
+    # visitor path exactly as it was.
+    identity_secret: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="HMAC secret for signed visitor identities (encrypted at rest)",
     )
 
     @field_validator("webhook_url")

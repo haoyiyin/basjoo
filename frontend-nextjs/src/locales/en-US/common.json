@@ -1017,6 +1017,15 @@
     "placeholder": "If the visitor explicitly asks for a human, sounds frustrated, or mentions a refund dispute, suggest a human handoff.",
     "hint": "Leave empty to add nothing to the prompt."
   },
+  "visitorDeletion": {
+    "action": "Delete visitor",
+    "actionTitle": "Erase every session, message and lead belonging to this visitor",
+    "confirm": "Delete all data for visitor {{id}}? Their sessions, messages, leads and feedback will be erased permanently. This cannot be undone.",
+    "deleted": "Deleted {{sessions}} session(s), {{messages}} message(s) and {{leads}} lead(s).",
+    "errors": {
+      "failed": "Could not delete this visitor. Please try again."
+    }
+  },
   "businessHours": {
     "title": "Business hours",
     "description": "Outside these hours the widget hides the composer and shows the away message. No timezone configured means always online.",

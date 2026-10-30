@@ -34,6 +34,21 @@ interface PublicWidgetConfig {
   online?: boolean | null;
   business_hours?: BusinessHoursConfig | null;
   away_message?: string | null;
+  /** #46: this agent accepts only signed identities (HMAC over the email). */
+  identity_required?: boolean | null;
+}
+
+/**
+ * #46: the signed identity the host page computes server-side.
+ *
+ * `hash` is `hmac_sha256(identity_secret, email)` in hex. The secret never
+ * reaches the browser: the host application derives the value after login and
+ * hands this object to `window.Basjoo.identify()`. The widget only ever stores
+ * the resulting `email:hash` string, which is what `visitor_id` becomes.
+ */
+interface VisitorIdentity {
+  email?: string;
+  hash?: string;
 }
 
 /** Contract C6 shape: day 0 = Monday, minutes from local midnight. */
@@ -231,6 +246,26 @@ function readEmbedConfig(): EmbedConfig | null {
 }
 
 /**
+ * #46: does this visitor id look like a signed `email:hash` identity?
+ *
+ * Matches the server's shape check (`services/visitor_identity.py`): one `:`
+ * separator and a 64-character hex digest. It is only used to decide whether a
+ * *persisted* value should be treated as signed after a reload — the signature
+ * itself is verified server-side and never here.
+ */
+function looksSigned(visitorId: string | null | undefined): boolean {
+  if (typeof visitorId !== 'string') {
+    return false
+  }
+  const separator = visitorId.lastIndexOf(':')
+  if (separator <= 0) {
+    return false
+  }
+  const digest = visitorId.slice(separator + 1)
+  return digest.length === 64 && /^[0-9a-f]{64}$/.test(digest)
+}
+
+/**
  * #40: is the current page on the operator's excluded list?
  *
  * A pattern that does not compile is ignored with a warning — a bad regex must
@@ -399,6 +434,13 @@ class BasjooWidget {
   private readonly STORAGE_KEY: string;
   private readonly VISITOR_STORAGE_KEY = 'basjoo_visitor_id';
   private visitorId: string;
+  // #46: `true` once the host page has handed us a signed identity. The widget
+  // then sends `email:hash` as `visitor_id` and asks the server to resume the
+  // thread behind that person instead of the one in this browser's storage.
+  private identitySigned = false;
+  // #46: the agent refuses unsigned identities. Shown as a readable line in the
+  // composer area rather than a bare 403 in the network tab.
+  private identityRequired = false;
   private storage: StorageAdapter;
   private effectiveTheme: 'light' | 'dark' = 'light';
   private originalTitle: string = '';
@@ -443,6 +485,12 @@ class BasjooWidget {
   private _starterClickListeners: Array<() => void> = [];
   // #40: host-page context pushed through `window.Basjoo.setContext`.
   private static pageContext: { before: string; after: string } = { before: '', after: '' }
+  // #46: instances alive on the page, so `window.Basjoo.identify()` reaches a
+  // widget the host page did not construct itself, and a pending identity
+  // survives the gap between the host calling `identify()` and the loader
+  // mounting (the server-rendered embed starts the widget on DOMContentLoaded).
+  private static instances: BasjooWidget[] = []
+  private static pendingIdentity: VisitorIdentity | null | undefined = undefined
 
   constructor(config: WidgetConfig) {
     // The server-rendered loader is authoritative: when it is present, its
@@ -475,6 +523,17 @@ class BasjooWidget {
     this.storage = new StorageAdapter();
     this.sessionId = this.storage.getItem(this.STORAGE_KEY);
     this.visitorId = this.storage.getItem(this.VISITOR_STORAGE_KEY) || this.generateVisitorId();
+    // #46: a persisted `email:hash` from an earlier page load is still a signed
+    // identity — the visitor never becomes anonymous merely by reloading.
+    this.identitySigned = looksSigned(this.visitorId);
+    BasjooWidget.instances.push(this);
+    if (BasjooWidget.pendingIdentity !== undefined) {
+      // Consumed once: the host identified the visitor before the loader
+      // mounted, so this first widget adopts it and no later one repeats it.
+      const pending = BasjooWidget.pendingIdentity
+      BasjooWidget.pendingIdentity = undefined
+      this.identify(pending)
+    }
 
     const mode = this.embed?.display_mode
     this.displayMode = mode === 'inline' || mode === 'iframe' ? mode : 'bubble';
@@ -492,6 +551,129 @@ class BasjooWidget {
     BasjooWidget.pageContext = {
       before: typeof next.before === 'string' ? next.before : '',
       after: typeof next.after === 'string' ? next.after : '',
+    }
+  }
+
+  /**
+   * #46: push an identity into every live widget, remembering it for any widget
+   * that mounts later. Public so `window.Basjoo.identify` can reach it without
+   * exporting the private instance list.
+   */
+  static applyIdentity(identity: VisitorIdentity | null | undefined): void {
+    // A widget whose container the host page has removed is no longer a live
+    // surface: pushing an identity into a detached tree would do nothing and,
+    // worse, would stop the value being remembered for the widget that mounts
+    // next. So prune those first.
+    BasjooWidget.instances = BasjooWidget.instances.filter(
+      (widget) => widget.container?.isConnected ?? false,
+    )
+    // Only a call with no live widget needs remembering — a mounted widget
+    // receives the identity directly, so a stale value can never be replayed
+    // into a later widget on the same page.
+    if (BasjooWidget.instances.length === 0) {
+      BasjooWidget.pendingIdentity = identity ?? null
+    }
+    for (const widget of BasjooWidget.instances.slice()) {
+      widget.identify(identity ?? null)
+    }
+  }
+
+  /**
+   * #46: adopt the signed identity the host page computed server-side.
+   *
+   * The host application knows the visitor's email after login and holds the
+   * agent's `identity_secret`; it sends both through here as
+   * `{ email, hash }` where `hash = hmac_sha256(secret, email)` in hex. The
+   * widget stores the resulting `email:hash` as its visitor id, which is what
+   * makes "the same email on a second device" the same visitor.
+   *
+   * Deliberately defensive: a missing field or a value that is not a string is
+   * ignored with a warning rather than sent to the server, because a malformed
+   * identity would only earn a 403. Calling it with `null` forgets the identity
+   * (a logout) and goes back to the anonymous visitor.
+   */
+  identify(identity: VisitorIdentity | null | undefined): void {
+    if (identity === null || identity === undefined) {
+      this.identitySigned = false;
+      const anonymous = this.generateVisitorId();
+      this.visitorId = anonymous;
+      this.clearSessionForIdentityChange();
+      this.applyBusinessHoursState();
+      this.renderModeNotice();
+      return;
+    }
+
+    const email = typeof identity.email === 'string' ? identity.email.trim().toLowerCase() : '';
+    const hash = typeof identity.hash === 'string' ? identity.hash.trim().toLowerCase() : '';
+    if (!email || !hash) {
+      console.warn('[Basjoo Widget] identify() needs both `email` and `hash`; ignoring.', identity);
+      return;
+    }
+
+    const signed = `${email}:${hash}`;
+    if (signed === this.visitorId) {
+      return;
+    }
+
+    this.visitorId = signed;
+    this.identitySigned = true;
+    // Persisted so a reload keeps the same visitor until the host page calls
+    // `identify()` again with the (possibly different) signed-in user.
+    this.storage.setItem(this.VISITOR_STORAGE_KEY, signed);
+    // A different person may be using this browser now, so the previous
+    // visitor's cached session id must never be reused.
+    this.clearSessionForIdentityChange();
+
+    // A composer that was closed for want of an identity can open now.
+    this.applyBusinessHoursState();
+    this.renderModeNotice();
+
+    if (this.chatWindow) {
+      void this.resumeIdentitySession();
+    }
+  }
+
+  /** Drop the cached session when the identity changes under the widget. */
+  private clearSessionForIdentityChange(): void {
+    this.sessionId = null;
+    this.lastMessageId = 0;
+    this.storage.removeItem(this.STORAGE_KEY);
+    this.stopPolling();
+  }
+
+  /**
+   * #46: ask the server which session belongs to this identity.
+   *
+   * This is the half of "same email, second device" that the browser cannot do
+   * on its own: `localStorage` is per device, so a returning visitor has no
+   * session id. The server answers one, scoped to the agent and the identity.
+   */
+  private async resumeIdentitySession(): Promise<boolean> {
+    if (!this.identitySigned || !this.visitorId) {
+      return false;
+    }
+
+    try {
+      const url = new URL(`${this.config.apiBase}/api/v1/chat/session:current`);
+      url.searchParams.set('agent_id', this.config.agentId);
+      url.searchParams.set('visitor_id', this.visitorId);
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        return false;
+      }
+
+      const payload = (await response.json()) as { session_id?: string | null };
+      if (!payload.session_id) {
+        return false;
+      }
+
+      this.sessionId = payload.session_id;
+      this.storage.setItem(this.STORAGE_KEY, payload.session_id);
+      await this.loadHistory();
+      return true;
+    } catch (error) {
+      console.warn('[Basjoo Widget] Could not resume the signed-in visitor history.', error);
+      return false;
     }
   }
 
@@ -602,6 +784,10 @@ class BasjooWidget {
       // business hours answers `true`, which is today's behaviour.
       this.isOnline = data.online !== false
       this.awayMessage = (data.away_message || '').trim()
+      // #46: an agent that signs visitors only accepts `email:hash`. Remember
+      // it so the composer can say why nothing is sent until the host page
+      // identifies the visitor, instead of discovering it as a 403.
+      this.identityRequired = data.identity_required === true
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
       console.warn('[Basjoo Widget] Failed to load public config, using defaults.', error)
@@ -736,6 +922,15 @@ class BasjooWidget {
 
     if (this.sessionId) {
       void this.loadHistory();
+      return;
+    }
+
+    // #46: a signed visitor with no cached session is on a second device (or
+    // after a cleared storage). Ask the server which thread belongs to this
+    // identity before painting a greeting, so the transcript is not appended
+    // underneath a welcome message the visitor has already read before.
+    if (this.identitySigned && (await this.resumeIdentitySession())) {
+      this.restoreOpenState();
       return;
     }
 
@@ -978,6 +1173,12 @@ class BasjooWidget {
         `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&visitor_id=${encodeURIComponent(this.visitorId)}`
       );
       if (!response.ok) {
+        // #46: a stale or missing identity is not an expired session — clearing
+        // the id would silently discard the thread instead of telling the
+        // visitor to sign in again, and the next send would 403 anyway.
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
         throw new Error('Failed to load history');
       }
 
@@ -1995,6 +2196,12 @@ class BasjooWidget {
   /**
    * #43: outside business hours the composer is replaced by the away message
    * (falling back to a sensible default) and the human affordance is hidden.
+   *
+   * #46: the same placeholder carries the "sign in first" line for an agent
+   * that signs visitors, because the two reasons for a closed composer are
+   * mutually exclusive and look identical to the visitor. Without it a host
+   * page that never calls `Basjoo.identify()` would send a message, earn a 403
+   * and only then learn why — the sentence reads much better *before* the send.
    */
   private applyBusinessHoursState() {
     if (!this.chatWindow) return;
@@ -2002,7 +2209,14 @@ class BasjooWidget {
     const inputArea = this.chatWindow.querySelector('.basjoo-input-area') as HTMLElement | null;
     const away = this.chatWindow.querySelector('.basjoo-away') as HTMLElement | null;
 
-    if (this.isOnline) {
+    const signedIdentityMissing = this.identityRequired && !this.identitySigned;
+    const blockedMessage = !this.isOnline
+      ? this.awayMessage || this.getText('awayDefault')
+      : signedIdentityMissing
+        ? this.getText('identityRequired')
+        : null;
+
+    if (blockedMessage === null) {
       if (inputArea) inputArea.hidden = false;
       away?.remove();
     } else {
@@ -2011,15 +2225,16 @@ class BasjooWidget {
         const awayEl = document.createElement('div');
         awayEl.className = 'basjoo-away';
         awayEl.setAttribute('role', 'status');
-        awayEl.textContent = this.awayMessage || this.getText('awayDefault');
+        awayEl.textContent = blockedMessage;
         this.chatWindow.appendChild(awayEl);
       } else {
-        away.textContent = this.awayMessage || this.getText('awayDefault');
+        away.textContent = blockedMessage;
       }
     }
 
     if (this.headerHumanButton) {
-      this.headerHumanButton.hidden = !this.isOnline || this.sessionMode === 'human';
+      this.headerHumanButton.hidden =
+        !this.isOnline || this.sessionMode === 'human' || signedIdentityMissing;
     }
   }
 
@@ -2039,7 +2254,9 @@ class BasjooWidget {
       this.humanNoticeBar = null;
       this._continueAiClickListener = null;
       if (this.headerHumanButton) {
-        this.headerHumanButton.hidden = !this.isOnline;
+        // #46: an unsigned visitor on a signing agent has no affordance either.
+        this.headerHumanButton.hidden =
+          !this.isOnline || (this.identityRequired && !this.identitySigned);
       }
       return;
     }
@@ -2078,7 +2295,6 @@ class BasjooWidget {
     this.applyBusinessHoursState();
     this.renderModeNotice();
   }
-
   /**
    * #43: ask for a human. Sets `mode="human"` server-side; `status` is
    * untouched, so the operator can still release the visitor back to the bot.
@@ -2102,6 +2318,9 @@ class BasjooWidget {
       });
 
       if (!response.ok) {
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -2116,6 +2335,39 @@ class BasjooWidget {
       console.error('[Basjoo Widget] Failed to request a human handoff:', error);
       this.showError(this.getText('humanFailed'));
     }
+  }
+
+  /**
+   * #46: turn a rejected identity into a sentence in the chat window.
+   *
+   * `/chat/escalate`, `/chat/release` and `/chat/messages` answer a forged or
+   * missing identity with 403 `identity_mismatch`. Those routes are not the SSE
+   * surface, so the code arrives in a JSON `detail`; without this the visitor
+   * would get the route's generic fallback line ("Could not reach a human
+   * agent") for what is really "sign in again".
+   *
+   * Returns `true` when the response was an identity rejection and has been
+   * reported, so the caller can stop and not also show its own message.
+   */
+  private async reportIdentityRejection(response: Response): Promise<boolean> {
+    if (response.status !== 403) {
+      return false;
+    }
+
+    try {
+      const payload = (await response.json()) as {
+        detail?: string;
+        code?: string;
+      };
+      if (payload?.detail !== 'identity_mismatch' && payload?.code !== 'identity_mismatch') {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    this.showError(this.getText('identityMismatch'));
+    return true;
   }
 
   /**
@@ -2137,6 +2389,9 @@ class BasjooWidget {
       });
 
       if (!response.ok) {
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -2208,7 +2463,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'quotaExceeded' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'degradedNotice' | 'identityMismatch' | 'identityRequired'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -2227,6 +2482,8 @@ class BasjooWidget {
       humanNeedsSession: { 'en-US': 'Send a message first, then you can ask for a human.', 'zh-CN': '请先发送一条消息，然后再转人工。' },
       humanFailed: { 'en-US': 'Could not reach a human agent. Please try again.', 'zh-CN': '转人工失败，请稍后重试。' },
       degradedNotice: { 'en-US': 'Quota reached — answering with the fallback model', 'zh-CN': '额度用尽，已使用备用模型' },
+      identityMismatch: { 'en-US': 'We could not verify your identity. Please refresh the page and sign in again.', 'zh-CN': '无法验证您的身份，请刷新页面并重新登录。' },
+      identityRequired: { 'en-US': 'Please sign in on this page to start chatting.', 'zh-CN': '请先在本页面登录，然后再开始对话。' },
     };
 
     const locale = this.getRequestLocale().toLowerCase()
@@ -2953,6 +3210,12 @@ class BasjooWidget {
       } else if (error?.name === 'ORIGIN_NOT_ALLOWED' || errorText.toLowerCase().includes('widget origin not allowed')) {
         errorMessage = this.getText('sendFailed');
         consoleHint = 'Widget request was blocked because the current page origin is not on the allowed domain list.';
+      } else if (error?.name === 'identity_mismatch' || errorText.includes('identity_mismatch')) {
+        /* #46: the agent signs visitors and this one's hash did not verify —
+         * usually a stale hash in the host page, or `identify()` never called.
+         * A readable sentence, not a bare 403. */
+        errorMessage = this.getText('identityMismatch');
+        consoleHint = 'Signed visitor identity rejected: recompute hmac_sha256(identity_secret, email) for the signed-in visitor and pass it to Basjoo.identify({ email, hash }).';
       } else if (errorText.includes('401')) {
         consoleHint = 'Authentication failed. Please check the agent configuration and public API access.';
       }
@@ -2975,6 +3238,7 @@ class BasjooWidget {
    * 销毁Widget
    */
   destroy() {
+    BasjooWidget.instances = BasjooWidget.instances.filter((instance) => instance !== this);
     // 停止轮询和标题闪烁
     this.stopPolling();
     this.stopTitleBlink();
@@ -3035,10 +3299,19 @@ class BasjooWidget {
  * #40: `window.Basjoo` is the host page's handle — `setContext` pushes page
  * context, `init` mounts a widget by hand. Exposed as a plain object because
  * the IIFE bundle has no module exports.
+ *
+ * #46 adds `identify`: the host page computes `hmac_sha256(secret, email)` on
+ * its own server and hands `{ email, hash }` across. The secret never reaches
+ * the browser, and the widget never computes the digest.
  */
 (window as any).Basjoo = {
   Widget: BasjooWidget,
   setContext: (context: { before?: string; after?: string } | null) => BasjooWidget.setContext(context),
+  identify: (identity: VisitorIdentity | null | undefined) => {
+    // Remember it for a widget that has not mounted yet, then fan out to every
+    // live instance (a page may hold more than one widget).
+    BasjooWidget.applyIdentity(identity)
+  },
   init: (config: WidgetConfig) => {
     const widget = new BasjooWidget(config)
     void widget.init()

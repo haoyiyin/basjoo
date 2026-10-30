@@ -117,6 +117,12 @@ def run_sqlite_migrations(database_url: str) -> None:
 
         # ── chat_sessions ──────────────────────────────────────────────────
         if _table_exists(cursor, "chat_sessions"):
+            # #46 widens `visitor_id` from VARCHAR(100) to VARCHAR(320), because
+            # a signed identity is `<email>:<64 hex>`. That is a `models.py`
+            # change only: SQLite's column affinity does not enforce VARCHAR
+            # lengths, and the alternative — rebuilding the table to restate a
+            # type — would rewrite every session row on upgrade for no
+            # behavioural gain. Existing short ids keep working unchanged.
             _ensure_columns(
                 cursor,
                 "chat_sessions",
