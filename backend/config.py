@@ -180,6 +180,13 @@ class Settings(BaseSettings):
     # exposed to untrusted users and guards its own metadata/internal network.
     ssrf_protection_enabled: bool = False
 
+    # The address visitors actually reach (#40). Every public, unauthenticated
+    # surface — `/api/v1/config:public` and `/api/v1/agents/{id}/embed.js` —
+    # answers with this origin when it is set, so a dashboard opened on
+    # `localhost` hands out a public snippet instead of a loopback one.
+    # Empty (the default) means: trust `X-Forwarded-Host`, then `Host`.
+    public_base_url: str = ""
+
     # 应用
     app_name: str = "Basjoo"
     app_port: int = 8000
@@ -216,6 +223,12 @@ class Settings(BaseSettings):
                 "allowed_headers",
                 "Content-Type,Authorization,X-Requested-With,Accept",
             )
+
+        # A trailing slash is a typo, not a path: the origin is the prefix every
+        # snippet is concatenated onto, so `https://x/` would render `//api`.
+        object.__setattr__(
+            self, "public_base_url", self.public_base_url.strip().rstrip("/")
+        )
 
         if _is_missing_or_insecure_secret(self.secret_key):
             resolved_secret = _load_secret_key_from_file(secret_key_file)

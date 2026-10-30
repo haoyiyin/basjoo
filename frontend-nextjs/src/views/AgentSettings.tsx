@@ -6,15 +6,17 @@ import { useTranslation } from 'react-i18next';
 import AdminLayout from '../components/AdminLayout';
 import ProcedureEditor from '../components/ProcedureEditor';
 import { Icon } from '../components/Icon';
-import { api, type Agent, type BusinessHoursPayload } from '../services/api';
-import { API_BASE_URL } from '../lib/env';
+import {
+  api,
+  type Agent,
+  type BusinessHoursPayload,
+  type WidgetCard,
+  type WidgetStarter,
+} from '../services/api';
 import {
   validateAllowedWidgetOriginsText,
 } from '../lib/widgetOrigins';
-import {
-  buildWidgetEmbedCode,
-  resolveWidgetScriptBaseUrl,
-} from '../lib/widgetEmbedCode';
+import { buildWidgetEmbedCode, isLoopbackOrigin } from '../lib/widgetEmbedCode';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
 interface AgentSettingsFormData {
@@ -25,6 +27,86 @@ interface AgentSettingsFormData {
   allowed_widget_origins: string[];
   rate_limit_per_minute: number;
   restricted_reply: string;
+}
+
+/** #40: the three install modes. `bubble` is today's behaviour. */
+type DisplayMode = 'bubble' | 'inline' | 'iframe';
+
+/** #40: a starter row in the editor; every field is a string so the inputs stay controlled. */
+interface StarterRow {
+  label: string;
+  action: 'message' | 'link';
+  value: string;
+  path: string;
+}
+
+/** #40: a card row in the editor. */
+interface CardRow {
+  logo: string;
+  heading: string;
+  text: string;
+  action: string;
+}
+
+const DEFAULT_TRAFFIC_PERCENTAGE = 100;
+
+function emptyStarterRow(): StarterRow {
+  return { label: '', action: 'message', value: '', path: '' };
+}
+
+function emptyCardRow(): CardRow {
+  return { logo: '', heading: '', text: '', action: '' };
+}
+
+function startersFromAgent(agent: Agent): StarterRow[] {
+  const raw = agent.starters ?? [];
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  return raw.map((starter) => ({
+    label: typeof starter?.label === 'string' ? starter.label : '',
+    action: starter?.action === 'link' ? 'link' : 'message',
+    value: typeof starter?.value === 'string'
+      ? starter.value
+      : (typeof starter?.url === 'string' ? starter.url : ''),
+    path: typeof starter?.path === 'string' ? starter.path : '',
+  }));
+}
+
+function cardsFromAgent(agent: Agent): CardRow[] {
+  const raw = agent.widget_cards ?? [];
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  return raw.map((card) => ({
+    logo: typeof card?.logo === 'string' ? card.logo : '',
+    heading: typeof card?.heading === 'string' ? card.heading : '',
+    text: typeof card?.text === 'string' ? card.text : '',
+    action:
+      (typeof card?.chat === 'string' && card.chat) ||
+      (typeof card?.kb_search === 'string' && card.kb_search) ||
+      (typeof card?.form === 'string' && card.form) ||
+      '',
+  }));
+}
+
+/** An empty row is dropped on save; a half-filled one is kept (the operator is mid-edit). */
+function isRowEmpty(row: StarterRow | CardRow): boolean {
+  return Object.values(row).every((value) => String(value).trim() === '');
+}
+
+/**
+ * A regex the widget will actually have to compile. An invalid one is reported
+ * here rather than silently shipped, but it never blocks the save — the widget
+ * ignores bad patterns at runtime with a warning.
+ */
+function findInvalidPatterns(values: string[]): string[] {
+  const invalid: string[] = [];
+  for (const value of values) {
+    if (!value.trim()) continue;
+    try {
+      new RegExp(value);
+    } catch {
+      invalid.push(value);
+    }
+  }
+  return invalid;
 }
 
 /** Contract C6: `day` 0 = Monday, `start`/`end` are minutes from local midnight. */
@@ -91,6 +173,13 @@ function supportedTimezones(): string[] {
   return FALLBACK_TIMEZONES;
 }
 
+function parseLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 /**
  * Coerce whatever the backend stored into the editor's shape.
  *
@@ -154,6 +243,19 @@ export default function AgentSettings() {
   const [escalationRules, setEscalationRules] = useState<string>('');
   const [businessHours, setBusinessHours] = useState<BusinessHoursConfig | null>(null);
   const [awayMessage, setAwayMessage] = useState<string>('');
+  // #40 install surface: the server-rendered loader's inputs.
+  const [publicOrigin, setPublicOrigin] = useState<string | null>(null);
+  const [publicOriginLoading, setPublicOriginLoading] = useState(true);
+  const [embedCopied, setEmbedCopied] = useState(false);
+  const [embedCopyError, setEmbedCopyError] = useState<string | null>(null);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('bubble');
+  const [inlineContainer, setInlineContainer] = useState<string>('');
+  const [excludedPathsText, setExcludedPathsText] = useState<string>('');
+  const [trafficPercentage, setTrafficPercentage] = useState<number>(
+    DEFAULT_TRAFFIC_PERCENTAGE,
+  );
+  const [starterRows, setStarterRows] = useState<StarterRow[]>([]);
+  const [cardRows, setCardRows] = useState<CardRow[]>([]);
   const timezoneOptions = useMemo(() => supportedTimezones(), []);
   // `businessHours.days` is an array in both locale files; i18next hands back
   // the raw value with `returnObjects`.
@@ -189,6 +291,35 @@ export default function AgentSettings() {
       setEscalationRules(loadedAgent.escalation_rules ?? '');
       setBusinessHours(normalizeBusinessHours(loadedAgent.business_hours ?? null));
       setAwayMessage(loadedAgent.away_message ?? '');
+      // #40 install surface.
+      setDisplayMode(
+        loadedAgent.display_mode === 'inline' || loadedAgent.display_mode === 'iframe'
+          ? loadedAgent.display_mode
+          : 'bubble',
+      );
+      setInlineContainer(loadedAgent.inline_container ?? '');
+      setExcludedPathsText((loadedAgent.excluded_paths ?? []).join('\n'));
+      const percentage = loadedAgent.traffic_percentage;
+      setTrafficPercentage(
+        typeof percentage === 'number' && Number.isFinite(percentage)
+          ? Math.max(0, Math.min(100, Math.round(percentage)))
+          : DEFAULT_TRAFFIC_PERCENTAGE,
+      );
+      setStarterRows(startersFromAgent(loadedAgent));
+      setCardRows(cardsFromAgent(loadedAgent));
+
+      // The embed code must come from the SERVER, never from
+      // `window.location.origin`: a dashboard opened on localhost would hand
+      // out a localhost snippet, which is the bug #40 fixes.
+      setPublicOriginLoading(true);
+      try {
+        const origin = await api.getPublicOrigin(loadedAgent.id);
+        setPublicOrigin(origin ?? null);
+      } catch {
+        setPublicOrigin(null);
+      } finally {
+        setPublicOriginLoading(false);
+      }
     } catch (err) {
       setError(t('errors.loadFailed'));
     } finally {
@@ -196,11 +327,34 @@ export default function AgentSettings() {
     }
   };
 
+  // #40: one script tag pointing at the server-rendered loader. `publicOrigin`
+  // comes from `/config:public`, so the snippet is right even on localhost.
   const embedCode = useMemo(() => {
     if (!agent) return '';
-    const scriptBaseUrl = resolveWidgetScriptBaseUrl(API_BASE_URL);
-    return buildWidgetEmbedCode(agent.id, scriptBaseUrl);
-  }, [agent]);
+    return buildWidgetEmbedCode(agent.id, publicOrigin);
+  }, [agent, publicOrigin]);
+
+  const handleCopyEmbedCode = async () => {
+    if (!embedCode) return;
+    setEmbedCopyError(null);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(embedCode);
+      } else {
+        // Older/insecure contexts: the same fallback the rest of the app uses.
+        const textArea = document.createElement('textarea');
+        textArea.value = embedCode;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setEmbedCopied(true);
+      setTimeout(() => setEmbedCopied(false), 2000);
+    } catch {
+      setEmbedCopyError(t('install.copyFailed'));
+    }
+  };
 
   const handleSave = async () => {
     if (!agent || !formData) return;
@@ -212,6 +366,37 @@ export default function AgentSettings() {
       return;
     }
     setValidationError(null);
+
+    // #40: an excluded path or a starter path that will not compile is reported
+    // here instead of being shipped to every visitor's browser.
+    const invalidPathPatterns = findInvalidPatterns([
+      ...parseLines(excludedPathsText),
+      ...starterRows.map((row) => row.path),
+    ]);
+    if (invalidPathPatterns.length > 0) {
+      setValidationError(
+        t('install.excludedPathsInvalid', { paths: invalidPathPatterns.join(', ') }),
+      );
+      return;
+    }
+
+    const excludedPaths = parseLines(excludedPathsText);
+    const starters: WidgetStarter[] = starterRows
+      .filter((row) => !isRowEmpty(row) && row.label.trim())
+      .map((row) => ({
+        label: row.label.trim(),
+        action: row.action,
+        value: row.value.trim(),
+        path: row.path.trim() ? row.path.trim() : undefined,
+      }));
+    const cards: WidgetCard[] = cardRows
+      .filter((row) => !isRowEmpty(row))
+      .map((row) => ({
+        logo: row.logo.trim() ? row.logo.trim() : undefined,
+        heading: row.heading.trim() ? row.heading.trim() : undefined,
+        text: row.text.trim() ? row.text.trim() : undefined,
+        chat: row.action.trim() ? row.action.trim() : undefined,
+      }));
 
     setSaving(true);
     try {
@@ -226,6 +411,13 @@ export default function AgentSettings() {
         escalation_rules: escalationRules.trim() ? escalationRules.trim() : null,
         business_hours: businessHours,
         away_message: awayMessage.trim() ? awayMessage.trim() : null,
+        // #40: the install surface rides the same save.
+        display_mode: displayMode,
+        inline_container: inlineContainer.trim() ? inlineContainer.trim() : null,
+        excluded_paths: excludedPaths,
+        traffic_percentage: trafficPercentage,
+        starters: starters,
+        widget_cards: cards,
       };
       const updatedAgent = await api.updateAgent(agent.id, updates);
       setAgent(updatedAgent);
@@ -234,6 +426,9 @@ export default function AgentSettings() {
       setBusinessHours(normalizeBusinessHours(updatedAgent.business_hours ?? null));
       setAwayMessage(updatedAgent.away_message ?? '');
       setOriginsText(normalizedOrigins.join('\n'));
+      setStarterRows(startersFromAgent(updatedAgent));
+      setCardRows(cardsFromAgent(updatedAgent));
+      setExcludedPathsText((updatedAgent.excluded_paths ?? []).join('\n'));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -323,6 +518,36 @@ export default function AgentSettings() {
       ...businessHours,
       schedule: businessHours.schedule.filter((_range, position) => position !== index),
     });
+  };
+
+  // --- #40: repeatable starter / card rows (add + remove, no drag-and-drop) ---
+
+  const updateStarterRow = (index: number, patch: Partial<StarterRow>) => {
+    setStarterRows((rows) =>
+      rows.map((row, position) => (position === index ? { ...row, ...patch } : row)),
+    );
+  };
+
+  const handleAddStarter = () => {
+    setStarterRows((rows) => [...rows, emptyStarterRow()]);
+  };
+
+  const handleRemoveStarter = (index: number) => {
+    setStarterRows((rows) => rows.filter((_row, position) => position !== index));
+  };
+
+  const updateCardRow = (index: number, patch: Partial<CardRow>) => {
+    setCardRows((rows) =>
+      rows.map((row, position) => (position === index ? { ...row, ...patch } : row)),
+    );
+  };
+
+  const handleAddCard = () => {
+    setCardRows((rows) => [...rows, emptyCardRow()]);
+  };
+
+  const handleRemoveCard = (index: number) => {
+    setCardRows((rows) => rows.filter((_row, position) => position !== index));
   };
 
   if (loading) {
@@ -790,12 +1015,364 @@ export default function AgentSettings() {
           </div>
         </section>
 
-        {/* Embed code */}
-        <section className="card">
+        {/* #40 install surface: display mode, excluded paths, rollout */}
+        <section className="card" data-testid="agent-install-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('install.title')}</h2>
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="display_mode">
+              {t('install.displayMode')}
+            </label>
+            <select
+              id="display_mode"
+              className="input"
+              data-testid="install-display-mode"
+              value={displayMode}
+              onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
+            >
+              <option value="bubble">{t('install.displayModeBubble')}</option>
+              <option value="inline">{t('install.displayModeInline')}</option>
+              <option value="iframe">{t('install.displayModeIframe')}</option>
+            </select>
+            <p className="field-hint">{t('install.displayModeHint')}</p>
+          </div>
+
+          {displayMode !== 'bubble' && (
+            <div className="field">
+              <label className="field-label" htmlFor="inline_container">
+                {t('install.inlineContainer')}
+              </label>
+              <input
+                id="inline_container"
+                className="input"
+                type="text"
+                value={inlineContainer}
+                onChange={(e) => setInlineContainer(e.target.value)}
+                placeholder={t('install.inlineContainerPlaceholder')}
+              />
+              <p className="field-hint">{t('install.inlineContainerHint')}</p>
+            </div>
+          )}
+
+          <div className="field">
+            <label className="field-label" htmlFor="excluded_paths">
+              {t('install.excludedPaths')}
+            </label>
+            <textarea
+              id="excluded_paths"
+              className="input textarea"
+              data-testid="install-excluded-paths"
+              value={excludedPathsText}
+              onChange={(e) => setExcludedPathsText(e.target.value)}
+              rows={3}
+              placeholder={t('install.excludedPathsPlaceholder')}
+            />
+            <p className="field-hint">{t('install.excludedPathsHint')}</p>
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="traffic_percentage">
+              {t('install.trafficPercentage')}
+            </label>
+            <input
+              id="traffic_percentage"
+              className="input"
+              type="number"
+              data-testid="install-traffic"
+              value={trafficPercentage}
+              onChange={(e) => {
+                const parsed = Number.parseInt(e.target.value, 10);
+                const next = Number.isNaN(parsed) ? 0 : Math.max(0, Math.min(100, parsed));
+                setTrafficPercentage(next);
+              }}
+              min={0}
+              max={100}
+              style={{ width: '120px' }}
+            />
+            <p className="field-hint">{t('install.trafficPercentageHint')}</p>
+          </div>
+        </section>
+
+        {/* #40: entry cards */}
+        <section className="card" data-testid="agent-cards-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('install.cards')}</h2>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('install.cardsHint')}
+          </p>
+
+          {cardRows.length === 0 ? (
+            <p className="field-hint" data-testid="install-cards-empty">
+              {t('install.cardsEmpty')}
+            </p>
+          ) : (
+            <ul className="list" data-testid="install-cards">
+              {cardRows.map((row, index) => (
+                <li
+                  key={`card-${index}`}
+                  className="list-row"
+                  style={{
+                    display: 'grid',
+                    gap: 'var(--space-2)',
+                    gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr auto',
+                    alignItems: 'start',
+                  }}
+                >
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label
+                      className="field-label"
+                      htmlFor={`card_heading_${index}`}
+                    >
+                      {t('install.cardHeading')}
+                    </label>
+                    <input
+                      id={`card_heading_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.cardHeading')} ${index + 1}`}
+                      value={row.heading}
+                      onChange={(e) => updateCardRow(index, { heading: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label className="field-label" htmlFor={`card_text_${index}`}>
+                      {t('install.cardText')}
+                    </label>
+                    <input
+                      id={`card_text_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.cardText')} ${index + 1}`}
+                      value={row.text}
+                      onChange={(e) => updateCardRow(index, { text: e.target.value })}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-icon"
+                    aria-label={t('install.cardsRemove')}
+                    title={t('install.cardsRemove')}
+                    style={{ minWidth: 44, minHeight: 44 }}
+                    onClick={() => handleRemoveCard(index)}
+                  >
+                    <Icon name="close" size={16} />
+                  </button>
+
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label className="field-label" htmlFor={`card_logo_${index}`}>
+                      {t('install.cardLogo')}
+                    </label>
+                    <input
+                      id={`card_logo_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.cardLogo')} ${index + 1}`}
+                      value={row.logo}
+                      onChange={(e) => updateCardRow(index, { logo: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label className="field-label" htmlFor={`card_action_${index}`}>
+                      {t('install.cardAction')}
+                    </label>
+                    <input
+                      id={`card_action_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.cardAction')} ${index + 1}`}
+                      value={row.action}
+                      onChange={(e) => updateCardRow(index, { action: e.target.value })}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="page-actions" style={{ marginTop: 'var(--space-3)' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              data-testid="install-cards-add"
+              onClick={handleAddCard}
+            >
+              {t('install.cardsAdd')}
+            </button>
+          </div>
+        </section>
+
+        {/* #40: starters */}
+        <section className="card" data-testid="agent-starters-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('install.starters')}</h2>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('install.startersHint')}
+          </p>
+
+          {starterRows.length === 0 ? (
+            <p className="field-hint" data-testid="install-starters-empty">
+              {t('install.startersEmpty')}
+            </p>
+          ) : (
+            <ul className="list" data-testid="install-starters">
+              {starterRows.map((row, index) => (
+                <li
+                  key={`starter-${index}`}
+                  className="list-row"
+                  style={{
+                    display: 'grid',
+                    gap: 'var(--space-2)',
+                    gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr auto',
+                    alignItems: 'start',
+                  }}
+                >
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label
+                      className="field-label"
+                      htmlFor={`starter_label_${index}`}
+                    >
+                      {t('install.starterLabel')}
+                    </label>
+                    <input
+                      id={`starter_label_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.starterLabel')} ${index + 1}`}
+                      value={row.label}
+                      onChange={(e) => updateStarterRow(index, { label: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label
+                      className="field-label"
+                      htmlFor={`starter_action_${index}`}
+                    >
+                      {t('install.starterAction')}
+                    </label>
+                    <select
+                      id={`starter_action_${index}`}
+                      className="input"
+                      aria-label={`${t('install.starterAction')} ${index + 1}`}
+                      value={row.action}
+                      onChange={(e) =>
+                        updateStarterRow(index, {
+                          action: e.target.value === 'link' ? 'link' : 'message',
+                        })
+                      }
+                    >
+                      <option value="message">{t('install.starterActionMessage')}</option>
+                      <option value="link">{t('install.starterActionLink')}</option>
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-icon"
+                    aria-label={t('install.startersRemove')}
+                    title={t('install.startersRemove')}
+                    style={{ minWidth: 44, minHeight: 44 }}
+                    onClick={() => handleRemoveStarter(index)}
+                  >
+                    <Icon name="close" size={16} />
+                  </button>
+
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label
+                      className="field-label"
+                      htmlFor={`starter_value_${index}`}
+                    >
+                      {t('install.starterValue')}
+                    </label>
+                    <input
+                      id={`starter_value_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.starterValue')} ${index + 1}`}
+                      value={row.value}
+                      onChange={(e) => updateStarterRow(index, { value: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label
+                      className="field-label"
+                      htmlFor={`starter_path_${index}`}
+                    >
+                      {t('install.starterPath')}
+                    </label>
+                    <input
+                      id={`starter_path_${index}`}
+                      className="input"
+                      type="text"
+                      aria-label={`${t('install.starterPath')} ${index + 1}`}
+                      placeholder={t('install.starterPathPlaceholder')}
+                      value={row.path}
+                      onChange={(e) => updateStarterRow(index, { path: e.target.value })}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="page-actions" style={{ marginTop: 'var(--space-3)' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              data-testid="install-starters-add"
+              onClick={handleAddStarter}
+            >
+              {t('install.startersAdd')}
+            </button>
+          </div>
+        </section>
+
+        {/* #40: the server-rendered snippet + copy button */}
+        <section className="card" data-testid="agent-embed-card">
           <div className="card-header">
             <h2 className="card-title">{t('labels.widgetEmbedCode')}</h2>
+            <div className="page-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="install-copy"
+                onClick={handleCopyEmbedCode}
+                disabled={!embedCode}
+                aria-label={t('install.copy')}
+                title={t('install.copy')}
+              >
+                {embedCopied ? t('install.copied') : t('install.copy')}
+              </button>
+            </div>
           </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('install.description')}
+          </p>
+
+          {publicOriginLoading ? (
+            <p className="field-hint" role="status">
+              {t('install.serverOriginPending')}
+            </p>
+          ) : null}
+          {!publicOriginLoading && !publicOrigin ? (
+            <p className="field-hint" role="alert">
+              {t('install.serverOriginUnknown')}
+            </p>
+          ) : null}
+
           <pre
+            data-testid="install-embed-code"
             style={{
               margin: 0,
               padding: 'var(--space-3)',
@@ -812,6 +1389,30 @@ export default function AgentSettings() {
           >
             {embedCode}
           </pre>
+
+          {/* #40: a loopback origin is only shareable once PUBLIC_BASE_URL is set.
+              A warning, never a block — the copy already happened above. */}
+          {!publicOriginLoading && isLoopbackOrigin(publicOrigin) ? (
+            <p
+              data-testid="install-loopback-warning"
+              role="status"
+              className="field-hint"
+              style={{ marginBottom: 0 }}
+            >
+              {t('install.loopbackOriginHint')}
+            </p>
+          ) : null}
+
+          {embedCopyError && (
+            <p role="alert" className="field-error">
+              {embedCopyError}
+            </p>
+          )}
+          {embedCopied && (
+            <p role="status" aria-live="polite" className="field-hint">
+              {t('install.copied')}
+            </p>
+          )}
         </section>
       </div>
     </AdminLayout>

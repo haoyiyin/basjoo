@@ -517,6 +517,7 @@ def _migrate_agents(cursor: sqlite3.Cursor):
         # #40 — install surface.
         ("excluded_paths", "TEXT"),
         ("display_mode", "VARCHAR(20) DEFAULT 'bubble'"),
+        ("inline_container", "VARCHAR(200)"),
         ("starters", "TEXT"),
         ("widget_cards", "TEXT"),
         ("traffic_percentage", "INTEGER DEFAULT 100"),
