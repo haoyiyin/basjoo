@@ -1,19 +1,24 @@
-# Basjoo
+<p align="center"><img src="resource/logo.png" width="112" alt="Basjoo"></p>
 
-[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
-[![React](https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
-[![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Qdrant](https://img.shields.io/badge/Qdrant-Vector_Search-DC244C)](https://qdrant.tech/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<h1 align="center">Basjoo</h1>
 
-English | [简体中文](README.zh-CN.md)
+<p align="center">
+<a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
+<a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI"></a>
+<a href="https://vite.dev/"><img src="https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white" alt="Vite"></a>
+<a href="https://react.dev/"><img src="https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black" alt="React 18"></a>
+<a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white" alt="Python"></a>
+<a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+<a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite"></a>
+<a href="https://qdrant.tech/"><img src="https://img.shields.io/badge/Qdrant-Vector_Search-DC244C" alt="Qdrant"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
+
+<p align="center">English | <a href="README.zh-CN.md">简体中文</a></p>
 
 Basjoo is a self-hosted AI customer-support platform: it turns a website plus a set of documents into a
-support agent you can embed anywhere, and gives you an admin console to run it.
+support agent you can embed anywhere, and gives you a console to run it — analytics, a session transcript
+wall, human takeover, a Q&A index and lead capture, all in one box you own.
 
 ## Install
 
@@ -29,8 +34,8 @@ Other distributions work too — **if Docker Engine with the Compose plugin, `gi
 installed**, the script skips package setup and deploys; otherwise it stops and tells you what to install.
 Prefer to drive Compose yourself? See [Docker Compose by hand](#docker-compose-by-hand).
 
-- **FastAPI backend** (`backend/`) — agents, knowledge bases, RAG retrieval, SSE chat, auth, workspace resource limits, schedulers
-- **Vite SPA admin console** (`frontend-nextjs/` — the directory name is left over from the former Next.js app)
+- **FastAPI backend** (`backend/`) — agents, knowledge bases, RAG retrieval, SSE chat, curated Q&A, leads, analytics, webhooks, auth, schedulers
+- **Vite SPA console** (`frontend-nextjs/` — the directory name is left over from the former Next.js app)
 - **Embeddable chat widget** (`widget/`) — one `<script>` tag, talks to the backend over HTTP + SSE
 - **Retrieval stack** — Qdrant for vectors, SQLite for application data, Redis for rate limiting, and a
   crawl4ai fetcher container (`basjoo-crawler`) that renders pages in a headless browser
@@ -45,8 +50,7 @@ works before you own any API key. **No GPU is needed.**
   independently of any agent, and a KB can outlive every agent that used it. Sources (URLs, uploaded files)
   belong to the KB, not to the agent.
 - **Two ingestion paths per KB.** Crawl one page, crawl a whole site (depth + page cap), or upload files
-  (`txt`, `md`, `html`, `pdf`, `docx`, `xlsx`; up to 5 files and 20 MB per file per request). Optional
-  auto-refetch keeps web sources fresh on a schedule.
+  (`txt`, `md`, `html`, `pdf`, `docx`, `xlsx`; up to 5 files and 20 MB per file per request).
 - **Per-KB embeddings.** `local` (bundled TEI container), `jina`, `siliconflow`, or any `custom`
   OpenAI-compatible endpoint. The vector width is measured with a real embedding call when the KB is
   created, so the collection and the provider can never silently disagree.
@@ -57,11 +61,36 @@ works before you own any API key. **No GPU is needed.**
   configurable restricted reply when a provider fails. No provider key at all? Curate Q&A pairs with
   keywords and flip `fallback_mode` (default `off`) to `keyword`: the bot answers matched questions with
   **no model and no API key**, marked `mode: "scripted"`; a miss falls back to the restricted reply.
+- **A curated Q&A index per KB.** Pairs are embedded on their own and matched before any retrieved passage,
+  so a correction takes effect without a reindex. Bulk import, a "try a message" tester that shows the score
+  and the matched keywords, per-pair hit counts, and a one-click "revise this answer" on any assistant turn
+  that writes a new pair straight onto the bound KB.
+- **Prompt layers you can edit.** Persona and model in the AI settings pane, `fixed_facts` for the facts the
+  bot must never contradict, ordered procedures for multi-step flows — each reaching the prompt in its own
+  position, never as a retraining of the model.
+- **Analytics that say what to fix.** Sessions, messages, visitors, leads, handoffs, unanswered questions,
+  thumbs-down and the positive-feedback rate over 24 h / 7 d / 30 d / 90 d, each with a delta against the
+  previous window and CSV export. Conversations are classified when they end (resolved, abandoned,
+  escalated, could not answer), and the unanswered queue groups the same question so you can turn it into a
+  Q&A pair.
+- **Lead capture.** `POST /api/v1/leads` is a public, origin-checked route that writes one lead per session
+  (idempotent, so a refresh edits instead of duplicating) with name, email, phone, message, page URL and a
+  `contacted` flag; a `prechat` block on a chat request lands the same way. Leads are counted on the
+  dashboard and listed through the admin API — there is no dedicated lead screen in the console yet.
 - **Human takeover.** Operators watch live sessions in the console and jump in; the widget polls for the
-  human reply and hands the conversation over.
-- **A widget that respects its host.** Per-agent origin whitelist, visitor/session persisted in
-  `localStorage`, locale-aware copy (English / Chinese), 90-second stream timeout with one retry.
-- **Bilingual admin UI** (English / 简体中文) on a warm, single-accent design system that holds up at 375 px.
+  human reply and hands the conversation over. Reply without takeover, release back to the bot, resolve, or
+  reopen a resolved session. Business hours decide when the bot is off duty, and the away message is shown
+  but never written into the transcript.
+- **A widget that respects its host.** Per-agent origin whitelist, three display modes (floating bubble,
+  inline container, iframe), path exclusions, a traffic percentage that is decided once per visitor, entry
+  cards and starters, `localStorage` visitor/session, locale-aware copy (English / Chinese), 90-second stream
+  timeout with one retry, and a signed visitor identity (`window.Basjoo.identify()`) for hosts that know who
+  is logged in.
+- **Outbound webhooks.** Seven events (`session.created`, `session.closed`, `message.created`,
+  `message.unanswered`, `handoff.requested`, `lead.created`, `document.indexed`), queued in the same
+  transaction as the change, signed with `X-Basjoo-Signature: sha256=<hmac>` over the exact bytes sent, and
+  retried with backoff — a slow receiver never blocks a chat reply.
+- **Bilingual console** (English / 简体中文) on a warm, single-accent design system that holds up at 375 px.
 
 ## Screenshots
 
@@ -73,8 +102,8 @@ One table for every agent: its knowledge base, last update, status and actions.
 
 ### Knowledge base
 
-Sources live on the KB: crawl controls, the URL list with fetch and index status, and the uploaded files
-with their parsed chunk counts.
+Sources live on the KB: crawl controls, the URL list with fetch and index status, the uploaded files with
+their parsed chunk counts, and the curated Q&A index that answers ahead of retrieval.
 
 ![Knowledge base detail](resource/screenshots/admin/en-US/knowledge-base.png)
 
@@ -86,17 +115,24 @@ the curated keyword path, so you can test it before configuring any provider key
 
 ![Playground](resource/screenshots/admin/en-US/playground.png)
 
-### Sessions and human takeover
+### Session console
 
-Every visitor session with its transcript, plus a takeover control for the ones a bot should not finish
-alone.
+Every visitor session with its transcript, and the actions a bot should not take alone: reply, takeover,
+release, resolve, reopen, email the transcript, delete the visitor's data.
 
 ![Sessions center](resource/screenshots/admin/en-US/sessions.png)
 
+### Dashboard
+
+Eight tiles with a delta against the previous window, the outcome split for finished conversations, and the
+questions that went unanswered — each row links back to the message that produced it.
+
+![Dashboard](resource/screenshots/admin/en-US/dashboard.png)
+
 ### Agent settings and embed code
 
-Widget title, colour, greeting, history retention, origin whitelist and per-minute limit — together with
-the embed snippet to paste into your site.
+Five groups in prompt order — the AI, its material, handoff, install, outbound webhooks — with the display
+mode, entry cards, starters and the embed snippet to paste into your site.
 
 ![Agent settings](resource/screenshots/admin/en-US/agent-settings.png)
 
@@ -166,7 +202,7 @@ browser ──▶ widget / admin SPA
                  │  HTTP + SSE
                  ▼
             nginx (prod) ──▶ FastAPI backend ──▶ Qdrant        (vectors, one collection per KB)
-                                  │        └──▶ SQLite        (agents, KBs, documents, sessions)
+                                  │        └──▶ SQLite        (agents, KBs, documents, sessions, leads)
                                   ├──────────▶ Redis         (rate limits)
                                   ├──────────▶ basjoo-crawler (crawl4ai, headless Chromium)
                                   ├──────────▶ local-embed   (TEI, CPU embeddings)
@@ -187,13 +223,13 @@ pointer — the KB, its documents, chunks and URL sources survive.
 ### Chat
 
 `POST /api/v1/chat/stream` runs in two phases on purpose: a short database phase (resolve agent → origin
-whitelist → session → rate limit → load history → retrieve context), then a streaming phase that
-holds no database connection while the provider generates. The event names are `sources`, `content`,
-`thinking_done`, `done` and `error`. A missing provider key is an explicit `400 API_KEY_MISSING`, never a
-silent mock answer — unless the agent opts into the scripted keyword path (`fallback_mode="keyword"`),
-where a keyless agent answers matched questions with no model call and a miss falls back to the
-restricted reply. Session ids are enumerable, so the public endpoints require the visitor's own
-`visitor_id` and answer `404 Session not found` for anyone else.
+whitelist → session → rate limit → load history → match curated Q&A → retrieve context), then a streaming
+phase that holds no database connection while the provider generates. The event names are `sources`,
+`content`, `thinking_done`, `done` and `error`. A missing provider key is an explicit `400 API_KEY_MISSING`,
+never a silent mock answer — unless the agent opts into the scripted keyword path
+(`fallback_mode="keyword"`), where a keyless agent answers matched questions with no model call and a miss
+falls back to the restricted reply. Session ids are enumerable, so the public endpoints require the
+visitor's own `visitor_id` and answer `404 Session not found` for anyone else.
 
 One gate decides whether the bot speaks: `services/session_state.answer_gate` requires `status="active"`,
 `mode="ai"` **and** the agent's business hours to be open. Anything else still stores the visitor's message
@@ -202,22 +238,32 @@ and answers nothing, reporting why in `done.no_answer_reason` (`taken_over`, `re
 `away_message` as the visible reply — it is never written to the transcript, so the history does not claim a
 person wrote it. An agent with no business hours (or an unparsable config) is always online.
 
+Every assistant turn carries a `confidence`: the best retrieval score the prompt was built from, or `null`
+when nothing was retrieved. An answer that matches no passage — or that equals a fallback sentence — is
+flagged `is_unanswered`, which is what the dashboard's triage queue and the "add to Q&A" button read.
+
 ### Widget
 
 `widget/src/BasjooWidget.tsx` bootstraps from `<script src="…/sdk.js?agent_id=agt_…">` (it also accepts
 `agentId` and `api_base`), auto-detects the API base from its own script URL, fetches
-`/api/v1/config:public` for the title, colour and greeting, keeps the visitor and session in `localStorage`,
-streams from `/api/v1/chat/stream`, and polls `/api/v1/chat/messages` (visitor id + `after_id`, assistant
-role only) every 3 s once the first reply lands — that is what surfaces human-takeover messages.
+`/api/v1/config:public` for the title, colour, greeting and install options, keeps the visitor and session in
+`localStorage`, streams from `/api/v1/chat/stream`, and polls `/api/v1/chat/messages` (visitor id +
+`after_id`, assistant role only) every 3 s once the first reply lands — that is what surfaces human-takeover
+messages.
 
 ```html
 <script src="https://your-basjoo-host/sdk.js?agent_id=agt_xxxxxxxxxxxx" async></script>
 ```
 
+The console hands out `/api/v1/agents/{id}/embed.js` instead, which bakes one agent's install config
+(display mode, excluded paths, traffic percentage, cards, starters) into a per-agent loader. A host that
+already knows who is visiting can call `window.Basjoo.identify({ email, hash })` with the HMAC the server
+issued, and the widget uses that signed identity instead of a random one.
+
 ## Configuration
 
 Settings come from environment variables or `.env` (`pydantic-settings`). Every value below has a working
-default.
+default; `docker-compose.yml` sets the ones that differ between the `dev` and `prod` profiles.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -227,16 +273,20 @@ default.
 | `QDRANT_API_KEY` | unset | key for a Qdrant that requires auth |
 | `SCRAPLING_SERVICE_URL` | `http://scrapling-service:8001` | fetcher service used by URL ingestion |
 | `SECRET_KEY` / `SECRET_KEY_FILE` | generated → `/app/data/.secret_key` | JWT signing |
-| `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | generated → `/app/data/.encryption_key` | encrypts provider keys at rest |
+| `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | generated → `/app/data/.encryption_key` | encrypts provider keys, webhook secrets and identity secrets at rest |
 | `DEFAULT_AGENT_ID` | generated → `/app/data/.agent_id` | pins the default widget agent identity |
-| `ALLOWED_ORIGINS` | empty (dev profile sets `*`) | CORS allowlist; empty means no cross-origin caller |
+| `PUBLIC_BASE_URL` | unset | public origin used to build embed snippets and `/config:public`; unset means trust `X-Forwarded-Host`, then `Host` |
+| `ALLOWED_ORIGINS` | `*` in code, `*` in dev, empty in prod | CORS allowlist; empty means no cross-origin caller |
+| `CORS_ALLOW_NULL_ORIGIN` | `false` | accept `Origin: null` sandboxed iframes |
+| `TRUSTED_PROXY_IPS` | empty, `172.16.0.0/12` in compose | peers whose `X-Forwarded-For` / `X-Real-IP` are believed; empty keys every limiter on the socket peer |
 | `SSRF_PROTECTION_ENABLED` | `false` | block private/link-local resolutions of user-supplied URLs |
 | `LOCAL_EMBEDDING_BASE_URL` | `http://local-embed:80/v1` | endpoint used by `local` knowledge bases |
 | `LOCAL_EMBEDDING_MODEL` | `ibm-granite/granite-embedding-97m-multilingual-r2` | model served there |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST_SIZE` | `1000` / `200` | global limiter |
-| `REQUIRE_SECRET_KEY` | unset | when `true`, refuse to boot with a generated secret (checked by the container entrypoint, not by the app) |
+| `LOGIN_RATE_LIMIT_MAX_ATTEMPTS` / `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | `5` / `300` | failed-login limiter, per IP and per account |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_USE_TLS` | empty / `587` / … / `true` | transcript email; unset host means the route answers `503` instead of failing a send |
+| `REQUIRE_SECRET_KEY` | unset, `true` in the `prod` compose service | refuse to boot with a generated secret (checked by the container entrypoint, not by the app) |
 | `SERVER_DOMAIN` | unset | nginx canonical host; anything else gets `444` |
-| `CORS_ALLOW_NULL_ORIGIN` | `false` | accept `Origin: null` sandboxed iframes |
 | `LOG_LEVEL` | `INFO` | |
 | `DEBIAN_MIRROR` | `http://deb.debian.org` | build-time apt mirror for the backend and crawler images; change it when a proxy mangles the default |
 
@@ -279,21 +329,26 @@ byte-identical, and `sdk.js` is never hand-edited.
 The console talks to `/api/admin` (login, register, account, users) and `/api/v1`. The routes that matter
 most:
 
-- `GET /health`, `GET /api/v1/config:public`
+- `GET /health`, `GET /api/v1/config:public`, `GET /api/v1/agents/{id}/embed.js`
 - `GET|POST /api/v1/agents`, `POST /api/v1/agents/{id}:pause|:resume`, `DELETE /api/v1/agents/{id}`
 - `GET|PUT /api/v1/agent`, `GET /api/v1/agent:kb-status`
-- `GET|POST /api/v1/knowledge-bases`, `GET|PATCH|DELETE /api/v1/knowledge-bases/{kb_id}`
+- `GET|POST /api/v1/knowledge-bases`, `GET|PATCH|DELETE /api/v1/knowledge-bases/{kb_id}`,
+  `POST /api/v1/knowledge-bases/{kb_id}/reset`
 - `PUT /api/v1/agents/{agent_id}/knowledge-base` — the only way to bind a KB
-- `POST /api/v1/knowledge-bases/{kb_id}/urls:create|:refetch|:discover|:crawl_site|:cancel`
-- `POST /api/v1/knowledge-bases/{kb_id}/files:upload`, `POST …/index:rebuild`
+- `POST /api/v1/knowledge-bases/{kb_id}/urls:create|:refetch|:discover|:crawl_site|:cancel`,
+  `…/files:upload`, `…/index:rebuild`
 - `GET /api/v1/knowledge-bases/{kb_id}/sources:summary`, `…/index:status`
-- `POST /api/v1/chat/stream`, `GET /api/v1/chat/messages`
-- `POST /api/v1/chat/escalate`, `POST /api/v1/chat/release` — the visitor side of handoff
+- `GET|POST /api/v1/knowledge-bases/{kb_id}/qa-items`, `PUT|DELETE …/qa-items/{qa_id}`,
+  `POST …/qa-items:match`, `POST …/qa-items:import`
+- `GET|POST|PUT|DELETE /api/v1/agents/{agent_id}/procedures`, `PUT /api/v1/agents/{agent_id}/fixed-facts`
+- `POST /api/v1/chat/stream`, `GET /api/v1/chat/messages`, `POST /api/v1/chat/escalate|release|feedback`
+- `POST /api/v1/leads`, `GET /api/v1/admin/leads`, `PATCH|GET /api/v1/admin/leads/{id}`
+- `GET /api/v1/admin/analytics`, `GET /api/v1/admin/stats/overview`, `GET /api/v1/admin/stats/export.csv`
 - `GET /api/v1/admin/sessions`, `POST /api/v1/admin/sessions/send`
-- `POST /api/v1/admin/sessions/{id}/takeover|release|reply|resolve|reopen` — `reopen` is the undo of
-  `resolve` (back to `active`/`ai`); it is not part of the original handoff ask, but the session centre
-  renders a Reopen action on resolved rows, so the route is kept and listed here rather than left as an
-  undocumented surface
+- `POST /api/v1/admin/sessions/{id}/takeover|release|reply|resolve|reopen|email-transcript`
+- `GET /api/v1/admin/sessions/unanswered`, `POST …/unanswered/{message_id}:dismiss`,
+  `POST /api/v1/admin/sessions/{id}/revise-answer`, `POST /api/v1/admin/qa/from-message/{message_id}`
+- `DELETE /api/v1/admin/visitors/{visitor_id}` — one visitor's sessions, messages, leads and feedback
 
 The agent-scoped `/api/v1/urls:*`, `/api/v1/files:*` and `/api/v1/index:*` routes still resolve, but they are
 one-release aliases that look the KB up through `agents.kb_id` and answer `409` when the agent is unbound.
@@ -313,6 +368,8 @@ New integrations should use the KB-scoped paths. The full schema is served at `/
 - Existing embeds keep working as long as `backend-data` survives: the agent id is persisted in
   `/app/data/.agent_id`, and `DEFAULT_AGENT_ID` pins a known id when you migrate hosts. Back up
   `/app/data/basjoo.db` and `/app/data/.agent_id` before moving.
+- Set `PUBLIC_BASE_URL` when the console is not reached on the same host visitors use, otherwise the embed
+  snippet falls back to the request's own `Host`.
 - Registering a second admin requires the super-admin token (`POST /api/admin/users`); self-registration is
   first-admin only, and the console has no user-management screen yet.
 
@@ -324,6 +381,12 @@ New integrations should use the KB-scoped paths. The full schema is served at `/
 - Roles (`super_admin`, `admin`, `support`) are enforced by the API; the console exposes account settings and
   per-agent membership, not full admin CRUD.
 - Parsing covers `txt`, `md`, `html`, `pdf`, `docx`, `xlsx`. There is no OCR for scanned PDFs.
+- Workspace quotas cap the agent count, the curated-pair count and the total text size; the URL and file
+  counters report a fixed 500 the services never enforce, and message volume is limited per minute per
+  visitor, not per day.
+- Webhooks are best-effort: queued and retried with backoff, but a permanently failing receiver shows up in
+  the backend log, not as a console alert.
+- Transcript email needs SMTP configured; without it the route answers `503` and the button reports it.
 - `Agent.last_error_code` / `last_error_message` / `last_error_at` are schema fields with no writer and no
   UI yet; failures surface as the restricted reply and in the backend log, not as a console alert.
 
@@ -357,12 +420,6 @@ read it before changing code in those areas.
   embedding server.
 - **[FastAPI](https://fastapi.tiangolo.com/)** and **[Vite](https://vite.dev/)** — backend and console
   toolchains.
-
-## Contributors
-
-<a href="https://github.com/haoyiyin/basjoo/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=haoyiyin/basjoo" />
-</a>
 
 ## Star history
 
