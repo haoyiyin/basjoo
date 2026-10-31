@@ -64,6 +64,9 @@ interface Message {
 /** Below this an answer is weak enough to badge in the transcript (#42). */
 const LOW_CONFIDENCE_THRESHOLD = 0.5
 
+/** 3b: one page of the session list. Must stay <= the backend's `limit` cap. */
+const SESSIONS_PAGE_SIZE = 50
+
 /** The confidence chip: a percentage in the mono face, or an em dash. */
 function confidenceLabel(confidence: number | null | undefined): string {
   if (typeof confidence !== 'number') return '—'
@@ -85,6 +88,12 @@ export default function Sessions() {
   const [keyword, setKeyword] = useState('')
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(false)
+  // 3b: the list is paged, not capped at the first 50 rows. `total` comes from
+  // the backend so the control can say how many are left, and `loadingMore`
+  // keeps the append from clearing the rows already on screen.
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const sessionsRef = useRef<Session[]>([])
   const [sendingMessage, setSendingMessage] = useState(false)
   // #43: the Reply composer is a separate, explicit action from Take over.
   const [replyOpen, setReplyOpen] = useState(false)
@@ -140,34 +149,65 @@ export default function Sessions() {
     }
   }, [token])
 
-  const fetchSessions = useCallback(async () => {
-    if (!token) return
+  const fetchSessions = useCallback(
+    async (options?: { append?: boolean }) => {
+      if (!token) return
 
-    setLoading(true)
-    try {
-      const statusParam = filter === 'all' ? '' : `&status=${filter}`
-      const keywordParam = keyword ? `&keyword=${encodeURIComponent(keyword)}` : ''
-      // #42: "未答问题 / Unanswered" narrows the list to sessions with at
-      // least one assistant message the quality rule flagged.
-      const unansweredParam = unansweredOnly ? '&unanswered=true' : ''
-
-      const response = await fetch(
-        `/api/v1/admin/sessions?skip=0&limit=50${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}${unansweredParam}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
-
-      if (response.ok) {
-        const data = await response.json()
-        setSessions(data.items || [])
+      const append = options?.append === true
+      const skip = append ? sessionsRef.current.length : 0
+      // A non-append refresh (WebSocket event, filter change, action result)
+      // must not silently throw away the pages the operator already loaded.
+      // Reload as many rows as are on screen, within the backend's 200 cap.
+      // ponytail: past 200 rows a refresh truncates back to 200; raise the
+      // backend `limit` ceiling or add a real pager when a console needs more.
+      const pageSize = append
+        ? SESSIONS_PAGE_SIZE
+        : Math.min(200, Math.max(SESSIONS_PAGE_SIZE, sessionsRef.current.length))
+      if (append) {
+        setLoadingMore(true)
+      } else {
+        setLoading(true)
       }
-    } catch (error) {
-      console.error('Failed to fetch sessions:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [filter, keyword, token, unansweredOnly, agentId])
+      try {
+        const statusParam = filter === 'all' ? '' : `&status=${filter}`
+        const keywordParam = keyword ? `&keyword=${encodeURIComponent(keyword)}` : ''
+        // #42: "未答问题 / Unanswered" narrows the list to sessions with at
+        // least one assistant message the quality rule flagged.
+        const unansweredParam = unansweredOnly ? '&unanswered=true' : ''
+
+        const response = await fetch(
+          `/api/v1/admin/sessions?skip=${skip}&limit=${pageSize}${agentId ? `&agent_id=${agentId}` : ''}${statusParam}${keywordParam}${unansweredParam}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        )
+
+        if (response.ok) {
+          const data = await response.json()
+          const items: Session[] = data.items || []
+          setSessions((current) => (append ? [...current, ...items] : items))
+          setTotal(typeof data.total === 'number' ? data.total : items.length)
+        }
+      } catch (error) {
+        console.error('Failed to fetch sessions:', error)
+      } finally {
+        setLoading(false)
+        setLoadingMore(false)
+      }
+    },
+    [filter, keyword, token, unansweredOnly, agentId],
+  )
+
+  const loadMoreSessions = useCallback(() => {
+    if (loadingMore || loading) return
+    void fetchSessions({ append: true })
+  }, [fetchSessions, loading, loadingMore])
+
+  // The append path reads the current length, so it must not go through the
+  // callback's dependency list (that would refetch on every page).
+  useEffect(() => {
+    sessionsRef.current = sessions
+  }, [sessions])
 
   const connectWebSocket = useCallback(() => {
     if (!token) return
@@ -552,6 +592,7 @@ export default function Sessions() {
 
   const statusLabel = (status: string): string => {
     const key: Record<string, string> = {
+      all: 'status.all',
       active: 'status.active',
       taken_over: 'status.takenOver',
       resolved: 'status.resolved',
@@ -738,6 +779,29 @@ export default function Sessions() {
                     )
                   })}
                 </ul>
+              )}
+              {/* 3b: without this the console could never show session 51+. The
+               * count comes from `total`, so the control disappears exactly when
+               * every session is on screen — including under a filter. */}
+              {sessions.length < total && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="sessions-load-more"
+                  disabled={loadingMore}
+                  onClick={loadMoreSessions}
+                  style={{ marginTop: 'var(--space-2)' }}
+                >
+                  {loadingMore
+                    ? t('status.loading')
+                    : t('sessions.loadMore', {
+                        shown: sessions.length,
+                        total,
+                        // Lane C owns no locale file; the copy lives here until
+                        // the catalog gains the key.
+                        defaultValue: 'Show more ({{shown}} of {{total}})',
+                      })}
+                </button>
               )}
             </div>
           </section>

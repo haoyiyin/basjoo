@@ -6,6 +6,7 @@ from fastapi import (
     HTTPException,
     status,
     Request,
+    Query,
     WebSocket,
     WebSocketDisconnect,
     UploadFile,
@@ -238,6 +239,10 @@ FALLBACK_MODES = frozenset({FALLBACK_MODE_OFF, FALLBACK_MODE_KEYWORD})
 # event and the persisted assistant row. Text, not a model answer.
 SCRIPTED_MODE = "scripted"
 SCRIPTED_MATCHED_BY = "keyword"
+# 3a: the marker a refused turn carries. It is NOT a model answer, so the mode
+# must travel to the client instead of defaulting to `ai` — otherwise a client
+# cannot tell "the bot said this" from "we refused to answer".
+RATE_LIMITED_MODE = "rate_limited"
 
 def fallback_mode(agent: Any) -> str:
     """Read `agent.fallback_mode`, normalising anything unknown to `"off"`.
@@ -1332,7 +1337,7 @@ async def prepare_chat_request(
             )
             logger.info(f"{limit_key} exceeded rate limit, returning auto reply")
             return {
-                "mode": "rate_limited",
+                "mode": RATE_LIMITED_MODE,
                 "reply": limit_reply,
                 "session": session,
             }
@@ -1824,12 +1829,16 @@ async def chat(
         chat_context = await prepare_chat_request(request, http_request, prep_db)
         session = chat_context["session"]
 
-        if chat_context["mode"] == "rate_limited":
+        if chat_context["mode"] == RATE_LIMITED_MODE:
             return ChatResponse(
                 reply=chat_context["reply"],
                 sources=[],
                 usage=None,
                 session_id=session.session_id,
+                # 3a: a refusal is not an answer. Without this the field
+                # defaults to `ai` and the widget renders the rate-limit copy
+                # as a normal bot message.
+                mode=RATE_LIMITED_MODE,
             )
 
         if chat_context["mode"] == SCRIPTED_MODE:
@@ -2050,7 +2059,7 @@ async def chat_stream(
                 )
                 session = chat_context["session"]
 
-                if chat_context["mode"] == "rate_limited":
+                if chat_context["mode"] == RATE_LIMITED_MODE:
                     yield sse_event("sources", {"sources": []})
                     yield sse_event("content", {"content": chat_context["reply"]})
                     yield sse_event(
@@ -2060,7 +2069,8 @@ async def chat_stream(
                             "session_id": session.session_id,
                             "usage": None,
                             "taken_over": False,
-                            "mode": "ai",
+                            # 3a: same marker as the blocking transport.
+                            "mode": RATE_LIMITED_MODE,
                         },
                     )
                     return
@@ -2961,7 +2971,11 @@ async def create_agent(
     return await build_agent_config_with_stats(agent, db)
 
 
+# 3d: one handler, two routes. `/agent?agent_id=` is the historical form the
+# SPA uses; `/agents/{agent_id}` is the REST-looking one that used to answer 405
+# because only the DELETE route matched that path.
 @router.get("/agent", response_model=AgentConfig)
+@router.get("/agents/{agent_id}", response_model=AgentConfig)
 async def get_agent(
     agent_id: str,
     current_user: AdminUser = Depends(require_admin_or_super_admin),
@@ -3766,8 +3780,8 @@ async def list_sessions(
     keyword: Optional[str] = None,
     low_confidence: bool = False,
     unanswered: bool = False,
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     current_user: AdminUser = Depends(require_chat_operator),
     db: AsyncSession = Depends(get_db),
 ):
@@ -3775,6 +3789,10 @@ async def list_sessions(
     获取会话列表
 
     支持按状态和关键词过滤
+
+    #3b: `skip`/`limit` are validated instead of accepted as any int. `limit=-1`
+    used to return every row and `limit=0` returned none, so the SPA could not
+    page and could not tell "no sessions" from "bad request".
 
     #42 adds two quality filters that select *sessions*, not messages: a session
     is listed when at least one assistant message crosses the threshold. They are

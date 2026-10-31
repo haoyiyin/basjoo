@@ -182,3 +182,6 @@ ssl/
 *.crt
 *.cer
 node_modules
+
+# Playwright HTML report is a per-run artifact
+tests/playwright-report/

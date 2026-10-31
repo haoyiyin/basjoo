@@ -95,9 +95,16 @@ export default function KnowledgeBaseDetail() {
 							</span>
 						)}
 						{kb && (
-							<span className="mono">
-								{kb.embedding_model} · {kb.ready_document_count}/
-								{kb.document_count} · {kb.total_chunks}
+							<span className="mono" data-testid="kb-detail-counters">
+								{kb.embedding_model} ·{' '}
+								{t("knowledgeBases.detail.documents", {
+									defaultValue: "Documents (ready/total)",
+								})}
+								: {kb.ready_document_count}/{kb.document_count} ·{' '}
+								{t("knowledgeBases.detail.chunks", {
+									defaultValue: "Total chunks",
+								})}
+								: {kb.total_chunks}
 							</span>
 						)}
 						<span data-testid="kb-detail-bound-agent">
@@ -107,6 +114,22 @@ export default function KnowledgeBaseDetail() {
 						</span>
 					</div>
 				</header>
+
+				{/*
+				 * 3c: the header counter and the file list below are both right but
+				 * count different sets — the counter includes URL-derived documents
+				 * (`list_kb_files` excludes them). One hint says which is which, so the
+				 * two numbers stop reading as a contradiction. The counter semantics
+				 * themselves are untouched.
+				 */}
+				{kb && (
+					<p className="field-hint" data-testid="kb-detail-counter-hint">
+						{t("knowledgeBases.detail.documentsIncludeUrls", {
+							defaultValue:
+								"Counts every document, including web pages. The file list below counts uploaded files only.",
+						})}
+					</p>
+				)}
 
 				{error && (
 					<div role="alert" className="badge badge-error kb-detail-error">

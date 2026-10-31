@@ -70,8 +70,13 @@ test.describe('Admin Authentication', () => {
     await page.locator('input').nth(1).fill('wrongpassword');
     await page.getByRole('button', { name: /login|登录|submit|提交/i }).click();
 
-    // Should show error message
-    await expect(page.getByText(/登录失败|invalid|incorrect|failed/i)).toBeVisible({ timeout: 5_000 });
+    // Should show error message. The backend speaks one generic sentence for
+    // both "no such account" and "wrong password" (`邮箱或密码不正确` /
+    // `Invalid email or password`), so the pattern must not look for the old
+    // enumerate-the-account copy.
+    await expect(
+      page.getByText(/登录失败|不正確|不正确|invalid|incorrect|failed/i)
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   test('expired token triggers auto-logout', async ({ page }) => {

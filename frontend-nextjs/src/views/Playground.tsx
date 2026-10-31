@@ -12,6 +12,7 @@ import AISettingsForm from '../components/AISettingsForm';
 import ChatPanel from '../components/ChatPanel';
 import type { Message as ChatPanelMessage, Agent as ChatPanelAgent } from '../components/ChatPanel';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { MAX_MESSAGE_LENGTH } from '../lib/limits';
 
 interface ChatParamOverrides {
   temperature: number;
@@ -90,6 +91,18 @@ export default function Playground() {
     }
 
     const errorMessage = error.message.toLowerCase();
+
+    /* The backend's `ChatRequest.message` is capped at MAX_MESSAGE_LENGTH and
+     * says so with `422 string_too_long`. That used to fall through to
+     * `errors.aiApiError` — "AI API call failed" — for a cause the operator can
+     * fix by typing less. Match it before every provider branch. */
+    if (
+      errorMessage.includes('string_too_long') ||
+      errorMessage.includes('too_long') ||
+      (errorMessage.includes('422') && errorMessage.includes('message'))
+    ) {
+      return t('errors.messageTooLong', { max: MAX_MESSAGE_LENGTH });
+    }
 
     // AI API errors
     if (errorMessage.includes('api key') || errorMessage.includes('401') || errorMessage.includes('unauthorized')) {
@@ -349,7 +362,10 @@ export default function Playground() {
   }, [t]);
 
   const handleInputChange = useCallback((value: string) => {
-    setInput(value);
+    // The composer lives in the shared ChatPanel (no `maxLength` prop), so the
+    // cap is applied at the state boundary every path funnels through — typing,
+    // paste and programmatic prefill alike.
+    setInput(value.slice(0, MAX_MESSAGE_LENGTH));
   }, []);
 
   const handleSettingsSave = useCallback((updatedAgent?: ApiAgent) => {
@@ -573,11 +589,25 @@ export default function Playground() {
               input={input}
               isLoading={isLoading}
               isSettingsSaving={isSettingsSaving}
+              maxMessageLength={MAX_MESSAGE_LENGTH}
               agent={agent}
               onInputChange={handleInputChange}
               onSendMessage={handleSendMessage}
               onClearChat={handleClearChat}
             />
+            <div
+              className="field-hint"
+              data-testid="playground-message-count"
+              style={{
+                padding: '0 var(--space-4) var(--space-2)',
+                textAlign: 'right',
+              }}
+            >
+              {t('agents.characterCount', {
+                count: input.length,
+                max: MAX_MESSAGE_LENGTH,
+              })}
+            </div>
           </section>
         )}
       </div>

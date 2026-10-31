@@ -67,7 +67,7 @@ function isTokenExpired(token: string): boolean {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-	const { t } = useTranslation("auth");
+	const { t, i18n } = useTranslation("auth");
 	const [admin, setAdmin] = useState<Admin | null>(null);
 	const [token, setToken] = useState<string | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
@@ -173,10 +173,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		};
 	}, [logout, token]);
 
+	/*
+	 * The backend owns the sentence (`get_locale_from_request` reads
+	 * `Accept-Language`), and fetch sends the *browser's* header by default, so a
+	 * user who switched the SPA to English still got Chinese error copy at
+	 * `/login` when their browser preferred zh. Declare the SPA's language
+	 * explicitly so the toggle actually decides.
+	 */
+	const localeHeaders = useCallback(
+		() => ({ "Accept-Language": i18n?.language || "zh-CN" }),
+		[i18n?.language],
+	);
+
 	const login = async (email: string, password: string) => {
 		const response = await fetch(`${API_BASE_URL}/api/admin/login`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...localeHeaders() },
 			body: JSON.stringify({ email, password }),
 		});
 
@@ -193,7 +205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	const register = async (email: string, password: string, name: string) => {
 		const response = await fetch(`${API_BASE_URL}/api/admin/register`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...localeHeaders() },
 			body: JSON.stringify({ email, password, name }),
 		});
 

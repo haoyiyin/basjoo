@@ -20,11 +20,8 @@ msgstr "User not found"
 msgid "Account has been deactivated"
 msgstr "Account has been deactivated"
 
-msgid "No account found with this email"
-msgstr "No account found with this email"
-
-msgid "Incorrect password"
-msgstr "Incorrect password"
+msgid "Invalid email or password"
+msgstr "Invalid email or password"
 
 msgid "Email already registered"
 msgstr "This email is already registered"

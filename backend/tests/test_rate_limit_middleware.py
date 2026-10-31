@@ -4,7 +4,12 @@ from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from middleware.rate_limit import RateLimitMiddleware, apply_cors_headers, should_apply_rate_limit
+from middleware.rate_limit import (
+    RateLimitMiddleware,
+    apply_cors_headers,
+    get_request_client_ip,
+    should_apply_rate_limit,
+)
 
 
 class _DummyApp:
@@ -69,26 +74,51 @@ async def test_check_rate_limit_uses_memory_after_redis_failure(monkeypatch):
     assert middleware.use_redis is False
 
 
-def test_get_client_ip_prefers_first_forwarded_ip():
-    app = FastAPI()
-    middleware = RateLimitMiddleware(app, use_redis=False)
+def test_get_client_ip_ignores_forwarded_headers_from_an_untrusted_peer(monkeypatch):
+    # Patch this module's settings object, not `config.settings`: a test that
+    # reloads `config` leaves the two pointing at different instances.
+    from middleware import rate_limit as rl
 
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/",
-        "headers": [
-            (b"x-forwarded-for", b"203.0.113.10, 10.0.0.2, 10.0.0.3"),
-            (b"x-real-ip", b"198.51.100.7"),
-        ],
-        "client": ("172.17.0.1", 12345),
-        "query_string": b"",
-        "scheme": "http",
-        "server": ("testserver", 80),
-    }
-    request = Request(scope)
+    monkeypatch.setattr(rl.settings, "trusted_proxy_ips", "")
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [
+                (b"x-forwarded-for", b"203.0.113.10, 10.0.0.2, 10.0.0.3"),
+                (b"x-real-ip", b"198.51.100.7"),
+            ],
+            "client": ("172.17.0.1", 12345),
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
 
-    assert middleware._get_client_ip(request) == "203.0.113.10"
+    # A client-supplied header must not be able to pick its own limiter bucket.
+    assert get_request_client_ip(request) == "172.17.0.1"
+
+
+def test_get_client_ip_walks_the_chain_from_the_right_for_a_trusted_peer(monkeypatch):
+    from middleware import rate_limit as rl
+
+    monkeypatch.setattr(rl.settings, "trusted_proxy_ips", "172.17.0.1")
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"x-forwarded-for", b"1.2.3.4, 203.0.113.10")],
+            "client": ("172.17.0.1", 12345),
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+
+    # Rightmost non-proxy hop wins: the leftmost entry is whatever the client sent.
+    assert get_request_client_ip(request) == "203.0.113.10"
 
 
 def test_apply_cors_headers_echoes_allowed_origin(monkeypatch):

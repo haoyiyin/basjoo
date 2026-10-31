@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from typing import Deque, Optional
 
@@ -29,23 +30,100 @@ logger = logging.getLogger(__name__)
 # In-memory login rate limiter (fallback when Redis is unavailable)
 _login_attempt_history: dict[str, Deque[float]] = defaultdict(deque)
 
+# Two counters, keyed the same way in Redis and in memory: one per client IP and
+# one per submitted email. The IP key alone is trivially reset by rotating
+# `X-Forwarded-For`; the account key is what makes that rotation useless.
+LOGIN_IP_KEY_PREFIX = "login:ip:"
+LOGIN_ACCOUNT_KEY_PREFIX = "login:acct:"
+
+def login_account_key(email: str) -> str:
+    """Rate-limit key for a submitted email (hashed: no address in Redis)."""
+    digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
+    return f"{LOGIN_ACCOUNT_KEY_PREFIX}{digest}"
 
 def _check_login_rate_limit(
-    ip: str, max_attempts: int, window_seconds: int
+    key: str, max_attempts: int, window_seconds: int
 ) -> tuple[bool, int]:
-    """In-memory sliding-window rate limit. Returns (allowed, retry_after_seconds)."""
-    now = time.time()
-    history = _login_attempt_history[ip]
-    while history and now - history[0] >= window_seconds:
-        history.popleft()
-    if not history:
-        _login_attempt_history.pop(ip, None)
+    """In-memory sliding window. Returns (allowed, retry_after_seconds).
+
+    Read-only on purpose: recording is `_record_login_failure`'s job. Appending
+    here is what used to charge a *successful* login to the brute-force budget.
+    """
+    from middleware.rate_limit import count_memory_sliding_window
+
+    count = count_memory_sliding_window(
+        _login_attempt_history, key, window_seconds=window_seconds
+    )
+    if count < max_attempts:
         return True, 0
-    if len(history) >= max_attempts:
-        retry_after = int(window_seconds - (now - history[0])) + 1
-        return False, max(retry_after, 1)
-    history.append(now)
+
+    history = _login_attempt_history.get(key)
+    oldest = history[0] if history else time.time()
+    retry_after = int(window_seconds - (time.time() - oldest)) + 1
+    return False, max(retry_after, 1)
+
+def _record_login_failure(key: str) -> None:
+    """Charge one failed login attempt against `key`."""
+    from middleware.rate_limit import record_memory_sliding_window
+
+    record_memory_sliding_window(_login_attempt_history, key)
+
+async def _login_keys_over_limit(
+    keys: list[str], max_attempts: int, window_seconds: int
+) -> tuple[bool, int]:
+    """Is any of `keys` over budget? Records nothing, in Redis or in memory."""
+    from middleware.rate_limit import count_redis_sliding_window
+    from services.redis_service import get_redis
+
+    try:
+        redis_svc = await get_redis()
+    except Exception as exc:  # pragma: no cover - get_redis is a dict lookup
+        logger.warning("Login limiter: no Redis (%s); using memory", exc)
+        redis_svc = None
+
+    if redis_svc is not None:
+        try:
+            for key in keys:
+                count = await count_redis_sliding_window(
+                    redis_svc, key, window_seconds
+                )
+                if count >= max_attempts:
+                    return False, window_seconds
+            return True, 0
+        except Exception as exc:
+            # Redis error — fall through to the in-memory limiter.
+            logger.warning("Login limiter: Redis error (%s); using memory", exc)
+
+    for key in keys:
+        allowed, retry_after = _check_login_rate_limit(
+            key, max_attempts, window_seconds
+        )
+        if not allowed:
+            return False, retry_after
     return True, 0
+
+async def _record_login_failure_everywhere(keys: list[str], window_seconds: int) -> None:
+    """Charge one failed attempt against every key, Redis-first with memory fallback."""
+    from middleware.rate_limit import record_redis_sliding_window
+    from services.redis_service import get_redis
+
+    recorded_in_redis = False
+    try:
+        redis_svc = await get_redis()
+    except Exception:
+        redis_svc = None
+
+    if redis_svc is not None:
+        try:
+            for key in keys:
+                await record_redis_sliding_window(redis_svc, key, window_seconds)
+            recorded_in_redis = True
+        except Exception as exc:
+            logger.warning("Login limiter: Redis error on record (%s)", exc)
+
+    if not recorded_in_redis:
+        for key in keys:
+            _record_login_failure(key)
 
 
 # Prevent concurrent first-admin bootstrap from creating multiple super_admin accounts
@@ -504,59 +582,30 @@ async def login(
     request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)
 ):
     from middleware.rate_limit import get_request_client_ip
-    from services.redis_service import get_redis
 
     locale = get_locale_from_request(request)
-
-    # Rate-limit login attempts per client IP to prevent brute-force attacks.
-    # Redis-first with in-memory fallback so protection never disappears.
     from config import settings as cfg
 
     max_attempts = cfg.login_rate_limit_max_attempts
     window_seconds = cfg.login_rate_limit_window_seconds
     ip = get_request_client_ip(request)
-    redis_svc = await get_redis()
-    if redis_svc is not None:
-        try:
-            login_key = f"login:ip:{ip}"
-            allowed, _remaining = await redis_svc.check_rate_limit(
-                login_key, max_requests=max_attempts, window_seconds=window_seconds
-            )
-            if not allowed:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=_(
-                        "Too many login attempts. Please try again later.",
-                        locale=locale,
-                    ),
-                    headers={"Retry-After": str(window_seconds)},
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            # Redis error — fall through to in-memory limiter.
-            allowed, retry_after = _check_login_rate_limit(
-                ip, max_attempts, window_seconds
-            )
-            if not allowed:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=_(
-                        "Too many login attempts. Please try again later.",
-                        locale=locale,
-                    ),
-                    headers={"Retry-After": str(retry_after)},
-                )
-    else:
-        allowed, retry_after = _check_login_rate_limit(ip, max_attempts, window_seconds)
-        if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=_(
-                    "Too many login attempts. Please try again later.", locale=locale
-                ),
-                headers={"Retry-After": str(retry_after)},
-            )
+    attempt_keys = [f"{LOGIN_IP_KEY_PREFIX}{ip}", login_account_key(req.email)]
+
+    def _too_many(retry_after: int) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=_("Too many login attempts. Please try again later.", locale=locale),
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    # Check BEFORE authenticating, record only on failure. Recording the check
+    # itself charged successful logins to a brute-force budget, and the IP key
+    # alone was resettable by rotating a client-supplied `X-Forwarded-For`.
+    allowed, retry_after = await _login_keys_over_limit(
+        attempt_keys, max_attempts, window_seconds
+    )
+    if not allowed:
+        raise _too_many(retry_after)
 
     auth_service = AuthService(db)
 
@@ -564,21 +613,21 @@ async def login(
         admin = await auth_service.authenticate_admin(
             email=req.email, password=req.password
         )
-    except AdminNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=_("No account found with this email", locale=locale),
-            headers={"WWW-Authenticate": "Bearer"},
-        )
     except AdminDeactivatedError:
+        # Only reachable once the password matched, so this leaks nothing about
+        # which addresses exist.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_("Account has been deactivated", locale=locale),
         )
     except AuthError:
+        # AdminNotFoundError is an AuthError: one generic sentence and one status
+        # for "no such account" and "wrong password" alike. Distinguishing them
+        # turned the login form into an account-existence oracle.
+        await _record_login_failure_everywhere(attempt_keys, window_seconds)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=_("Incorrect password", locale=locale),
+            detail=_("Invalid email or password", locale=locale),
             headers={"WWW-Authenticate": "Bearer"},
         )
 

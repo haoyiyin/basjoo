@@ -37,8 +37,10 @@ export interface ChatResponse {
 	/**
 	 * #43: who answers next. `taken_over` implies `human`.
 	 * #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
+	 * 3a: `rate_limited` means the turn was refused by the per-minute limit and
+	 * `reply` is the rate-limit copy, not an answer.
 	 */
-	mode?: "ai" | "human" | "scripted";
+	mode?: "ai" | "human" | "scripted" | "rate_limited";
 	no_answer_reason?: string | null;
 	/** #60: what matched a `scripted` reply — today always `keyword`. */
 	matched_by?: string | null;
@@ -52,8 +54,9 @@ export interface StreamDoneMeta {
 	/**
 	 * #43: who answers next. `taken_over` implies `human`.
 	 * #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
+	 * 3a: `rate_limited` means the turn was refused by the per-minute limit.
 	 */
-	mode?: "ai" | "human" | "scripted";
+	mode?: "ai" | "human" | "scripted" | "rate_limited";
 	/** #43: machine token explaining why the bot stayed silent. */
 	no_answer_reason?: string | null;
 	/** #60: what matched a `scripted` answer — today always `keyword`. */
