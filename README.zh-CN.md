@@ -1,18 +1,22 @@
-# Basjoo
+<p align="center"><img src="resource/logo.png" width="112" alt="Basjoo"></p>
 
-[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
-[![React](https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
-[![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Qdrant](https://img.shields.io/badge/Qdrant-Vector_Search-DC244C)](https://qdrant.tech/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<h1 align="center">Basjoo</h1>
 
-[English](README.md) | 简体中文
+<p align="center">
+<a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
+<a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI"></a>
+<a href="https://vite.dev/"><img src="https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white" alt="Vite"></a>
+<a href="https://react.dev/"><img src="https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black" alt="React 18"></a>
+<a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white" alt="Python"></a>
+<a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+<a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite"></a>
+<a href="https://qdrant.tech/"><img src="https://img.shields.io/badge/Qdrant-Vector_Search-DC244C" alt="Qdrant"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
-Basjoo 是一个可自托管的开源 AI 客服平台：把网站和一批文档变成一个可以嵌到任何页面的客服智能体，并配一套管理后台来运营它。
+<p align="center"><a href="README.md">English</a> | 简体中文</p>
+
+Basjoo 是一个可自托管的开源 AI 客服平台：把网站和一批文档变成一个可以嵌到任何页面的客服智能体，并配一套后台来运营它——数据看板、会话记录墙、人工接管、问答索引、留资线索，全都在你自己的一台机器上。
 
 ## 安装
 
@@ -27,8 +31,8 @@ curl -fsSL https://raw.githubusercontent.com/haoyiyin/basjoo/main/install-deploy
 **其他发行版也能用**——只要机器上已经有 Docker Engine（带 Compose 插件）、`git`、`python3`，脚本就跳过
 装包直接部署；缺东西时会停下并明确告诉你装什么。想自己用 Compose 起？看下面的「手动 Docker Compose」。
 
-- **FastAPI 后端**（`backend/`）——智能体、知识库、RAG 检索、SSE 流式聊天、认证、配额、定时任务
-- **Vite 单页管理后台**（`frontend-nextjs/`，目录名是上一代 Next.js 版本的遗留）
+- **FastAPI 后端**（`backend/`）——智能体、知识库、RAG 检索、SSE 流式聊天、定制问答、留资、数据看板、Webhook、认证、定时任务
+- **Vite 单页后台**（`frontend-nextjs/`，目录名是上一代 Next.js 版本的遗留）
 - **可嵌入聊天组件**（`widget/`）——一个 `<script>` 标签，通过 HTTP + SSE 与后端通信
 - **检索栈**——Qdrant 存向量，SQLite 存业务数据，Redis 做限流，`basjoo-crawler` 抓取容器用无头浏览器渲染页面
 
@@ -38,12 +42,17 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 ## 功能
 
 - **知识库是一等公民。** 知识库独立于智能体存在——创建、重置、删除、绑定都在知识库自己身上完成，一个知识库可以比用它的所有智能体活得都久。来源（URL、上传文件）属于知识库，不属于智能体。
-- **每个知识库两条入库路径。** 抓单页、整站抓取（可设深度与页数上限），或上传文件（`txt`、`md`、`html`、`pdf`、`docx`、`xlsx`；单次最多 5 个文件、单文件 20 MB）。可选自动重抓，让网页来源按周期保持最新。
+- **每个知识库两条入库路径。** 抓单页、整站抓取（可设深度与页数上限），或上传文件（`txt`、`md`、`html`、`pdf`、`docx`、`xlsx`；单次最多 5 个文件、单文件 20 MB）。
 - **每个知识库独立配置 Embedding。** `local`（自带 TEI 容器）、`jina`、`siliconflow`，或任意 `custom` OpenAI 兼容端点。创建知识库时会用一次真实 embedding 调用测出向量维度，集合与服务商不可能悄悄不匹配。
 - **13 家 LLM 服务商**，同一份智能体配置里切换：OpenAI 兼容、OpenAI 原生、Anthropic、Google Gemini、xAI、DeepSeek、OpenRouter、z.ai、火山引擎、Moonshot、阿里百炼、腾讯云、硅基流动。
 - **SSE 流式聊天**，带来源引用、首字保活、按访客限流，以及服务商异常时可配置的兜底回复。没配任何服务商密钥？把关键词整理成问答对，并把 `fallback_mode`（默认 `off`）设为 `keyword`：机器人就能在**不调用任何模型、不需要任何 API 密钥**的情况下回答命中的问题，回复标记为 `mode: "scripted"`；未命中则回落到受限回复。
-- **人工接管。** 运营在后台实时查看会话并接过去；组件侧轮询人工回复并完成交接。
-- **不越界的组件。** 按智能体配置来源白名单，访客与会话存在 `localStorage`，文案随访客语言切换（中文 / 英文），90 秒流式超时并自动重试一次。
+- **每个知识库一套定制问答索引。** 问答对单独向量化、在任何检索段落之前先匹配，所以改一条答案不需要重建索引。支持批量导入、带分数与命中关键词的「试一句话」测试框、单条命中次数，以及在任意机器人回答上点一下「修正答案」直接把新问答对写回绑定的知识库。
+- **可编辑的提示词分层。** 人设与模型在 AI 设置面板里，`fixed_facts` 存机器人绝不能违背的事实，流程按顺序编排多步指引——各自进入提示词的不同位置，不是重新训练模型。
+- **能指出该补什么的看板。** 会话、消息、访客、留资、转人工、未答问题、点踩、好评率，覆盖 24 小时 / 7 天 / 30 天 / 90 天，每项都带与上一周期的对比和 CSV 导出。会话结束时自动归类（已解决、未回复即离开、已转人工、没能回答），未答队列按同一问题聚合，一键就能变成问答对。
+- **留资。** `POST /api/v1/leads` 是公开路由（同样校验来源白名单），按会话写一条线索（幂等，刷新只是编辑同一条），带姓名、邮箱、电话、留言、页面地址和「已联系」标记；聊天请求里带 `prechat` 块也走同一套落库。线索在看板上计数，通过管理 API 列出——后台目前没有单独的线索页。
+- **人工接管。** 运营在后台实时查看会话并接过去；组件侧轮询人工回复并完成交接。可以不接管直接回复、交还机器人、标记已解决，或重新打开已解决的会话。营业时间之外由机器人下班，离线文案会显示但**不会**写进会话记录。
+- **不越界的组件。** 按智能体配置来源白名单，三种展示形态（悬浮气泡、内联容器、iframe），可排除路径，可设流量百分比（按访客决定一次，不会来回闪），入口卡片与开场提示，访客与会话存在 `localStorage`，文案随访客语言切换（中文 / 英文），90 秒流式超时并自动重试一次，还支持签名访客身份（`window.Basjoo.identify()`），给知道当前登录用户是谁的宿主站用。
+- **对外 Webhook。** 七个事件（`session.created`、`session.closed`、`message.created`、`message.unanswered`、`handoff.requested`、`lead.created`、`document.indexed`），与业务变更写在同一事务里入队，用 `X-Basjoo-Signature: sha256=<hmac>` 对实际发送的字节签名，失败退避重试——接收方再慢也不会卡住一次回答。
 - **中英双语后台**，暖色单强调色设计系统，375 px 宽度下布局不破。
 
 ## 界面截图
@@ -56,7 +65,7 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 
 ### 知识库
 
-来源挂在知识库上：抓取设置、带抓取与索引状态的 URL 列表、以及上传文件与其解析出的分块数。
+来源挂在知识库上：抓取设置、带抓取与索引状态的 URL 列表、上传文件与其解析出的分块数，以及排在检索之前的定制问答索引。
 
 ![知识库详情](resource/screenshots/admin/zh-CN/knowledge-base.png)
 
@@ -66,15 +75,22 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 
 ![调试区](resource/screenshots/admin/zh-CN/playground.png)
 
-### 会话中心与人工接管
+### 会话中心
 
-每个访客会话及完整对话记录，不该由机器人单独收尾的会话可以一键接管。
+每个访客会话及完整对话记录，以及不该由机器人单独完成的动作：回复、接管、交还、标记已解决、重新打开、发送邮件记录、删除该访客的数据。
 
 ![会话中心](resource/screenshots/admin/zh-CN/sessions.png)
 
+### 数据看板
+
+八项指标都带与上一周期的对比，外加已完成会话的结果分布，以及没答上来的问题——每一行都能点回产生它的那条消息。
+
+![数据看板](resource/screenshots/admin/zh-CN/dashboard.png)
+
 ### 智能体设置与嵌入代码
 
-组件标题、颜色、欢迎语、历史保留天数、来源白名单、每分钟限额——以及要粘到自己站点的嵌入代码。
+按提示词顺序分五组——AI 本身、给它的材料、人工接管、放到网站上、告诉其他系统（Webhook），含展示形态、
+入口卡片、开场提示，以及要粘到自己站点的嵌入代码。
 
 ![智能体设置](resource/screenshots/admin/zh-CN/agent-settings.png)
 
@@ -138,7 +154,7 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
              │  HTTP + SSE
              ▼
         nginx（prod）──▶ FastAPI 后端 ──▶ Qdrant        （向量，每个知识库一个集合）
-                              │      └──▶ SQLite        （智能体、知识库、文档、会话）
+                              │      └──▶ SQLite        （智能体、知识库、文档、会话、线索）
                               ├────────▶ Redis         （限流）
                               ├────────▶ basjoo-crawler （crawl4ai，无头 Chromium）
                               ├────────▶ local-embed   （TEI，CPU embedding）
@@ -157,9 +173,9 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 ### 聊天
 
 `POST /api/v1/chat/stream` 刻意分两段：先是短数据库阶段（解析智能体 → 来源白名单 → 会话 → 限流 →
-读取历史 → 检索上下文），随后是**不持有数据库连接**的流式阶段。事件名只有 `sources`、`content`、
-`thinking_done`、`done`、`error`。没配服务商密钥会明确返回 `400 API_KEY_MISSING`，绝不用 mock 蒙过去——
-除非智能体选择了脚本化关键词路径（`fallback_mode="keyword"`）：此时未配密钥的智能体用无模型调用的方式
+读取历史 → 匹配定制问答 → 检索上下文），随后是**不持有数据库连接**的流式阶段。事件名只有 `sources`、
+`content`、`thinking_done`、`done`、`error`。没配服务商密钥会明确返回 `400 API_KEY_MISSING`，绝不用 mock
+蒙过去——除非智能体选择了脚本化关键词路径（`fallback_mode="keyword"`）：此时未配密钥的智能体用无模型调用的方式
 回答命中的问题，未命中则回落到受限回复。
 会话 ID 可枚举，所以公开接口要求调用方带自己的 `visitor_id`，别人的会话一律 `404 Session not found`。
 
@@ -169,10 +185,13 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 `after_hours` 是唯一保持 `mode` 为 `ai` 的情况，同时把运营配置的 `away_message` 作为可见回复下发——
 它**不会**写进会话记录，避免历史记录假装是人写的。没配营业时间（或配置无法解析）的智能体永远在线。
 
+每条机器人回复都带一个 `confidence`：构造提示词时用到的最佳检索分数，什么都没检索到时为 `null`。没有命中任何
+段落、或内容等于兜底话术的回答会被标记 `is_unanswered`——看板的未答队列和「加入问答」按钮读的就是这个标记。
+
 ### 组件
 
 `widget/src/BasjooWidget.tsx` 从 `<script src="…/sdk.js?agent_id=agt_…">` 自举（也接受 `agentId` 和
-`api_base`），从自身脚本地址推断 API 基址，请求 `/api/v1/config:public` 拿标题、颜色与欢迎语，把访客和会话
+`api_base`），从自身脚本地址推断 API 基址，请求 `/api/v1/config:public` 拿标题、颜色、欢迎语与安装选项，把访客和会话
 存在 `localStorage`，从 `/api/v1/chat/stream` 流式接收回复，并在首条回复落地后开始每 3 秒轮询
 `/api/v1/chat/messages`（带访客 id 与 `after_id`，只要 assistant 角色）——人工接管的消息就是这样到达的。
 
@@ -180,9 +199,14 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 <script src="https://your-basjoo-host/sdk.js?agent_id=agt_xxxxxxxxxxxx" async></script>
 ```
 
+后台下发的其实是 `/api/v1/agents/{id}/embed.js`，它把单个智能体的安装配置（展示形态、排除路径、流量百分比、
+入口卡片、开场提示）烤进一个专属 loader。已经知道当前访客是谁的宿主站，可以带着服务端签发的 HMAC 调用
+`window.Basjoo.identify({ email, hash })`，组件就会用这个签名身份代替随机身份。
+
 ## 配置
 
-配置来自环境变量或 `.env`（`pydantic-settings`）。下表中每一项都有可用默认值。
+配置来自环境变量或 `.env`（`pydantic-settings`）。下表每一项都有可用默认值；`docker-compose.yml` 只覆盖
+`dev` 与 `prod` 两个 profile 之间不同的那几项。
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
@@ -192,16 +216,20 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 | `QDRANT_API_KEY` | 未设置 | 需要鉴权的 Qdrant 所用密钥 |
 | `SCRAPLING_SERVICE_URL` | `http://scrapling-service:8001` | 网页入库调用的抓取服务 |
 | `SECRET_KEY` / `SECRET_KEY_FILE` | 自动生成 → `/app/data/.secret_key` | JWT 签名 |
-| `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | 自动生成 → `/app/data/.encryption_key` | 加密存储服务商密钥 |
+| `ENCRYPTION_KEY` / `ENCRYPTION_KEY_FILE` | 自动生成 → `/app/data/.encryption_key` | 加密存储服务商密钥、Webhook 密钥与身份密钥 |
 | `DEFAULT_AGENT_ID` | 自动生成 → `/app/data/.agent_id` | 固定默认组件智能体身份 |
-| `ALLOWED_ORIGINS` | 空（dev profile 设为 `*`） | CORS 白名单；空表示不允许跨域调用 |
+| `PUBLIC_BASE_URL` | 未设置 | 拼嵌入代码与 `/config:public` 用的公网地址；不设则依次信任 `X-Forwarded-Host`、`Host` |
+| `ALLOWED_ORIGINS` | 代码里 `*`，dev 为 `*`，prod 为空 | CORS 白名单；空表示不允许跨域调用 |
+| `CORS_ALLOW_NULL_ORIGIN` | `false` | 接受 `Origin: null` 的沙箱 iframe |
+| `TRUSTED_PROXY_IPS` | 空；compose 里为 `172.16.0.0/12` | 可信任 `X-Forwarded-For` / `X-Real-IP` 的对端；为空时所有限流按 socket 对端计数 |
 | `SSRF_PROTECTION_ENABLED` | `false` | 拦截用户所填 URL 解析到内网/链路本地地址 |
 | `LOCAL_EMBEDDING_BASE_URL` | `http://local-embed:80/v1` | `local` 知识库使用的端点 |
 | `LOCAL_EMBEDDING_MODEL` | `ibm-granite/granite-embedding-97m-multilingual-r2` | 该端点上的模型 |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST_SIZE` | `1000` / `200` | 全局限流 |
-| `REQUIRE_SECRET_KEY` | 未设置 | 设为 `true` 时拒绝用自动生成的密钥启动（由容器入口脚本检查，不由应用检查） |
+| `LOGIN_RATE_LIMIT_MAX_ATTEMPTS` / `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | `5` / `300` | 登录失败限流，按 IP 与按账号各计一份 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_USE_TLS` | 空 / `587` / … / `true` | 会话记录邮件；主机为空时该路由返回 `503`，不是发送失败 |
+| `REQUIRE_SECRET_KEY` | 未设置；`prod` compose 里为 `true` | 设为 `true` 时拒绝用自动生成的密钥启动（由容器入口脚本检查，不由应用检查） |
 | `SERVER_DOMAIN` | 未设置 | nginx 规范域名，其他 Host 直接 `444` |
-| `CORS_ALLOW_NULL_ORIGIN` | `false` | 接受 `Origin: null` 的沙箱 iframe |
 | `LOG_LEVEL` | `INFO` | |
 | `DEBIAN_MIRROR` | `http://deb.debian.org` | 后端与抓取镜像构建时的 apt 源；代理会破坏默认源时改它 |
 
@@ -243,20 +271,26 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 
 后台使用 `/api/admin`（登录、注册、账号、用户）与 `/api/v1`。最常用的路由：
 
-- `GET /health`、`GET /api/v1/config:public`
+- `GET /health`、`GET /api/v1/config:public`、`GET /api/v1/agents/{id}/embed.js`
 - `GET|POST /api/v1/agents`、`POST /api/v1/agents/{id}:pause|:resume`、`DELETE /api/v1/agents/{id}`
 - `GET|PUT /api/v1/agent`、`GET /api/v1/agent:kb-status`
-- `GET|POST /api/v1/knowledge-bases`、`GET|PATCH|DELETE /api/v1/knowledge-bases/{kb_id}`
+- `GET|POST /api/v1/knowledge-bases`、`GET|PATCH|DELETE /api/v1/knowledge-bases/{kb_id}`、
+  `POST /api/v1/knowledge-bases/{kb_id}/reset`
 - `PUT /api/v1/agents/{agent_id}/knowledge-base` —— 绑定知识库的唯一入口
-- `POST /api/v1/knowledge-bases/{kb_id}/urls:create|:refetch|:discover|:crawl_site|:cancel`
-- `POST /api/v1/knowledge-bases/{kb_id}/files:upload`、`POST …/index:rebuild`
+- `POST /api/v1/knowledge-bases/{kb_id}/urls:create|:refetch|:discover|:crawl_site|:cancel`、
+  `…/files:upload`、`…/index:rebuild`
 - `GET /api/v1/knowledge-bases/{kb_id}/sources:summary`、`…/index:status`
-- `POST /api/v1/chat/stream`、`GET /api/v1/chat/messages`
-- `POST /api/v1/chat/escalate`、`POST /api/v1/chat/release` —— 访客侧的转人工
+- `GET|POST /api/v1/knowledge-bases/{kb_id}/qa-items`、`PUT|DELETE …/qa-items/{qa_id}`、
+  `POST …/qa-items:match`、`POST …/qa-items:import`
+- `GET|POST|PUT|DELETE /api/v1/agents/{agent_id}/procedures`、`PUT /api/v1/agents/{agent_id}/fixed-facts`
+- `POST /api/v1/chat/stream`、`GET /api/v1/chat/messages`、`POST /api/v1/chat/escalate|release|feedback`
+- `POST /api/v1/leads`、`GET /api/v1/admin/leads`、`PATCH|GET /api/v1/admin/leads/{id}`
+- `GET /api/v1/admin/analytics`、`GET /api/v1/admin/stats/overview`、`GET /api/v1/admin/stats/export.csv`
 - `GET /api/v1/admin/sessions`、`POST /api/v1/admin/sessions/send`
-- `POST /api/v1/admin/sessions/{id}/takeover|release|reply|resolve|reopen` —— `reopen` 是 `resolve` 的逆操作
-  （回到 `active`/`ai`）；它不在最初的转人工需求里，但会话中心会在已解决的行上渲染「重新打开」按钮，
-  因此保留该路由并在此列出，而不是留成未文档化的接口
+- `POST /api/v1/admin/sessions/{id}/takeover|release|reply|resolve|reopen|email-transcript`
+- `GET /api/v1/admin/sessions/unanswered`、`POST …/unanswered/{message_id}:dismiss`、
+  `POST /api/v1/admin/sessions/{id}/revise-answer`、`POST /api/v1/admin/qa/from-message/{message_id}`
+- `DELETE /api/v1/admin/visitors/{visitor_id}` —— 删除某个访客的会话、消息、线索与反馈
 
 智能体维度的 `/api/v1/urls:*`、`/api/v1/files:*`、`/api/v1/index:*` 仍然能用，但都是保留一版的别名：它们
 通过 `agents.kb_id` 反查知识库，未绑定时返回 `409`。新接入请直接用知识库维度的路径。完整 schema 在
@@ -273,6 +307,7 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
   `redis-data`、`local-embed-cache`。`docker compose down -v` 会把四个都删掉。
 - 只要 `backend-data` 还在，旧嵌入代码就继续有效：智能体 id 落在 `/app/data/.agent_id`，迁移机器时用
   `DEFAULT_AGENT_ID` 固定已知 id。搬之前至少备份 `/app/data/basjoo.db` 和 `/app/data/.agent_id`。
+- 后台访问地址与访客访问地址不同时，设 `PUBLIC_BASE_URL`；否则嵌入代码会回落到请求自身的 `Host`。
 - 新增第二个管理员要走超管 token（`POST /api/admin/users`）；自助注册只对第一个管理员开放，后台目前没有
   用户管理界面。
 
@@ -283,6 +318,9 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 - 角色（`super_admin`、`admin`、`support`）由 API 强制，后台暴露的是账号设置与智能体成员，不是完整的
   管理员增删改查。
 - 文档解析支持 `txt`、`md`、`html`、`pdf`、`docx`、`xlsx`；扫描版 PDF 没有 OCR。
+- 工作区配额限制的是智能体数量、定制问答条数、文本总量；URL 与文件计数报的 500 上限服务端并不强制，消息量只按访客每分钟限流，没有每日总额。
+- Webhook 是尽力而为：入队并退避重试，但长期失败的接收方只会出现在后端日志里，后台没有告警。
+- 会话记录邮件需要配好 SMTP；没配时该路由返回 `503`，按钮会把原因显示出来。
 - `Agent.last_error_code` / `last_error_message` / `last_error_at` 三个字段目前没有任何写入方，后台也没有
   消费方；服务商失败只会体现为兜底回复和后端日志，不会在控制台弹告警。
 
@@ -314,12 +352,6 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 - **[Text Embeddings Inference](https://github.com/huggingface/text-embeddings-inference)** —— 自带的 CPU
   embedding 服务。
 - **[FastAPI](https://fastapi.tiangolo.com/)** 与 **[Vite](https://vite.dev/)** —— 后端与后台工具链。
-
-## 贡献者
-
-<a href="https://github.com/haoyiyin/basjoo/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=haoyiyin/basjoo" />
-</a>
 
 ## Star 趋势
 
