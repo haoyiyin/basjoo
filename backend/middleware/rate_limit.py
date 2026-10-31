@@ -9,6 +9,7 @@ API级速率限制中间件
 from collections import defaultdict, deque
 import logging
 import time
+import uuid
 from typing import Deque, Dict, Optional, Tuple
 
 from fastapi import Request
@@ -70,23 +71,61 @@ def apply_cors_headers(request: Request, response: Response) -> Response:
     return response
 
 
+def _trusted_networks() -> list:
+    """Parse `TRUSTED_PROXY_IPS` into ipaddress networks (bare IPs become /32, /128).
+
+    CIDRs let a deployment trust the whole docker bridge range instead of pinning
+    a container address that changes on every `docker compose up`.
+    """
+    import ipaddress
+
+    networks = []
+    for entry in settings.trusted_proxy_ips_list:
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid TRUSTED_PROXY_IPS entry %r", entry)
+    return networks
+
+
+def _is_trusted(ip: str, networks: list) -> bool:
+    import ipaddress
+
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(address in network for network in networks)
+
+
 def get_request_client_ip(request: Request) -> str:
-    """Get the originating client IP, preferring the first forwarded IP."""
+    """Get the originating client IP, believing forwarded headers only from a proxy.
+
+    `X-Forwarded-For` and `X-Real-IP` are client-supplied: anyone can rotate them
+    to reset a per-IP counter. They are only meaningful when the immediate peer is
+    infrastructure we control, so the peer address is the default answer and the
+    headers are read only when that peer is listed in `TRUSTED_PROXY_IPS`.
+
+    With a trusted peer the chain is walked from the RIGHT, because only the last
+    hops were appended by our own proxies — a client can prepend anything.
+    """
+    peer = request.client.host if request.client and request.client.host else ""
+    trusted = _trusted_networks()
+
+    if not peer or not _is_trusted(peer, trusted):
+        return peer or "unknown"
+
     forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        for candidate in forwarded.split(","):
-            candidate = candidate.strip()
-            if candidate:
-                return candidate
+    chain = [candidate.strip() for candidate in forwarded.split(",") if candidate.strip()]
+    for candidate in reversed(chain):
+        if not _is_trusted(candidate, trusted):
+            return candidate
 
-    real_ip = request.headers.get("X-Real-IP", "")
-    if real_ip:
-        return real_ip.strip()
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    if real_ip and not _is_trusted(real_ip, trusted):
+        return real_ip
 
-    if request.client and request.client.host:
-        return request.client.host
-
-    return "unknown"
+    return peer
 
 
 def should_apply_rate_limit(request: Request) -> bool:
@@ -130,6 +169,58 @@ def check_memory_sliding_window(
     remaining = max(0, max_requests - len(history))
     return True, remaining
 
+
+def count_memory_sliding_window(
+    history_map: Dict[str, Deque[float]],
+    key: str,
+    *,
+    window_seconds: int,
+) -> int:
+    """Count the events inside the window WITHOUT recording a new one.
+
+    A limiter that only ever appends cannot tell "this request is over budget"
+    from "this request is the one that spends the budget", which is how a
+    successful login ends up consuming a brute-force allowance.
+    """
+    now = time.time()
+    history = history_map.get(key)
+    if not history:
+        return 0
+
+    while history and now - history[0] >= window_seconds:
+        history.popleft()
+
+    if not history:
+        history_map.pop(key, None)
+        return 0
+
+    return len(history)
+
+def record_memory_sliding_window(
+    history_map: Dict[str, Deque[float]], key: str
+) -> None:
+    """Record one event against `key`."""
+    history_map.setdefault(key, deque()).append(time.time())
+
+async def count_redis_sliding_window(
+    redis_service, key: str, window_seconds: int
+) -> int:
+    """Count the members of a Redis sliding window without adding one."""
+    now = time.time()
+    await redis_service.client.zremrangebyscore(key, 0, now - window_seconds)
+    return int(await redis_service.client.zcard(key))
+
+async def record_redis_sliding_window(
+    redis_service, key: str, window_seconds: int
+) -> None:
+    """Add one member to a Redis sliding window.
+
+    The member carries a unique suffix: `zadd` with the bare timestamp silently
+    collapses two attempts inside the same float tick into one score entry.
+    """
+    now = time.time()
+    await redis_service.client.zadd(key, {f"{now}:{uuid.uuid4().hex}": now})
+    await redis_service.client.expire(key, window_seconds)
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """

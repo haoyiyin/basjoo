@@ -130,7 +130,8 @@
     "agentErrorMODEL_NOT_FOUND": "The configured AI model was not found. Please verify the model name.",
     "agentErrorPROVIDER_ERROR": "The AI provider request failed. Please review the configuration or try again later.",
     "sendFailed": "Failed to send message",
-    "takeoverFailed": "Failed to take over session"
+    "takeoverFailed": "Failed to take over session",
+    "messageTooLong": "Message too long (max {{max}} characters)"
   },
   "time": {
     "goodMorning": "Good morning",
@@ -825,7 +826,8 @@
       "documents": "Documents (ready/total)",
       "chunks": "Total chunks",
       "boundAgent": "Bound agent",
-      "notSet": "Not set"
+      "notSet": "Not set",
+      "documentsIncludeUrls": "Counts every document, including web pages. The file list below counts uploaded files only."
     },
     "errors": {
       "loadFailed": "Failed to load knowledge bases",
@@ -1191,5 +1193,8 @@
     "topUnansweredEmptyDescription": "Every answer in this period was found in the knowledge base.",
     "topUnansweredAction": "Open all unanswered questions",
     "occurrences": "{{count}}×"
+  },
+  "sessions": {
+    "loadMore": "Show more ({{shown}} of {{total}})"
   }
 }

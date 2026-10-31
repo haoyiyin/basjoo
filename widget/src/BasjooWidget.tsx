@@ -232,6 +232,15 @@ const OPEN_STATE_KEY_PREFIX = 'basjoo_open_'
 const ROLLOUT_KEY_PREFIX = 'basjoo_rollout_'
 
 /**
+ * The one message-length number, mirroring `ChatRequest.message.max_length`
+ * (`backend/api/v1/schemas.py`). A cap the server enforces and the widget
+ * advertises must not be two numbers: at 2000 the widget accepted a message the
+ * backend rejected with `422 string_too_long`, and the visitor was told
+ * "Send failed". `tests/test_message_length_contract.py` pins the pair.
+ */
+export const MAX_MESSAGE_LENGTH = 1000
+
+/**
  * The literal the server baked into `embed.js`.
  *
  * It is read once at module load so every widget on the page agrees, and it is
@@ -2090,7 +2099,7 @@ class BasjooWidget {
       <div class="basjoo-notice" hidden></div>
       <div class="basjoo-messages"></div>
       <div class="basjoo-input-area">
-        <input type="text" class="basjoo-input" placeholder="${safePlaceholder}" maxlength="2000">
+        <input type="text" class="basjoo-input" placeholder="${safePlaceholder}" maxlength="${MAX_MESSAGE_LENGTH}">
         <button class="basjoo-send">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -2113,7 +2122,7 @@ class BasjooWidget {
       }
       const message = input.value.trim();
       if (message) {
-        if (message.length > 2000) {
+        if (message.length > MAX_MESSAGE_LENGTH) {
           this.showError(this.getText('messageTooLong'));
           return;
         }
@@ -2470,7 +2479,7 @@ class BasjooWidget {
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
       takenOverNotice: { 'en-US': 'Your conversation has been transferred to a human agent. Please wait for their reply.', 'zh-CN': '已转接人工客服，请等待回复。' },
       inputPlaceholder: { 'en-US': 'Type your question...', 'zh-CN': '输入您的问题...' },
-      messageTooLong: { 'en-US': 'Message too long (max 2000 characters)', 'zh-CN': '消息过长（最多2000字符）' },
+      messageTooLong: { 'en-US': `Message too long (max ${MAX_MESSAGE_LENGTH} characters)`, 'zh-CN': `消息过长（最多${MAX_MESSAGE_LENGTH}字符）` },
       greetingBubble: { 'en-US': 'Hi! How can I help you?', 'zh-CN': '你好！有什么可以帮您？' },
       newMessage: { 'en-US': 'New message', 'zh-CN': '新消息' },
       thinking: { 'en-US': 'Thinking...', 'zh-CN': '思考中...' },
@@ -3142,7 +3151,21 @@ class BasjooWidget {
           let detail = `HTTP ${response.status}: ${response.statusText}`;
           try {
             const errorPayload = await response.json();
-            detail = errorPayload.message || errorPayload.detail || detail;
+            const raw = errorPayload.message || errorPayload.detail || detail;
+            // A Pydantic 422 carries `detail` as a LIST of error objects. The
+            // old code assigned the array straight to `detail`, so the thrown
+            // message stringified to "[object Object]" and the visitor saw a
+            // generic "Send failed" for a length rejection. Flatten it, and
+            // keep the error `type` (`string_too_long`) alongside the sentence.
+            detail = Array.isArray(raw)
+              ? raw
+                  .map((entry: any) =>
+                    [entry?.type, entry?.msg].filter(Boolean).join(': ')
+                    || JSON.stringify(entry),
+                  )
+                  .join('; ')
+              : String(raw);
+            detail = `HTTP ${response.status}: ${detail}`;
           } catch {
             // ignore non-JSON error bodies
           }
@@ -3217,6 +3240,13 @@ class BasjooWidget {
          * A readable sentence, not a bare 403. */
         errorMessage = this.getText('identityMismatch');
         consoleHint = 'Signed visitor identity rejected: recompute hmac_sha256(identity_secret, email) for the signed-in visitor and pass it to Basjoo.identify({ email, hash }).';
+      } else if (errorText.includes('422') || errorText.includes('string_too_long') || errorText.includes('too_long')) {
+        /* A validation rejection, and length is the one a visitor can cause: the
+         * widget caps input at MAX_MESSAGE_LENGTH but a paste pasted before the
+         * attribute applied (or a stale cached bundle) still reaches the server.
+         * Naming the real cause beats "Send failed". */
+        errorMessage = this.getText('messageTooLong');
+        consoleHint = `Request rejected by validation (422 string_too_long): message exceeds MAX_MESSAGE_LENGTH=${MAX_MESSAGE_LENGTH}.`;
       } else if (errorText.includes('401')) {
         consoleHint = 'Authentication failed. Please check the agent configuration and public API access.';
       }

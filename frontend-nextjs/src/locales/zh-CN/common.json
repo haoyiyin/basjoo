@@ -130,7 +130,8 @@
     "agentErrorMODEL_NOT_FOUND": "AI 模型不存在，请检查模型名称",
     "agentErrorPROVIDER_ERROR": "AI 服务调用失败，请检查配置或稍后重试",
     "sendFailed": "发送消息失败",
-    "takeoverFailed": "接管会话失败"
+    "takeoverFailed": "接管会话失败",
+    "messageTooLong": "消息过长（最多 {{max}} 字符）"
   },
   "time": {
     "goodMorning": "早上好",
@@ -825,7 +826,8 @@
       "documents": "文档（就绪/总数）",
       "chunks": "分块总数",
       "boundAgent": "绑定智能体",
-      "notSet": "未设置"
+      "notSet": "未设置",
+      "documentsIncludeUrls": "统计所有文档（含网页）。下方文件列表只统计已上传文件。"
     },
     "errors": {
       "loadFailed": "加载知识库失败",
@@ -1191,5 +1193,8 @@
     "topUnansweredEmptyDescription": "这段时间内每个回答都命中了知识库。",
     "topUnansweredAction": "查看全部未答问题",
     "occurrences": "{{count}} 次"
+  },
+  "sessions": {
+    "loadMore": "显示更多（{{shown}} / {{total}}）"
   }
 }

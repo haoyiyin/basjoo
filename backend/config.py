@@ -200,6 +200,14 @@ class Settings(BaseSettings):
     login_rate_limit_max_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 
+    # Reverse proxies whose forwarded headers may be believed (comma-separated
+    # IPs). X-Forwarded-For / X-Real-IP are client-controlled unless the
+    # immediate peer is one of these, so empty (the default) trusts nothing and
+    # every limiter keys on the socket peer address. The deployed nginx sets
+    # X-Real-IP and X-Forwarded-For; point this at the nginx container to keep
+    # per-visitor accounting there.
+    trusted_proxy_ips: str = ""
+
     # 日志
     log_level: str = "info"
 
@@ -264,6 +272,15 @@ class Settings(BaseSettings):
                 resolved_agent_id = _generate_and_save_agent_id(agent_id_file)
 
         object.__setattr__(self, "default_agent_id", resolved_agent_id)
+
+    @property
+    def trusted_proxy_ips_list(self) -> list[str]:
+        """将逗号分隔的可信代理 IP 转换为列表"""
+        return [
+            ip.strip()
+            for ip in self.trusted_proxy_ips.split(",")
+            if ip.strip()
+        ]
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -117,6 +117,10 @@ services:
     environment:
       # Same switch as the backend (see services/url_safety.py). Off by default.
       - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
+      # Comma-separated proxy IPs/CIDRs whose forwarded headers may be believed.
+      # Defaults to the docker bridge range: the backend is only reachable through
+      # nginx in this stack, and that keeps per-visitor buckets working out of the box.
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-172.16.0.0/12}
       - CRAWL4AI_NO_CLOUD_NOTICE=1
     networks:
       - basjoo-network
@@ -164,6 +168,10 @@ services:
       - LOG_LEVEL=INFO
       - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
       - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
+      # Comma-separated proxy IPs/CIDRs whose forwarded headers may be believed.
+      # Defaults to the docker bridge range: the backend is only reachable through
+      # nginx in this stack, and that keeps per-visitor buckets working out of the box.
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-172.16.0.0/12}
     volumes:
       - backend-data:/app/data
     depends_on:
@@ -256,6 +264,10 @@ services:
       - LOG_LEVEL=DEBUG
       - SCRAPLING_SERVICE_URL=http://scrapling-service:8001
       - SSRF_PROTECTION_ENABLED=${SSRF_PROTECTION_ENABLED:-false}
+      # Comma-separated proxy IPs/CIDRs whose forwarded headers may be believed.
+      # Defaults to the docker bridge range: the backend is only reachable through
+      # nginx in this stack, and that keeps per-visitor buckets working out of the box.
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-172.16.0.0/12}
     volumes:
       - backend-data:/app/data
       - ./backend:/app

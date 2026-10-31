@@ -152,7 +152,11 @@ class ChatResponse(BaseModel):
     # #43: who is expected to answer. `mode="human"` alone (a single operator
     # reply) is NOT a takeover — `taken_over` stays False.
     # #60: `scripted` means a keyword-matched FAQ pair answered, with no model.
-    mode: str = Field("ai", description="ai | human | scripted")
+    # 3a: `rate_limited` means the turn was REFUSED by the agent's per-minute
+    # limit and `reply` is the rate-limit copy, not a model answer. A client
+    # must be able to tell a refusal from a real answer; the same marker travels
+    # on the SSE `done` event.
+    mode: str = Field("ai", description="ai | human | scripted | rate_limited")
     # #43: machine token explaining why the bot stayed silent
     # (taken_over | resolved | closed | paused | human | after_hours). Null when
     # it answered. `after_hours` means the schedule was closed and the session

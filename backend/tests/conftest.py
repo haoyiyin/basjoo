@@ -127,8 +127,9 @@ def clear_login_rate_limit():
     url = os.environ.get("REDIS_URL", "")
     try:
         client = redis_lib.Redis.from_url(url, socket_connect_timeout=1)
-        for key in client.scan_iter("login:ip:*"):
-            client.delete(key)
+        for prefix in ("login:ip:*", "login:acct:*"):
+            for key in client.scan_iter(prefix):
+                client.delete(key)
         client.close()
     except Exception:
         # No Redis in this environment: the in-memory fallback is already

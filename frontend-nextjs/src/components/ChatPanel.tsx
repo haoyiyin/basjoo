@@ -34,6 +34,8 @@ interface ChatPanelProps {
 	isLoading: boolean;
 	isSettingsSaving?: boolean;
 	sendDisabled?: boolean;
+	/** Cap for the composer, so paste cannot exceed what the API accepts. */
+	maxMessageLength?: number;
 	agent: Agent | null;
 	onInputChange: (value: string) => void;
 	onSendMessage: () => void;
@@ -184,6 +186,7 @@ function ChatPanel({
 	isLoading,
 	isSettingsSaving = false,
 	sendDisabled = false,
+	maxMessageLength,
 	agent,
 	onInputChange,
 	onSendMessage,
@@ -622,6 +625,7 @@ function ChatPanel({
 						type="text"
 						className="input"
 						data-testid="chat-message-input"
+						maxLength={maxMessageLength}
 						aria-label={t("playground.inputPlaceholder")}
 						value={input}
 						onChange={(e) => onInputChange(e.target.value)}
