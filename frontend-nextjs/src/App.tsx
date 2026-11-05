@@ -11,6 +11,7 @@ import Dashboard from './views/Dashboard';
 import KnowledgeBaseDetail from './views/KnowledgeBaseDetail';
 import KnowledgeBaseSetup from './views/KnowledgeBaseSetup';
 import KnowledgeBases from './views/KnowledgeBases';
+import Leads from './views/Leads';
 import Playground from './views/Playground';
 import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
@@ -49,6 +50,8 @@ export function App() {
         <Route path="/agent-selector" element={<AgentSelector />} />
         <Route path="/" element={<Home />} />
         <Route path="/agents" element={<Agents />} />
+        {/* #72: the workspace lead inbox (spans every agent's captured visitors). */}
+        <Route path="/leads" element={<Leads />} />
         <Route path="/agents/:agentId/dashboard" element={<Dashboard />} />
         {/*
          * `KnowledgeBaseSetup` resolves `agent.kb_id` from

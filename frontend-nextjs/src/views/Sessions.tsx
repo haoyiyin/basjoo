@@ -10,7 +10,8 @@ import { Icon } from '../components/Icon'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useIsMobile } from '../hooks/useMediaQuery'
 import { WS_BASE_URL } from '../lib/env'
-import { api } from '../services/api'
+import { api, substituteMacroVariables } from '../services/api'
+import type { Macro } from '../services/api'
 import { formatAssistantMessageContent } from '../utils/citations'
 
 interface Session {
@@ -19,6 +20,17 @@ interface Session {
   visitor_id?: string
   visitor_country?: string
   visitor_city?: string
+  /**
+   * #73/#72: the identity a prechat or offline form stored on the session.
+   * Both are nullable columns on `chat_sessions` and are filled by the lead
+   * upsert, so the transcript header can say who this is instead of only a
+   * visitor id. See the deviation note in the report: the admin session LIST
+   * payload (`SessionListItem`) does not echo them yet, so these stay empty
+   * until the backend adds the two fields — the view renders nothing in that
+   * case rather than inventing a value.
+   */
+  contact_name?: string | null
+  contact_email?: string | null
   status: string
   /** #43: who answers next. `taken_over` implies `human`. */
   mode?: 'ai' | 'human'
@@ -77,7 +89,7 @@ export default function Sessions() {
   const { t } = useTranslation('common')
   const { agentId } = useParams<{ agentId?: string }>()
   const [searchParams] = useSearchParams()
-  const { token } = useAuth()
+  const { token, admin } = useAuth()
   const isMobile = useIsMobile()
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedSession, setSelectedSession] = useState<Session | null>(null)
@@ -98,6 +110,16 @@ export default function Sessions() {
   // #43: the Reply composer is a separate, explicit action from Take over.
   const [replyOpen, setReplyOpen] = useState(false)
   const [replyDraft, setReplyDraft] = useState('')
+  // #74: the reply-macro picker inside that composer. The macros come from
+  // `GET /api/v1/admin/macros` (workspace-scoped), the picker is client-side
+  // searchable, and the substitution happens at INSERT time — the composer then
+  // holds plain editable text, never a chip.
+  const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [macros, setMacros] = useState<Macro[]>([])
+  const [macroPickOpen, setMacroPickOpen] = useState(false)
+  const [macroSearch, setMacroSearch] = useState('')
+  const [macrosLoading, setMacrosLoading] = useState(false)
+  const [macroError, setMacroError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<SessionAction | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   // Issue item 4: correct one assistant answer and turn it into a curated pair.
@@ -375,6 +397,78 @@ export default function Sessions() {
   const handleTakeover = (sessionId: string) => {
     void runSessionAction(sessionId, 'takeover')
   }
+
+  /**
+   * #74: the macro picker fetches on every open, not once per mount. A macro
+   * created or deleted on the account page is then visible/l gone on the next
+   * open without a page reload, and a failed fetch never leaves a stale list.
+   */
+  const loadMacros = useCallback(async () => {
+    setMacrosLoading(true)
+    setMacroError(null)
+    try {
+      const payload = await api.listMacros()
+      setMacros(Array.isArray(payload.items) ? payload.items : [])
+    } catch (err) {
+      setMacroError(
+        err instanceof Error ? err.message : t('macros.errors.loadFailed'),
+      )
+    } finally {
+      setMacrosLoading(false)
+    }
+  }, [t])
+
+  const toggleMacroPicker = () => {
+    setMacroPickOpen((open) => {
+      if (!open) void loadMacros()
+      return !open
+    })
+    setMacroSearch('')
+  }
+
+  /**
+   * #74: insert one macro's body into the draft **at the caret**.
+   *
+   * The variables are substituted here, at insert time, from the selected
+   * session (`contact_name` / `contact_email` / public `session_id`) and the
+   * signed-in admin's name — so the composer only ever holds plain text the
+   * operator can still edit before sending. Nothing is sent until they do.
+   */
+  const insertMacro = (macro: Macro) => {
+    const body = substituteMacroVariables(macro.body, {
+      visitorName: selectedSession?.contact_name ?? null,
+      visitorEmail: selectedSession?.contact_email ?? null,
+      operatorName: admin?.name ?? null,
+      sessionId: selectedSession?.session_id ?? null,
+    })
+    const element = replyTextareaRef.current
+    const start = element?.selectionStart ?? replyDraft.length
+    const end = element?.selectionEnd ?? replyDraft.length
+    setReplyDraft(
+      `${replyDraft.slice(0, start)}${body}${replyDraft.slice(end)}`,
+    )
+    setMacroPickOpen(false)
+    setMacroSearch('')
+    // Put the caret after the inserted text once React has committed it, so the
+    // operator can keep typing where the macro ends.
+    if (element) {
+      const caret = start + body.length
+      requestAnimationFrame(() => {
+        element.focus()
+        element.setSelectionRange(caret, caret)
+      })
+    }
+  }
+
+  const filteredMacros = macroSearch.trim()
+    ? macros.filter((macro) => {
+        const needle = macroSearch.trim().toLowerCase()
+        return (
+          macro.name.toLowerCase().includes(needle) ||
+          macro.body.toLowerCase().includes(needle)
+        )
+      })
+    : macros
 
   const handleReply = async () => {
     if (!replyDraft.trim() || !selectedSession) return
@@ -885,6 +979,35 @@ export default function Sessions() {
                             id: selectedSession.visitor_id,
                           })}
                         </span>
+                        {/* #72/#73: a prechat or offline form stored who this is
+                         * on the session. Render both when the payload carries
+                         * them — nothing is invented when it does not. */}
+                        {selectedSession.contact_name && (
+                          <span
+                            data-testid="session-contact-name"
+                            style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxWidth: isMobile ? '140px' : 'none',
+                            }}
+                          >
+                            {selectedSession.contact_name}
+                          </span>
+                        )}
+                        {selectedSession.contact_email && (
+                          <span
+                            data-testid="session-contact-email"
+                            style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxWidth: isMobile ? '180px' : 'none',
+                            }}
+                          >
+                            {selectedSession.contact_email}
+                          </span>
+                        )}
                         {(selectedSession.visitor_country ||
                           selectedSession.visitor_city) && (
                           <span className="badge badge-neutral">
@@ -1274,57 +1397,156 @@ export default function Sessions() {
                       data-testid="session-reply-composer"
                       style={{
                         display: 'flex',
+                        flexDirection: 'column',
                         gap: 'var(--space-2)',
-                        alignItems: 'stretch',
-                        flexWrap: isMobile ? 'wrap' : 'nowrap',
                         padding: 'var(--space-3) var(--space-4)',
                         borderTop: '1px solid var(--color-border)',
                         background: 'var(--color-bg-panel)',
                       }}
                     >
-                      <input
-                        className="input"
-                        type="text"
-                        aria-label={t('handoff.replyPlaceholder')}
-                        value={replyDraft}
-                        onChange={(e) => setReplyDraft(e.target.value)}
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter') void handleReply()
-                        }}
-                        placeholder={t('handoff.replyPlaceholder')}
-                        disabled={pendingAction === 'reply'}
-                        style={{ flex: 1, minWidth: 0 }}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-icon"
-                        data-testid="session-reply-send"
-                        aria-label={t('handoff.sendReply')}
-                        title={t('handoff.sendReply')}
-                        onClick={() => void handleReply()}
-                        disabled={
-                          pendingAction === 'reply' || !replyDraft.trim()
-                        }
-                      >
-                        {pendingAction === 'reply' ? (
-                          <div className="spinner" style={{ width: '14px', height: '14px' }} />
-                        ) : (
-                          <Icon name="send" size={16} />
+                      {/* #74: the macro picker. A searchable list of the
+                       * workspace's saved replies; picking one inserts its
+                       * body AT THE CARET as plain, editable text. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                        <div className="page-actions" style={{ justifyContent: 'flex-start' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            data-testid="session-macro-picker-toggle"
+                            aria-expanded={macroPickOpen}
+                            aria-label={t('macros.pickerToggle')}
+                            title={t('macros.pickerToggle')}
+                            onClick={toggleMacroPicker}
+                          >
+                            <Icon name="reply" size={16} />
+                            {t('macros.pickerToggle')}
+                          </button>
+                        </div>
+
+                        {macroPickOpen && (
+                          <div
+                            data-testid="session-macro-picker"
+                            style={{
+                              border: '1px solid var(--color-border)',
+                              borderRadius: 'var(--radius-md)',
+                              background: 'var(--surface-bg)',
+                              padding: 'var(--space-2)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 'var(--space-2)',
+                            }}
+                          >
+                            <input
+                              className="input"
+                              type="search"
+                              aria-label={t('macros.searchPlaceholder')}
+                              placeholder={t('macros.searchPlaceholder')}
+                              value={macroSearch}
+                              onChange={(e) => setMacroSearch(e.target.value)}
+                            />
+
+                            {macroError && (
+                              <p role="alert" className="field-error">
+                                {macroError}
+                              </p>
+                            )}
+
+                            {macrosLoading ? (
+                              <p className="field-hint" aria-busy="true">
+                                {t('status.loading')}
+                              </p>
+                            ) : filteredMacros.length === 0 ? (
+                              <p
+                                className="field-hint"
+                                data-testid="session-macro-empty"
+                              >
+                                {t('macros.emptyPicker')}
+                              </p>
+                            ) : (
+                              <ul className="list" data-testid="session-macro-list">
+                                {filteredMacros.map((macro) => (
+                                  <li key={macro.id} className="list-row">
+                                    <button
+                                      type="button"
+                                      className="list-row-main"
+                                      data-testid={`session-macro-${macro.id}`}
+                                      aria-label={t('macros.insertLabel', {
+                                        name: macro.name,
+                                      })}
+                                      style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        padding: 0,
+                                        textAlign: 'left',
+                                        cursor: 'pointer',
+                                      }}
+                                      onClick={() => insertMacro(macro)}
+                                    >
+                                      <span className="list-row-title">{macro.name}</span>
+                                      <span className="list-row-description">
+                                        {macro.body}
+                                      </span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
                         )}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-icon"
-                        aria-label={t('buttons.cancel')}
-                        title={t('buttons.cancel')}
-                        style={iconButtonStyle}
-                        onClick={() => {
-                          setReplyOpen(false)
-                          setReplyDraft('')
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 'var(--space-2)',
+                          alignItems: 'stretch',
+                          flexWrap: isMobile ? 'wrap' : 'nowrap',
                         }}
                       >
-                        <Icon name="close" size={16} />
-                      </button>
+                        {/* A textarea, not an input: a macro body is multi-line
+                         * and the caret has to survive the insertion. */}
+                        <textarea
+                          ref={replyTextareaRef}
+                          className="input textarea"
+                          rows={2}
+                          aria-label={t('handoff.replyPlaceholder')}
+                          value={replyDraft}
+                          onChange={(e) => setReplyDraft(e.target.value)}
+                          placeholder={t('handoff.replyPlaceholder')}
+                          disabled={pendingAction === 'reply'}
+                          style={{ flex: 1, minWidth: 0 }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-icon"
+                          data-testid="session-reply-send"
+                          aria-label={t('handoff.sendReply')}
+                          title={t('handoff.sendReply')}
+                          onClick={() => void handleReply()}
+                          disabled={
+                            pendingAction === 'reply' || !replyDraft.trim()
+                          }
+                        >
+                          {pendingAction === 'reply' ? (
+                            <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                          ) : (
+                            <Icon name="send" size={16} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-icon"
+                          aria-label={t('buttons.cancel')}
+                          title={t('buttons.cancel')}
+                          style={iconButtonStyle}
+                          onClick={() => {
+                            setReplyOpen(false)
+                            setReplyDraft('')
+                          }}
+                        >
+                          <Icon name="close" size={16} />
+                        </button>
+                      </div>
                     </div>
                   )}
 

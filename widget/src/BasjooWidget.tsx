@@ -36,6 +36,10 @@ interface PublicWidgetConfig {
   away_message?: string | null;
   /** #46: this agent accepts only signed identities (HMAC over the email). */
   identity_required?: boolean | null;
+  /** #73: `off` | `optional` | `required` — the prechat form policy. */
+  prechat_mode?: string | null;
+  /** #73: the operator's own AI disclosure copy, shown verbatim. */
+  ai_disclosure?: string | null;
 }
 
 /**
@@ -97,11 +101,53 @@ interface EmbedConfig {
   inline_container?: string | null;
 }
 
+/**
+ * #70: who produced an assistant turn. A `human` turn was typed by an operator
+ * and a `scripted` one came from a curated FAQ pair, so neither may be rated:
+ * the thumbs are a signal about the *model's* answer, and offering them on a
+ * human reply would put a meaningless row in the analytics rollup.
+ */
+type AnswerMode = 'ai' | 'human' | 'scripted'
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   sources?: Source[];
   timestamp: Date;
+  /** #70: the persisted assistant row, so a thumbs vote can be posted. */
+  messageId?: number | null;
+  /** #70: the stored vote painted on this turn (-1 | 0 | 1). */
+  rating?: number;
+  /** #70: who answered — only `ai` turns may be rated. */
+  answerMode?: AnswerMode;
+}
+
+/** #71: one file the visitor attached and the server accepted. */
+interface PendingAttachment {
+  id: string;
+  filename: string;
+  mime: string;
+  kind: 'image' | 'document';
+  /** #71: the local preview URL for an image chip (never sent anywhere). */
+  previewUrl?: string;
+}
+
+/**
+ * #71: the subset of `ChatAttachmentPayload` the widget needs. The parsed
+ * document text is prompt material and is deliberately not in the payload.
+ */
+interface ChatAttachmentResponse {
+  id?: string;
+  filename?: string;
+  mime?: string | null;
+  kind?: string | null;
+  status?: string | null;
+}
+
+/** #73: the identity the prechat form captured. Overlay state only. */
+interface PrechatValues {
+  name: string;
+  email: string;
 }
 
 interface Source {
@@ -143,6 +189,20 @@ interface ChatHistoryMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   sources?: Source[];
+  /**
+   * #70: the persisted vote. The server keeps it on the *visitor's* turn (the
+   * transcript's own context), so a reloaded answer paints the vote stored on
+   * the user row that preceded it.
+   */
+  rating?: number | null;
+  /** #70: `human` marks an operator reply, which must never be rateable. */
+  sender_type?: string | null;
+  /**
+   * #70: read if the server ever puts the answer source on this payload (the
+   * admin transcript already carries `mode`; `/chat/messages` does not yet).
+   * Absent is treated as `ai`, which is today's only history shape.
+   */
+  mode?: string | null;
 }
 
 function formatAssistantMessage(content: string, sources: Source[] = []): { content: string; references: Array<{ title: string; url: string }> } {
@@ -239,6 +299,15 @@ const ROLLOUT_KEY_PREFIX = 'basjoo_rollout_'
  * "Send failed". `tests/test_message_length_contract.py` pins the pair.
  */
 export const MAX_MESSAGE_LENGTH = 1000
+
+/**
+ * #71: the attachment caps, mirrored from `backend/api/v1/schemas.py`
+ * (`ATTACHMENT_MAX_FILES` / `ATTACHMENT_MAX_FILE_BYTES`). The widget rejects an
+ * over-cap pick *client-side, with a readable sentence*, because the server's
+ * 4xx would otherwise only reach the visitor as a generic "Send failed".
+ */
+export const ATTACHMENT_MAX_FILES = 5
+export const ATTACHMENT_MAX_FILE_BYTES = 5 * 1024 * 1024
 
 /**
  * The literal the server baked into `embed.js`.
@@ -493,6 +562,47 @@ class BasjooWidget {
   private openStateStorageKey: string;
   private _cardActionListeners: Array<() => void> = [];
   private _starterClickListeners: Array<() => void> = [];
+  // #71: files uploaded for the *next* turn. Cleared on send; the ids are what
+  // the chat body carries (`attachment_ids`).
+  private pendingAttachments: PendingAttachment[] = [];
+  // #71: >0 while an upload is in flight; the composer refuses to send then.
+  private uploadsInFlight = 0;
+  // #73: the prechat policy + the operator's disclosure copy from
+  // `config:public`. `off` and an empty disclosure are today's behaviour.
+  private prechatMode: 'off' | 'optional' | 'required' = 'off';
+  private aiDisclosure = '';
+  // #73: the values captured by the prechat form. OVERLAY STATE ONLY — never
+  // pushed into `this.messages`, which is why they cannot appear in the
+  // transcript after `loadHistory()`.
+  private prechatValues: PrechatValues | null = null;
+  // #73: `true` until the captured values have ridden the first chat turn.
+  // Kept separate from `prechatValues` because the form must stay submitted
+  // (composer unlocked) after its values have been sent.
+  private prechatPending = false;
+  // #73: `optional` mode only — the visitor dismissed the form, so it must not
+  // come back on this page ("skip never repeats").
+  private prechatSkipped = false;
+  // #75: the visitor menu (New chat / End chat) and its two actions.
+  private headerMenuButton: HTMLButtonElement | null = null;
+  private headerMenu: HTMLElement | null = null;
+  private newChatButton: HTMLButtonElement | null = null;
+  private endChatButton: HTMLButtonElement | null = null;
+  /**
+   * #75: how many *real* turns this session holds. The welcome greeting is a
+   * rendered assistant row but not a turn — a session only exists once the
+   * visitor has actually said something — so counting `this.messages` would
+   * unlock the menu on a pristine widget. Reset by New chat / End chat.
+   */
+  private realTurnCount = 0;
+  // #70/#71/#75/#73: listener bookkeeping for the new controls.
+  private _menuBtnClickListener: (() => void) | null = null;
+  private _newChatClickListener: (() => void) | null = null;
+  private _endChatClickListener: (() => void) | null = null;
+  private _attachBtnClickListener: (() => void) | null = null;
+  private _attachInputChangeListener: ((event: Event) => void) | null = null;
+  private _prechatSubmitListener: ((event: Event) => void) | null = null;
+  private _prechatSkipClickListener: (() => void) | null = null;
+  private _documentClickListener: ((event: Event) => void) | null = null;
   // #40: host-page context pushed through `window.Basjoo.setContext`.
   private static pageContext: { before: string; after: string } = { before: '', after: '' }
   // #46: instances alive on the page, so `window.Basjoo.identify()` reaches a
@@ -798,6 +908,13 @@ class BasjooWidget {
       // it so the composer can say why nothing is sent until the host page
       // identifies the visitor, instead of discovering it as a 403.
       this.identityRequired = data.identity_required === true
+      // #73: the prechat policy and the operator's disclosure copy. An unknown
+      // or absent `prechat_mode` is `off`, which is today's behaviour; an empty
+      // `ai_disclosure` renders nothing.
+      const prechatMode = typeof data.prechat_mode === 'string' ? data.prechat_mode : ''
+      this.prechatMode =
+        prechatMode === 'optional' || prechatMode === 'required' ? prechatMode : 'off'
+      this.aiDisclosure = typeof data.ai_disclosure === 'string' ? data.ai_disclosure.trim() : ''
       this.effectiveTheme = this.getEffectiveTheme()
     } catch (error) {
       console.warn('[Basjoo Widget] Failed to load public config, using defaults.', error)
@@ -934,7 +1051,6 @@ class BasjooWidget {
       void this.loadHistory();
       return;
     }
-
     // #46: a signed visitor with no cached session is on a second device (or
     // after a cleared storage). Ask the server which thread belongs to this
     // identity before painting a greeting, so the transcript is not appended
@@ -1194,18 +1310,50 @@ class BasjooWidget {
 
       const messages = await response.json() as ChatHistoryMessage[];
       if (messages && messages.length > 0) {
+        // #70: the server stores the vote on the *visitor's* turn, so the answer
+        // that replied to it inherits the vote for display. Tracking the most
+        // recent user row's rating across the (id-ordered) transcript is enough:
+        // a thumbs vote always judges the question immediately above it.
+        let lastUserRating = 0;
         for (const message of messages) {
-          this.addMessage({
-            role: message.role === 'user' ? 'user' : 'assistant',
-            content: message.content,
-            sources: message.sources,
-            timestamp: new Date(),
-          });
+          this.realTurnCount += 1;
+          if (message.role === 'user') {
+            lastUserRating = typeof message.rating === 'number' ? message.rating : 0;
+            this.addMessage({
+              role: 'user',
+              content: message.content,
+              sources: message.sources,
+              timestamp: new Date(),
+            });
+          } else {
+            const humanReply = message.sender_type === 'human';
+            // #70: `/chat/messages` today carries no `mode`, so a reloaded
+            // scripted turn is indistinguishable from a model answer. It is
+            // read when present and defaults to `ai` otherwise; the deviation
+            // is reported to the parent rather than guessed at here.
+            const mode = message.mode === 'human' || message.mode === 'scripted'
+              ? message.mode
+              : humanReply ? 'human' : 'ai';
+            this.addMessage({
+              role: 'assistant',
+              content: message.content,
+              sources: message.sources,
+              timestamp: new Date(),
+              messageId: mode === 'human' ? null : message.id,
+              rating: mode === 'human' ? 0 : lastUserRating,
+              answerMode: mode,
+            });
+          }
           if (message.id > this.lastMessageId) {
             this.lastMessageId = message.id;
           }
         }
         this.startPolling();
+        this.updateVisitorMenuState();
+        // #73: history means the prechat form was answered in a previous visit,
+        // so it must not appear again on top of a loaded transcript.
+        this.renderPrechat();
+        this.applyBusinessHoursState();
         return;
       }
     } catch {
@@ -1214,6 +1362,8 @@ class BasjooWidget {
 
     this.sessionId = null;
     this.storage.removeItem(this.STORAGE_KEY);
+    this.renderPrechat();
+    this.applyBusinessHoursState();
     if (this.config.welcomeMessage) {
       this.addMessage({
         role: 'assistant',
@@ -1470,6 +1620,76 @@ class BasjooWidget {
         flex-shrink: 0;
       }
 
+      /* #75: the visitor menu (New chat / End chat) sits beside the handoff
+         button; the panel is anchored to its wrapper so it cannot escape the
+         header on a narrow phone. */
+      .basjoo-menu-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+      }
+
+      .basjoo-menu-toggle {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border: none;
+        background: ${this.hexToRgba(theme.accentContrast, 0.15)};
+        border-radius: ${theme.radiusSm};
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: ${theme.accentContrast};
+        transition: background 0.2s;
+      }
+
+      .basjoo-menu-toggle:hover {
+        background: ${this.hexToRgba(theme.accentContrast, 0.28)};
+      }
+
+      .basjoo-menu {
+        position: absolute;
+        top: 38px;
+        right: 0;
+        min-width: 168px;
+        padding: ${theme.space1};
+        background: ${theme.surfaceRaised};
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radiusMd};
+        box-shadow: ${theme.shadow2};
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        z-index: 1;
+      }
+
+      .basjoo-menu[hidden] {
+        display: none;
+      }
+
+      .basjoo-menu-item {
+        min-height: 32px;
+        padding: 0 ${theme.space3};
+        border: none;
+        background: transparent;
+        color: ${theme.textPrimary};
+        border-radius: ${theme.radiusSm};
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .basjoo-menu-item:hover:not(:disabled) {
+        background: ${theme.surfaceSunken};
+      }
+
+      .basjoo-menu-item:disabled {
+        color: ${theme.textMuted};
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
       /* #43: the human-mode notice bar sits above the transcript. */
       .basjoo-notice {
         display: flex;
@@ -1490,6 +1710,13 @@ class BasjooWidget {
       }
 
       .basjoo-notice-text {
+        flex: 1;
+        min-width: 0;
+      }
+
+      /* #73: the operator's AI-disclosure copy rides in the same bar as the
+         human-handoff notice, so the widget still has exactly one notice slot. */
+      .basjoo-disclosure {
         flex: 1;
         min-width: 0;
       }
@@ -1638,6 +1865,210 @@ class BasjooWidget {
 
       .basjoo-input-area[hidden] {
         display: none;
+      }
+
+      /* #71: the attachment chips sit between the transcript and the composer,
+         the same slot the starters use. */
+      .basjoo-attachments {
+        display: flex;
+        flex-wrap: wrap;
+        gap: ${theme.space2};
+        padding: ${theme.space3} ${theme.space5} 0 ${theme.space5};
+        border-top: 1px solid ${theme.border};
+        background: ${theme.surface};
+        flex-shrink: 0;
+      }
+
+      .basjoo-attachments[hidden] {
+        display: none;
+      }
+
+      .basjoo-attachment {
+        display: inline-flex;
+        align-items: center;
+        gap: ${theme.space2};
+        max-width: 100%;
+        padding: ${theme.space1} ${theme.space2};
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radiusMd};
+        background: ${theme.surfaceRaised};
+        color: ${theme.textSecondary};
+        font-size: 12px;
+      }
+
+      .basjoo-attachment-name {
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .basjoo-attachment-thumb {
+        width: 28px;
+        height: 28px;
+        border-radius: ${theme.radiusSm};
+        object-fit: cover;
+      }
+
+      .basjoo-attachment-remove {
+        padding: 0 ${theme.space1};
+        border: none;
+        background: transparent;
+        color: ${theme.textMuted};
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .basjoo-attachment-remove:hover {
+        color: ${theme.error};
+      }
+
+      .basjoo-attach {
+        width: 48px;
+        height: 48px;
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radiusFull};
+        background: ${theme.surfaceRaised};
+        color: ${theme.textSecondary};
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .basjoo-attach:hover:not(:disabled) {
+        border-color: ${this.config.themeColor};
+      }
+
+      .basjoo-attach:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .basjoo-attach svg {
+        width: 20px;
+        height: 20px;
+        stroke: currentColor;
+      }
+
+      .basjoo-file-input {
+        display: none;
+      }
+
+      /* #73: the prechat form. In "required" mode it *replaces* the composer
+         until the visitor submits; in "optional" mode it sits above it and
+         offers a skip. Either way the values are overlay state: they are sent
+         as prechat on the first turn and never become transcript rows. */
+      .basjoo-prechat {
+        display: flex;
+        flex-direction: column;
+        gap: ${theme.space2};
+        padding: ${theme.space4} ${theme.space5} ${theme.space5} ${theme.space5};
+        border-top: 1px solid ${theme.border};
+        background: ${theme.surfaceRaised};
+        flex-shrink: 0;
+      }
+
+      .basjoo-prechat[hidden] {
+        display: none;
+      }
+
+      .basjoo-prechat-title {
+        color: ${theme.textPrimary};
+        font-family: ${theme.fontDisplay};
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .basjoo-prechat-label {
+        color: ${theme.textMuted};
+        font-size: 12px;
+      }
+
+      .basjoo-prechat-input {
+        height: 40px;
+        padding: 0 ${theme.space3};
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radiusMd};
+        background: ${theme.surface};
+        color: ${theme.textPrimary};
+        font-size: 14px;
+        outline: none;
+      }
+
+      .basjoo-prechat-input:focus {
+        border-color: ${this.config.themeColor};
+      }
+
+      .basjoo-prechat-error {
+        color: ${theme.error};
+        font-size: 12px;
+      }
+
+      .basjoo-prechat-actions {
+        display: flex;
+        align-items: center;
+        gap: ${theme.space2};
+        margin-top: ${theme.space1};
+      }
+
+      .basjoo-prechat-submit {
+        min-height: 32px;
+        padding: 0 ${theme.space4};
+        border: none;
+        border-radius: ${theme.radiusFull};
+        background: ${this.config.themeColor};
+        color: ${theme.accentContrast};
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .basjoo-prechat-skip {
+        min-height: 32px;
+        padding: 0 ${theme.space3};
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radiusFull};
+        background: transparent;
+        color: ${theme.textSecondary};
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      /* #70: the thumbs row under an AI answer. */
+      .basjoo-feedback {
+        display: flex;
+        align-items: center;
+        gap: ${theme.space1};
+        margin-top: ${theme.space1};
+      }
+
+      .basjoo-thumb {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: ${theme.radiusFull};
+        background: transparent;
+        color: ${theme.textMuted};
+        cursor: pointer;
+        transition: color 0.2s, background 0.2s;
+      }
+
+      .basjoo-thumb:hover {
+        color: ${theme.textPrimary};
+        background: ${theme.surfaceSunken};
+      }
+
+      .basjoo-thumb[aria-pressed='true'] {
+        color: ${theme.accentContrast};
+        background: ${this.config.themeColor};
+        border-color: ${this.config.themeColor};
       }
 
       .basjoo-messages {
@@ -2072,6 +2503,10 @@ class BasjooWidget {
     const safeTitle = this.escapeHtml(this.config.title);
     const safePlaceholder = this.escapeHtml(this.getText('inputPlaceholder'));
     const safeHumanLabel = this.escapeHtml(this.getText('talkToHuman'));
+    const safeMenuLabel = this.escapeHtml(this.getText('visitorMenu'));
+    const safeNewChatLabel = this.escapeHtml(this.getText('newChat'));
+    const safeEndChatLabel = this.escapeHtml(this.getText('endChat'));
+    const safeAttachLabel = this.escapeHtml(this.getText('attachFile'));
 
     this.chatWindow.innerHTML = `
       <div class="basjoo-header">
@@ -2088,6 +2523,19 @@ class BasjooWidget {
             </svg>
             <span class="basjoo-human-label">${safeHumanLabel}</span>
           </button>
+          <div class="basjoo-menu-wrap">
+            <button class="basjoo-menu-toggle" type="button" aria-label="${safeMenuLabel}" title="${safeMenuLabel}" aria-haspopup="true" aria-expanded="false">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="5" r="2"></circle>
+                <circle cx="12" cy="12" r="2"></circle>
+                <circle cx="12" cy="19" r="2"></circle>
+              </svg>
+            </button>
+            <div class="basjoo-menu" role="menu" hidden>
+              <button class="basjoo-menu-item basjoo-new-chat" type="button" role="menuitem" disabled>${safeNewChatLabel}</button>
+              <button class="basjoo-menu-item basjoo-end-chat" type="button" role="menuitem" disabled>${safeEndChatLabel}</button>
+            </div>
+          </div>
           <button class="basjoo-close" type="button" aria-label="${this.escapeHtml(this.getText('closeWindow'))}">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -2098,8 +2546,27 @@ class BasjooWidget {
       </div>
       <div class="basjoo-notice" hidden></div>
       <div class="basjoo-messages"></div>
+      <form class="basjoo-prechat" hidden novalidate>
+        <div class="basjoo-prechat-title">${this.escapeHtml(this.getText('prechatTitle'))}</div>
+        <label class="basjoo-prechat-label" for="basjoo-prechat-name">${this.escapeHtml(this.getText('prechatName'))}</label>
+        <input id="basjoo-prechat-name" class="basjoo-prechat-input basjoo-prechat-name-input" type="text" autocomplete="name" maxlength="120">
+        <label class="basjoo-prechat-label" for="basjoo-prechat-email">${this.escapeHtml(this.getText('prechatEmail'))}</label>
+        <input id="basjoo-prechat-email" class="basjoo-prechat-input basjoo-prechat-email-input" type="email" autocomplete="email" maxlength="255">
+        <div class="basjoo-prechat-error" role="alert" hidden></div>
+        <div class="basjoo-prechat-actions">
+          <button class="basjoo-prechat-submit" type="submit">${this.escapeHtml(this.getText('prechatSubmit'))}</button>
+          <button class="basjoo-prechat-skip" type="button" hidden>${this.escapeHtml(this.getText('prechatSkip'))}</button>
+        </div>
+      </form>
+      <div class="basjoo-attachments" hidden></div>
       <div class="basjoo-input-area">
         <input type="text" class="basjoo-input" placeholder="${safePlaceholder}" maxlength="${MAX_MESSAGE_LENGTH}">
+        <input type="file" class="basjoo-file-input" multiple hidden accept=".txt,.md,.html,.pdf,.docx,.xlsx,.png,.jpg,.jpeg">
+        <button class="basjoo-attach" type="button" aria-label="${safeAttachLabel}" title="${safeAttachLabel}">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+          </svg>
+        </button>
         <button class="basjoo-send">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -2118,6 +2585,10 @@ class BasjooWidget {
 
     this._sendBtnClickListener = () => {
       if (this.isSending) {
+        return;
+      }
+      // #71: an upload must land before the turn that references it.
+      if (this.uploadsInFlight > 0) {
         return;
       }
       const message = input.value.trim();
@@ -2148,10 +2619,79 @@ class BasjooWidget {
     };
     this.headerHumanButton?.addEventListener('click', this._humanBtnClickListener);
 
+    // #75: the visitor menu (New chat / End chat).
+    this.headerMenuButton = this.chatWindow.querySelector(
+      '.basjoo-menu-toggle'
+    ) as HTMLButtonElement | null;
+    this.headerMenu = this.chatWindow.querySelector('.basjoo-menu') as HTMLElement | null;
+    this.newChatButton = this.chatWindow.querySelector('.basjoo-new-chat') as HTMLButtonElement | null;
+    this.endChatButton = this.chatWindow.querySelector('.basjoo-end-chat') as HTMLButtonElement | null;
+    this._menuBtnClickListener = () => {
+      this.toggleVisitorMenu();
+    };
+    this.headerMenuButton?.addEventListener('click', this._menuBtnClickListener);
+    this._newChatClickListener = () => {
+      this.closeVisitorMenu();
+      this.startNewChat();
+    };
+    this.newChatButton?.addEventListener('click', this._newChatClickListener);
+    this._endChatClickListener = () => {
+      this.closeVisitorMenu();
+      void this.endChat();
+    };
+    this.endChatButton?.addEventListener('click', this._endChatClickListener);
+    // A click anywhere else dismisses the panel (a menu that stays open over
+    // the transcript is the usual "is the widget frozen?" bug report).
+    this._documentClickListener = (event: Event) => {
+      if (!this.headerMenu || this.headerMenu.hidden) {
+        return;
+      }
+      const target = event.target as Node | null;
+      if (target && this.headerMenu.parentElement?.contains(target)) {
+        return;
+      }
+      this.closeVisitorMenu();
+    };
+    document.addEventListener('click', this._documentClickListener);
+
+    // #71: the paperclip opens the file picker; the picked files upload at once.
+    const attachBtn = this.chatWindow.querySelector('.basjoo-attach') as HTMLButtonElement | null;
+    const fileInput = this.chatWindow.querySelector('.basjoo-file-input') as HTMLInputElement | null;
+    this._attachBtnClickListener = () => {
+      fileInput?.click();
+    };
+    attachBtn?.addEventListener('click', this._attachBtnClickListener);
+    this._attachInputChangeListener = () => {
+      const files = fileInput?.files;
+      if (files && files.length > 0) {
+        void this.uploadAttachments(Array.from(files));
+      }
+      // Re-picking the same file must fire `change` again.
+      if (fileInput) {
+        fileInput.value = '';
+      }
+    };
+    fileInput?.addEventListener('change', this._attachInputChangeListener);
+
+    // #73: the prechat form is a real form so Enter submits it.
+    const prechatForm = this.chatWindow.querySelector('.basjoo-prechat') as HTMLFormElement | null;
+    const prechatSkip = this.chatWindow.querySelector('.basjoo-prechat-skip') as HTMLButtonElement | null;
+    this._prechatSubmitListener = (event: Event) => {
+      event.preventDefault();
+      this.submitPrechat();
+    };
+    prechatForm?.addEventListener('submit', this._prechatSubmitListener);
+    this._prechatSkipClickListener = () => {
+      this.skipPrechat();
+    };
+    prechatSkip?.addEventListener('click', this._prechatSkipClickListener);
+
     this.container!.appendChild(this.chatWindow);
 
+    this.renderPrechat();
     this.applyBusinessHoursState();
     this.renderModeNotice();
+    this.updateVisitorMenuState();
   }
 
   /**
@@ -2220,13 +2760,22 @@ class BasjooWidget {
     const away = this.chatWindow.querySelector('.basjoo-away') as HTMLElement | null;
 
     const signedIdentityMissing = this.identityRequired && !this.identitySigned;
+    // #73: in `required` mode the prechat form stands in for the composer until
+    // the visitor submits it. The form itself is rendered by `renderPrechat()`;
+    // here only the composer's visibility is computed, and the "away" copy is
+    // NOT shown, because the visitor is not blocked by the operator — they just
+    // have one short form to fill in.
+    const prechatBlocking = this.prechatMode === 'required' && this.prechatIsOpen();
     const blockedMessage = !this.isOnline
       ? this.awayMessage || this.getText('awayDefault')
       : signedIdentityMissing
         ? this.getText('identityRequired')
         : null;
 
-    if (blockedMessage === null) {
+    if (prechatBlocking && blockedMessage === null) {
+      if (inputArea) inputArea.hidden = true;
+      away?.remove();
+    } else if (blockedMessage === null) {
       if (inputArea) inputArea.hidden = false;
       away?.remove();
     } else {
@@ -2251,6 +2800,13 @@ class BasjooWidget {
   /**
    * #43: the notice bar shown while a human is expected to answer, with the
    * "Continue with AI" action that puts the session back into `ai` mode.
+   *
+   * #73: the same single bar also carries the operator's AI disclosure. The
+   * two are mutually exclusive in practice (a disclosure is a standing policy
+   * line, the handoff notice is a live state), and the handoff notice wins
+   * because it is the one the visitor can act on. When `ai_disclosure` is
+   * absent and the session is in `ai` mode the bar stays hidden, which is
+   * exactly today's behaviour.
    */
   private renderModeNotice() {
     if (!this.chatWindow) return;
@@ -2259,8 +2815,6 @@ class BasjooWidget {
     if (!bar) return;
 
     if (this.sessionMode !== 'human') {
-      bar.hidden = true;
-      bar.textContent = '';
       this.humanNoticeBar = null;
       this._continueAiClickListener = null;
       if (this.headerHumanButton) {
@@ -2268,6 +2822,7 @@ class BasjooWidget {
         this.headerHumanButton.hidden =
           !this.isOnline || (this.identityRequired && !this.identitySigned);
       }
+      this.renderDisclosure(bar);
       return;
     }
 
@@ -2300,10 +2855,443 @@ class BasjooWidget {
     this.humanNoticeBar = bar;
   }
 
+  /**
+   * #73: paint the operator's `ai_disclosure` into the notice bar.
+   *
+   * The copy is the operator's own words, so it is rendered as TEXT (never as
+   * markup) and is not translated. Only the surrounding label is ours. An
+   * empty disclosure hides the bar, so an agent that never set one renders
+   * byte-identically to before this issue.
+   */
+  private renderDisclosure(bar: HTMLElement): void {
+    if (!this.aiDisclosure) {
+      bar.hidden = true;
+      bar.textContent = '';
+      return;
+    }
+
+    bar.textContent = '';
+    bar.hidden = false;
+
+    const text = document.createElement('span');
+    text.className = 'basjoo-disclosure';
+    text.setAttribute('data-testid', 'basjoo-ai-disclosure');
+    text.textContent = this.aiDisclosure;
+    bar.appendChild(text);
+  }
+
   private setSessionMode(mode: 'ai' | 'human') {
     this.sessionMode = mode;
     this.applyBusinessHoursState();
     this.renderModeNotice();
+  }
+
+  /* ========================================================================
+   * #73 — prechat form
+   *
+   * The form is an OVERLAY: its values live in `this.prechatValues` and are
+   * sent as `prechat` on the first chat turn. They are never passed to
+   * `addMessage()`, which is what keeps them out of the transcript, and they
+   * are never derived from history, which is what keeps them out of the
+   * transcript after `loadHistory()` as well.
+   * ===================================================================== */
+
+  /** #73: show the form for a policy that asks for one and a visitor who has not answered it yet. */
+  private renderPrechat(): void {
+    if (!this.chatWindow) return;
+
+    const form = this.chatWindow.querySelector('.basjoo-prechat') as HTMLFormElement | null;
+    if (!form) return;
+
+    form.hidden = !this.prechatIsOpen();
+
+    // `optional` offers a skip affordance; `required` does not, because the
+    // whole point of choosing `required` is that the form is not skippable.
+    const skip = form.querySelector('.basjoo-prechat-skip') as HTMLButtonElement | null;
+    if (skip) {
+      skip.hidden = this.prechatMode !== 'optional';
+    }
+  }
+
+  /**
+   * #73: is the prechat form currently the visitor's gate?
+   *
+   * Three conditions, all required:
+   *   - the operator asked for one (`prechat_mode !== 'off'`);
+   *   - the visitor has not answered or skipped it yet;
+   *   - there is no session with history already — a reloaded transcript means
+   *     the form was answered before, and re-asking would be a second gate on a
+   *     conversation that already exists.
+   */
+  private prechatIsOpen(): boolean {
+    if (this.prechatMode === 'off') {
+      return false;
+    }
+    if (this.prechatValues !== null || this.prechatSkipped) {
+      return false;
+    }
+    return this.realTurnCount === 0 && this.sessionId === null;
+  }
+
+  /** #73: validate and capture the form's values (they are not sent yet). */
+  private submitPrechat(): void {
+    if (!this.chatWindow) return;
+
+    const nameInput = this.chatWindow.querySelector('.basjoo-prechat-name-input') as HTMLInputElement | null;
+    const emailInput = this.chatWindow.querySelector('.basjoo-prechat-email-input') as HTMLInputElement | null;
+    const error = this.chatWindow.querySelector('.basjoo-prechat-error') as HTMLElement | null;
+
+    const name = (nameInput?.value || '').trim();
+    const email = (emailInput?.value || '').trim();
+
+    const fail = (message: string) => {
+      if (error) {
+        error.textContent = message;
+        error.hidden = false;
+      }
+    };
+
+    if (!name) {
+      fail(this.getText('prechatNameRequired'));
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      fail(this.getText('prechatEmailInvalid'));
+      return;
+    }
+
+    if (error) {
+      error.hidden = true;
+      error.textContent = '';
+    }
+
+    this.prechatValues = { name, email };
+    this.prechatPending = true;
+    this.renderPrechat();
+    // A `required` form had the composer hidden; submitting is what unlocks it.
+    this.applyBusinessHoursState();
+  }
+
+  /** #73: `optional` only — dismiss without capturing anything, forever. */
+  private skipPrechat(): void {
+    this.prechatSkipped = true;
+    this.prechatValues = null;
+    this.prechatPending = false;
+    this.renderPrechat();
+    this.applyBusinessHoursState();
+  }
+
+  /** #73: the `prechat` body for the next turn, or `undefined` when there is none. */
+  private pendingPrechat(): { name: string; email: string } | undefined {
+    if (!this.prechatPending || !this.prechatValues) {
+      return undefined;
+    }
+    return { name: this.prechatValues.name, email: this.prechatValues.email };
+  }
+
+  /* ========================================================================
+   * #71 — attachments
+   * ===================================================================== */
+
+  /**
+   * #71: upload the picked files and keep the ids the server returned.
+   *
+   * The caps are mirrored from the frozen schema and enforced HERE, with a
+   * readable sentence: a client that only discovers "too many files" as a bare
+   * 4xx has told the visitor nothing. Files upload one at a time because the
+   * route's contract is one file per request; a failure of any single file
+   * drops that file and keeps the ones that landed.
+   */
+  private async uploadAttachments(files: File[]): Promise<void> {
+    if (files.length === 0) {
+      return;
+    }
+
+    const accepted: File[] = [];
+    for (const file of files) {
+      if (this.pendingAttachments.length + accepted.length >= ATTACHMENT_MAX_FILES) {
+        this.showError(this.getText('attachmentTooMany'));
+        break;
+      }
+      if (file.size > ATTACHMENT_MAX_FILE_BYTES) {
+        this.showError(this.getText('attachmentTooLarge'));
+        continue;
+      }
+      accepted.push(file);
+    }
+    if (accepted.length === 0) {
+      return;
+    }
+
+    this.uploadsInFlight += 1;
+    this.updateComposerDisabledState();
+
+    try {
+      for (const file of accepted) {
+        try {
+          const form = new FormData();
+          form.append('file', file);
+          const url = new URL(`${this.config.apiBase}/api/v1/chat/attachments`);
+          // The owning session is sent when one exists. A visitor may well
+          // attach a file before saying anything at all, so the widget does not
+          // require it here: the route decides whether a session is mandatory
+          // (see the report's deviation note).
+          if (this.sessionId) {
+            url.searchParams.set('session_id', this.sessionId);
+          }
+          url.searchParams.set('visitor_id', this.visitorId);
+          url.searchParams.set('agent_id', this.config.agentId);
+          const response = await fetch(url.toString(), {
+            method: 'POST',
+            body: form,
+          });
+          if (!response.ok) {
+            if (await this.reportIdentityRejection(response)) {
+              break;
+            }
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const payload = (await response.json()) as ChatAttachmentResponse;
+          if (!payload.id) {
+            throw new Error('Attachment response carried no id');
+          }
+          const kind = payload.kind === 'image' || file.type.startsWith('image/') ? 'image' : 'document';
+          const attachment: PendingAttachment = {
+            id: payload.id,
+            filename: payload.filename || file.name,
+            mime: payload.mime || file.type || '',
+            kind,
+            previewUrl: kind === 'image' ? this.createPreviewUrl(file) : undefined,
+          };
+          this.pendingAttachments.push(attachment);
+        } catch (error) {
+          console.error('[Basjoo Widget] Attachment upload failed:', error);
+          this.showError(this.getText('attachmentUploadFailed'));
+        }
+      }
+    } finally {
+      this.uploadsInFlight -= 1;
+      this.updateComposerDisabledState();
+      this.renderAttachments();
+    }
+  }
+
+  /** #71: an object URL for an image chip's thumbnail (revoked on removal). */
+  private createPreviewUrl(file: File): string | undefined {
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+      return undefined;
+    }
+    try {
+      return URL.createObjectURL(file);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** #71: paint the chip row above the composer. */
+  private renderAttachments(): void {
+    if (!this.chatWindow) return;
+
+    const row = this.chatWindow.querySelector('.basjoo-attachments') as HTMLElement | null;
+    if (!row) return;
+
+    row.textContent = '';
+    if (this.pendingAttachments.length === 0) {
+      row.hidden = true;
+      return;
+    }
+
+    row.hidden = false;
+    for (const attachment of this.pendingAttachments) {
+      const chip = document.createElement('span');
+      chip.className = 'basjoo-attachment';
+      chip.setAttribute('data-attachment-id', attachment.id);
+
+      if (attachment.kind === 'image' && attachment.previewUrl) {
+        const thumb = document.createElement('img');
+        thumb.className = 'basjoo-attachment-thumb';
+        thumb.src = attachment.previewUrl;
+        thumb.alt = attachment.filename;
+        chip.appendChild(thumb);
+      }
+
+      const name = document.createElement('span');
+      name.className = 'basjoo-attachment-name';
+      name.textContent = attachment.filename;
+      chip.appendChild(name);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'basjoo-attachment-remove';
+      remove.setAttribute('aria-label', this.getText('attachmentRemove'));
+      remove.setAttribute('title', this.getText('attachmentRemove'));
+      remove.textContent = '\u00d7';
+      remove.addEventListener('click', () => {
+        this.removeAttachment(attachment.id);
+      });
+      chip.appendChild(remove);
+
+      row.appendChild(chip);
+    }
+  }
+
+  /** #71: drop one attachment (and its preview URL) without sending. */
+  private removeAttachment(id: string): void {
+    const index = this.pendingAttachments.findIndex((attachment) => attachment.id === id);
+    if (index === -1) {
+      return;
+    }
+    const [removed] = this.pendingAttachments.splice(index, 1);
+    if (removed?.previewUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(removed.previewUrl);
+    }
+    this.renderAttachments();
+  }
+
+  /** #71: drop every attachment (after a send, or when a chat is reset). */
+  private clearAttachments(): void {
+    for (const attachment of this.pendingAttachments) {
+      if (attachment.previewUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(attachment.previewUrl);
+      }
+    }
+    this.pendingAttachments = [];
+    this.renderAttachments();
+  }
+
+  /** #71: the send button is disabled while an upload is in flight. */
+  private updateComposerDisabledState(): void {
+    if (!this.chatWindow) return;
+    const sendBtn = this.chatWindow.querySelector('.basjoo-send') as HTMLButtonElement | null;
+    if (sendBtn) {
+      sendBtn.disabled = this.uploadsInFlight > 0;
+    }
+    const attachBtn = this.chatWindow.querySelector('.basjoo-attach') as HTMLButtonElement | null;
+    if (attachBtn) {
+      attachBtn.disabled = this.uploadsInFlight > 0;
+    }
+  }
+
+  /* ========================================================================
+   * #75 — visitor menu (New chat / End chat)
+   * ===================================================================== */
+
+  /** #75: open/close the header panel. */
+  private toggleVisitorMenu(): void {
+    if (!this.headerMenu) return;
+    const nextOpen = this.headerMenu.hidden;
+    this.headerMenu.hidden = !nextOpen;
+    this.headerMenuButton?.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  }
+
+  private closeVisitorMenu(): void {
+    if (!this.headerMenu || this.headerMenu.hidden) {
+      return;
+    }
+    this.headerMenu.hidden = true;
+    this.headerMenuButton?.setAttribute('aria-expanded', 'false');
+  }
+
+  /** #75: both actions need a session with at least one real turn to act on. */
+  private updateVisitorMenuState(): void {
+    const hasTurns = this.realTurnCount > 0;
+    if (this.newChatButton) this.newChatButton.disabled = !hasTurns;
+    if (this.endChatButton) this.endChatButton.disabled = !hasTurns;
+  }
+
+  /**
+   * #75: "New chat" — forget the stored session, keep the same visitor.
+   *
+   * Only `basjoo_session_<agentId>` is cleared. The visitor id survives because
+   * the visitor is the same person: clearing it would make the widget treat
+   * them as a brand-new arrival and lose their identity/history linkage.
+   */
+  private startNewChat(): void {
+    this.stopPolling();
+    this.abortStream();
+    this.cleanupAfterStreamError();
+    this.sessionId = null;
+    this.lastMessageId = 0;
+    this.storage.removeItem(this.STORAGE_KEY);
+    this.clearAttachments();
+
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (messagesContainer) {
+      messagesContainer.textContent = '';
+    }
+    this.messages = [];
+    this.realTurnCount = 0;
+    this.setSessionMode('ai');
+
+    if (this.config.welcomeMessage) {
+      this.addMessage({
+        role: 'assistant',
+        content: this.config.welcomeMessage,
+        timestamp: new Date(),
+      });
+    }
+    this.updateVisitorMenuState();
+  }
+
+  /**
+   * #75: "End chat" — close the session server-side, then forget it locally.
+   *
+   * The order matters: the local id is cleared only after the route accepts, so
+   * a failed request leaves the visitor on their existing thread instead of
+   * dropping them into a new one that the server never closed.
+   */
+  private async endChat(): Promise<void> {
+    if (!this.sessionId) {
+      return;
+    }
+
+    const endingSessionId = this.sessionId;
+
+    try {
+      const response = await fetch(`${this.config.apiBase}/api/v1/chat/session:end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: this.config.agentId,
+          session_id: endingSessionId,
+          visitor_id: this.visitorId,
+        }),
+      });
+      if (!response.ok) {
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error('[Basjoo Widget] Failed to end the chat:', error);
+      this.showError(this.getText('endChatFailed'));
+      return;
+    }
+
+    this.stopPolling();
+    this.abortStream();
+    this.cleanupAfterStreamError();
+    this.sessionId = null;
+    this.lastMessageId = 0;
+    this.storage.removeItem(this.STORAGE_KEY);
+    this.clearAttachments();
+
+    const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement | null;
+    if (messagesContainer) {
+      messagesContainer.textContent = '';
+    }
+    this.messages = [];
+    this.realTurnCount = 0;
+    this.setSessionMode('ai');
+    if (this.config.welcomeMessage) {
+      this.addMessage({
+        role: 'assistant',
+        content: this.config.welcomeMessage,
+        timestamp: new Date(),
+      });
+    }
+    this.updateVisitorMenuState();
   }
   /**
    * #43: ask for a human. Sets `mode="human"` server-side; `status` is
@@ -2473,7 +3461,7 @@ class BasjooWidget {
   /**
    * Get localized text based on language setting
    */
-  private getText(key: 'sendFailed' | 'networkError' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'scriptedNotice' | 'identityMismatch' | 'identityRequired'): string {
+  private getText(key: 'sendFailed' | 'networkError' | 'takenOverNotice' | 'inputPlaceholder' | 'messageTooLong' | 'greetingBubble' | 'newMessage' | 'thinking' | 'references' | 'talkToHuman' | 'continueWithAi' | 'awayDefault' | 'closeWindow' | 'humanNeedsSession' | 'humanFailed' | 'scriptedNotice' | 'identityMismatch' | 'identityRequired' | 'thumbUp' | 'thumbDown' | 'attachFile' | 'attachmentTooMany' | 'attachmentTooLarge' | 'attachmentUploadFailed' | 'attachmentRemove' | 'prechatTitle' | 'prechatName' | 'prechatEmail' | 'prechatSubmit' | 'prechatSkip' | 'prechatNameRequired' | 'prechatEmailInvalid' | 'visitorMenu' | 'newChat' | 'endChat' | 'endChatFailed'): string {
     const texts: Record<string, Record<string, string>> = {
       sendFailed: { 'en-US': 'Send failed, please try again later', 'zh-CN': '发送失败，请稍后重试' },
       networkError: { 'en-US': 'Network connection failed, please check your connection', 'zh-CN': '网络连接失败，请检查网络' },
@@ -2493,6 +3481,28 @@ class BasjooWidget {
       scriptedNotice: { 'en-US': 'Answered from a saved FAQ', 'zh-CN': '由常见问题自动回答' },
       identityMismatch: { 'en-US': 'We could not verify your identity. Please refresh the page and sign in again.', 'zh-CN': '无法验证您的身份，请刷新页面并重新登录。' },
       identityRequired: { 'en-US': 'Please sign in on this page to start chatting.', 'zh-CN': '请先在本页面登录，然后再开始对话。' },
+      // #70 thumbs.
+      thumbUp: { 'en-US': 'Helpful', 'zh-CN': '有帮助' },
+      thumbDown: { 'en-US': 'Not helpful', 'zh-CN': '没有帮助' },
+      // #71 attachments.
+      attachFile: { 'en-US': 'Attach a file', 'zh-CN': '添加附件' },
+      attachmentTooMany: { 'en-US': `You can attach up to ${ATTACHMENT_MAX_FILES} files`, 'zh-CN': `最多只能添加 ${ATTACHMENT_MAX_FILES} 个文件` },
+      attachmentTooLarge: { 'en-US': `Each file must be 5 MB or smaller`, 'zh-CN': '单个文件不能超过 5 MB' },
+      attachmentUploadFailed: { 'en-US': 'That file could not be uploaded. Please try again.', 'zh-CN': '文件上传失败，请重试。' },
+      attachmentRemove: { 'en-US': 'Remove attachment', 'zh-CN': '移除附件' },
+      // #73 prechat.
+      prechatTitle: { 'en-US': 'Before we start', 'zh-CN': '开始之前' },
+      prechatName: { 'en-US': 'Name', 'zh-CN': '姓名' },
+      prechatEmail: { 'en-US': 'E-mail', 'zh-CN': '邮箱' },
+      prechatSubmit: { 'en-US': 'Start chat', 'zh-CN': '开始对话' },
+      prechatSkip: { 'en-US': 'Skip', 'zh-CN': '跳过' },
+      prechatNameRequired: { 'en-US': 'Please enter your name.', 'zh-CN': '请输入您的姓名。' },
+      prechatEmailInvalid: { 'en-US': 'Please enter a valid e-mail address.', 'zh-CN': '请输入有效的邮箱地址。' },
+      // #75 visitor menu.
+      visitorMenu: { 'en-US': 'Chat options', 'zh-CN': '对话选项' },
+      newChat: { 'en-US': 'New chat', 'zh-CN': '新对话' },
+      endChat: { 'en-US': 'End chat', 'zh-CN': '结束对话' },
+      endChatFailed: { 'en-US': 'Could not end the chat. Please try again.', 'zh-CN': '结束对话失败，请重试。' },
     };
 
     const locale = this.getRequestLocale().toLowerCase()
@@ -2626,6 +3636,7 @@ class BasjooWidget {
     }
 
     messageDiv.appendChild(contentDiv);
+    this.renderFeedback(messageDiv, message);
 
     const timeDiv = document.createElement('div');
     timeDiv.className = 'basjoo-message-time';
@@ -2633,6 +3644,130 @@ class BasjooWidget {
     messageDiv.appendChild(timeDiv);
 
     return messageDiv;
+  }
+
+  /**
+   * #70: is this turn rateable?
+   *
+   * Only a model answer can be voted on. A `human` turn was typed by an
+   * operator and a `scripted` one came from a curated FAQ pair: a vote on
+   * either would tell analytics something the model never did. An unset
+   * `answerMode` is a model answer (every pre-#70 turn), so absent is rateable.
+   */
+  private isRateableMessage(message: ChatMessage): boolean {
+    if (message.role !== 'assistant') {
+      return false;
+    }
+    if (typeof message.messageId !== 'number') {
+      return false;
+    }
+    return (message.answerMode ?? 'ai') === 'ai';
+  }
+
+  /**
+   * #70: the 👍/👎 pair under one model answer.
+   *
+   * Toggle semantics are the server's: clicking the ACTIVE vote posts
+   * `value: 0` (clear), clicking the other flips it. The row keeps the current
+   * vote in `data-rating` so the two buttons never have to round-trip to learn
+   * their own state, and `aria-pressed` mirrors it for assistive tech.
+   */
+  private renderFeedback(messageDiv: HTMLElement, message: ChatMessage): void {
+    if (!this.isRateableMessage(message)) {
+      return;
+    }
+
+    const messageId = message.messageId as number;
+    const row = document.createElement('div');
+    row.className = 'basjoo-feedback';
+    row.setAttribute('data-message-id', String(messageId));
+    row.setAttribute('data-rating', String(message.rating ?? 0));
+
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'basjoo-thumb basjoo-thumb-up';
+    up.setAttribute('data-value', '1');
+    up.setAttribute('aria-label', this.getText('thumbUp'));
+    up.setAttribute('title', this.getText('thumbUp'));
+    up.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M7 10v12"></path><path d="M15 5.88L14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88z"></path>' +
+      '</svg>';
+
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'basjoo-thumb basjoo-thumb-down';
+    down.setAttribute('data-value', '-1');
+    down.setAttribute('aria-label', this.getText('thumbDown'));
+    down.setAttribute('title', this.getText('thumbDown'));
+    down.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M17 14V2"></path><path d="M9 18.12L10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88z"></path>' +
+      '</svg>';
+
+    for (const button of [up, down]) {
+      button.addEventListener('click', () => {
+        // The two buttons are the only producers of this value.
+        const value: 1 | -1 = button === up ? 1 : -1;
+        void this.castVote(messageId, value, row);
+      });
+    }
+
+    row.appendChild(up);
+    row.appendChild(down);
+    this.paintVote(row, message.rating ?? 0);
+    messageDiv.appendChild(row);
+  }
+
+  /** Reflect one vote in the DOM: `aria-pressed` plus the row's own state. */
+  private paintVote(row: HTMLElement, value: number): void {
+    row.setAttribute('data-rating', String(value));
+    const up = row.querySelector('.basjoo-thumb-up') as HTMLButtonElement | null;
+    const down = row.querySelector('.basjoo-thumb-down') as HTMLButtonElement | null;
+    if (up) up.setAttribute('aria-pressed', value === 1 ? 'true' : 'false');
+    if (down) down.setAttribute('aria-pressed', value === -1 ? 'true' : 'false');
+  }
+
+  /**
+   * #70: post one vote and paint the result. The click on the ACTIVE vote
+   * asks for `0` (clear); the other flips. The DOM is only repainted after the
+   * server accepts, so a failed request cannot leave a vote the transcript does
+   * not actually hold.
+   */
+  private async castVote(messageId: number, value: 1 | -1, row: HTMLElement): Promise<void> {
+    if (!this.sessionId) {
+      return;
+    }
+
+    const current = Number(row.getAttribute('data-rating') || '0');
+    const next = current === value ? 0 : value;
+
+    try {
+      const url = new URL(`${this.config.apiBase}/api/v1/chat/feedback`);
+      url.searchParams.set('session_id', this.sessionId);
+      url.searchParams.set('message_id', String(messageId));
+      url.searchParams.set('visitor_id', this.visitorId);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: next }),
+      });
+      if (!response.ok) {
+        if (await this.reportIdentityRejection(response)) {
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      this.paintVote(row, next);
+      // Keep the in-memory turn in step, so a re-render paints the same vote.
+      const stored = this.messages.find((message) => message.messageId === messageId);
+      if (stored) {
+        stored.rating = next;
+      }
+    } catch (error) {
+      console.error('[Basjoo Widget] Failed to save the message feedback:', error);
+    }
   }
 
   private formatThinkingText(): string {
@@ -2742,7 +3877,13 @@ class BasjooWidget {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
-  private finalizeStreamingMessage(sources: Source[] = []): void {
+  /**
+   * #70: `finalizeStreamingMessage` now takes the `done` payload, because that
+   * is where `message_id` and `mode` live. The finished turn keeps them so the
+   * thumbs row can post against the persisted assistant row, and so a
+   * `human`/`scripted` turn is never offered a vote.
+   */
+  private finalizeStreamingMessage(sources: Source[] = [], done?: StreamDoneMeta): void {
     if (!this.streamingMessage || !this.streamingMessageContent) {
       return;
     }
@@ -2762,12 +3903,24 @@ class BasjooWidget {
     const finalContent = formattedMessage.content + referenceMarkdown;
     this.updateMessageContent(this.streamingMessageContent, finalContent);
 
-    this.messages.push({
+    const mode = done?.mode
+    const answerMode: AnswerMode =
+      mode === 'human' || mode === 'scripted' ? mode : 'ai'
+    const messageId = typeof done?.message_id === 'number' ? done.message_id : null
+
+    const stored: ChatMessage = {
       role: 'assistant',
       content: finalContent,
       sources,
       timestamp: new Date(),
-    });
+      messageId,
+      rating: 0,
+      answerMode,
+    }
+    this.messages.push(stored);
+
+    // #70: the thumbs row goes on the element that is already in the transcript.
+    this.renderFeedback(this.streamingMessage, stored);
 
     const messagesContainer = this.chatWindow?.querySelector('.basjoo-messages') as HTMLElement;
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -2802,6 +3955,9 @@ class BasjooWidget {
       this.hasUnread = true;
       this.updateUnreadBadge();
     }
+
+    // #75: New chat / End chat only unlock once the session has a real turn.
+    this.updateVisitorMenuState();
   }
 
   /**
@@ -2904,11 +4060,19 @@ class BasjooWidget {
       const messages = await response.json() as ChatHistoryMessage[];
       for (const msg of messages) {
         if (msg.content) {
+          // #70: a polled reply is an operator (human) reply by construction —
+          // this route is how an admin's message reaches the visitor — so it
+          // never carries a thumbs control.
+          const humanReply = msg.sender_type === 'human';
+          this.realTurnCount += 1;
           this.addMessage({
             role: msg.role === 'user' ? 'user' : 'assistant',
             content: msg.content,
             sources: msg.sources,
             timestamp: new Date(),
+            messageId: humanReply ? null : msg.id,
+            rating: 0,
+            answerMode: humanReply ? 'human' : 'ai',
           });
           if (!this.isOpen) {
             this.startTitleBlink();
@@ -2918,6 +4082,8 @@ class BasjooWidget {
           this.lastMessageId = msg.id;
         }
       }
+      // #75: a polled reply means the session has a turn now.
+      this.updateVisitorMenuState();
     } catch {
       // 轮询失败静默忽略
     }
@@ -3006,7 +4172,7 @@ class BasjooWidget {
             if (donePayload.mode === 'human') {
               this.setSessionMode('human');
             }
-            this.finalizeStreamingMessage(this.currentStreamSources);
+            this.finalizeStreamingMessage(this.currentStreamSources, donePayload);
             /* #60: a keyword-matched FAQ pair answered, so no model was called.
              *
              * `matched_by` is the discriminator, not `mode`: a MISS is also
@@ -3144,7 +4310,13 @@ class BasjooWidget {
             // them in a labelled block and states they are not instructions.
             context_before: BasjooWidget.pageContext.before || undefined,
             context_after: BasjooWidget.pageContext.after || undefined,
-          }),
+            // #71: the ids the attachment route returned. Frozen schema caps
+            // the list at 5, so send at most 5.
+            attachment_ids: this.pendingAttachments.length > 0
+              ? this.pendingAttachments.slice(0, ATTACHMENT_MAX_FILES).map((attachment) => attachment.id)
+              : undefined,
+            // #73: the prechat values travel on the FIRST turn only.
+            prechat: this.pendingPrechat(),          }),
         });
 
         if (!response.ok) {
@@ -3208,11 +4380,32 @@ class BasjooWidget {
 
     this.isSending = true;
 
+    // #71: an in-flight upload means the ids the turn would reference are not
+    // known yet, so the composer refuses to send. Checked here as well as in
+    // the click handler because Enter and a card action both reach this method.
+    if (this.uploadsInFlight > 0) {
+      this.isSending = false;
+      return;
+    }
+
+    // #73: a `required` prechat form is a gate, not decoration. The composer is
+    // hidden while it is open, but a card action or a programmatic send must
+    // not slip past a gate the visitor can see — so the send path itself
+    // refuses until the form is submitted.
+    if (this.prechatMode === 'required' && this.prechatIsOpen()) {
+      this.isSending = false;
+      return;
+    }
+
     this.addMessage({
       role: 'user',
       content: message,
       timestamp: new Date(),
     });
+    // #75: the visitor has now said something, so the session exists and the
+    // menu actions become available.
+    this.realTurnCount += 1;
+    this.updateVisitorMenuState();
 
     this.hideLoading();
     this.hideThinkingIndicator();
@@ -3262,6 +4455,13 @@ class BasjooWidget {
       this.showError(errorMessage);
     } finally {
       this.isSending = false;
+      // #73: the prechat values ride the FIRST turn only. Whether the turn
+      // succeeded or failed, they have now been offered to the server; keeping
+      // them pending would attach them again on every later message.
+      this.prechatPending = false;
+      // #71: the attachments were part of that turn; a second send must not
+      // silently re-attach files the visitor already sent.
+      this.clearAttachments();
     }
   }
 
@@ -3309,6 +4509,46 @@ class BasjooWidget {
     }
     this.humanNoticeBar = null;
     this.headerHumanButton = null;
+
+    // #75: the visitor menu's panel and its toggle.
+    if (this.headerMenuButton && this._menuBtnClickListener) {
+      this.headerMenuButton.removeEventListener('click', this._menuBtnClickListener);
+    }
+    if (this.newChatButton && this._newChatClickListener) {
+      this.newChatButton.removeEventListener('click', this._newChatClickListener);
+    }
+    if (this.endChatButton && this._endChatClickListener) {
+      this.endChatButton.removeEventListener('click', this._endChatClickListener);
+    }
+    if (this._documentClickListener) {
+      document.removeEventListener('click', this._documentClickListener);
+      this._documentClickListener = null;
+    }
+    this.headerMenuButton = null;
+    this.headerMenu = null;
+    this.newChatButton = null;
+    this.endChatButton = null;
+
+    // #71: the paperclip and its hidden file input.
+    const attachBtn = this.chatWindow?.querySelector('.basjoo-attach') as HTMLButtonElement | null;
+    if (attachBtn && this._attachBtnClickListener) {
+      attachBtn.removeEventListener('click', this._attachBtnClickListener);
+    }
+    const fileInput = this.chatWindow?.querySelector('.basjoo-file-input') as HTMLInputElement | null;
+    if (fileInput && this._attachInputChangeListener) {
+      fileInput.removeEventListener('change', this._attachInputChangeListener);
+    }
+    this.clearAttachments();
+
+    // #73: the prechat form.
+    const prechatForm = this.chatWindow?.querySelector('.basjoo-prechat') as HTMLFormElement | null;
+    if (prechatForm && this._prechatSubmitListener) {
+      prechatForm.removeEventListener('submit', this._prechatSubmitListener);
+    }
+    const prechatSkip = this.chatWindow?.querySelector('.basjoo-prechat-skip') as HTMLButtonElement | null;
+    if (prechatSkip && this._prechatSkipClickListener) {
+      prechatSkip.removeEventListener('click', this._prechatSkipClickListener);
+    }
 
     // #40: the card and starter rows are destroyed with the container, but their
     // closures outlive a re-render, so drop every reference explicitly.

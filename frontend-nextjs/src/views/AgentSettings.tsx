@@ -11,6 +11,7 @@ import {
   api,
   type Agent,
   type BusinessHoursPayload,
+  type PrechatMode,
   type WidgetCard,
   type WidgetStarter,
 } from '../services/api';
@@ -37,6 +38,22 @@ interface AgentSettingsFormData {
 // widget/src/theme.ts: ACCENT (spec contract C1, issue #48).
 const DEFAULT_WIDGET_COLOR = '#F9CA02';
 const DEFAULT_HISTORY_DAYS = 30;
+
+/**
+ * #73 — the three prechat policies, in the order the select renders them.
+ * Mirrors `Literal["off", "optional", "required"]` in
+ * `backend/api/v1/schemas.py` (`AgentUpdateRequest.prechat_mode`).
+ */
+const PRECHAT_MODES: PrechatMode[] = ['off', 'optional', 'required'];
+
+/**
+ * A missing or unexpected value reads as `off`: that is what the backend's
+ * column default is, and it is the behaviour that changes nothing for an
+ * operator who never touched this field.
+ */
+function normalizePrechatMode(value: string | null | undefined): PrechatMode {
+  return value === 'optional' || value === 'required' ? value : 'off';
+}
 
 /* ---------------------------------------------------------------------------
  * Live widget preview (issue #48, acceptance item "the settings page renders a
@@ -558,6 +575,16 @@ export default function AgentSettings() {
   const [fixedFactsSaving, setFixedFactsSaving] = useState(false);
   const [fixedFactsSaved, setFixedFactsSaved] = useState(false);
   const [fixedFactsError, setFixedFactsError] = useState<string | null>(null);
+  // #73 prechat + disclosure: same explicit-save pattern as `fixedFacts` above.
+  // Both fields already round-trip through `AgentConfig` / `AgentUpdateRequest`
+  // (`prechat_mode` is off | optional | required, `ai_disclosure` is the
+  // operator's own copy, rendered verbatim by the widget), so this is the only
+  // surface they were missing.
+  const [prechatMode, setPrechatMode] = useState<PrechatMode>('off');
+  const [aiDisclosure, setAiDisclosure] = useState<string>('');
+  const [prechatSaving, setPrechatSaving] = useState(false);
+  const [prechatSaved, setPrechatSaved] = useState(false);
+  const [prechatError, setPrechatError] = useState<string | null>(null);
   // #43 conversation policy: the business hours that decide handoff-adjacent
   // behaviour. #64 removed `escalation_rules`, the prompt block beside it.
   const [businessHours, setBusinessHours] = useState<BusinessHoursConfig | null>(null);
@@ -613,6 +640,8 @@ export default function AgentSettings() {
       setFormData(data);
       setOriginsText(data.allowed_widget_origins.join('\n'));
       setFixedFacts(loadedAgent.fixed_facts ?? '');
+      setPrechatMode(normalizePrechatMode(loadedAgent.prechat_mode));
+      setAiDisclosure(loadedAgent.ai_disclosure ?? '');
       setBusinessHours(normalizeBusinessHours(loadedAgent.business_hours ?? null));
       setAwayMessage(loadedAgent.away_message ?? '');
       // #40 install surface.
@@ -798,6 +827,36 @@ export default function AgentSettings() {
       setFixedFactsError(t('errors.saveFailed'));
     } finally {
       setFixedFactsSaving(false);
+    }
+  };
+
+  /**
+   * #73 prechat form + AI disclosure. Both are part of the agent payload
+   * (`AgentConfig.prechat_mode` / `.ai_disclosure`), so they ride the ordinary
+   * agent update — there is no dedicated sub-route for them, unlike fixed
+   * facts. The save is explicit so an untouched form never publishes a policy
+   * change by accident.
+   */
+  const handleSavePrechat = async () => {
+    if (!agent || prechatSaving) return;
+    setPrechatSaving(true);
+    setPrechatError(null);
+    try {
+      const updatedAgent = await api.updateAgent(agent.id, {
+        prechat_mode: prechatMode,
+        // An empty box clears the disclosure; the backend treats an empty
+        // string exactly like a null ("nothing rendered").
+        ai_disclosure: aiDisclosure.trim() ? aiDisclosure.trim() : null,
+      });
+      setAgent(updatedAgent);
+      setPrechatMode(normalizePrechatMode(updatedAgent.prechat_mode));
+      setAiDisclosure(updatedAgent.ai_disclosure ?? '');
+      setPrechatSaved(true);
+      setTimeout(() => setPrechatSaved(false), 2000);
+    } catch (err) {
+      setPrechatError(t('errors.saveFailed'));
+    } finally {
+      setPrechatSaving(false);
     }
   };
 
@@ -1281,6 +1340,91 @@ export default function AgentSettings() {
             <p className="field-hint" data-testid="away-message-when-hint">
               {t('businessHours.awayMessageWhenHint')}
             </p>
+          </div>
+        </section>
+
+        {/* #73: the prechat form and the AI disclosure. Both are widget-side
+            behaviour that changes what a visitor sees before the first send, so
+            they sit in the same "when a human takes over" group as the clock. */}
+        <section className="card" data-testid="agent-prechat-card">
+          <div className="card-header">
+            <h2 className="card-title">{t('prechat.title')}</h2>
+            <div className="page-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="prechat-save"
+                onClick={handleSavePrechat}
+                disabled={prechatSaving}
+                aria-busy={prechatSaving}
+              >
+                {prechatSaving ? (
+                  <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                ) : null}
+                {t('prechat.save')}
+              </button>
+            </div>
+          </div>
+
+          <p className="page-subtitle" style={{ marginTop: 0, marginBottom: 'var(--space-4)' }}>
+            {t('prechat.description')}
+          </p>
+
+          <div className="field">
+            <label className="field-label" htmlFor="prechat_mode">
+              {t('prechat.modeLabel')}
+            </label>
+            <select
+              id="prechat_mode"
+              className="input"
+              data-testid="prechat-mode"
+              value={prechatMode}
+              onChange={(e) => {
+                setPrechatMode(normalizePrechatMode(e.target.value));
+                setPrechatSaved(false);
+                setPrechatError(null);
+              }}
+            >
+              {PRECHAT_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {t(`prechat.modes.${mode}`)}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint" data-testid="prechat-mode-hint">
+              {t(`prechat.modeHints.${prechatMode}`)}
+            </p>
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" htmlFor="ai_disclosure">
+              {t('prechat.disclosureLabel')}
+            </label>
+            <textarea
+              id="ai_disclosure"
+              className="input textarea"
+              data-testid="agent-ai-disclosure"
+              value={aiDisclosure}
+              onChange={(e) => {
+                setAiDisclosure(e.target.value);
+                setPrechatSaved(false);
+                setPrechatError(null);
+              }}
+              rows={3}
+              maxLength={500}
+              placeholder={t('prechat.disclosurePlaceholder')}
+            />
+            <p className="field-hint">{t('prechat.disclosureHint')}</p>
+            {prechatError && (
+              <p role="alert" className="field-error">
+                {prechatError}
+              </p>
+            )}
+            {prechatSaved && (
+              <p role="status" aria-live="polite" className="field-hint">
+                {t('labels.settingsSaved')}
+              </p>
+            )}
           </div>
         </section>
 

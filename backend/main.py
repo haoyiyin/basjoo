@@ -10,9 +10,11 @@ from config import settings
 from database import init_db
 from api.endpoints import auth
 from api.v1 import analytics_endpoints as v1_analytics_endpoints
+from api.v1 import attachments_endpoints as v1_attachments_endpoints
 from api.v1 import endpoints as v1_endpoints
 from api.v1 import kb_endpoints as v1_kb_endpoints
 from api.v1 import leads_endpoints as v1_leads_endpoints
+from api.v1 import macros_endpoints as v1_macros_endpoints
 from api.v1 import qa_endpoints as v1_qa_endpoints
 from services.scheduler import (
     agent_purge_scheduler,
@@ -225,6 +227,10 @@ app.include_router(v1_kb_endpoints.router, tags=["knowledge-bases"])
 app.include_router(v1_qa_endpoints.router, tags=["qa"])
 app.include_router(v1_leads_endpoints.router, tags=["leads"])
 app.include_router(v1_analytics_endpoints.router, tags=["analytics"])
+# #71 / #74 — mounted in wave 1 so the prefixes are fixed; wave 2 fills the
+# attachment handlers and the macro CRUD into these two modules.
+app.include_router(v1_attachments_endpoints.router, tags=["attachments"])
+app.include_router(v1_macros_endpoints.router, tags=["macros"])
 
 
 # SDK.js 路由 - 用于嵌入 widget

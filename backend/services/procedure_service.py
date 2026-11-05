@@ -22,16 +22,22 @@ from models import Agent, ChatSession, Procedure
 logger = logging.getLogger(__name__)
 
 # Actions the chat channel can perform. `link` is always available; `form` only
-# when a lead/prechat form is configured on the agent (#41 owns that field, so
-# this is read attr-by-attr and degrades to "not configured").
+# when the agent has a visitor form switched on. `prechat_mode` is the field that
+# actually exists on the agent (`off` | `optional` | `required`), so `form` is
+# available whenever it is anything but `off`. Read attr-by-attr and degrade to
+# "not configured" when the column is missing, so an old row cannot crash chat.
 ALWAYS_AVAILABLE_ACTIONS = frozenset({"link"})
-FORM_CONFIG_ATTRS = ("prechat_form", "lead_capture_form", "lead_capture")
+FORM_CONFIG_ATTRS = ("prechat_mode",)
+FORM_OFF_VALUES = frozenset({"", "off"})
 
 def available_channel_actions(agent: Agent | None) -> set[str]:
     """Actions the visitor's channel can actually perform right now."""
     actions = set(ALWAYS_AVAILABLE_ACTIONS)
     for attr in FORM_CONFIG_ATTRS:
-        if getattr(agent, attr, None):
+        value = getattr(agent, attr, None)
+        if value is None:
+            continue
+        if str(value).strip().lower() not in FORM_OFF_VALUES:
             actions.add("form")
             break
     return actions

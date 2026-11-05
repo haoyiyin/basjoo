@@ -73,10 +73,18 @@ works before you own any API key. **No GPU is needed.**
   previous window and CSV export. Conversations are classified when they end (resolved, abandoned,
   escalated, could not answer), and the unanswered queue groups the same question so you can turn it into a
   Q&A pair.
-- **Lead capture.** `POST /api/v1/leads` is a public, origin-checked route that writes one lead per session
+- **Lead capture, with an inbox.** `POST /api/v1/leads` is a public, origin-checked route that writes one lead per session
   (idempotent, so a refresh edits instead of duplicating) with name, email, phone, message, page URL and a
-  `contacted` flag; a `prechat` block on a chat request lands the same way. Leads are counted on the
-  dashboard and listed through the admin API — there is no dedicated lead screen in the console yet.
+  `contacted` flag; a `prechat` block on a chat request lands the same way. The console's 留资线索 `/leads`
+  screen lists them with an uncontacted count, a source filter and a contacted toggle, and links back to the
+  originating session when there is one.
+- **Attachments, macros and a visitor-side close.** A visitor can attach a screenshot or a document (images,
+  `txt`/`md`/`html`/`pdf`/`docx`/`xlsx`, 5 files and 5 MB per file per conversation); the parsed text reaches the
+  prompt as untrusted material below the retrieved passages, never as instructions, and never enters the
+  knowledge base. Operators save reply macros per workspace and drop them into the composer at the caret, with
+  `{{visitor.name}}`-style variables substituted client-side. The widget can end its own chat, which the outcome
+  classifier reads as a resolved conversation, and 👍/👎 on any model answer is stored on the turn and rolled
+  up in analytics.
 - **Human takeover.** Operators watch live sessions in the console and jump in; the widget polls for the
   human reply and hands the conversation over. Reply without takeover, release back to the bot, resolve, or
   reopen a resolved session. Business hours decide when the bot is off duty, and the away message is shown
@@ -85,7 +93,9 @@ works before you own any API key. **No GPU is needed.**
   inline container, iframe), path exclusions, a traffic percentage that is decided once per visitor, entry
   cards and starters, `localStorage` visitor/session, locale-aware copy (English / Chinese), 90-second stream
   timeout with one retry, and a signed visitor identity (`window.Basjoo.identify()`) for hosts that know who
-  is logged in.
+  is logged in. Optional pre-chat form (name + e-mail, `off` / `optional` / `required`), an AI disclosure line
+  rendered before the first send, end-of-chat and new-chat actions in the header, and a visitor menu that stays
+  disabled until the conversation has really started.
 - **Outbound webhooks.** Seven events (`session.created`, `session.closed`, `message.created`,
   `message.unanswered`, `handoff.requested`, `lead.created`, `document.indexed`), queued in the same
   transaction as the change, signed with `X-Basjoo-Signature: sha256=<hmac>` over the exact bytes sent, and
@@ -117,8 +127,10 @@ the curated keyword path, so you can test it before configuring any provider key
 
 ### Session console
 
-Every visitor session with its transcript, and the actions a bot should not take alone: reply, takeover,
-release, resolve, reopen, email the transcript, delete the visitor's data.
+Every visitor session with its transcript, and the actions a bot should not take alone: reply (with saved
+macros inserted at the caret), takeover, release, resolve, reopen, email the transcript, delete the visitor's
+data. The header carries the pre-chat name and e-mail when the visitor supplied them, and every model answer
+has a thumbs control whose vote lands on the turn it answered.
 
 ![Sessions center](resource/screenshots/admin/en-US/sessions.png)
 
@@ -242,6 +254,18 @@ Every assistant turn carries a `confidence`: the best retrieval score the prompt
 when nothing was retrieved. An answer that matches no passage — or that equals a fallback sentence — is
 flagged `is_unanswered`, which is what the dashboard's triage queue and the "add to Q&A" button read.
 
+A visitor can attach files to a turn. `POST /api/v1/chat/attachments` stores the bytes on disk and the
+metadata in `chat_attachments` (5 files and 5 MB per file per conversation; images are stored only, documents
+are parsed to text), and the next turn names them in `attachment_ids`. The parsed text enters the prompt as a
+labelled **untrusted** block below the retrieved passages and above the visitor's own words, capped at 10000
+characters. An attachment is never a `KbDocument`, so it cannot end up in the knowledge base.
+
+Thumbs write to `chat_messages.rating` on the visitor turn an answer replied to, so a vote stays in the
+transcript's context and analytics counts answers rather than votes. A visitor ending the chat themselves
+(`POST /api/v1/chat/session:end`) sets `status="closed"` with `closed_by="visitor"`, which the outcome
+classifier reads as a resolved conversation — an idle close leaves `closed_by` NULL and keeps its own bucket,
+and the operator's `reopen` still works on either.
+
 ### Widget
 
 `widget/src/BasjooWidget.tsx` bootstraps from `<script src="…/sdk.js?agent_id=agt_…">` (it also accepts
@@ -256,9 +280,14 @@ messages.
 ```
 
 The console hands out `/api/v1/agents/{id}/embed.js` instead, which bakes one agent's install config
-(display mode, excluded paths, traffic percentage, cards, starters) into a per-agent loader. A host that
-already knows who is visiting can call `window.Basjoo.identify({ email, hash })` with the HMAC the server
-issued, and the widget uses that signed identity instead of a random one.
+(display mode, excluded paths, traffic percentage, cards, starters, `prechat_mode`, `ai_disclosure`) into a
+per-agent loader. A host that already knows who is visiting can call `window.Basjoo.identify({ email, hash })`
+with the HMAC the server issued, and the widget uses that signed identity instead of a random one.
+
+The same `config:public` payload decides the pre-chat form (`off` / `optional` / `required`) and the AI
+disclosure line, both inert when unset. A three-dots menu beside the human-handoff button offers New chat
+(clears the stored session, keeps the visitor) and End chat (calls `session:end`, then clears it), and both
+stay disabled until the conversation has at least one real turn.
 
 ## Configuration
 
@@ -341,7 +370,10 @@ most:
 - `GET|POST /api/v1/knowledge-bases/{kb_id}/qa-items`, `PUT|DELETE …/qa-items/{qa_id}`,
   `POST …/qa-items:match`, `POST …/qa-items:import`
 - `GET|POST|PUT|DELETE /api/v1/agents/{agent_id}/procedures`, `PUT /api/v1/agents/{agent_id}/fixed-facts`
-- `POST /api/v1/chat/stream`, `GET /api/v1/chat/messages`, `POST /api/v1/chat/escalate|release|feedback`
+- `POST /api/v1/chat/stream`, `GET /api/v1/chat/messages`, `POST /api/v1/chat/escalate|release|feedback`,
+  `POST /api/v1/chat/session:end`
+- `POST /api/v1/chat/attachments` (multipart, one file per request), `GET /api/v1/chat/attachments/{id}`
+- `GET|POST /api/v1/admin/macros`, `PATCH|DELETE /api/v1/admin/macros/{id}`
 - `POST /api/v1/leads`, `GET /api/v1/admin/leads`, `PATCH|GET /api/v1/admin/leads/{id}`
 - `GET /api/v1/admin/analytics`, `GET /api/v1/admin/stats/overview`, `GET /api/v1/admin/stats/export.csv`
 - `GET /api/v1/admin/sessions`, `POST /api/v1/admin/sessions/send`

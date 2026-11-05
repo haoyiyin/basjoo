@@ -84,7 +84,8 @@
     "agentSettings": "Agent Settings",
     "accountSettings": "Account Settings",
     "administrator": "Administrator",
-    "agents": "Agents"
+    "agents": "Agents",
+    "leads": "Leads"
   },
   "errors": {
     "required": "This field is required",
@@ -1196,5 +1197,89 @@
   },
   "sessions": {
     "loadMore": "Show more ({{shown}} of {{total}})"
+  },
+  "leads": {
+    "title": "Lead inbox",
+    "subtitle": "Everyone who left contact details, from a prechat form, an offline form or a trigger. Mark a row contacted once you have reached out — the count at the top is the queue that still needs a human.",
+    "uncontactedCount": "{{count}} not contacted yet",
+    "totalCount": "{{count}} in total",
+    "filterLabel": "Source",
+    "sources": {
+      "all": "All sources",
+      "offline-form": "Offline form",
+      "prechat": "Prechat form",
+      "trigger": "Trigger",
+      "manual": "Added manually"
+    },
+    "columns": {
+      "name": "Name",
+      "email": "E-mail",
+      "phone": "Phone",
+      "source": "Source",
+      "page": "Page",
+      "created": "Captured",
+      "contacted": "Contacted"
+    },
+    "unknownName": "Unnamed visitor",
+    "contacted": "Contacted",
+    "notContacted": "Not contacted",
+    "contactedToggle": "Mark {{name}} as contacted",
+    "message": "Message",
+    "openSession": "Open the conversation",
+    "closeDetail": "Close the lead details",
+    "reload": "Reload",
+    "emptyTitle": "No leads yet",
+    "emptyDescription": "Nothing has been captured for this filter. A lead appears as soon as a visitor submits a prechat or offline form.",
+    "errors": {
+      "loadFailed": "Could not load the lead inbox.",
+      "updateFailed": "Could not update this lead."
+    }
+  },
+  "prechat": {
+    "title": "Prechat form and AI disclosure",
+    "description": "What a visitor sees before the first message. Both settings live on the agent, so they apply to every install of this bot.",
+    "modeLabel": "Prechat form",
+    "modes": {
+      "off": "Off",
+      "optional": "Optional",
+      "required": "Required"
+    },
+    "modeHints": {
+      "off": "No form: the visitor starts typing straight away.",
+      "optional": "The form is offered first, but the visitor can skip it and start chatting.",
+      "required": "The composer stays hidden until the visitor leaves a name and an e-mail."
+    },
+    "disclosureLabel": "AI disclosure",
+    "disclosurePlaceholder": "For example: You are chatting with an AI assistant. A human can take over at any time.",
+    "disclosureHint": "Shown verbatim above the composer before the visitor sends anything. Leave it empty to show nothing.",
+    "save": "Save prechat settings"
+  },
+  "macros": {
+    "title": "Reply macros",
+    "description": "Saved replies an operator can insert into the reply composer of any session. A macro is plain text, filled in when it is inserted.",
+    "variablesHint": "Variables are filled in when the macro is inserted. The four the console knows are visitor.name, visitor.email, operator.name and session.id — each written in double curly braces. Add \"| fallback\" inside the braces to print a fallback when the value is empty; a variable the console cannot fill and that has no fallback is left exactly as written.",
+    "create": "New macro",
+    "save": "Save macro",
+    "reload": "Load macros",
+    "loadHintTitle": "The macro list has not been loaded yet",
+    "emptyTitle": "No macros yet",
+    "emptyDescription": "Write the replies you send again and again, then insert them from the session view in one click.",
+    "nameLabel": "Name",
+    "bodyLabel": "Body",
+    "nameCap": "{{count}} / {{max}} characters",
+    "bodyCap": "{{count}} / {{max}} characters",
+    "editLabel": "Edit macro {{name}}",
+    "deleteLabel": "Delete macro {{name}}",
+    "pickerToggle": "Insert a macro",
+    "searchPlaceholder": "Search macros",
+    "insertLabel": "Insert the macro {{name}}",
+    "emptyPicker": "No macro matches this search.",
+    "errors": {
+      "loadFailed": "Could not load the macros.",
+      "saveFailed": "Could not save this macro.",
+      "deleteFailed": "Could not delete this macro.",
+      "required": "A macro needs both a name and a body.",
+      "tooLong": "The name or the body is longer than the API allows."
+    }
   }
 }
