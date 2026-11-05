@@ -68,6 +68,10 @@ class SessionSnapshot:
     mode: str
     human_replied_at: Optional[datetime]
     message_count: int
+    #: ``visitor`` when the visitor pressed End chat (#75), NULL for an idle-sweep
+    #: or operator close. A visitor's own done-signal is the one close reason
+    #: that is evidence rather than a timeout.
+    closed_by: Optional[str] = None
     #: ``(role, content, is_unanswered, sender_type)`` in chronological order.
     messages: tuple[tuple[str, str, bool, Optional[str]], ...] = field(default=())
 
@@ -114,16 +118,23 @@ async def classify_snapshot(snapshot: SessionSnapshot) -> Optional[Classificatio
     Reading order, first match wins:
 
     1. ``escalated`` — a human was expected: they replied, or the session was
-       taken over (#43's own signal, not a guess).
-    2. ``no-answer`` — the visitor asked something real and the last answer the
+       taken over (#43's own signal, not a guess). This precedence is absolute:
+       a visitor who ended the chat *after* asking for a human still escalated.
+    2. ``resolved`` — the visitor ended the chat themselves (#75). Pressing End
+       chat is a real "we are done" signal, so it beats the idle-sweep default
+       rather than being classified as an abandonment.
+    3. ``no-answer`` — the visitor asked something real and the last answer the
        bot gave was flagged unanswered (#42's flag).
-    3. ``abandoned`` — the visitor never got a single answer, or never wrote
+    4. ``abandoned`` — the visitor never got a single answer, or never wrote
        anything at all.
-    4. ``resolved`` — the bot answered and nobody needed a human.
+    5. ``resolved`` — the bot answered and nobody needed a human.
     """
     if snapshot.human_replied_at is not None or snapshot.mode == "human" \
             or snapshot.status == "taken_over":
         return Classification(outcome="escalated", topic=derive_topic(snapshot))
+
+    if (snapshot.closed_by or "").strip().lower() == "visitor":
+        return Classification(outcome="resolved", topic=derive_topic(snapshot))
 
     assistants = snapshot.assistant_messages
     if assistants:
@@ -174,6 +185,7 @@ def snapshot_from_rows(
         mode=str(row.mode or "ai"),
         human_replied_at=row.human_replied_at,
         message_count=int(row.message_count or 0),
+        closed_by=getattr(row, "closed_by", None),
         messages=tuple(
             (
                 str(message.role),

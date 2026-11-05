@@ -483,3 +483,103 @@ async def test_a_keyless_install_skips_a_model_backed_classifier_and_logs_once(
     assert len(skip_lines) == 1, "the reason is logged once, not every tick"
     for record in caplog.records:
         assert record.levelno < logging.ERROR, "no traceback per tick"
+
+
+# ------------------------------------------------- #75: the visitor's own close
+
+@pytest.mark.asyncio
+async def test_a_visitor_close_is_resolved_and_an_idle_close_is_not():
+    """#75 — `closed_by='visitor'` is a real done-signal, not an abandonment.
+
+    The two snapshots differ in exactly one field, so the assertion cannot pass
+    for any other reason: an idle-swept session where the visitor asked and got
+    no answer is `abandoned`, and the same session closed by the visitor's own
+    End-chat button is `resolved`.
+    """
+    messages = (("user", "还在吗？", False, None),)
+
+    idle = SessionSnapshot(
+        session_db_id="sess_idle",
+        agent_id="agt_x",
+        status="closed",
+        mode="ai",
+        human_replied_at=None,
+        message_count=1,
+        closed_by=None,
+        messages=messages,
+    )
+    visitor_ended = SessionSnapshot(
+        session_db_id="sess_ended",
+        agent_id="agt_x",
+        status="closed",
+        mode="ai",
+        human_replied_at=None,
+        message_count=1,
+        closed_by="visitor",
+        messages=messages,
+    )
+
+    idle_verdict = await classify_snapshot(idle)
+    ended_verdict = await classify_snapshot(visitor_ended)
+
+    assert idle_verdict.outcome == "abandoned"
+    assert ended_verdict.outcome == "resolved"
+    assert idle_verdict.outcome != ended_verdict.outcome
+
+@pytest.mark.asyncio
+async def test_escalation_still_beats_a_visitor_close():
+    """Escalated precedence is absolute: ending the chat does not un-escalate it."""
+    snapshot = SessionSnapshot(
+        session_db_id="sess_esc",
+        agent_id="agt_x",
+        status="closed",
+        mode="human",
+        human_replied_at=datetime.now(timezone.utc),
+        message_count=2,
+        closed_by="visitor",
+        messages=(
+            ("user", "我要人工客服", False, None),
+            ("assistant", "我来帮您。", False, "human"),
+        ),
+    )
+    verdict = await classify_snapshot(snapshot)
+    assert verdict.outcome == "escalated"
+
+def test_snapshot_from_rows_plumbs_closed_by():
+    """The row's `closed_by` reaches the snapshot, so the classifier can see it."""
+    from services.outcome_classifier import snapshot_from_rows
+
+    row = ChatSession(
+        id="sess_db",
+        agent_id="agt_x",
+        session_id="sess_public",
+        status="closed",
+        mode="ai",
+        closed_by="visitor",
+    )
+    snapshot = snapshot_from_rows(row, [])
+    assert snapshot.closed_by == "visitor"
+
+    row.closed_by = None
+    assert snapshot_from_rows(row, []).closed_by is None
+
+@pytest.mark.asyncio
+async def test_a_tick_classifies_a_visitor_closed_session_as_resolved(default_agent_id):
+    """End to end: the scheduler writes `resolved` on a visitor-ended session."""
+    from services.outcome_classifier import snapshot_from_rows
+
+    session_db_id = await _insert_session(
+        default_agent_id, "sess_visitor_ended", status="closed", closed_by="visitor"
+    )
+    await _insert_message(session_db_id, "user", "谢谢，问题解决了。")
+
+    row = await _session_row(session_db_id)
+    async with database.AsyncSessionLocal() as session:
+        messages = (
+            await session.execute(
+                select(ChatMessage).where(ChatMessage.session_id == session_db_id)
+            )
+        ).scalars().all()
+
+    verdict = await classify_snapshot(snapshot_from_rows(row, messages))
+    assert verdict.outcome == "resolved"

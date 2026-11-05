@@ -49,9 +49,10 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 - **每个知识库一套定制问答索引。** 问答对单独向量化、在任何检索段落之前先匹配，所以改一条答案不需要重建索引。支持批量导入、带分数与命中关键词的「试一句话」测试框、单条命中次数，以及在任意机器人回答上点一下「修正答案」直接把新问答对写回绑定的知识库。
 - **可编辑的提示词分层。** 人设与模型在 AI 设置面板里，`fixed_facts` 存机器人绝不能违背的事实，流程按顺序编排多步指引——各自进入提示词的不同位置，不是重新训练模型。
 - **能指出该补什么的看板。** 会话、消息、访客、留资、转人工、未答问题、点踩、好评率，覆盖 24 小时 / 7 天 / 30 天 / 90 天，每项都带与上一周期的对比和 CSV 导出。会话结束时自动归类（已解决、未回复即离开、已转人工、没能回答），未答队列按同一问题聚合，一键就能变成问答对。
-- **留资。** `POST /api/v1/leads` 是公开路由（同样校验来源白名单），按会话写一条线索（幂等，刷新只是编辑同一条），带姓名、邮箱、电话、留言、页面地址和「已联系」标记；聊天请求里带 `prechat` 块也走同一套落库。线索在看板上计数，通过管理 API 列出——后台目前没有单独的线索页。
+- **留资，并且有收件箱。** `POST /api/v1/leads` 是公开路由（同样校验来源白名单），按会话写一条线索（幂等，刷新只是编辑同一条），带姓名、邮箱、电话、留言、页面地址和「已联系」标记；聊天请求里带 `prechat` 块也走同一套落库。后台的「留资线索」页（`/leads`）把它们列出来，带未联系计数、来源筛选和「已联系」开关，并在有会话时跳回那条会话。
+- **附件、宏回复与访客侧结束聊天。** 访客可以上传截图或文档（图片、`txt`/`md`/`html`/`pdf`/`docx`/`xlsx`，每个会话最多 5 个文件、单文件 5 MB）；解析出的文本以**不可信材料**的形式放在检索结果之下进入提示词，绝不会当成指令，也永远不会进入知识库。运营可为工作空间保存宏回复，在输入框光标处插入，`{{visitor.name}}` 这类变量在浏览器端替换。组件侧可以自己结束会话，归类器会把它读作「已解决」；对任意模型回答的 👍/👎 都会记在那一轮上，并进入看板统计。
 - **人工接管。** 运营在后台实时查看会话并接过去；组件侧轮询人工回复并完成交接。可以不接管直接回复、交还机器人、标记已解决，或重新打开已解决的会话。营业时间之外由机器人下班，离线文案会显示但**不会**写进会话记录。
-- **不越界的组件。** 按智能体配置来源白名单，三种展示形态（悬浮气泡、内联容器、iframe），可排除路径，可设流量百分比（按访客决定一次，不会来回闪），入口卡片与开场提示，访客与会话存在 `localStorage`，文案随访客语言切换（中文 / 英文），90 秒流式超时并自动重试一次，还支持签名访客身份（`window.Basjoo.identify()`），给知道当前登录用户是谁的宿主站用。
+- **不越界的组件。** 按智能体配置来源白名单，三种展示形态（悬浮气泡、内联容器、iframe），可排除路径，可设流量百分比（按访客决定一次，不会来回闪），入口卡片与开场提示，访客与会话存在 `localStorage`，文案随访客语言切换（中文 / 英文），90 秒流式超时并自动重试一次，还支持签名访客身份（`window.Basjoo.identify()`），给知道当前登录用户是谁的宿主站用。可选的开场表单（姓名 + 邮箱，`off` / `optional` / `required`）、首次发送前展示的 AI 声明行、头部的重新开始与结束聊天入口，以及一个在会话真正开始前保持禁用的访客菜单。
 - **对外 Webhook。** 七个事件（`session.created`、`session.closed`、`message.created`、`message.unanswered`、`handoff.requested`、`lead.created`、`document.indexed`），与业务变更写在同一事务里入队，用 `X-Basjoo-Signature: sha256=<hmac>` 对实际发送的字节签名，失败退避重试——接收方再慢也不会卡住一次回答。
 - **中英双语后台**，暖色单强调色设计系统，375 px 宽度下布局不破。
 
@@ -77,7 +78,7 @@ embedding 容器**，所以在没有任何 API 密钥之前知识库就能用。
 
 ### 会话中心
 
-每个访客会话及完整对话记录，以及不该由机器人单独完成的动作：回复、接管、交还、标记已解决、重新打开、发送邮件记录、删除该访客的数据。
+每个访客会话及完整对话记录，以及不该由机器人单独完成的动作：回复（可在光标处插入已存的宏回复）、接管、交还、标记已解决、重新打开、发送邮件记录、删除该访客的数据。访客填过开场表单时，头部会带姓名与邮箱；每条模型回答都有点赞/点踩。
 
 ![会话中心](resource/screenshots/admin/zh-CN/sessions.png)
 
@@ -188,6 +189,16 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 每条机器人回复都带一个 `confidence`：构造提示词时用到的最佳检索分数，什么都没检索到时为 `null`。没有命中任何
 段落、或内容等于兜底话术的回答会被标记 `is_unanswered`——看板的未答队列和「加入问答」按钮读的就是这个标记。
 
+访客可以给某一轮挂上文件。`POST /api/v1/chat/attachments` 把字节存到磁盘、元数据写进 `chat_attachments`
+（每个会话最多 5 个文件、单文件 5 MB；图片只存不解析，文档会解析成文本），下一轮用 `attachment_ids`
+把它们带上。解析出的文本作为带标签的**不可信**块进入提示词，位置在检索结果之下、访客原话之上，总字符数上限
+10000。附件永远不是 `KbDocument`，因此不可能落入知识库。
+
+点赞/点踩写在机器人回答所回应的那条访客消息的 `chat_messages.rating` 上，所以票数留在会话上下文中，看板统计的是
+回答而不是投票。访客自己结束聊天（`POST /api/v1/chat/session:end`）会把会话置为 `status="closed"` 且
+`closed_by="visitor"`，归类器把它读作「已解决」——空闲自动关闭会留 `closed_by` 为 NULL 并保留自己的归类，
+两种情况下运营的 `reopen` 都照旧可用。
+
 ### 组件
 
 `widget/src/BasjooWidget.tsx` 从 `<script src="…/sdk.js?agent_id=agt_…">` 自举（也接受 `agentId` 和
@@ -200,8 +211,12 @@ Debian 系，compose 也没给任何服务设内存上限。内存下限已包�
 ```
 
 后台下发的其实是 `/api/v1/agents/{id}/embed.js`，它把单个智能体的安装配置（展示形态、排除路径、流量百分比、
-入口卡片、开场提示）烤进一个专属 loader。已经知道当前访客是谁的宿主站，可以带着服务端签发的 HMAC 调用
-`window.Basjoo.identify({ email, hash })`，组件就会用这个签名身份代替随机身份。
+入口卡片、开场提示、`prechat_mode`、`ai_disclosure`）烤进一个专属 loader。已经知道当前访客是谁的宿主站，可以
+带着服务端签发的 HMAC 调用 `window.Basjoo.identify({ email, hash })`，组件就会用这个签名身份代替随机身份。
+
+同一份 `config:public` 决定开场表单（`off` / `optional` / `required`）与 AI 声明行，未配置时两者都不渲染。
+人工按钮旁的三点菜单提供「重新开始」（只清本地会话，保留访客 id）与「结束聊天」（先调 `session:end`，再清本地会话），
+会话真正开始前两项都处于禁用状态。
 
 ## 配置
 
@@ -283,7 +298,10 @@ npm run test:e2e           # 针对 dev profile 的 Playwright smoke
 - `GET|POST /api/v1/knowledge-bases/{kb_id}/qa-items`、`PUT|DELETE …/qa-items/{qa_id}`、
   `POST …/qa-items:match`、`POST …/qa-items:import`
 - `GET|POST|PUT|DELETE /api/v1/agents/{agent_id}/procedures`、`PUT /api/v1/agents/{agent_id}/fixed-facts`
-- `POST /api/v1/chat/stream`、`GET /api/v1/chat/messages`、`POST /api/v1/chat/escalate|release|feedback`
+- `POST /api/v1/chat/stream`、`GET /api/v1/chat/messages`、`POST /api/v1/chat/escalate|release|feedback`、
+  `POST /api/v1/chat/session:end`
+- `POST /api/v1/chat/attachments`（multipart，一次一个文件）、`GET /api/v1/chat/attachments/{id}`
+- `GET|POST /api/v1/admin/macros`、`PATCH|DELETE /api/v1/admin/macros/{id}`
 - `POST /api/v1/leads`、`GET /api/v1/admin/leads`、`PATCH|GET /api/v1/admin/leads/{id}`
 - `GET /api/v1/admin/analytics`、`GET /api/v1/admin/stats/overview`、`GET /api/v1/admin/stats/export.csv`
 - `GET /api/v1/admin/sessions`、`POST /api/v1/admin/sessions/send`

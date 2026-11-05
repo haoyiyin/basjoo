@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional, Sequence
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import ChatMessage, ChatSession, Lead
+from models import ChatAttachment, ChatMessage, ChatSession, Lead
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,23 @@ async def delete_visitor_data(
         )
     leads = (await db.execute(delete(Lead).where(lead_filter))).rowcount or 0
 
+    # #71: the visitor's attachments are rows AND files on disk. The rows are
+    # counted from the delete itself; the session ids are collected first because
+    # the delete below removes the rows that point at the directories. Files are
+    # swept after the commit (the caller owns the transaction), so a rolled-back
+    # deletion never leaves a row whose bytes are already gone.
+    attachment_session_ids = [
+        str(row[0])
+        for row in (
+            await db.execute(select(ChatSession.id).where(ChatSession.id.in_(session_ids)))
+        ).all()
+    ]
+    attachments = (
+        await db.execute(
+            delete(ChatAttachment).where(ChatAttachment.session_id.in_(session_ids))
+        )
+    ).rowcount or 0
+
     messages = (
         await db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(session_ids)))
     ).rowcount or 0
@@ -99,11 +116,12 @@ async def delete_visitor_data(
 
     logger.warning(
         "Visitor data deleted: sessions=%s messages=%s leads=%s feedback=%s "
-        "agents=%s (requested by an admin)",
+        "attachments=%s agents=%s (requested by an admin)",
         sessions,
         messages,
         leads,
         feedback,
+        attachments,
         len(agent_ids),
     )
 
@@ -112,4 +130,8 @@ async def delete_visitor_data(
         "messages": int(messages),
         "leads": int(leads),
         "feedback": feedback,
+        "attachments": int(attachments),
+        # Not a count: the caller sweeps these directories once it commits, so a
+        # failure before the commit cannot delete bytes for rows that survive.
+        "attachment_session_ids": attachment_session_ids,
     }

@@ -125,6 +125,8 @@ async def test_delete_visitor_removes_exactly_the_visitors_rows(client, default_
         "messages": 6,
         "leads": 1,
         "feedback": 1,
+        # #71: the visitor had no attachments in this fixture.
+        "attachments": 0,
     }, body
     assert body["total"] == 10
     assert body["visitor_id"] == VISITOR
@@ -382,3 +384,112 @@ async def test_unsigned_visitor_does_not_sweep_leads_by_string_match(
             )
             == 1
         )
+
+# ------------------------------------------- #71: attachments go with the visitor
+
+@pytest.mark.asyncio
+async def test_deletion_sweeps_attachment_rows_and_their_files(
+    client, default_agent_id, tmp_path, monkeypatch
+):
+    """A visitor's uploaded files are rows AND bytes; both must go.
+
+    Nothing else may be swept: the control visitor's attachment survives, in the
+    database and on disk, which is what stops this test passing for the wrong
+    reason (e.g. if the sweep deleted every directory under the root).
+    """
+    from models import ChatAttachment
+    from services import attachment_service
+
+    root = tmp_path / "chat_attachments"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(attachment_service, "ATTACHMENTS_ROOT", root)
+
+    async with database.AsyncSessionLocal() as db:
+        doomed_session = ChatSession(
+            agent_id=default_agent_id,
+            session_id="sess_att_doomed",
+            visitor_id=VISITOR,
+            status="closed",
+        )
+        kept_session = ChatSession(
+            agent_id=default_agent_id,
+            session_id="sess_att_kept",
+            visitor_id=OTHER_VISITOR,
+            status="closed",
+        )
+        db.add_all([doomed_session, kept_session])
+        await db.flush()
+
+        doomed_attachment = ChatAttachment(
+            session_id=doomed_session.id,
+            kind="document",
+            filename="invoice.txt",
+            mime="text/plain",
+            size_bytes=12,
+            status="parsed",
+            text_content="hello there",
+        )
+        kept_attachment = ChatAttachment(
+            session_id=kept_session.id,
+            kind="document",
+            filename="keep.txt",
+            mime="text/plain",
+            size_bytes=4,
+            status="parsed",
+            text_content="keep",
+        )
+        db.add_all([doomed_attachment, kept_attachment])
+        await db.flush()
+
+        doomed_path = attachment_service.storage_path_for(
+            doomed_session.id, str(doomed_attachment.id), "invoice.txt"
+        )
+        kept_path = attachment_service.storage_path_for(
+            kept_session.id, str(kept_attachment.id), "keep.txt"
+        )
+        doomed_path.parent.mkdir(parents=True, exist_ok=True)
+        kept_path.parent.mkdir(parents=True, exist_ok=True)
+        doomed_path.write_bytes(b"hello there")
+        kept_path.write_bytes(b"keep")
+        doomed_attachment_id = str(doomed_attachment.id)
+        await db.commit()
+
+    assert doomed_path.exists()
+
+    response = await client.delete(f"/api/v1/admin/visitors/{VISITOR}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["deleted"]["attachments"] == 1, body
+    assert body["attachment_files"] == 1, body
+
+    async with database.AsyncSessionLocal() as db:
+        assert await db.get(ChatAttachment, doomed_attachment_id) is None
+        assert (
+            await db.scalar(
+                select(func.count(ChatAttachment.id)).join(
+                    ChatSession, ChatSession.id == ChatAttachment.session_id
+                ).where(ChatSession.visitor_id == OTHER_VISITOR)
+            )
+            == 1
+        ), "the control visitor's attachment must survive"
+
+    assert not doomed_path.exists(), "the bytes must be gone too"
+    assert kept_path.exists(), "only the deleted visitor's files are swept"
+
+@pytest.mark.asyncio
+async def test_deletion_without_attachments_reports_zero(client, default_agent_id):
+    """The count is honest when there was nothing to sweep."""
+    async with database.AsyncSessionLocal() as db:
+        session = ChatSession(
+            agent_id=default_agent_id,
+            session_id="sess_att_none",
+            visitor_id=VISITOR,
+            status="closed",
+        )
+        db.add(session)
+        await db.commit()
+
+    response = await client.delete(f"/api/v1/admin/visitors/{VISITOR}")
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted"]["attachments"] == 0
+    assert response.json()["attachment_files"] == 0

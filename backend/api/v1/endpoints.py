@@ -79,6 +79,7 @@ from api.v1.schemas import (
     ModelsListRequest,
     QuotaInfo,
     SourcesSummaryResponse,
+    SessionEndResponse,
     SessionListItem,
     SessionListResponse,
     normalize_widget_origin,
@@ -138,6 +139,11 @@ from services.visitor_identity import (
     verify_visitor_identity,
 )
 from services.visitor_deletion import delete_visitor_data
+from services.attachment_service import (
+    build_attachment_block,
+    load_turn_attachments,
+    remove_attachment_files,
+)
 from middleware import get_request_client_ip
 from api.v1.sse_utils import sse_event
 from config import settings
@@ -1488,6 +1494,14 @@ async def prepare_chat_request(
     qa_block = build_qa_prompt_block(qa_hits)
     facts_block = build_fixed_facts_block(fixed_facts_text)
     procedure_block = await resolve_active_procedure(db, session, agent)
+    # #71: the files the visitor attached to THIS turn. Loaded here, scoped to
+    # the owning session, and rendered below the retrieved chunks — the text is
+    # data the visitor supplied, never instructions (see
+    # `services.attachment_service.build_attachment_block`).
+    turn_attachments = await load_turn_attachments(
+        db, session.id, getattr(request, "attachment_ids", None) or []
+    )
+    attachment_block = build_attachment_block(turn_attachments)
     # #40: the two host-page slots. `before` sits ahead of the instruction
     # block, `after` right behind the retrieval results.
     context_before_block = build_page_context_block(
@@ -1520,6 +1534,11 @@ async def prepare_chat_request(
                 "\n\n[No relevant information found in the knowledge base. "
                 "Please use a fallback response according to your role constraints.]"
             )
+        # #71: the visitor's attachments sit BELOW the retrieved chunks and
+        # ABOVE the raw user message (which is its own array entry below), so a
+        # document is never mistaken for the knowledge base or for the question.
+        if attachment_block:
+            content += f"\n\n{attachment_block}"
         # #40: and the second slot lands AFTER the retrieval results.
         if context_after_block:
             content += f"\n\n{context_after_block}"
@@ -2606,6 +2625,76 @@ async def release_chat_to_ai(
     }
 
 
+@router.post("/chat/session:end", response_model=SessionEndResponse)
+async def end_chat_session(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Visitor-side "End chat" (#75).
+
+    The public counterpart of the operator's `/admin/sessions/{id}/resolve`: it
+    closes the row with `closed_by='visitor'`, which is the one signal the
+    outcome classifier treats as "the visitor said we are done" (an idle-sweep
+    close leaves `closed_by` NULL).
+
+    Ownership is enforced exactly like `/chat/release`: the agent must be live,
+    the signed identity must verify (#46), and the session must belong to this
+    agent and this visitor — anything else answers the same 404, so a session id
+    is never confirmed. Closing twice is a no-op that returns the same receipt.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    agent_id = str(body.get("agent_id") or "").strip()
+    session_public_id = str(body.get("session_id") or "").strip()
+    visitor_id = str(body.get("visitor_id") or "").strip()
+
+    if not agent_id or not session_public_id or not visitor_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing agent_id, session_id or visitor_id",
+        )
+
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id))
+    ).scalar_one_or_none()
+    if not agent or getattr(agent, "deleted_at", None) or not agent.is_active:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    enforce_signed_visitor_identity(agent, visitor_id)
+
+    session = await resolve_public_chat_session(db, session_public_id)
+    if (
+        not session
+        or session.agent_id != agent.id
+        or not session.visitor_id
+        or session.visitor_id != visitor_id
+    ):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    enforce_widget_origin_whitelist(agent, request)
+
+    session.status = "closed"
+    session.closed_by = "visitor"
+    session.updated_at = func.now()
+    await db.commit()
+    await db.refresh(session)
+
+    logger.info(
+        "Visitor ended session %s (agent %s)", session.session_id, agent.id
+    )
+
+    return SessionEndResponse(
+        success=True,
+        session_id=session.session_id,
+        status=session.status,
+        closed_by=session.closed_by,
+    )
+
 @router.post("/chat/feedback")
 async def submit_message_feedback(
     payload: MessageFeedbackRequest,
@@ -2803,6 +2892,10 @@ async def get_chat_messages(
             "sources": msg.sources or [],
             # #41: persisted thumbs, so a reload shows the vote the visitor cast.
             "rating": msg.rating if msg.rating is not None else 0,
+            # #70/#60: the answer source travels with a reloaded transcript too,
+            # so the widget can hide the thumbs on a `scripted` turn. NULL on an
+            # ordinary turn reads as `ai`.
+            "mode": msg.mode or "ai",
             "sender_type": msg.sender_type,
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
         }
@@ -3888,6 +3981,10 @@ async def list_sessions(
                 visitor_city=session.visitor_city,
                 status=session.status,
                 mode=session_mode(session),
+                # #41/#72: the prechat identity rides along so the console's
+                # transcript header can name the visitor without a second call.
+                contact_name=session.contact_name,
+                contact_email=session.contact_email,
                 human_replied_at=session.human_replied_at,
                 message_count=session.message_count,
                 created_at=session.created_at,
@@ -4023,7 +4120,18 @@ async def delete_visitor(
         await db.rollback()
         raise HTTPException(status_code=404, detail="Visitor not found")
 
+    # #71: the attachment directories are swept only once the row delete is
+    # committed, so a rolled-back request never deletes bytes for rows that
+    # survive. Blocking IO, off the event loop.
+    attachment_session_ids = counts.pop("attachment_session_ids", [])
+    attachment_files = 0
+
     await db.commit()
+
+    if attachment_session_ids:
+        attachment_files = await asyncio.to_thread(
+            remove_attachment_files, attachment_session_ids
+        )
 
     logger.warning(
         "Admin %s deleted visitor %r: %s", current_user.id, visitor_key[:80], counts
@@ -4033,6 +4141,7 @@ async def delete_visitor(
         "success": True,
         "visitor_id": visitor_key,
         "deleted": counts,
+        "attachment_files": attachment_files,
         # The console says "已删除 2 个会话、6 条消息" from these numbers;
         # `total` is what it shows when a single count is asked for.
         "total": sum(counts.values()),

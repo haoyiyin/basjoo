@@ -84,7 +84,8 @@
     "agentSettings": "智能体设置",
     "accountSettings": "账号设置",
     "administrator": "管理员",
-    "agents": "智能体"
+    "agents": "智能体",
+    "leads": "留资线索"
   },
   "errors": {
     "required": "此字段为必填项",
@@ -1196,5 +1197,89 @@
   },
   "sessions": {
     "loadMore": "显示更多（{{shown}} / {{total}}）"
+  },
+  "leads": {
+    "title": "留资线索",
+    "subtitle": "所有留下联系方式的访客：预聊天表单、离线表单或触发式线索。联系过之后勾选“已联系”，顶部数字是还需要人跟进的队列。",
+    "uncontactedCount": "{{count}} 条待联系",
+    "totalCount": "共 {{count}} 条",
+    "filterLabel": "来源",
+    "sources": {
+      "all": "全部来源",
+      "offline-form": "离线表单",
+      "prechat": "预聊天表单",
+      "trigger": "触发式",
+      "manual": "手动添加"
+    },
+    "columns": {
+      "name": "姓名",
+      "email": "邮箱",
+      "phone": "电话",
+      "source": "来源",
+      "page": "页面",
+      "created": "留资时间",
+      "contacted": "已联系"
+    },
+    "unknownName": "未留姓名",
+    "contacted": "已联系",
+    "notContacted": "未联系",
+    "contactedToggle": "把 {{name}} 标记为已联系",
+    "message": "留言",
+    "openSession": "打开对应会话",
+    "closeDetail": "关闭线索详情",
+    "reload": "刷新",
+    "emptyTitle": "还没有线索",
+    "emptyDescription": "当前筛选下没有线索。访客提交预聊天或离线表单后，这里会立刻出现一行。",
+    "errors": {
+      "loadFailed": "线索列表加载失败。",
+      "updateFailed": "这条线索更新失败。"
+    }
+  },
+  "prechat": {
+    "title": "预聊天表单与 AI 声明",
+    "description": "访客在发出第一条消息之前会看到什么。两项设置都属于智能体本身，因此对该机器人的所有安装位置生效。",
+    "modeLabel": "预聊天表单",
+    "modes": {
+      "off": "关闭",
+      "optional": "可选",
+      "required": "必填"
+    },
+    "modeHints": {
+      "off": "不显示表单：访客可以直接开始输入。",
+      "optional": "先展示表单，但访客可以跳过并直接开始对话。",
+      "required": "访客留下姓名和邮箱之前，输入框保持隐藏。"
+    },
+    "disclosureLabel": "AI 声明",
+    "disclosurePlaceholder": "例如：你正在与 AI 助手对话，随时可以转接人工客服。",
+    "disclosureHint": "在访客发送任何内容之前，原文显示在输入框上方。留空则不显示。",
+    "save": "保存预聊天设置"
+  },
+  "macros": {
+    "title": "回复宏",
+    "description": "可一键插入到任意会话回复框的预设回复。宏是纯文本，插入时才填充变量。",
+    "variablesHint": "变量在插入时填充。控制台认识四个：visitor.name、visitor.email、operator.name、session.id，写的时候各自套一对双花括号。在花括号里加“| 兜底文字”，值取不到时会输出兜底文字；取不到又没有兜底的变量会原样保留。",
+    "create": "新建宏",
+    "save": "保存宏",
+    "reload": "加载回复宏",
+    "loadHintTitle": "回复宏列表还没有加载",
+    "emptyTitle": "还没有回复宏",
+    "emptyDescription": "把反复要发的回复写下来，之后在会话页一键插入。",
+    "nameLabel": "名称",
+    "bodyLabel": "内容",
+    "nameCap": "{{count}} / {{max}} 个字符",
+    "bodyCap": "{{count}} / {{max}} 个字符",
+    "editLabel": "编辑宏 {{name}}",
+    "deleteLabel": "删除宏 {{name}}",
+    "pickerToggle": "插入回复宏",
+    "searchPlaceholder": "搜索回复宏",
+    "insertLabel": "插入宏 {{name}}",
+    "emptyPicker": "没有匹配的回复宏。",
+    "errors": {
+      "loadFailed": "回复宏加载失败。",
+      "saveFailed": "这条回复宏保存失败。",
+      "deleteFailed": "这条回复宏删除失败。",
+      "required": "回复宏需要同时填写名称和内容。",
+      "tooLong": "名称或内容超过了接口允许的长度。"
+    }
   }
 }

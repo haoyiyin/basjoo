@@ -409,6 +409,10 @@ class ChatSession(Base):
 
     # 会话状态: active-活跃, taken_over-已接管, resolved-已解决, closed-已关闭, paused-已暂停(垃圾消息)
     status = Column(String(20), nullable=False, default="active", index=True)
+    # #75 — who closed the session: `visitor` when the widget's End-chat action
+    # did it, NULL for an idle-sweep / operator close. Informational only: the
+    # operator's reopen route keeps working on every closed row.
+    closed_by = Column(String(20), nullable=True)
     # Who is expected to answer: "ai" or "human". A single operator reply sets
     # mode="human" without touching `status`, so "human answered, bot still
     # available" is representable (#43).
@@ -446,6 +450,9 @@ class ChatSession(Base):
     agent = relationship("Agent", back_populates="chat_sessions")
     messages = relationship(
         "ChatMessage", back_populates="session", cascade="all, delete-orphan"
+    )
+    attachments = relationship(
+        "ChatAttachment", back_populates="session", cascade="all, delete-orphan"
     )
 
     # 索引
@@ -519,6 +526,38 @@ class ChatMessage(Base):
         Index("ix_chat_messages_session_created", "session_id", "created_at"),
     )
 
+
+class ChatAttachment(Base):
+    """One file a visitor attached to a chat turn (#71).
+
+    The file itself lives on disk (``<CHAT_ATTACHMENTS_ROOT>/<session_id>/
+    <id>_<safe filename>``); this row is the metadata and the parse result.
+    ``text_content`` holds the extracted plain text for a document — it is
+    prompt material, never rendered to a client. Images are stored only (no OCR
+    this batch), so their ``text_content`` stays NULL.
+    """
+
+    __tablename__ = "chat_attachments"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(
+        String(50), ForeignKey("chat_sessions.id"), nullable=False, index=True
+    )
+    # No FK on purpose, same reason as ``QaItem.source_message_id``: an upload
+    # is stored before its turn exists and must survive the message row being
+    # pruned by history cleanup. NULL = not sent with a turn yet.
+    message_id = Column(Integer, nullable=True)
+    # image | document
+    kind = Column(String(20), nullable=False, default="document")
+    filename = Column(String(500), nullable=False)
+    mime = Column(String(255), nullable=True)
+    size_bytes = Column(Integer, nullable=False, default=0)
+    # uploaded | parsed | failed
+    status = Column(String(20), nullable=False, default="uploaded")
+    text_content = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    session = relationship("ChatSession", back_populates="attachments")
 
 class WorkspaceQuota(Base):
     """工作空间配额模型"""
@@ -858,6 +897,29 @@ class Lead(Base):
     updated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
+class ReplyMacro(Base):
+    """A saved reply an operator can drop into the composer (#74).
+
+    Workspace-scoped, not agent-scoped: the same house-keeping answers serve
+    every agent an operator runs. The 200/2500 character caps live in
+    ``api.v1.schemas`` (the API contract) — ``body`` is ``Text`` so the row is
+    never rejected by a database that counts bytes instead of characters.
+    """
+
+    __tablename__ = "reply_macros"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id = Column(
+        Integer, ForeignKey("workspaces.id"), nullable=False, index=True
+    )
+    name = Column(String(200), nullable=False)
+    body = Column(Text, nullable=False)
+    # NULL for a macro whose author has since been deleted; the macro is still
+    # the workspace's, so the row must not disappear with the account.
+    created_by = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 class Webhook(Base):
     """A best-effort outbound webhook. One attempt, 5s timeout, logged only."""

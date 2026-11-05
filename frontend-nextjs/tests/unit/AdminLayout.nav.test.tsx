@@ -6,10 +6,10 @@
  * every label assertion therefore pins the i18n key, never prose.
  *
  * Covered:
- *   1. workspace (super_admin, root) nav = 首页 / 智能体 / 知识库 / 设置, in order,
- *      and no 会话 / 用户 entry (both routes were deleted from App.tsx);
- *   2. agent scope has exactly four entries (仪表盘 / 调试区 / 会话中心 / 智能体设置,
- *      asserted by href) — round 6 removed the 知识库 sidebar door;
+ *   1. workspace (super_admin, root) nav = 首页 / 智能体 / 留资线索 / 知识库 / 设置,
+ *      in order, and no 会话 / 用户 entry (both routes were deleted from App.tsx);
+ *   2. agent scope has exactly five entries (仪表盘 / 调试区 / 会话中心 / 留资线索 /
+ *      智能体设置, asserted by href) — round 6 removed the 知识库 sidebar door;
  *   3. `support` in agent scope still sees only that agent's sessions entry;
  *   4. `KnowledgeBaseSetup`: the `/agents/:id/knowledge` deep link still resolves
  *      (unbound = inline bind PROMPT, not a redirect), `/urls` + `/files` keep the
@@ -166,13 +166,16 @@ function renderKnowledgeSetup(path: string) {
 /* ------------------------------------------------------- workspace (root) */
 
 describe("§13 workspace nav (super_admin)", () => {
-	it("shows exactly the four entries, in order: 首页, 智能体, 知识库, 设置", () => {
+	it("shows exactly the five entries, in order: 首页, 智能体, 留资线索, 知识库, 设置", () => {
 		setRole("super_admin");
 		renderShell("/");
 
+		// #72 added the fifth entry, `/leads`: the lead inbox is a workspace
+		// surface (it spans every agent), so it sits with the other root doors.
 		expect(navHrefs()).toEqual([
 			"/",
 			"/agents",
+			"/leads",
 			"/knowledge-bases",
 			"/settings/account",
 		]);
@@ -182,6 +185,7 @@ describe("§13 workspace nav (super_admin)", () => {
 		expect(navLabels()).toEqual([
 			"navigation.home",
 			"navigation.agents",
+			"navigation.leads",
 			"navigation.knowledgeBases",
 			"navigation.accountSettings",
 		]);
@@ -217,23 +221,26 @@ describe("§13 workspace nav (super_admin)", () => {
 /* ------------------------------------------------------------ agent scope */
 
 describe("§13 agent-scoped nav", () => {
-	it("a super_admin in an agent workspace sees exactly four entries, and no 知识库 door", () => {
+	it("a super_admin in an agent workspace sees exactly five entries, and no 知识库 door", () => {
 		setRole("super_admin");
 		renderShell("/agents/agt_1/dashboard");
 
 		// Round 6: the 知识库 sidebar entry is gone. The KB is reached from the
 		// dashboard's knowledge row, and `/agents/:id/knowledge` stays as a deep
 		// link (covered by the KnowledgeBaseSetup block below).
+		// The fifth entry is 留资线索: the agent's own slice of the lead inbox.
 		expect(navHrefs()).toEqual([
 			"/agents/agt_1/dashboard",
 			"/agents/agt_1/playground",
 			"/agents/agt_1/sessions",
+			"/agents/agt_1/leads",
 			"/agents/agt_1/settings/agent",
 		]);
 		expect(navLabels()).toEqual([
 			"navigation.dashboard",
 			"navigation.playground",
 			"navigation.sessions",
+			"navigation.leads",
 			"navigation.agentSettings",
 		]);
 		// The item is gone by href, not merely relabelled.

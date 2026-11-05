@@ -6,9 +6,9 @@ must exist and be live (a paused or soft-deleted agent answers exactly like an
 unknown one), and the widget origin whitelist applies. Nothing here reads an
 admin token.
 
-The read/write-admin routes (`/admin/leads*`) are workspace-scoped like every
-other admin surface: a lead from another workspace answers the same 404 as a
-missing one.
+The read/write-admin routes (`/admin/leads*`) are agent-scoped for members and
+workspace-scoped for a super_admin: a lead on an agent the caller does not work
+answers the same 404 as a missing one.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from api.endpoints.auth import get_current_admin, require_chat_operator
 from api.v1.endpoints import (
     AGENT_PAUSED_DETAIL,
     enforce_widget_origin_whitelist,
+    require_agent_for_admin,
 )
 from api.v1.schemas import (
     LEAD_MESSAGE_MAX_LENGTH,
@@ -34,7 +35,7 @@ from api.v1.schemas import (
     LeadSubmitRequest,
 )
 from database import get_db
-from models import AdminUser, Agent, ChatSession, Lead
+from models import AdminUser, Agent, AgentMember, ChatSession, Lead
 from services.lead_service import SOURCE_OFFLINE_FORM, set_contacted, upsert_lead
 logger = logging.getLogger(__name__)
 
@@ -149,11 +150,29 @@ async def list_leads(
     current_user: AdminUser = Depends(require_chat_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    """The operator's lead list, newest first."""
-    workspace_id = _require_workspace(current_user)
-    conditions = [Agent.workspace_id == workspace_id]
+    """The operator's lead list, newest first.
+
+    Scoped like `list_sessions`: `?agent_id=` goes through the shared agent
+    access helper (403 for a stranger, 403 "Agent not in your workspace" for a
+    super_admin from elsewhere), a super_admin without it gets the workspace
+    roll-up, and anybody else gets only the agents they are a member of — a
+    member with no membership sees an empty inbox, never the whole workspace.
+    """
+    conditions = []
     if agent_id:
+        await require_agent_for_admin(db, agent_id, current_user)
         conditions.append(Lead.agent_id == agent_id)
+    elif current_user.role == "super_admin":
+        conditions.append(Agent.workspace_id == _require_workspace(current_user))
+    else:
+        member_agent_ids = (
+            await db.execute(
+                select(AgentMember.agent_id).where(
+                    AgentMember.admin_user_id == current_user.id
+                )
+            )
+        ).scalars().all()
+        conditions.append(Lead.agent_id.in_(member_agent_ids or ["__none__"]))
     if contacted is not None:
         conditions.append(Lead.contacted.is_(contacted))
 
@@ -193,12 +212,28 @@ async def list_leads(
 
 
 async def _load_lead(db: AsyncSession, lead_id: str, current_user: AdminUser) -> Lead:
-    workspace_id = _require_workspace(current_user)
-    lead = await db.scalar(
+    """One lead, visible only to its own operator.
+
+    A non-super_admin must be a member of the lead's agent; anything else
+    answers the same 404 an unknown id gets, so ids stay non-enumerable.
+    """
+    query = (
         select(Lead)
         .join(Agent, Agent.id == Lead.agent_id)
-        .where(Lead.id == lead_id, Agent.workspace_id == workspace_id)
+        .where(Lead.id == lead_id)
     )
+    if current_user.role == "super_admin":
+        query = query.where(Agent.workspace_id == _require_workspace(current_user))
+    else:
+        query = query.where(
+            select(AgentMember.id)
+            .where(
+                AgentMember.agent_id == Lead.agent_id,
+                AgentMember.admin_user_id == current_user.id,
+            )
+            .exists()
+        )
+    lead = await db.scalar(query)
     if lead is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"

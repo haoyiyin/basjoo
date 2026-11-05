@@ -154,6 +154,11 @@ def run_sqlite_migrations(database_url: str) -> None:
                     ("outcome", "VARCHAR(20)"),
                     # #44 — spam-check sampling counts answered turns.
                     ("ai_turn_count", "INTEGER DEFAULT 0"),
+                    # #75 — who closed the session (`visitor` for the widget's
+                    # End-chat action). NULL on every pre-existing row is the
+                    # honest value: those closes were the idle sweep or an
+                    # operator, and both keep reading as "not the visitor".
+                    ("closed_by", "VARCHAR(20)"),
                 ],
             )
             # Existing rows: every session is AI-handled until a human replies.
@@ -514,6 +519,52 @@ def _create_feature_tables(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS ix_webhook_deliveries_status_created "
             "ON webhook_deliveries(status, created_at)"
+        )
+
+    # #71 — visitor chat attachments. Metadata only: the bytes live on disk
+    # (see `services.attachment_service.py`, wave 2). Created here so an
+    # existing database gains the table even though `create_all` only builds it
+    # on a fresh install.
+    if _table_exists(cursor, "chat_sessions"):
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_attachments (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                session_id VARCHAR(50) NOT NULL REFERENCES chat_sessions(id),
+                message_id INTEGER,
+                kind VARCHAR(20) NOT NULL DEFAULT 'document',
+                filename VARCHAR(500) NOT NULL,
+                mime VARCHAR(255),
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                status VARCHAR(20) NOT NULL DEFAULT 'uploaded',
+                text_content TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_chat_attachments_session_id "
+            "ON chat_attachments(session_id)"
+        )
+
+    # #74 — operator reply macros, workspace-scoped (#74).
+    if _table_exists(cursor, "workspaces") and _table_exists(cursor, "admin_users"):
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reply_macros (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+                name VARCHAR(200) NOT NULL,
+                body TEXT NOT NULL,
+                created_by INTEGER REFERENCES admin_users(id),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_reply_macros_workspace_id "
+            "ON reply_macros(workspace_id)"
         )
 
 

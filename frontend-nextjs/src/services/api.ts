@@ -104,6 +104,13 @@ export type EmbeddingProvider =
  */
 export type FallbackMode = "off" | "keyword";
 
+/**
+ * #73 — the prechat form policy the operator picks in the agent settings.
+ * `off` renders no form, `optional` offers a skippable one, `required` hides
+ * the composer until the visitor submits it. Mirrors the backend literal.
+ */
+export type PrechatMode = "off" | "optional" | "required";
+
 export interface Agent {
 	id: string;
 	workspace_id?: number;
@@ -123,6 +130,18 @@ export interface Agent {
 	 * Mirrors `AgentConfig.fallback_mode` / `AgentUpdateRequest.fallback_mode`.
 	 */
 	fallback_mode?: FallbackMode;
+	/**
+	 * #41/#73 — the widget's prechat form policy. Mirrors the
+	 * `Literal["off", "optional", "required"]` in
+	 * `AgentConfig.prechat_mode` / `AgentUpdateRequest.prechat_mode`.
+	 */
+	prechat_mode?: PrechatMode;
+	/**
+	 * #41/#73 — the operator's own AI disclosure line, rendered verbatim by the
+	 * widget before the first send. `null`/empty clears it. Mirrors
+	 * `AgentConfig.ai_disclosure` / `AgentUpdateRequest.ai_disclosure`.
+	 */
+	ai_disclosure?: string | null;
 	/** #40: regexes matched against `location.pathname`; a match renders nothing. */
 	excluded_paths?: string[] | null;
 	/** #40: bubble | inline | iframe. */
@@ -717,6 +736,136 @@ export interface VisitorDeletionResult {
 	visitor_id: string;
 	deleted: VisitorDeletionCounts;
 	total: number;
+}
+
+/**
+ * #72 — one captured lead as `GET /api/v1/admin/leads` returns it.
+ *
+ * Mirrors `LeadPayload` in `backend/api/v1/schemas.py`: every optional field
+ * really is optional, because a prechat capture carries a name/e-mail and an
+ * offline-form capture may carry a phone and a message instead.
+ */
+export interface Lead {
+	id: string;
+	agent_id: string;
+	/** The PUBLIC session id (not the row id) when the lead came from a chat. */
+	session_id?: string | null;
+	name?: string | null;
+	email?: string | null;
+	phone?: string | null;
+	message?: string | null;
+	/** `offline-form` | `prechat` | `trigger` | `manual`. */
+	source: string;
+	page_url?: string | null;
+	contacted: boolean;
+	contacted_at?: string | null;
+	created_at?: string | null;
+	updated_at?: string | null;
+}
+
+/** `GET /api/v1/admin/leads` — body, with the header's queue count. */
+export interface LeadListResponse {
+	items: Lead[];
+	total: number;
+	/** Rows in the same scope that still need a human (`contacted === false`). */
+	uncontacted: number;
+}
+
+/**
+ * #74 — one saved reply macro as `/api/v1/admin/macros` returns it.
+ * Mirrors `MacroPayload` in `backend/api/v1/schemas.py`.
+ */
+export interface Macro {
+	id: string;
+	workspace_id?: number | null;
+	name: string;
+	body: string;
+	created_by?: number | null;
+	created_at?: string | null;
+	updated_at?: string | null;
+}
+
+/** `GET /api/v1/admin/macros`. */
+export interface MacroListResponse {
+	items: Macro[];
+	total: number;
+}
+
+/** `POST /api/v1/admin/macros` body (both fields are required there). */
+export interface MacroCreateInput {
+	name: string;
+	body: string;
+}
+
+/** `PATCH /api/v1/admin/macros/{id}` body — only the supplied fields change. */
+export interface MacroUpdateInput {
+	name?: string;
+	body?: string;
+}
+
+/**
+ * The macro caps, mirrored from `MACRO_NAME_MAX_LENGTH` / `MACRO_BODY_MAX_LENGTH`
+ * in `backend/api/v1/schemas.py`. The API answers 422 beyond them, so the
+ * console caps its inputs client-side and prints the same numbers.
+ */
+export const MACRO_NAME_MAX_LENGTH = 200;
+export const MACRO_BODY_MAX_LENGTH = 2500;
+
+/**
+ * #74 — the values a reply macro may interpolate, as the console knows them at
+ * insert time. Every field is optional: a macro inserted into a session with no
+ * captured contact simply has nothing to fill `{{visitor.name}}` with.
+ */
+export interface MacroVariableContext {
+	visitorName?: string | null;
+	visitorEmail?: string | null;
+	operatorName?: string | null;
+	sessionId?: string | null;
+}
+
+/**
+ * `{{name}}` or `{{name | fallback}}`. The fallback half is optional and keeps
+ * everything after the first `|` verbatim (minus the surrounding blanks).
+ */
+const MACRO_VARIABLE_PATTERN =
+	/\{\{\s*([a-zA-Z0-9_.]+)\s*(?:\|\s*([^}]*?)\s*)?\}\}/g;
+
+/**
+ * #74 — fill a saved macro body with the session's values, **at insert time**.
+ *
+ * Contract (see the spec's #74 UI section):
+ *   - `{{visitor.name}}`, `{{visitor.email}}`, `{{operator.name}}` and
+ *     `{{session.id}}` resolve against `context`;
+ *   - `{{x | fallback}}` renders `fallback` when `x` is missing/empty;
+ *   - a variable with no value **and no fallback** stays the literal `{{x}}`,
+ *     so an operator can see that the console could not fill it in;
+ *   - everything else is passed through untouched.
+ *
+ * The output is plain text: it is typed into the composer, never a chip.
+ */
+export function substituteMacroVariables(
+	body: string,
+	context: MacroVariableContext,
+): string {
+	if (!body) return "";
+	const values: Record<string, string> = {
+		"visitor.name": (context.visitorName ?? "").trim(),
+		"visitor.email": (context.visitorEmail ?? "").trim(),
+		"operator.name": (context.operatorName ?? "").trim(),
+		"session.id": (context.sessionId ?? "").trim(),
+	};
+
+	return body.replace(
+		MACRO_VARIABLE_PATTERN,
+		(match: string, name: string, fallback?: string): string => {
+			const value = values[name];
+			if (value) return value;
+			if (fallback !== undefined) return fallback;
+			// Nothing to interpolate and nothing to fall back on: keep the
+			// literal so the operator can see what did not resolve.
+			return match;
+		},
+	);
 }
 
 export async function parseErrorResponse(response: Response): Promise<string> {
@@ -1930,6 +2079,61 @@ class APIService {
 	async deleteVisitor(visitorId: string): Promise<VisitorDeletionResult> {
 		return this.request<VisitorDeletionResult>(
 			`/api/v1/admin/visitors/${encodeURIComponent(visitorId)}`,
+			{ method: "DELETE" },
+		);
+	}
+
+	// ------------------------------------------------------------- leads (#72)
+
+	/** The workspace's lead inbox, newest first. `agentId` narrows to one agent. */
+	async listLeads(
+		options: { agentId?: string; contacted?: boolean } = {},
+	): Promise<LeadListResponse> {
+		const params: string[] = [];
+		if (options.agentId) {
+			params.push(`agent_id=${encodeURIComponent(options.agentId)}`);
+		}
+		if (typeof options.contacted === "boolean") {
+			params.push(`contacted=${options.contacted ? "true" : "false"}`);
+		}
+		const query = params.length > 0 ? `?${params.join("&")}` : "";
+		return this.request<LeadListResponse>(`/api/v1/admin/leads${query}`);
+	}
+
+	/**
+	 * #72 — flip the operator's "contacted" mark. Idempotent in both directions;
+	 * the response is the updated row, so the list re-renders from it.
+	 */
+	async setLeadContacted(leadId: string, contacted: boolean): Promise<Lead> {
+		return this.request<Lead>(
+			`/api/v1/admin/leads/${encodeURIComponent(leadId)}`,
+			{ method: "PATCH", body: JSON.stringify({ contacted }) },
+		);
+	}
+
+	// ------------------------------------------------------------- macros (#74)
+
+	async listMacros(): Promise<MacroListResponse> {
+		return this.request<MacroListResponse>("/api/v1/admin/macros");
+	}
+
+	async createMacro(input: MacroCreateInput): Promise<Macro> {
+		return this.request<Macro>("/api/v1/admin/macros", {
+			method: "POST",
+			body: JSON.stringify(input),
+		});
+	}
+
+	async updateMacro(macroId: string, input: MacroUpdateInput): Promise<Macro> {
+		return this.request<Macro>(
+			`/api/v1/admin/macros/${encodeURIComponent(macroId)}`,
+			{ method: "PATCH", body: JSON.stringify(input) },
+		);
+	}
+
+	async deleteMacro(macroId: string): Promise<DeleteResult> {
+		return this.request<DeleteResult>(
+			`/api/v1/admin/macros/${encodeURIComponent(macroId)}`,
 			{ method: "DELETE" },
 		);
 	}

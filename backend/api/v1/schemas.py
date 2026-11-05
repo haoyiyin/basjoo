@@ -13,6 +13,17 @@ from services.answer_quality import DEFAULT_RATE_LIMIT_REPLY
 LEAD_NAME_MAX_LENGTH = 100
 LEAD_MESSAGE_MAX_LENGTH = 2000
 
+# #71 — the attachment caps, in one place so the request schema, the upload
+# route and the widget can all read the same two numbers (#74 macro caps are not
+# constants: they are the frozen `Field(max_length=…)` values below).
+ATTACHMENT_MAX_FILES = 5
+ATTACHMENT_MAX_FILE_BYTES = 5 * 1024 * 1024
+
+# #74 — reply-macro caps. Exported because the console renders them as hints and
+# the API rejects anything longer with a field-level 422.
+MACRO_NAME_MAX_LENGTH = 200
+MACRO_BODY_MAX_LENGTH = 2500
+
 
 def is_plausible_email(value: str) -> bool:
     """A structural email check with the stdlib only.
@@ -120,6 +131,34 @@ class ChatRequest(BaseModel):
     prechat: Optional[PrechatSubmission] = Field(
         None, description="Visitor identity captured by the prechat form (#41)"
     )
+    # #71: ids returned by `POST /api/v1/chat/attachments`, at most
+    # `ATTACHMENT_MAX_FILES`. Absent/empty = a plain text turn, which is what
+    # every existing caller sends. The chat path loads each row, wraps its
+    # parsed text as untrusted material and never the other way round.
+    attachment_ids: Optional[List[str]] = Field(
+        None,
+        max_length=ATTACHMENT_MAX_FILES,
+        description="Attachment ids from POST /chat/attachments (max 5, #71)",
+    )
+
+class ChatAttachmentPayload(BaseModel):
+    """One stored attachment as `POST /chat/attachments` returns it (#71).
+
+    Deliberately without `text_content`: the parsed document text is prompt
+    material for the model, never a client payload.
+    """
+
+    id: str
+    session_id: Optional[str] = None
+    message_id: Optional[int] = None
+    kind: str = "document"
+    filename: str
+    mime: Optional[str] = None
+    size_bytes: int = 0
+    status: str = "uploaded"
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SourceItem(BaseModel):
@@ -977,6 +1016,11 @@ class SessionListItem(BaseModel):
     # #43: who is expected to answer. `taken_over` implies mode == "human", but
     # mode == "human" alone (one operator reply) leaves `status` untouched.
     mode: str = "ai"
+    # #41/#72: the prechat identity the visitor submitted, so the console's
+    # transcript header can name them without a second request. NULL when the
+    # form was skipped.
+    contact_name: str | None = None
+    contact_email: str | None = None
     human_replied_at: datetime | None = None
     message_count: int = 0
     created_at: datetime
@@ -1403,3 +1447,77 @@ class MessageFeedbackPayload(BaseModel):
     session_id: str
     rating: int
     cleared: bool = False
+
+# ========== #74: operator reply macros ==========
+
+class MacroPayload(BaseModel):
+    """One saved reply as `/api/v1/admin/macros` returns it.
+
+    Workspace-scoped: a macro the caller's workspace does not own answers the
+    same 404 as a missing one, so `workspace_id` is echoed back for the console
+    to assert on rather than to route by.
+    """
+
+    id: str
+    workspace_id: Optional[int] = None
+    name: str
+    body: str
+    created_by: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class MacroCreateRequest(BaseModel):
+    """Create one macro. The two caps are the API contract (422 beyond them)."""
+
+    name: str = Field(..., min_length=1, max_length=MACRO_NAME_MAX_LENGTH)
+    body: str = Field(..., min_length=1, max_length=MACRO_BODY_MAX_LENGTH)
+
+    @field_validator("name", "body")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class MacroUpdateRequest(BaseModel):
+    """Partial update; only the supplied fields are written."""
+
+    name: Optional[str] = Field(
+        None, min_length=1, max_length=MACRO_NAME_MAX_LENGTH
+    )
+    body: Optional[str] = Field(
+        None, min_length=1, max_length=MACRO_BODY_MAX_LENGTH
+    )
+
+    @field_validator("name", "body")
+    @classmethod
+    def _not_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+class MacroListResponse(BaseModel):
+    """`GET /api/v1/admin/macros` — the shape the console's picker reads."""
+
+    items: List[MacroPayload] = Field(default_factory=list)
+    total: int = 0
+
+# ========== #75: visitor-initiated session end ==========
+
+class SessionEndResponse(BaseModel):
+    """`POST /api/v1/chat/session:end` — the widget's closed-session receipt.
+
+    `closed_by` is echoed so the widget can tell its own close (`visitor`) from
+    a session that was already closed by the idle sweep.
+    """
+
+    success: bool = True
+    session_id: str
+    status: str = "closed"
+    closed_by: Optional[str] = "visitor"

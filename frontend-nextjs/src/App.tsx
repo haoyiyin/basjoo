@@ -11,6 +11,7 @@ import Dashboard from './views/Dashboard';
 import KnowledgeBaseDetail from './views/KnowledgeBaseDetail';
 import KnowledgeBaseSetup from './views/KnowledgeBaseSetup';
 import KnowledgeBases from './views/KnowledgeBases';
+import Leads from './views/Leads';
 import Playground from './views/Playground';
 import Sessions from './views/Sessions';
 import AgentSettings from './views/AgentSettings';
@@ -49,6 +50,8 @@ export function App() {
         <Route path="/agent-selector" element={<AgentSelector />} />
         <Route path="/" element={<Home />} />
         <Route path="/agents" element={<Agents />} />
+        {/* #72: the workspace lead inbox (spans every agent's captured visitors). */}
+        <Route path="/leads" element={<Leads />} />
         <Route path="/agents/:agentId/dashboard" element={<Dashboard />} />
         {/*
          * `KnowledgeBaseSetup` resolves `agent.kb_id` from
@@ -61,6 +64,12 @@ export function App() {
         <Route path="/agents/:agentId/knowledge" element={<KnowledgeBaseSetup />} />
         <Route path="/agents/:agentId/playground" element={<Playground />} />
         <Route path="/agents/:agentId/sessions" element={<Sessions />} />
+        {/*
+         * The agent-scoped lead inbox (follow-up to #72): the same view as the
+         * root roll-up, narrowed by `?agent_id=` so a member only sees the
+         * leads of the agent they work.
+         */}
+        <Route path="/agents/:agentId/leads" element={<Leads />} />
         <Route path="/agents/:agentId/settings/agent" element={<AgentSettings />} />
         <Route path="/chat/:sessionId" element={<Chat />} />
         <Route path="/settings/agent" element={<AgentSettings />} />

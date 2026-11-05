@@ -21,13 +21,18 @@ interface NavItem {
 }
 
 /**
- * Workspace (root) navigation — spec §13: exactly these four entries, in this
+ * Workspace (root) navigation — spec §13: exactly these five entries, in this
  * order. 会话 `/sessions` and 用户 `/users` are gone: both routes were deleted
  * from `App.tsx` (`AdminUsers` is gone with them).
+ *
+ * #72 added the fifth entry, 留资线索 `/leads`: the lead inbox is a workspace
+ * surface (it spans every agent's captured visitors), so it belongs beside the
+ * other root doors rather than inside one agent's workspace.
  */
 const workspaceNavItems: NavItem[] = [
 	{ path: "/", i18nKey: "navigation.home", icon: "home" },
 	{ path: "/agents", i18nKey: "navigation.agents", icon: "agents" },
+	{ path: "/leads", i18nKey: "navigation.leads", icon: "user" },
 	{
 		path: "/knowledge-bases",
 		i18nKey: "navigation.knowledgeBases",
@@ -41,11 +46,14 @@ const workspaceNavItems: NavItem[] = [
 ];
 
 /**
- * Agent-scoped navigation — exactly four entries. `/agents/:id/dashboard`
+ * Agent-scoped navigation — exactly five entries. `/agents/:id/dashboard`
  * replaces the workspace home. The old 知识库 sidebar door (which pointed at
  * `/agents/:id/knowledge`) is gone: the dashboard's knowledge row links to the
  * KB, so the sidebar entry was a second door to the same place. The route
  * itself still resolves (deep link / legacy `/urls`+`/files` redirects).
+ *
+ * The fifth entry is 留资线索 `/agents/:id/leads`: the agent's share of the
+ * lead inbox (the root `/leads` stays the super_admin roll-up).
  */
 function agentNavItems(agentBasePath: string): NavItem[] {
 	return [
@@ -63,6 +71,11 @@ function agentNavItems(agentBasePath: string): NavItem[] {
 			path: `${agentBasePath}/sessions`,
 			i18nKey: "navigation.sessions",
 			icon: "sessions",
+		},
+		{
+			path: `${agentBasePath}/leads`,
+			i18nKey: "navigation.leads",
+			icon: "user",
 		},
 		{
 			path: `${agentBasePath}/settings/agent`,
@@ -86,7 +99,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 	const agentBasePath = agentId ? `/agents/${agentId}` : "";
 
 	// Build nav items based on role and context. A `super_admin` at workspace
-	// level sees the four §13 entries; every other root role sees none. Support
+	// level sees the five §13 entries; every other root role sees none. Support
 	// users only ever get the agent-scoped sessions entry.
 	const navItems: NavItem[] = agentId
 		? agentNavItems(agentBasePath)
