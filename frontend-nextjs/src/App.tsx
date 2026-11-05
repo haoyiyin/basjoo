@@ -64,6 +64,12 @@ export function App() {
         <Route path="/agents/:agentId/knowledge" element={<KnowledgeBaseSetup />} />
         <Route path="/agents/:agentId/playground" element={<Playground />} />
         <Route path="/agents/:agentId/sessions" element={<Sessions />} />
+        {/*
+         * The agent-scoped lead inbox (follow-up to #72): the same view as the
+         * root roll-up, narrowed by `?agent_id=` so a member only sees the
+         * leads of the agent they work.
+         */}
+        <Route path="/agents/:agentId/leads" element={<Leads />} />
         <Route path="/agents/:agentId/settings/agent" element={<AgentSettings />} />
         <Route path="/chat/:sessionId" element={<Chat />} />
         <Route path="/settings/agent" element={<AgentSettings />} />

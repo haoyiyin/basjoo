@@ -9,6 +9,9 @@
  *
  * Every other view is replaced with a marker so this suite is about the route
  * table only (same technique as tests/unit/routes.test.tsx).
+ *
+ * `/leads` is the super_admin roll-up; `/agents/:agentId/leads` is the same view
+ * inside agent scope (the follow-up that gives members a leads door).
  */
 import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
@@ -100,5 +103,16 @@ describe("#72 /leads route", () => {
 			screen.getByText("layout:AuthLanguageSwitcher"),
 		).toBeInTheDocument();
 		expect(screen.queryByTestId("leads-view")).toBeNull();
+	});
+
+	it("mounts the same inbox at /agents/:agentId/leads inside the authed shell", () => {
+		renderAt("/agents/agt_1/leads");
+
+		expect(screen.getByTestId("leads-view")).toBeInTheDocument();
+		expect(screen.getByTestId("location")).toHaveTextContent("/agents/agt_1/leads");
+		// Dashboard group, not the signed-out one.
+		expect(
+			screen.queryByText("layout:AuthLanguageSwitcher"),
+		).not.toBeInTheDocument();
 	});
 });

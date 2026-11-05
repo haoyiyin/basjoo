@@ -19,10 +19,15 @@
  * that agent's session centre (`/agents/:agentId/sessions`). The rows carry
  * `agent_id` for exactly this reason: a session lives under its agent, and the
  * workspace inbox spans every agent.
+ *
+ * Two entry points, one view: `/leads` is the super_admin's cross-agent
+ * roll-up, `/agents/:agentId/leads` is the same inbox narrowed to the agent the
+ * operator works. The scoping is the server's (`?agent_id=`), never a
+ * client-side filter of the workspace payload.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import AdminLayout from '../components/AdminLayout';
 import { Icon } from '../components/Icon';
@@ -56,6 +61,8 @@ function formatCreated(value: string | null | undefined): string {
 export default function Leads() {
 	const { t } = useTranslation('common');
 	const isMobile = useIsMobile();
+	// Present only on `/agents/:agentId/leads`; absent on the root roll-up.
+	const { agentId } = useParams<{ agentId?: string }>();
 
 	const [leads, setLeads] = useState<Lead[]>([]);
 	const [total, setTotal] = useState(0);
@@ -73,7 +80,7 @@ export default function Leads() {
 		setLoading(true);
 		setError(null);
 		try {
-			const payload = await api.listLeads();
+			const payload = await api.listLeads(agentId ? { agentId } : {});
 			setLeads(Array.isArray(payload.items) ? payload.items : []);
 			setTotal(typeof payload.total === 'number' ? payload.total : 0);
 			setUncontacted(
@@ -84,7 +91,7 @@ export default function Leads() {
 		} finally {
 			setLoading(false);
 		}
-	}, [t]);
+	}, [t, agentId]);
 
 	useEffect(() => {
 		void loadLeads();

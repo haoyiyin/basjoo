@@ -12,12 +12,14 @@
  *     `{contacted: bool}` — the exact contract `leads_endpoints.py` reads;
  *  4. the source filter narrows the rows client-side;
  *  5. a row with `session_id` links to that agent's session centre, and a row
- *     without one renders no dead link.
+ *     without one renders no dead link;
+ *  6. `/agents/:agentId/leads` sends `agent_id` (the server scopes), while the
+ *     root roll-up sends none — and the filter/toggle behave the same there.
  */
 import React from "react";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
 import Leads from "../Leads";
@@ -124,12 +126,21 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function renderLeads() {
+function renderLeadsAt(path: string) {
 	return render(
-		<MemoryRouter initialEntries={["/leads"]}>
-			<Leads />
+		<MemoryRouter initialEntries={[path]}>
+			<Routes>
+				<Route path="/leads" element={<Leads />} />
+				{/* The agent-scoped entry point: `useParams` only resolves under a
+				 * matching route, so the path table is part of the fixture. */}
+				<Route path="/agents/:agentId/leads" element={<Leads />} />
+			</Routes>
 		</MemoryRouter>,
 	);
+}
+
+function renderLeads() {
+	return renderLeadsAt("/leads");
 }
 
 describe("#72 lead inbox", () => {
@@ -233,5 +244,46 @@ describe("#72 lead inbox", () => {
 		const link = await screen.findByTestId("lead-session-link");
 		expect(link).toHaveAttribute("href", "/agents/agt_1/sessions");
 		expect(link.textContent).toContain("sess_public_1");
+	});
+});
+
+/* ---------------------------------------------------------------------------
+ * Agent-scoped entry point (`/agents/:agentId/leads`). The scope is the
+ * server's: the view must send `agent_id`, never filter a workspace payload
+ * client-side, and the root roll-up must keep sending nothing.
+ * ------------------------------------------------------------------------- */
+describe("agent-scoped lead inbox", () => {
+	it("sends agent_id on /agents/:agentId/leads and none on the root roll-up", async () => {
+		renderLeadsAt("/agents/agt_1/leads");
+
+		await screen.findByTestId("lead-row-lead_1");
+		expect(requests[0].url).toContain("/api/v1/admin/leads");
+		expect(requests[0].url).toContain("agent_id=agt_1");
+		cleanup();
+
+		requests = [];
+		renderLeadsAt("/leads");
+		await screen.findByTestId("lead-row-lead_1");
+		expect(requests[0].url).not.toContain("agent_id=");
+	});
+
+	it("keeps the source filter and the contacted toggle working under the agent scope", async () => {
+		const user = userEvent.setup();
+		renderLeadsAt("/agents/agt_1/leads");
+
+		await screen.findByTestId("lead-row-lead_1");
+		await user.selectOptions(screen.getByLabelText("leads.filterLabel"), "offline-form");
+		expect(screen.queryByTestId("lead-row-lead_1")).toBeNull();
+		expect(screen.getByTestId("lead-row-lead_2")).toBeInTheDocument();
+
+		await user.click(screen.getByTestId("lead-contacted-lead_2"));
+		await waitFor(() => {
+			const patch = requests.find((request) => request.method === "PATCH");
+			expect(patch).toBeDefined();
+			expect(new URL(String(patch?.url)).pathname).toBe(
+				"/api/v1/admin/leads/lead_2",
+			);
+			expect(patch?.body).toEqual({ contacted: false });
+		});
 	});
 });

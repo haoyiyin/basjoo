@@ -46,11 +46,14 @@ const workspaceNavItems: NavItem[] = [
 ];
 
 /**
- * Agent-scoped navigation — exactly four entries. `/agents/:id/dashboard`
+ * Agent-scoped navigation — exactly five entries. `/agents/:id/dashboard`
  * replaces the workspace home. The old 知识库 sidebar door (which pointed at
  * `/agents/:id/knowledge`) is gone: the dashboard's knowledge row links to the
  * KB, so the sidebar entry was a second door to the same place. The route
  * itself still resolves (deep link / legacy `/urls`+`/files` redirects).
+ *
+ * The fifth entry is 留资线索 `/agents/:id/leads`: the agent's share of the
+ * lead inbox (the root `/leads` stays the super_admin roll-up).
  */
 function agentNavItems(agentBasePath: string): NavItem[] {
 	return [
@@ -68,6 +71,11 @@ function agentNavItems(agentBasePath: string): NavItem[] {
 			path: `${agentBasePath}/sessions`,
 			i18nKey: "navigation.sessions",
 			icon: "sessions",
+		},
+		{
+			path: `${agentBasePath}/leads`,
+			i18nKey: "navigation.leads",
+			icon: "user",
 		},
 		{
 			path: `${agentBasePath}/settings/agent`,
