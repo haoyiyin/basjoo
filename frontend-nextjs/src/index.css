@@ -1374,6 +1374,20 @@ a.stat-link:hover {
   padding-block: 2px;
 }
 
+/* The lead name is the one row affordance that is a real <button>: the agent
+ * and KB names are anchors, which carry no control chrome. Strip the global
+ * button box so the name reads as the row's title, not as a control. */
+button.list-row-affordance {
+  min-height: 0;
+  padding: 2px 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  text-align: left;
+}
+
 .list-row:hover .list-row-title,
 .list-row:hover .list-row-affordance,
 .list-row:focus-within .list-row-title,
@@ -1403,6 +1417,7 @@ a.stat-link:hover {
  *
  *   .list-grid--kb      name / documents / chunks / bound agent / status / actions
  *   .list-grid--agents  name / knowledge base / updated / status / actions
+ *   .list-grid--leads   name / email / phone / source / page / created / contacted
  *
  * `.list-row` stays a flex block for the stacked views (agent selector,
  * sessions, the sidebar nav); the grid applies only where a row opts in with
@@ -1437,6 +1452,15 @@ a.stat-link:hover {
 /* The agent list: name (wide) / knowledge base / updated / status / actions. */
 .list-grid--agents {
   --list-columns: minmax(0, 1fr) 200px 150px 96px 40px;
+}
+
+/* The lead inbox: name / email / phone / source / page / created / contacted.
+ * Seven tracks (the widest list), the four trailing ones fixed so the header
+ * label and the value share a left edge. The generic mobile rule collapses
+ * every `.list-grid` to one column, so this template never forces the page
+ * wider than 375px. */
+.list-grid--leads {
+  --list-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1fr) 110px minmax(0, 1.2fr) 130px 160px;
 }
 
 /* One cell per column. A cell may stack two lines (name + description), but it

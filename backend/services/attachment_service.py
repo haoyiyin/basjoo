@@ -25,12 +25,13 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from constants import EXT_TO_MIME
 from models import ChatAttachment
 from services.document_parser import DocumentParser
+from services.kb_document_processor import sanitise_upload_filename
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,13 @@ class AttachmentService:
         can see what the visitor sent), and stays ``uploaded`` for an image,
         which has nothing to parse.
         """
+        # The multipart filename is visitor-controlled: neutralise its path
+        # separators and device names before it reaches the DB row or the disk
+        # path, exactly like a KB upload. Without this, `../../../../x.txt`
+        # escapes ATTACHMENTS_ROOT (the row's id prefix does not stop `..`).
+        filename = sanitise_upload_filename(filename)
+        if not filename:
+            raise ValueError("attachment filename is empty after sanitisation")
         kind = attachment_kind(filename)
         attachment = ChatAttachment(
             session_id=session_db_id,
@@ -200,6 +208,33 @@ async def load_turn_attachments(
     ).scalars().all()
     by_id = {str(row.id): row for row in rows}
     return [by_id[attachment_id] for attachment_id in wanted if attachment_id in by_id]
+
+async def bind_turn_attachments(
+    db: AsyncSession,
+    session_db_id: str,
+    attachment_ids: Sequence[str],
+    message_id: int,
+) -> int:
+    """Stamp the persisted turn's user-message id on its attachments.
+
+    Scoped by session AND only fills rows still unbound, so an id from another
+    visitor's session is never touched and re-sending the same id on a later
+    turn cannot move the pointer off the first turn that actually carried it.
+    Returns the number of rows bound.
+    """
+    wanted = [str(attachment_id) for attachment_id in attachment_ids if attachment_id]
+    if not wanted:
+        return 0
+    result = await db.execute(
+        update(ChatAttachment)
+        .where(
+            ChatAttachment.id.in_(wanted),
+            ChatAttachment.session_id == session_db_id,
+            ChatAttachment.message_id.is_(None),
+        )
+        .values(message_id=message_id)
+    )
+    return result.rowcount or 0
 
 def build_attachment_block(attachments: Sequence[Any]) -> str:
     """The turn's attachment text as ONE labelled untrusted block ('' when none).

@@ -13,10 +13,12 @@ import {
   API_BASE,
   loginByApi,
   getDefaultAgent,
+  sseDoneEvent,
 } from '../fixtures/e2e-context';
 
 test.describe('Admin Sessions Takeover', () => {
   test('full takeover chain via API', async ({ request }) => {
+    test.setTimeout(120_000);
     // 1. Login as admin using shared helper
     const token = await loginByApi(request);
     const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -29,12 +31,24 @@ test.describe('Admin Sessions Takeover', () => {
       data: { allowed_widget_origins: [] },
     });
 
-    // 3. Simulate a visitor chat (creates a session)
-    const chatRes = await request.post(`${API_BASE}/api/v1/chat`, {
-      data: { agent_id: agent.id, message: 'I need help from a human', visitor_id: 'e2e-visitor', session_id: `e2e-session-${Date.now()}` },
+    // 3. Simulate a visitor chat (creates a session). The stream endpoint is the
+    //    only one that survives a slow first token; a client cannot predict the
+    //    server-minted session id, so read it from the SSE `done` event.
+    const chatRes = await request.post(`${API_BASE}/api/v1/chat/stream`, {
+      headers: authHeaders,
+      data: {
+        agent_id: agent.id,
+        message: 'I need help from a human',
+        visitor_id: 'e2e-visitor',
+        preview: true,
+      },
     });
-    const chatData = await chatRes.json();
-    const sessionId = chatData.session_id;
+    expect(chatRes.status()).toBe(200);
+    const sseBody = await chatRes.text();
+    expect(sseBody).not.toContain('event: error');
+    const done = sseDoneEvent(sseBody);
+    expect(done, sseBody.slice(-400)).toBeTruthy();
+    const sessionId = done!.session_id as string;
     expect(sessionId).toBeTruthy();
 
     // 4. Admin views sessions list. The endpoint sorts oldest first, so use a
@@ -57,6 +71,13 @@ test.describe('Admin Sessions Takeover', () => {
       { headers: authHeaders },
     );
     expect([200, 201]).toContain(takeoverRes.status());
+    const takeover = (await takeoverRes.json()) as {
+      success?: boolean;
+      session?: { status?: string; mode?: string };
+    };
+    expect(takeover.success).toBe(true);
+    expect(takeover.session?.status).toBe('taken_over');
+    expect(takeover.session?.mode).toBe('human');
 
     // 6. Admin sends human reply
     const sendRes = await request.post(`${API_BASE}/api/v1/admin/sessions/send`, {
@@ -76,9 +97,9 @@ test.describe('Admin Sessions Takeover', () => {
     const messages = await messagesRes.json();
     expect(Array.isArray(messages)).toBe(true);
 
-    // Should contain the human reply
+    // Should contain the human reply, authored by the operator (not the AI).
     const hasHumanReply = messages.some((m: any) =>
-      m.content?.includes('human agent'),
+      m.content?.includes('human agent') && m.sender_type === 'human',
     );
     expect(hasHumanReply).toBe(true);
   });
@@ -89,23 +110,34 @@ test.describe('Admin Sessions Takeover', () => {
     test.setTimeout(120_000);
     // 1. Create a visitor session via API first using shared helpers
     const token = await loginByApi(request);
-    const authHeaders = { Authorization: `Bearer ${token}` };
+    const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
     // Get default agent using shared helper
     const agent = await getDefaultAgent(request, token);
 
     await request.put(`${API_BASE}/api/v1/agent?agent_id=${agent.id}`, {
-      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      headers: authHeaders,
       data: { allowed_widget_origins: [] },
     });
 
-    // Create a visitor chat session
-    const sessionId = `e2e-ui-session-${Date.now()}`;
+    // Create a visitor chat session through the stream endpoint and take the
+    // server-minted id from the SSE `done` event; the client cannot predict it.
     const chatRes = await request.post(`${API_BASE}/api/v1/chat/stream`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: { agent_id: agent.id, message: 'UI test session', session_id: sessionId },
+      headers: authHeaders,
+      data: {
+        agent_id: agent.id,
+        message: 'UI test session',
+        visitor_id: 'e2e-ui-visitor',
+        preview: true,
+      },
     });
     expect(chatRes.status()).toBe(200);
+    const sseBody = await chatRes.text();
+    expect(sseBody).not.toContain('event: error');
+    const done = sseDoneEvent(sseBody);
+    expect(done, sseBody.slice(-400)).toBeTruthy();
+    const sessionId = done!.session_id as string;
+    expect(sessionId).toBeTruthy();
 
     // 2. Login to admin dashboard using shared helper
     await adminLogin(page);
@@ -123,6 +155,7 @@ test.describe('Admin Sessions Takeover', () => {
     const sessionsData = await sessionsRes.json() as { items: Array<{ session_id: string; status: string }> };
     expect(Array.isArray(sessionsData.items)).toBe(true);
     expect(sessionsData.items.length).toBeGreaterThanOrEqual(1);
+    expect(sessionsData.items.some((s) => s.session_id === sessionId)).toBe(true);
 
     // 5. Verify sessions page renders content with bilingual assertions
     await expect(page.getByRole('heading', { name: /会话中心|Sessions Center/i })).toBeVisible({ timeout: 10_000 });

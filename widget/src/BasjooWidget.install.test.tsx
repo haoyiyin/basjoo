@@ -52,6 +52,18 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
+function sseResponse(events: string[]): Response {
+  const body = events.map((event) => `${event}\n\n`).join('');
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(body));
+      controller.close();
+    },
+  });
+  return { ok: true, status: 200, body: stream, json: async () => ({}), text: async () => body } as unknown as Response;
+}
+
 /** Route every fetch the widget makes to a deterministic response. */
 function installFetch(calls: Array<{ url: string; body?: unknown }> = []) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -633,6 +645,50 @@ describe('BasjooWidget install surface (#40)', () => {
     expect(configCall?.url).toContain('agent_id=agt_baked');
     expect(configCall?.url).toContain('https://api.example.com');
     expect(configCall?.url).not.toContain('localhost');
+
+    widget.destroy();
+  });
+
+  it('stores the session under the default agent id when none was configured', async () => {
+    // `config:public` can answer a `default_agent_id` for an embed that names no
+    // agent. The session storage key is derived from the agent id, so it must
+    // be recomputed from that default — otherwise the session lands under
+    // `basjoo_session_` and two default-id widgets collide.
+    const calls: Array<{ url: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        calls.push({ url, body });
+        if (url.includes('/api/v1/config:public')) {
+          return jsonResponse({ ...CONFIG, default_agent_id: 'agt_default' });
+        }
+        if (url.includes('/api/v1/chat/stream')) {
+          return sseResponse([
+            'event: content\ndata: {"content": "ok"}',
+            'event: done\ndata: {"message_id": 1, "session_id": "sess_stream", "mode": "ai"}',
+          ]);
+        }
+        if (url.includes('/api/v1/chat/messages')) return jsonResponse([]);
+        return jsonResponse({}, 404);
+      }),
+    );
+
+    const widget = makeWidget({ agentId: '' });
+    await widget.init();
+
+    const input = document.querySelector('.basjoo-input') as HTMLInputElement;
+    input.value = 'hi';
+    (document.querySelector('.basjoo-send') as HTMLButtonElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // The stream carried the default agent id…
+    const streamCall = calls.find((call) => call.url.includes('/api/v1/chat/stream'));
+    expect((streamCall?.body as { agent_id?: string }).agent_id).toBe('agt_default');
+    // …and the session is stored under that id, not the empty one.
+    expect(window.localStorage.getItem('basjoo_session_agt_default')).toBe('sess_stream');
+    expect(window.localStorage.getItem('basjoo_session_')).toBeNull();
 
     widget.destroy();
   });
