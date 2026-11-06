@@ -70,9 +70,9 @@ function sseResponse(events: string[]): Response {
  * Stub fetch. `uploadDelayMs` lets a test observe the in-flight state (the send
  * button must be disabled while the POST is outstanding).
  */
-function installFetch(options: { uploadDelayMs?: number; uploadStatus?: number } = {}) {
+function installFetch(options: { uploadDelayMs?: number; uploadStatus?: number; attachSession?: string | null } = {}) {
   const calls: Call[] = [];
-  const { uploadDelayMs = 0, uploadStatus = 200 } = options;
+  const { uploadDelayMs = 0, uploadStatus = 200, attachSession = null } = options;
   let uploadCounter = 0;
 
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -101,6 +101,7 @@ function installFetch(options: { uploadDelayMs?: number; uploadStatus?: number }
         mime: 'text/plain',
         kind: 'document',
         status: 'uploaded',
+        session_id: attachSession,
       });
     }
     if (url.includes('/api/v1/chat/stream')) {
@@ -300,6 +301,34 @@ describe('BasjooWidget attachments (#71)', () => {
 
     // The chips are consumed by the turn they belonged to.
     expect(chips()).toHaveLength(0);
+
+    widget.destroy();
+  });
+
+  it('adopts the session the upload route minted for a pre-chat attachment', async () => {
+    // A visitor may attach a file before ever saying anything. The upload route
+    // then mints a session and returns its public id; the next turn must reuse
+    // it, or `load_turn_attachments` scopes the ids to a different session and
+    // the file never reaches the prompt.
+    const calls = installFetch({ attachSession: 'sess_minted' });
+    const widget = makeWidget('en-US');
+    await widget.init();
+    expect((widget as unknown as { sessionId: string | null }).sessionId).toBeNull();
+
+    pick([makeFile('notes.txt')]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect((widget as unknown as { sessionId: string | null }).sessionId).toBe('sess_minted');
+    expect(window.localStorage.getItem('basjoo_session_agent-1')).toBe('sess_minted');
+
+    const input = document.querySelector('.basjoo-input') as HTMLInputElement;
+    input.value = 'please read this';
+    sendBtn().click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const streamCall = calls.find((call) => call.url.includes('/api/v1/chat/stream'));
+    expect((streamCall?.body as { session_id?: string }).session_id).toBe('sess_minted');
+    expect((streamCall?.body as { attachment_ids?: string[] }).attachment_ids).toEqual(['att_1']);
 
     widget.destroy();
   });

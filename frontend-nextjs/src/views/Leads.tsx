@@ -249,9 +249,8 @@ export default function Leads() {
 						{/* Column labels sit OUTSIDE the <ul> so they never become a
 						 * phantom list item (same contract as the KB list). */}
 						<div
-							className="list-header"
+							className="list-header list-grid list-grid--leads"
 							data-testid="leads-list-header"
-							style={{ display: 'grid', gridTemplateColumns: LEAD_COLUMNS }}
 						>
 							<span className="list-header-cell">{t('leads.columns.name')}</span>
 							<span className="list-header-cell">{t('leads.columns.email')}</span>
@@ -269,18 +268,30 @@ export default function Leads() {
 								return (
 									<li
 										key={lead.id}
-										className={isSelected ? 'list-row is-selected' : 'list-row'}
+										className={
+											isSelected
+												? 'list-row list-grid list-grid--leads is-selected'
+												: 'list-row list-grid list-grid--leads'
+										}
 										data-testid={`lead-row-${lead.id}`}
-										style={{ display: 'grid', gridTemplateColumns: LEAD_COLUMNS }}
 										onClick={(event) => {
 											if (isRowControl(event.target)) return;
 											setSelectedId(isSelected ? null : lead.id);
 										}}
 									>
 										<span className="list-cell" data-testid={`lead-name-${lead.id}`}>
-											<span className="list-cell-value">
+											{/* The name is the row's only keyboard affordance: the row's own
+											 * click is a pointer convenience, so the panel opens from a
+											 * focusable button here too. */}
+											<button
+												type="button"
+												className="list-cell-value list-row-affordance"
+												data-testid={`lead-name-button-${lead.id}`}
+												aria-expanded={isSelected}
+												onClick={() => setSelectedId(isSelected ? null : lead.id)}
+											>
 												{lead.name || t('leads.unknownName')}
-											</span>
+											</button>
 										</span>
 										<span className="list-cell">{lead.email || '—'}</span>
 										<span className="list-cell">{lead.phone || '—'}</span>
@@ -402,12 +413,11 @@ export default function Leads() {
 }
 
 /**
- * The column plan for the inbox. Declared once and used by both the label row
- * and the data rows so cell N and header N always share one column.
+ * The lead inbox is a column list: the rows and the label row opt into the
+ * shared `.list-grid` primitive with the `list-grid--leads` column plan
+ * declared in `index.css`. That is what lets the 375px media block collapse
+ * the seven fixed/flexible tracks to one column instead of clipping them.
  */
-const LEAD_COLUMNS =
-	'minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1fr) 110px minmax(0, 1.2fr) 130px 160px';
-
 interface DetailRowProps {
 	label: string;
 	value: string | null | undefined;

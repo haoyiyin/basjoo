@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import func, select
 
 import database
-from models import ChatAttachment, KbChunk, KbDocument
+from models import Agent, ChatAttachment, ChatMessage, ChatSession, KbChunk, KbDocument
 from services import attachment_service
 
 ATTACHMENT_TEXT = "ATTACHMENT_SECRET_BODY: the invoice number is INV-90210."
@@ -224,6 +224,37 @@ async def test_file_over_five_megabytes_is_rejected(public_client, default_agent
     assert await _attachment_count() == before
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_traversal_filename_cannot_escape_the_attachments_root(
+    public_client, default_agent_id, attachments_root
+):
+    """#71 hardening: the multipart filename is visitor-controlled, so separators
+    in it must never steer the disk write out of the attachments root."""
+    response = await _upload(
+        public_client,
+        default_agent_id,
+        name="../../../../escaped.txt",
+        content=b"pwned",
+        visitor_id="visitor-traversal",
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    # The row and the reply carry the neutralised name, not the raw path.
+    assert body["filename"] == ".._.._.._.._escaped.txt"
+    assert "/" not in body["filename"] and "\\" not in body["filename"]
+
+    # Nothing was written above the root. With the raw name the write escapes
+    # to `attachments_root.parent`, so that is the directory to guard.
+    escaped = attachments_root.parent / "escaped.txt"
+    assert not escaped.exists(), f"traversal wrote outside the root: {escaped}"
+    # The bytes still landed, but as ONE flat filename inside the session dir.
+    stored = list(attachments_root.rglob("*escaped.txt"))
+    assert len(stored) == 1, stored
+    assert stored[0].is_file()
+    assert stored[0].parent.parent == attachments_root
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_disallowed_type_is_rejected(public_client, default_agent_id):
     response = await _upload(
         public_client, default_agent_id, name="payload.exe", content=b"MZ", visitor_id="visitor-exe"
@@ -285,3 +316,220 @@ async def test_attachment_read_back_is_scoped_to_the_owner(public_client, defaul
 async def _attachment_count() -> int:
     async with database.AsyncSessionLocal() as db:
         return int(await db.scalar(select(func.count(ChatAttachment.id))) or 0)
+
+async def _attachment_row(attachment_id: str) -> ChatAttachment:
+    async with database.AsyncSessionLocal() as db:
+        return (
+            await db.execute(
+                select(ChatAttachment).where(ChatAttachment.id == attachment_id)
+            )
+        ).scalar_one()
+
+async def _latest_user_message(session_db_id: str) -> ChatMessage:
+    async with database.AsyncSessionLocal() as db:
+        return (
+            await db.execute(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.session_id == session_db_id,
+                    ChatMessage.role == "user",
+                )
+                .order_by(ChatMessage.id.desc())
+            )
+        ).scalars().first()
+
+# ------------------------------------------- message_id persistence (#71)
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_blocking_chat_binds_attachment_to_its_user_turn(
+    public_client, default_agent_id, captured_prompts, kb_chunks
+):
+    """After a real blocking turn the row points at the user message it rode."""
+    uploaded = await _upload(
+        public_client, default_agent_id, name="bound.txt", content=b"bound body"
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    body = uploaded.json()
+    assert body["message_id"] is None, "an upload starts unbound"
+
+    response = await public_client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "read my file",
+            "visitor_id": "visitor-att",
+            "session_id": body["session_id"],
+            "attachment_ids": [body["id"]],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    stored = await _attachment_row(body["id"])
+    user_message = await _latest_user_message(stored.session_id)
+    assert stored.message_id is not None
+    assert stored.message_id == user_message.id
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_streaming_chat_binds_attachment_to_its_user_turn(
+    public_client, default_agent_id
+):
+    """The SSE transport persists through the same shared writer, so it binds too."""
+    uploaded = await _upload(
+        public_client, default_agent_id, name="stream.txt", content=b"stream body", visitor_id="visitor-stream"
+    )
+    body = uploaded.json()
+
+    async with public_client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={
+            "agent_id": default_agent_id,
+            "message": "read my file",
+            "visitor_id": "visitor-stream",
+            "session_id": body["session_id"],
+            "attachment_ids": [body["id"]],
+        },
+    ) as response:
+        assert response.status_code == 200, await response.aread()
+        sse = "".join([chunk async for chunk in response.aiter_text()])
+    assert '"message_id"' in sse, sse
+
+    stored = await _attachment_row(body["id"])
+    user_message = await _latest_user_message(stored.session_id)
+    assert stored.message_id == user_message.id
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_keyless_scripted_turn_binds_attachment(
+    public_client, default_agent_id, monkeypatch
+):
+    """A keyless keyword/restricted turn is a real answered turn: it binds."""
+    monkeypatch.setattr(
+        "api.v1.endpoints.get_agent_plaintext_keys", lambda agent: None
+    )
+    async with database.AsyncSessionLocal() as db:
+        agent = (
+            await db.execute(select(Agent).where(Agent.id == default_agent_id))
+        ).scalar_one()
+        agent.fallback_mode = "keyword"
+        await db.commit()
+
+    uploaded = await _upload(
+        public_client, default_agent_id, name="scripted.txt", content=b"scripted body", visitor_id="visitor-scripted"
+    )
+    body = uploaded.json()
+
+    response = await public_client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "read my file",
+            "visitor_id": "visitor-scripted",
+            "session_id": body["session_id"],
+            "attachment_ids": [body["id"]],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["mode"] == "scripted", response.text
+
+    stored = await _attachment_row(body["id"])
+    user_message = await _latest_user_message(stored.session_id)
+    assert stored.message_id == user_message.id
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_reusing_an_attachment_keeps_the_first_turn_binding(
+    public_client, default_agent_id, captured_prompts, kb_chunks
+):
+    """Re-sending the same id still injects its text, but the pointer must stay."""
+    uploaded = await _upload(
+        public_client, default_agent_id, name="reuse.txt", content=b"reuse body", visitor_id="visitor-reuse"
+    )
+    body = uploaded.json()
+    chat = {
+        "agent_id": default_agent_id,
+        "message": "read my file",
+        "visitor_id": "visitor-reuse",
+        "session_id": body["session_id"],
+        "attachment_ids": [body["id"]],
+    }
+    first = await public_client.post("/api/v1/chat", json=chat)
+    assert first.status_code == 200, first.text
+    first_binding = (await _attachment_row(body["id"])).message_id
+    assert first_binding is not None
+
+    second = await public_client.post(
+        "/api/v1/chat", json={**chat, "message": "read my file again"}
+    )
+    assert second.status_code == 200, second.text
+    assert (await _attachment_row(body["id"])).message_id == first_binding
+
+    async with database.AsyncSessionLocal() as db:
+        user_messages = (
+            await db.execute(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.session_id == (await _attachment_row(body["id"])).session_id,
+                    ChatMessage.role == "user",
+                )
+                .order_by(ChatMessage.id)
+            )
+        ).scalars().all()
+    assert len(user_messages) == 2
+    assert user_messages[0].id == first_binding != user_messages[1].id
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_human_takeover_turn_binds_its_attachment(
+    public_client, default_agent_id
+):
+    """A no-answer early return still persists the message, so it binds too."""
+    uploaded = await _upload(
+        public_client, default_agent_id, name="human.txt", content=b"human body", visitor_id="visitor-human"
+    )
+    body = uploaded.json()
+    async with database.AsyncSessionLocal() as db:
+        session = (
+            await db.execute(
+                select(ChatSession).where(ChatSession.session_id == body["session_id"])
+            )
+        ).scalar_one()
+        session.mode = "human"
+        await db.commit()
+
+    response = await public_client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "human please",
+            "visitor_id": "visitor-human",
+            "session_id": body["session_id"],
+            "attachment_ids": [body["id"]],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["mode"] == "human", response.text
+
+    stored = await _attachment_row(body["id"])
+    user_message = await _latest_user_message(stored.session_id)
+    assert stored.message_id is not None
+    assert stored.message_id == user_message.id
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_a_foreign_session_never_binds_the_attachment(
+    public_client, default_agent_id
+):
+    """A stranger cannot stamp their id onto somebody else's attachment row."""
+    owner = await _upload(
+        public_client, default_agent_id, name="owner.txt", content=b"owner", visitor_id="visitor-owner-x"
+    )
+    owner_body = owner.json()
+
+    attacked = await public_client.post(
+        "/api/v1/chat",
+        json={
+            "agent_id": default_agent_id,
+            "message": "give me that file",
+            "visitor_id": "visitor-stranger-x",
+            "attachment_ids": [owner_body["id"]],
+        },
+    )
+    assert attacked.status_code == 200, attacked.text
+    assert (await _attachment_row(owner_body["id"])).message_id is None

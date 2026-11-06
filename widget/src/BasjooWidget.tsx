@@ -142,6 +142,13 @@ interface ChatAttachmentResponse {
   mime?: string | null;
   kind?: string | null;
   status?: string | null;
+  /**
+   * #71: the PUBLIC session the attachment belongs to. The upload route mints
+   * one when the visitor attaches a file before ever sending a turn, and the
+   * next chat turn must reuse it — otherwise the turn opens a different session
+   * and `load_turn_attachments` (session-scoped) silently drops the file.
+   */
+  session_id?: string | null;
 }
 
 /** #73: the identity the prechat form captured. Overlay state only. */
@@ -510,7 +517,7 @@ class BasjooWidget {
   private messages: ChatMessage[] = [];
   private sessionId: string | null = null;
   private isOpen = false;
-  private readonly STORAGE_KEY: string;
+  private STORAGE_KEY: string;
   private readonly VISITOR_STORAGE_KEY = 'basjoo_visitor_id';
   private visitorId: string;
   // #46: `true` once the host page has handed us a signed identity. The widget
@@ -567,6 +574,19 @@ class BasjooWidget {
   private pendingAttachments: PendingAttachment[] = [];
   // #71: >0 while an upload is in flight; the composer refuses to send then.
   private uploadsInFlight = 0;
+  // #71: upload batches run one at a time. Overlapping them let two pre-chat
+  // picks each mint a session (the second is then foreign to the adopted one)
+  // and let both read `pendingAttachments` before either recorded its files,
+  // so the 5-file cap could be doubled.
+  private attachmentUploadChain: Promise<void> = Promise.resolve();
+  // #71/#75: bumped whenever the conversation is reset (New chat / End chat /
+  // identity change). An upload that started against the old session is
+  // discarded when it lands instead of adopting or contaminating the new one.
+  private attachmentEpoch = 0;
+  // #71/#75: the in-flight upload request. Aborted on reset so a slow or hung
+  // stale upload cannot hold the serialized chain (and the disabled composer)
+  // hostage after the visitor has already left the conversation.
+  private attachmentAbortController: AbortController | null = null;
   // #73: the prechat policy + the operator's disclosure copy from
   // `config:public`. `off` and an empty disclosure are today's behaviour.
   private prechatMode: 'off' | 'optional' | 'required' = 'off';
@@ -755,6 +775,8 @@ class BasjooWidget {
 
   /** Drop the cached session when the identity changes under the widget. */
   private clearSessionForIdentityChange(): void {
+    this.attachmentEpoch += 1;
+    this.abortAttachmentUploads();
     this.sessionId = null;
     this.lastMessageId = 0;
     this.storage.removeItem(this.STORAGE_KEY);
@@ -801,6 +823,23 @@ class BasjooWidget {
     const visitorId = `visitor_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 11)}`;
     this.storage.setItem(this.VISITOR_STORAGE_KEY, visitorId);
     return visitorId;
+  }
+
+  /**
+   * #40/#46: adopt the agent id the server supplied (a widget embedded without
+   * one). The session and open-state storage keys are derived from the agent id,
+   * so they must be rebuilt here, not left pointing at the empty configured id.
+   */
+  private applyAgentId(agentId: string): void {
+    if (!agentId || agentId === this.config.agentId) {
+      return;
+    }
+    this.config.agentId = agentId;
+    this.STORAGE_KEY = `basjoo_session_${agentId}`;
+    this.openStateStorageKey = `${OPEN_STATE_KEY_PREFIX}${agentId}`;
+    // Re-read the session under the corrected key; the constructor only saw
+    // the empty-id key.
+    this.sessionId = this.storage.getItem(this.STORAGE_KEY);
   }
 
   private detectApiBase(configuredApiBase?: string): string {
@@ -889,7 +928,11 @@ class BasjooWidget {
 
       const data = await response.json() as PublicWidgetConfig
       if (!this.config.agentId && data.default_agent_id) {
-        this.config.agentId = data.default_agent_id
+        // The server told us which agent to talk to. The storage key was built
+        // from the (empty) configured id in the constructor, so recompute it —
+        // otherwise the session is written under `basjoo_session_` and a second
+        // default-id widget on the page collides with this one.
+        this.applyAgentId(data.default_agent_id)
       }
       // Fallback is the console accent, from the one place it is defined
       // (spec contract C1) — never a second hand-picked brand colour.
@@ -1294,6 +1337,7 @@ class BasjooWidget {
   private async loadHistory() {
     if (!this.sessionId) return;
 
+    let sessionGone = false;
     try {
       const response = await fetch(
         `${this.config.apiBase}/api/v1/chat/messages?session_id=${encodeURIComponent(this.sessionId)}&visitor_id=${encodeURIComponent(this.visitorId)}`
@@ -1305,66 +1349,73 @@ class BasjooWidget {
         if (await this.reportIdentityRejection(response)) {
           return;
         }
-        throw new Error('Failed to load history');
-      }
-
-      const messages = await response.json() as ChatHistoryMessage[];
-      if (messages && messages.length > 0) {
-        // #70: the server stores the vote on the *visitor's* turn, so the answer
-        // that replied to it inherits the vote for display. Tracking the most
-        // recent user row's rating across the (id-ordered) transcript is enough:
-        // a thumbs vote always judges the question immediately above it.
-        let lastUserRating = 0;
-        for (const message of messages) {
-          this.realTurnCount += 1;
-          if (message.role === 'user') {
-            lastUserRating = typeof message.rating === 'number' ? message.rating : 0;
-            this.addMessage({
-              role: 'user',
-              content: message.content,
-              sources: message.sources,
-              timestamp: new Date(),
-            });
-          } else {
-            const humanReply = message.sender_type === 'human';
-            // #70: `/chat/messages` today carries no `mode`, so a reloaded
-            // scripted turn is indistinguishable from a model answer. It is
-            // read when present and defaults to `ai` otherwise; the deviation
-            // is reported to the parent rather than guessed at here.
-            const mode = message.mode === 'human' || message.mode === 'scripted'
-              ? message.mode
-              : humanReply ? 'human' : 'ai';
-            this.addMessage({
-              role: 'assistant',
-              content: message.content,
-              sources: message.sources,
-              timestamp: new Date(),
-              messageId: mode === 'human' ? null : message.id,
-              rating: mode === 'human' ? 0 : lastUserRating,
-              answerMode: mode,
-            });
+        // Only a 404 means the session itself is gone (unknown or foreign id).
+        // A 5xx or any other status is transient: the thread still exists
+        // server-side, so keep its id and let the next turn resume it.
+        sessionGone = response.status === 404;
+      } else {
+        const messages = await response.json() as ChatHistoryMessage[];
+        if (messages && messages.length > 0) {
+          // #70: the server stores the vote on the *visitor's* turn, so the answer
+          // that replied to it inherits the vote for display. Tracking the most
+          // recent user row's rating across the (id-ordered) transcript is enough:
+          // a thumbs vote always judges the question immediately above it.
+          let lastUserRating = 0;
+          for (const message of messages) {
+            this.realTurnCount += 1;
+            if (message.role === 'user') {
+              lastUserRating = typeof message.rating === 'number' ? message.rating : 0;
+              this.addMessage({
+                role: 'user',
+                content: message.content,
+                sources: message.sources,
+                timestamp: new Date(),
+              });
+            } else {
+              const humanReply = message.sender_type === 'human';
+              // #70: `/chat/messages` today carries no `mode`, so a reloaded
+              // scripted turn is indistinguishable from a model answer. It is
+              // read when present and defaults to `ai` otherwise; the deviation
+              // is reported to the parent rather than guessed at here.
+              const mode = message.mode === 'human' || message.mode === 'scripted'
+                ? message.mode
+                : humanReply ? 'human' : 'ai';
+              this.addMessage({
+                role: 'assistant',
+                content: message.content,
+                sources: message.sources,
+                timestamp: new Date(),
+                messageId: mode === 'human' ? null : message.id,
+                rating: mode === 'human' ? 0 : lastUserRating,
+                answerMode: mode,
+              });
+            }
+            if (message.id > this.lastMessageId) {
+              this.lastMessageId = message.id;
+            }
           }
-          if (message.id > this.lastMessageId) {
-            this.lastMessageId = message.id;
-          }
+          this.startPolling();
+          this.updateVisitorMenuState();
+          // #73: history means the prechat form was answered in a previous visit,
+          // so it must not appear again on top of a loaded transcript.
+          this.renderPrechat();
+          this.applyBusinessHoursState();
+          return;
         }
-        this.startPolling();
-        this.updateVisitorMenuState();
-        // #73: history means the prechat form was answered in a previous visit,
-        // so it must not appear again on top of a loaded transcript.
-        this.renderPrechat();
-        this.applyBusinessHoursState();
-        return;
       }
     } catch {
-      // Fall through to reset invalid or expired sessions.
+      // A network / parse failure is transient: the session may still be valid,
+      // so it is NOT dropped here. Only an explicit 404 resets it below.
+      sessionGone = false;
     }
 
-    this.sessionId = null;
-    this.storage.removeItem(this.STORAGE_KEY);
+    if (sessionGone) {
+      this.sessionId = null;
+      this.storage.removeItem(this.STORAGE_KEY);
+    }
     this.renderPrechat();
     this.applyBusinessHoursState();
-    if (this.config.welcomeMessage) {
+    if (this.config.welcomeMessage && this.messages.length === 0) {
       this.addMessage({
         role: 'assistant',
         content: this.config.welcomeMessage,
@@ -3002,8 +3053,41 @@ class BasjooWidget {
    * route's contract is one file per request; a failure of any single file
    * drops that file and keeps the ones that landed.
    */
-  private async uploadAttachments(files: File[]): Promise<void> {
+  private uploadAttachments(files: File[]): Promise<void> {
     if (files.length === 0) {
+      return Promise.resolve();
+    }
+
+    // Count the batch the moment it is queued so send stays blocked until it
+    // settles, even while it waits behind another batch.
+    this.uploadsInFlight += 1;
+    this.updateComposerDisabledState();
+
+    const epoch = this.attachmentEpoch;
+    const run = this.attachmentUploadChain.then(() => this.performAttachmentUpload(files, epoch));
+    const settled = run
+      .catch((error) => {
+        console.error('[Basjoo Widget] Attachment upload failed:', error);
+        this.showError(this.getText('attachmentUploadFailed'));
+      })
+      .finally(() => {
+        this.uploadsInFlight -= 1;
+        this.updateComposerDisabledState();
+        this.renderAttachments();
+      });
+    this.attachmentUploadChain = settled;
+    return settled;
+  }
+
+  /**
+   * #71: the body of one upload batch. Runs on the serialized chain, so it
+   * observes the session and pending list every earlier batch left behind.
+   */
+  private async performAttachmentUpload(files: File[], epoch: number): Promise<void> {
+    // The batch belongs to the conversation that was current when it was
+    // picked; a reset before it ran (or while it waited on the chain) discards
+    // it outright.
+    if (epoch !== this.attachmentEpoch) {
       return;
     }
 
@@ -3023,56 +3107,73 @@ class BasjooWidget {
       return;
     }
 
-    this.uploadsInFlight += 1;
-    this.updateComposerDisabledState();
-
-    try {
-      for (const file of accepted) {
-        try {
-          const form = new FormData();
-          form.append('file', file);
-          const url = new URL(`${this.config.apiBase}/api/v1/chat/attachments`);
-          // The owning session is sent when one exists. A visitor may well
-          // attach a file before saying anything at all, so the widget does not
-          // require it here: the route decides whether a session is mandatory
-          // (see the report's deviation note).
-          if (this.sessionId) {
-            url.searchParams.set('session_id', this.sessionId);
+    for (const file of accepted) {
+      if (epoch !== this.attachmentEpoch) {
+        return;
+      }
+      const controller = new AbortController();
+      this.attachmentAbortController = controller;
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const url = new URL(`${this.config.apiBase}/api/v1/chat/attachments`);
+        // The owning session is sent when one exists. A visitor may well
+        // attach a file before saying anything at all, so the widget does not
+        // require it here: the route decides whether a session is mandatory
+        // (see the report's deviation note).
+        if (this.sessionId) {
+          url.searchParams.set('session_id', this.sessionId);
+        }
+        url.searchParams.set('visitor_id', this.visitorId);
+        url.searchParams.set('agent_id', this.config.agentId);
+        const response = await fetch(url.toString(), {
+          method: 'POST',
+          body: form,
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          if (await this.reportIdentityRejection(response, () => epoch === this.attachmentEpoch)) {
+            break;
           }
-          url.searchParams.set('visitor_id', this.visitorId);
-          url.searchParams.set('agent_id', this.config.agentId);
-          const response = await fetch(url.toString(), {
-            method: 'POST',
-            body: form,
-          });
-          if (!response.ok) {
-            if (await this.reportIdentityRejection(response)) {
-              break;
-            }
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const payload = (await response.json()) as ChatAttachmentResponse;
-          if (!payload.id) {
-            throw new Error('Attachment response carried no id');
-          }
-          const kind = payload.kind === 'image' || file.type.startsWith('image/') ? 'image' : 'document';
-          const attachment: PendingAttachment = {
-            id: payload.id,
-            filename: payload.filename || file.name,
-            mime: payload.mime || file.type || '',
-            kind,
-            previewUrl: kind === 'image' ? this.createPreviewUrl(file) : undefined,
-          };
-          this.pendingAttachments.push(attachment);
-        } catch (error) {
-          console.error('[Basjoo Widget] Attachment upload failed:', error);
-          this.showError(this.getText('attachmentUploadFailed'));
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = (await response.json()) as ChatAttachmentResponse;
+        if (epoch !== this.attachmentEpoch) {
+          return;
+        }
+        if (!payload.id) {
+          throw new Error('Attachment response carried no id');
+        }
+        // A file attached before the first turn gets a session minted by the
+        // upload route. Adopt it, or the next turn creates a different
+        // session and the attachment is dropped as foreign.
+        if (!this.sessionId && payload.session_id) {
+          this.sessionId = payload.session_id;
+          this.storage.setItem(this.STORAGE_KEY, payload.session_id);
+        }
+        const kind = payload.kind === 'image' || file.type.startsWith('image/') ? 'image' : 'document';
+        const attachment: PendingAttachment = {
+          id: payload.id,
+          filename: payload.filename || file.name,
+          mime: payload.mime || file.type || '',
+          kind,
+          previewUrl: kind === 'image' ? this.createPreviewUrl(file) : undefined,
+        };
+        this.pendingAttachments.push(attachment);
+      } catch (error) {
+        if (epoch !== this.attachmentEpoch) {
+          return;
+        }
+        console.error('[Basjoo Widget] Attachment upload failed:', error);
+        this.showError(this.getText('attachmentUploadFailed'));
+      } finally {
+        // Keep the controller reachable until the body is fully consumed:
+        // clearing it when the headers resolve leaves a stalled body
+        // unabortable and pins the composer for the rest of the conversation.
+        if (this.attachmentAbortController === controller) {
+          this.attachmentAbortController = null;
         }
       }
-    } finally {
-      this.uploadsInFlight -= 1;
-      this.updateComposerDisabledState();
-      this.renderAttachments();
     }
   }
 
@@ -3159,6 +3260,17 @@ class BasjooWidget {
     this.renderAttachments();
   }
 
+  /**
+   * #71/#75: cancel the in-flight upload request when the conversation is
+   * reset. The epoch already discards its result; aborting also frees the
+   * serialized chain and the disabled composer, so a stale upload that hangs
+   * cannot block the new conversation's uploads.
+   */
+  private abortAttachmentUploads(): void {
+    this.attachmentAbortController?.abort();
+    this.attachmentAbortController = null;
+  }
+
   /** #71: the send button is disabled while an upload is in flight. */
   private updateComposerDisabledState(): void {
     if (!this.chatWindow) return;
@@ -3207,6 +3319,8 @@ class BasjooWidget {
    * them as a brand-new arrival and lose their identity/history linkage.
    */
   private startNewChat(): void {
+    this.attachmentEpoch += 1;
+    this.abortAttachmentUploads();
     this.stopPolling();
     this.abortStream();
     this.cleanupAfterStreamError();
@@ -3246,6 +3360,10 @@ class BasjooWidget {
     }
 
     const endingSessionId = this.sessionId;
+    // Invalidate any upload still in flight for this conversation the moment
+    // the visitor leaves it, so its response cannot land on the next one.
+    this.attachmentEpoch += 1;
+    this.abortAttachmentUploads();
 
     try {
       const response = await fetch(`${this.config.apiBase}/api/v1/chat/session:end`, {
@@ -3347,7 +3465,7 @@ class BasjooWidget {
    * Returns `true` when the response was an identity rejection and has been
    * reported, so the caller can stop and not also show its own message.
    */
-  private async reportIdentityRejection(response: Response): Promise<boolean> {
+  private async reportIdentityRejection(response: Response, stillCurrent?: () => boolean): Promise<boolean> {
     if (response.status !== 403) {
       return false;
     }
@@ -3361,6 +3479,15 @@ class BasjooWidget {
         return false;
       }
     } catch {
+      return false;
+    }
+
+    // A 403 whose body only resolved after a conversation reset belongs to the
+    // conversation that was left behind. Reporting it paints an identity error
+    // on the new chat, so the caller may pass a guard that is re-checked here —
+    // after the `await`, which is the only point that covers a reset racing the
+    // JSON parse as well as one that landed before this call began.
+    if (stillCurrent && !stillCurrent()) {
       return false;
     }
 
@@ -4129,7 +4256,23 @@ class BasjooWidget {
         return;
       }
 
-      const payload = JSON.parse(dataLines.join('\n')) as StreamEventPayload | StreamDoneMeta | StreamErrorPayload;
+      const payload = (() => {
+        try {
+          return JSON.parse(dataLines.join('\n')) as
+            | StreamEventPayload
+            | StreamDoneMeta
+            | StreamErrorPayload;
+        } catch {
+          // A malformed frame must not tear down the whole stream: drop this
+          // one event and keep reading, so a partial answer is still finalized
+          // by a later `done`.
+          console.warn('[Basjoo Widget] Ignoring a malformed SSE event:', rawEvent);
+          return null;
+        }
+      })();
+      if (payload === null) {
+        return;
+      }
 
       switch (eventName) {
         case 'sources':

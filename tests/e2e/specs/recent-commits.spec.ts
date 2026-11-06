@@ -3,6 +3,9 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
 const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000';
+// Origin the widget page is actually served from; used for the real
+// allowed_widget_origins config so the backend whitelist matches the page.
+const WIDGET_ORIGIN = process.env.BASE_URL || 'http://localhost:3000';
 const JINA_API_KEY = process.env.E2E_JINA_API_KEY || '';
 const SILICONFLOW_API_KEY = process.env.E2E_SILICONFLOW_API_KEY || '';
 const DEEPSEEK_API_KEY = process.env.E2E_DEEPSEEK_API_KEY || '';
@@ -213,10 +216,19 @@ test.describe('Recent commit regressions', () => {
   });
 
   test('widget renderer does not execute malicious markdown-like content in welcome message', async ({ page, request }) => {
+    const maliciousWelcome = '[<img src=x onerror=alert(1)>](javascript:alert(1)) <script>alert(2)</script>';
+
+    // Real backend write. No mocking: the agent is configured through the API
+    // under test and the value is read back from the real public config route.
     await updateAgent(request, token, agent.id, {
-      allowed_widget_origins: ['http://localhost:3000'],
-      welcome_message: '[<img src=x onerror=alert(1)>](javascript:alert(1)) <script>alert(2)</script>',
+      allowed_widget_origins: [WIDGET_ORIGIN],
+      welcome_message: maliciousWelcome,
     });
+
+    const configRes = await request.get(`${API_BASE}/api/v1/config:public?agent_id=${agent.id}`);
+    expect(configRes.status(), await configRes.text()).toBe(200);
+    const publicConfig = (await configRes.json()) as { welcome_message?: string | null };
+    expect(publicConfig.welcome_message).toBe(maliciousWelcome);
 
     const dialogs: string[] = [];
     page.on('dialog', async (dialog) => {
@@ -226,14 +238,28 @@ test.describe('Recent commit regressions', () => {
 
     await page.goto('/');
     await page.addScriptTag({ url: `${API_BASE}/sdk.js` });
-    await page.evaluate((currentAgentId) => {
-      const WidgetClass = (window as any).BasjooWidget;
-      const widget = new WidgetClass({ agentId: currentAgentId, apiBase: 'http://localhost:8000' });
-      return widget.init();
-    }, agent.id);
+    await page.evaluate(
+      ({ currentAgentId, apiBase }) => {
+        const WidgetClass = (window as any).BasjooWidget;
+        const widget = new WidgetClass({ agentId: currentAgentId, apiBase });
+        return widget.init();
+      },
+      { currentAgentId: agent.id, apiBase: API_BASE },
+    );
     await expect(page.locator('#basjoo-widget-button')).toBeVisible({ timeout: 10_000 });
     await page.locator('#basjoo-widget-button').click();
-    await page.waitForTimeout(1_000);
+
+    // The real configured welcome text must render — proving the widget loaded
+    // THIS agent's config from the isolated backend, not its built-in default.
+    const welcome = page.locator('#basjoo-widget-container .basjoo-message-assistant .basjoo-message-content').first();
+    await expect(welcome).toContainText(maliciousWelcome, { timeout: 10_000 });
+
+    // ...and it must be inert text, not markup.
+    const renderedHtml = await welcome.innerHTML();
+    expect(renderedHtml).toContain('&lt;img');
+    expect(renderedHtml).toContain('&lt;script&gt;');
+    expect(renderedHtml).not.toContain('<img');
+    expect(renderedHtml).not.toContain('<script');
     expect(dialogs).toEqual([]);
 
     const dangerousNodes = await page.locator('#basjoo-widget-container a[href^="javascript:"], #basjoo-widget-container script, #basjoo-widget-container img[onerror]').count();

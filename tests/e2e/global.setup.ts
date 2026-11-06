@@ -11,10 +11,10 @@ import {
   loginHeaders,
 } from './fixtures/e2e-context';
 
-const E2E_JINA_API_KEY = process.env.E2E_JINA_API_KEY || 'test_jina_key_for_e2e';
-const E2E_API_KEY = process.env.E2E_API_KEY || ''; // LLM API key (e.g., DeepSeek)
-
 export default async function globalSetup(): Promise<void> {
+  const E2E_JINA_API_KEY = process.env.E2E_JINA_API_KEY || 'test_jina_key_for_e2e';
+  const E2E_API_KEY = process.env.E2E_API_KEY || ''; // LLM API key (e.g., DeepSeek)
+
   // Use consistent IP for the setup run (required for rate limiting)
   const setupHeaders = loginHeaders();
 

@@ -34,7 +34,7 @@ export default function AgentSelector() {
     const timeout = setTimeout(() => {
       if (loading) {
         setLoading(false)
-        setError(t('common.loadingTimeout'))
+        setError(t('status.loadingTimeout'))
       }
     }, 10000)
     return () => clearTimeout(timeout)

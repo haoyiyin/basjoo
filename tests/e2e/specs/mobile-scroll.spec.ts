@@ -9,40 +9,31 @@
  *  - on the playground settings tab the last control is inside the viewport.
  */
 import { test, expect } from '@playwright/test';
+import {
+  loginByApiWithAdmin,
+  getDefaultAgent,
+} from '../fixtures/e2e-context';
 
 test.use({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'test@example.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'testpassword123';
-
 test.describe('mobile scroll sweep (375×667)', () => {
-  test('every route scrolls as one surface', async ({ page }) => {
-    const loginResponse = await page.request.post('/api/admin/login', {
-      data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-    });
-    expect(loginResponse.ok()).toBeTruthy();
-    const session = (await loginResponse.json()) as {
-      access_token: string;
-      admin: unknown;
-    };
+  test('every route scrolls as one surface', async ({ page, request }) => {
+    // Authenticate through the shared API helper (absolute API_BASE) instead of a
+    // dashboard-relative path, then seed localStorage exactly the way
+    // AuthContext.persistSession() writes it: token plus JSON-stringified admin.
+    const { token, admin } = await loginByApiWithAdmin(request);
 
     await page.addInitScript(
-      ([token, admin]) => {
-        localStorage.setItem('token', token);
-        localStorage.setItem('admin', admin);
+      ([storedToken, storedAdmin]) => {
+        localStorage.setItem('token', storedToken);
+        localStorage.setItem('admin', storedAdmin);
         localStorage.setItem('basjoo_locale', 'zh-CN');
       },
-      [session.access_token, JSON.stringify(session.admin)],
+      [token, JSON.stringify(admin)],
     );
 
-    const agentsResponse = await page.request.get('/api/v1/agents', {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    const agents = (await agentsResponse.json()) as {
-      agents: Array<{ id: string }>;
-    };
-    const agentId = agents.agents[0]?.id;
-    if (!agentId) throw new Error('E2E needs at least one agent');
+    const agent = await getDefaultAgent(request, token);
+    const agentId = agent.id;
 
     const routes = [
       '/agents',
@@ -96,9 +87,13 @@ test.describe('mobile scroll sweep (375×667)', () => {
       if (metrics.max > 0) {
         expect(metrics.scrollY, `${route} did not reach max scroll`).toBe(metrics.max);
       }
-      if (metrics.lastTop !== null) {
-        expect(metrics.lastTop).toBeGreaterThanOrEqual(0);
-        expect(metrics.lastBottom).toBeLessThanOrEqual(667);
+      // The documented contract only pins the last control to the viewport on the
+      // playground settings tab. Other routes (e.g. /settings/account, whose
+      // trailing content is an action-less empty state) have no control at the
+      // page bottom, so the "last control" heuristic does not apply there.
+      if (route.includes('tab=settings') && metrics.lastTop !== null) {
+        expect(metrics.lastTop, `${route} last control above viewport`).toBeGreaterThanOrEqual(0);
+        expect(metrics.lastBottom, `${route} last control below viewport`).toBeLessThanOrEqual(667);
       }
     }
   });

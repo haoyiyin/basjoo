@@ -140,6 +140,7 @@ from services.visitor_identity import (
 )
 from services.visitor_deletion import delete_visitor_data
 from services.attachment_service import (
+    bind_turn_attachments,
     build_attachment_block,
     load_turn_attachments,
     remove_attachment_files,
@@ -1662,6 +1663,15 @@ async def handle_taken_over_chat(
     db.add(user_message)
     session.message_count += 1
     session.updated_at = func.now()
+    await db.flush()
+    # #71: the visitor's message is the turn the attachment was sent with. Only
+    # the turn that first carries it binds, so a later reuse cannot move it.
+    await bind_turn_attachments(
+        db,
+        session.id,
+        getattr(request, "attachment_ids", None) or [],
+        user_message.id,
+    )
     await db.commit()
 
     from services.websocket_service import manager
@@ -1731,6 +1741,16 @@ async def persist_chat_response(
         content=request.message,
     )
     db.add(user_message)
+    await db.flush()
+    # #71: bind the attachments to the user turn they were sent with. Same
+    # session scope as `load_turn_attachments`; `message_id IS NULL` keeps a
+    # reused id on its first turn.
+    await bind_turn_attachments(
+        db,
+        session.id,
+        getattr(request, "attachment_ids", None) or [],
+        user_message.id,
+    )
 
     assistant_message = ChatMessage(
         session_id=session.id,
